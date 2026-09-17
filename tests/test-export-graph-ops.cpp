@@ -135,6 +135,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    LOG("%s: running\n", "test-export-graph-ops");
+
     // Load CPU-only
     ggml_backend_dev_t cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     params.devices = { cpu_device, nullptr };
@@ -154,6 +156,8 @@ int main(int argc, char ** argv) {
         ctx = init_result->context();
         if (!ctx) {
             LOG_ERR("failed to initialize params\n");
+            LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
     } else {
@@ -166,6 +170,8 @@ int main(int argc, char ** argv) {
         gguf_context_ptr gguf_ctx = gguf_fetch_gguf_ctx(hf_repo, hf_quant);
         if (!gguf_ctx) {
             LOG_ERR("failed to fetch GGUF metadata from %s\n", hf_repo.c_str());
+            LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -177,6 +183,8 @@ int main(int argc, char ** argv) {
 
         if (!model) {
             LOG_ERR("failed to create llama_model from %s\n", hf_repo.c_str());
+            LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -186,10 +194,14 @@ int main(int argc, char ** argv) {
 
         if (!ctx) {
             LOG_ERR("failed to create llama_context\n");
+            LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 #else
         LOG_ERR("test-export-graph-ops compiled without HF fetch support\n");
+        LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
 #endif
     }
@@ -197,11 +209,15 @@ int main(int argc, char ** argv) {
     const uint32_t n_seqs  = llama_n_seq_max(ctx);
     const uint32_t n_tokens = std::min(llama_n_ctx(ctx), llama_n_ubatch(ctx));
 
+    LOG_INF("  running %s\n", params.model.get_name().c_str());
+
     std::set<test_object> tests;
 
     auto * gf_pp = llama_graph_reserve(ctx, n_tokens, n_seqs, n_tokens);
     if (!gf_pp) {
         LOG_ERR("failed to reserve prompt processing graph\n");
+        LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
     extract_graph_ops(gf_pp, "pp", tests);
@@ -209,6 +225,8 @@ int main(int argc, char ** argv) {
     auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
         LOG_ERR("failed to reserve token generation graph\n");
+        LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
     extract_graph_ops(gf_tg, "tg", tests);
@@ -219,6 +237,8 @@ int main(int argc, char ** argv) {
 
     if (!f.is_open()) {
         LOG_ERR("unable to open output file: %s\n", params.out_file.c_str());
+        LOG("%s: %s\n", "test-export-graph-ops", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
@@ -226,5 +246,7 @@ int main(int argc, char ** argv) {
         test.serialize(f);
     }
 
+    LOG("%s: %s\n", "test-export-graph-ops", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

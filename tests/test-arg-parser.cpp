@@ -2,6 +2,7 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "log.h"
 #include "speculative.h"
 
 #include <cmath>
@@ -101,7 +102,7 @@ static void test(void) {
         assert(draft.n_outputs_max_per_seq == 1);
     }
 
-    printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
+    LOG_INF("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {
             auto ctx_arg = common_params_parser_init(params, (enum llama_example)ex);
@@ -114,7 +115,7 @@ static void test(void) {
                     if (seen_args.find(arg) == seen_args.end()) {
                         seen_args.insert(arg);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
+                        LOG_ERR("test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
                         exit(1);
                     }
                 }
@@ -123,7 +124,7 @@ static void test(void) {
                     if (seen_env_vars.find(env) == seen_env_vars.end()) {
                         seen_env_vars.insert(env);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", env.c_str());
+                        LOG_ERR("test-arg-parser: found different handlers for the same env var: %s", env.c_str());
                         exit(1);
                     }
                 }
@@ -138,7 +139,7 @@ static void test(void) {
                     const std::string last(opt.args.back());
 
                     if (first.length() > last.length()) {
-                        fprintf(stderr, "test-arg-parser: shorter argument should come before longer one: %s, %s\n",
+                        LOG_ERR("test-arg-parser: shorter argument should come before longer one: %s, %s\n",
                                 first.c_str(), last.c_str());
                         assert(false);
                     }
@@ -150,14 +151,15 @@ static void test(void) {
                     const std::string last(opt.args_neg.back());
 
                     if (first.length() > last.length()) {
-                        fprintf(stderr, "test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
+                        LOG_ERR("test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
                                 first.c_str(), last.c_str());
                         assert(false);
                     }
                 }
             }
         } catch (std::exception & e) {
-            printf("%s\n", e.what());
+            LOG_ERR("%s\n", e.what());
+            common_log_flush(common_log_main());
             assert(false);
         }
     }
@@ -172,7 +174,7 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
-    printf("test-arg-parser: test invalid usage\n\n");
+    LOG_INF("test-arg-parser: test invalid usage\n\n");
 
     // missing value
     argv = {"binary_name", "-m"};
@@ -229,7 +231,7 @@ static void test(void) {
     argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
-    printf("test-arg-parser: test valid usage\n\n");
+    LOG_INF("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -305,9 +307,9 @@ static void test(void) {
 
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
-    printf("test-arg-parser: skip on windows build\n");
+    LOG_INF("test-arg-parser: skip on windows build\n");
 #else
-    printf("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
+    LOG_INF("test-arg-parser: test environment variables (valid + invalid usages)\n\n");
 
     setenv("LLAMA_ARG_THREADS", "blah", true);
     argv = {"binary_name"};
@@ -344,7 +346,7 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
 
-    printf("test-arg-parser: test negated environment variables\n\n");
+    LOG_INF("test-arg-parser: test negated environment variables\n\n");
 
     setenv("LLAMA_ARG_LOAD_MODE", "none", true);
     setenv("LLAMA_ARG_NO_PERF", "1", true); // legacy format
@@ -353,7 +355,7 @@ static void test(void) {
     assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
     assert(params.no_perf == true);
 
-    printf("test-arg-parser: test environment variables being overwritten\n\n");
+    LOG_INF("test-arg-parser: test environment variables being overwritten\n\n");
 
     setenv("LLAMA_ARG_MODEL", "blah.gguf", true);
     setenv("LLAMA_ARG_THREADS", "1010", true);
@@ -363,12 +365,12 @@ static void test(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
-    printf("test-arg-parser: test download functions\n\n");
+    LOG_INF("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";
     const char * BAD_URL  = "http://ggml.ai/404";
 
     {
-        printf("test-arg-parser: test good URL\n\n");
+        LOG_INF("test-arg-parser: test good URL\n\n");
         auto res = common_remote_get_content(GOOD_URL, {});
         assert(res.first == 200);
         assert(res.second.size() > 0);
@@ -377,32 +379,45 @@ static void test(void) {
     }
 
     {
-        printf("test-arg-parser: test bad URL\n\n");
+        LOG_INF("test-arg-parser: test bad URL\n\n");
         auto res = common_remote_get_content(BAD_URL, {});
         assert(res.first == 404);
     }
 
     {
-        printf("test-arg-parser: test max size error\n");
+        LOG_INF("test-arg-parser: test max size error\n");
         common_remote_params params;
         params.max_size = 1;
         try {
             common_remote_get_content(GOOD_URL, params);
             assert(false && "it should throw an error");
         } catch (std::exception & e) {
-            printf("  expected error: %s\n\n", e.what());
+            LOG_INF("  expected error: %s\n\n", e.what());
         }
     }
 
-    printf("test-arg-parser: all tests OK\n\n");
+    LOG_INF("test-arg-parser: all tests OK\n\n");
 }
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-arg-parser");
+
     try {
         test();
     } catch (std::exception & e) {
-        fprintf(stderr, "test-arg-parser: exception: %s\n", e.what());
+        LOG_ERR("test-arg-parser: exception: %s\n", e.what());
+        LOG("%s: %s\n", "test-arg-parser", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
+    LOG("%s: %s\n", "test-arg-parser", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

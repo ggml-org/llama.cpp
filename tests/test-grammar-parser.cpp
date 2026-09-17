@@ -7,6 +7,10 @@
 // TODO: shold not include libllama sources
 #include "../src/llama-grammar.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cassert>
 
 static const char * type_str(llama_gretype type) {
@@ -33,52 +37,53 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 
     auto print_all = [&]() {
-        fprintf(stderr, "    verify_parsing(R\"\"\"(%s)\"\"\", {\n", grammar_bytes);
+        // dump is emitted in partial lines: LOG_CNT adds no prefix
+        LOG_CNT("    verify_parsing(R\"\"\"(%s)\"\"\", {\n", grammar_bytes);
         for (auto it = parsed_grammar.symbol_ids.begin(); it != parsed_grammar.symbol_ids.end(); ++it) {
-            fprintf(stderr, "        {\"%s\", %u},\n", it->first.c_str(), it->second);
+            LOG_CNT("        {\"%s\", %u},\n", it->first.c_str(), it->second);
         }
-        fprintf(stderr, "    }, {\n");
+        LOG_CNT("    }, {\n");
         for (size_t i_rule = 0; i_rule < parsed_grammar.rules.size(); i_rule++) {
-            fprintf(stderr, "        // %s (index %zu)\n", symbol_names[i_rule].c_str(), i_rule);
+            LOG_CNT("        // %s (index %zu)\n", symbol_names[i_rule].c_str(), i_rule);
             auto & rule = parsed_grammar.rules[i_rule];
             for (uint32_t i = 0; i < rule.size(); i++) {
                 std::string rule_str;
-                fprintf(stderr, "        {%s, ", type_str(rule[i].type));
+                LOG_CNT("        {%s, ", type_str(rule[i].type));
                 if (rule[i].type == LLAMA_GRETYPE_CHAR || rule[i].type == LLAMA_GRETYPE_CHAR_ALT ||
                     rule[i].type == LLAMA_GRETYPE_CHAR_NOT || rule[i].type == LLAMA_GRETYPE_CHAR_RNG_UPPER) {
                     char c = rule[i].value;
                     if (c == '\n') {
-                        fprintf(stderr, "'\\n'");
+                        LOG_CNT("'\\n'");
                     } else if (c == '\t') {
-                        fprintf(stderr, "'\\t'");
+                        LOG_CNT("'\\t'");
                     } else if (c == '\r') {
-                        fprintf(stderr, "'\\r'");
+                        LOG_CNT("'\\r'");
                     } else if (c == '\0') {
-                        fprintf(stderr, "'\\0'");
+                        LOG_CNT("'\\0'");
                     } else {
-                        fprintf(stderr, "'%c'", c);
+                        LOG_CNT("'%c'", c);
                     }
                 } else if (rule[i].type == LLAMA_GRETYPE_RULE_REF) {
-                    fprintf(stderr, "/* %s */ %u", symbol_names[rule[i].value].c_str(), rule[i].value);
+                    LOG_CNT("/* %s */ %u", symbol_names[rule[i].value].c_str(), rule[i].value);
                 } else {
-                    fprintf(stderr, "%u", rule[i].value);
+                    LOG_CNT("%u", rule[i].value);
                 }
-                fprintf(stderr, "},\n");
+                LOG_CNT("},\n");
             }
         }
-        fprintf(stderr, "    });\n");
+        LOG_CNT("    });\n");
     };
 
     if (getenv("TEST_GRAMMAR_PARSER_PRINT_ALL")) {
         print_all();
-        fprintf(stderr, "\n");
+        LOG_CNT("\n");
         return;
     }
 
-    fprintf(stderr, "Testing grammar:%s\n", grammar_bytes);
+    LOG_INF("Testing grammar:%s\n", grammar_bytes);
 
     if (parsed_grammar.symbol_ids.size() != expected.size()) {
-        fprintf(stderr, "Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
+        LOG_ERR("Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
         print_all();
         assert(parsed_grammar.symbol_ids.size() == expected.size());
     }
@@ -92,11 +97,11 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
         // pretty print error message before asserting
         if (expected_pair.first != key || expected_pair.second != value)
         {
-            fprintf(stderr, "index: %u\n", index);
-            fprintf(stderr, "expected_pair: %s, %u\n", expected_pair.first.c_str(), expected_pair.second);
-            fprintf(stderr, "actual_pair: %s, %u\n", key.c_str(), value);
-            fprintf(stderr, "expected_pair != actual_pair\n");
-            fprintf(stderr, "Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
+            LOG_ERR("index: %u\n", index);
+            LOG_ERR("expected_pair: %s, %u\n", expected_pair.first.c_str(), expected_pair.second);
+            LOG_ERR("actual_pair: %s, %u\n", key.c_str(), value);
+            LOG_ERR("expected_pair != actual_pair\n");
+            LOG_ERR("Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
             print_all();
         }
 
@@ -117,12 +122,12 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
             // pretty print error message before asserting
             if (expected_element.type != element.type || expected_element.value != element.value)
             {
-                fprintf(stderr, "index: %u\n", index);
-                fprintf(stderr, "expected_element: %s, %u\n", type_str(expected_element.type), expected_element.value);
-                fprintf(stderr, "actual_element: %s, %u\n", type_str(element.type), element.value);
-                fprintf(stderr, "expected_element != actual_element\n");
-                fprintf(stderr, "all elements:\n");
-                fprintf(stderr, "Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
+                LOG_ERR("index: %u\n", index);
+                LOG_ERR("expected_element: %s, %u\n", type_str(expected_element.type), expected_element.value);
+                LOG_ERR("actual_element: %s, %u\n", type_str(element.type), element.value);
+                LOG_ERR("expected_element != actual_element\n");
+                LOG_ERR("all elements:\n");
+                LOG_ERR("Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
                 print_all();
             }
 
@@ -133,14 +138,23 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
 }
 
 static void verify_failure(const char * grammar_bytes) {
-    fprintf(stderr, "Testing expected failure:%s\n", grammar_bytes);
+    LOG_INF("Testing expected failure:%s\n", grammar_bytes);
     llama_grammar_parser result;
     result.parse(grammar_bytes);
     assert(result.rules.empty() && "should have failed");
 }
 
-int main()
+int main(int argc, char ** argv)
 {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-grammar-parser");
+
     verify_failure(R"""(
         root ::= "a"{,}"
     )""");
@@ -580,5 +594,8 @@ int main()
         {LLAMA_GRETYPE_END, 0},
     });
 
+    // the test aborts on a mismatch, so reaching this point means it passed
+    LOG("%s: %s\n", "test-grammar-parser", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

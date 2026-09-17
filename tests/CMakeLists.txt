@@ -40,7 +40,7 @@ function(llama_test target)
     add_test(
         NAME ${TEST_NAME}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        COMMAND $<TARGET_FILE:${TEST_TARGET}> --errors-only
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
@@ -110,7 +110,7 @@ function(llama_build_and_test source)
     add_test(
         NAME ${TEST_TARGET}
         WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
-        COMMAND $<TARGET_FILE:${TEST_TARGET}>
+        COMMAND $<TARGET_FILE:${TEST_TARGET}> --errors-only
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})

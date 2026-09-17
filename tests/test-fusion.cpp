@@ -16,6 +16,7 @@
 //   test-fusion --models DIR --device MTL0 --check  baseline.csv   # validate against it
 //   test-fusion --model FILE --device MTL0 --check  baseline.csv   # validate a single model
 
+#include "arg.h"
 #include "common.h"
 #include "log.h"
 #include "llama-cpp.h"
@@ -224,17 +225,24 @@ static void usage(const char * argv0) {
 }
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes its models from --models/--model
+    common_init();
+
     std::string models_dir;
     std::string model_file;
     std::string device_name;
     std::string record_path;
     std::string check_path;
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         const std::string arg = argv[i];
         const auto next = [&](const char * name) -> std::string {
             if (i + 1 >= argc) {
                 LOG_ERR("%s: %s requires an argument\n", __func__, name);
+                common_log_flush(common_log_main());
                 exit(1);
             }
             return argv[++i];
@@ -248,39 +256,56 @@ int main(int argc, char ** argv) {
         else if (arg == "--device"){ device_name = next("--device"); }
         else if (arg == "--record"){ record_path = next("--record"); }
         else if (arg == "--check") { check_path  = next("--check"); }
-        else {
+        else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, arg.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
     }
 
     if (device_name.empty()) {
         LOG_ERR("%s: --device NAME is required\n", __func__);
+        common_log_flush(common_log_main());
         return 1;
     }
     if (models_dir.empty() && model_file.empty()) {
         LOG_ERR("%s: --models DIR or --model FILE is required\n", __func__);
+        common_log_flush(common_log_main());
         return 1;
     }
     if (!models_dir.empty() && !model_file.empty()) {
         LOG_ERR("%s: --models DIR and --model FILE are mutually exclusive\n", __func__);
+        common_log_flush(common_log_main());
         return 1;
     }
     if (!record_path.empty() && !check_path.empty()) {
         LOG_ERR("%s: --record and --check are mutually exclusive\n", __func__);
+        common_log_flush(common_log_main());
         return 1;
     }
+
+    LOG("%s: running\n", "test-fusion");
 
     std::vector<std::string> models;
     if (!model_file.empty()) {
         if (!std::filesystem::is_regular_file(model_file)) {
             LOG_ERR("%s: model file '%s' does not exist\n", __func__, model_file.c_str());
+            LOG("%s: %s\n", "test-fusion", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
         models.push_back(model_file);
     } else {
         if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
             LOG_ERR("%s: models directory '%s' does not exist\n", __func__, models_dir.c_str());
+            LOG("%s: %s\n", "test-fusion", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
         for (const auto & entry : std::filesystem::directory_iterator(models_dir)) {
@@ -292,17 +317,20 @@ int main(int argc, char ** argv) {
 
         if (models.empty()) {
             LOG_ERR("%s: no .gguf models found in '%s'\n", __func__, models_dir.c_str());
+            LOG("%s: %s\n", "test-fusion", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
     }
 
-    common_init();
     ggml_backend_load_all();
 
     ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
     if (!dev) {
         LOG_WRN("%s: device '%s' not found - skipping (baseline is device-specific)\n",
                 __func__, device_name.c_str());
+        LOG("%s: %s\n", "test-fusion", "PASSED");
+        common_log_flush(common_log_main());
         return 0;
     }
 
@@ -324,6 +352,8 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s: device '%s' does not export the generic fusion debugging API "
                 "(ggml_backend_fusion_*) - cannot run the fusion regression test\n",
                 __func__, device_name.c_str());
+        LOG("%s: %s\n", "test-fusion", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
@@ -340,6 +370,8 @@ int main(int argc, char ** argv) {
         std::ifstream in(check_path);
         if (!in) {
             LOG_ERR("%s: cannot open baseline '%s'\n", __func__, check_path.c_str());
+            LOG("%s: %s\n", "test-fusion", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
         std::string line;
@@ -368,6 +400,8 @@ int main(int argc, char ** argv) {
     const size_t seed = 1;
 
     for (const auto & model_path : models) {
+        LOG_INF("  running %s\n", model_path.c_str());
+
         const std::string arch = get_arch(model_path);
         const bool moe = arch.find("moe") != std::string::npos;
 
@@ -560,6 +594,8 @@ int main(int argc, char ** argv) {
                     __func__, models_dir.c_str(), argv[0], device_name.c_str(), models_dir.c_str(), check_path.c_str());
         }
 
+        LOG("%s: %s\n", "test-fusion", n_bad == 0 ? "PASSED" : "FAILED");
+        common_log_flush(common_log_main());
         return n_bad;
     }
 }

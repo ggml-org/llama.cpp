@@ -1,7 +1,9 @@
+#include "arg.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
+#include "log.h"
 #include "peg-parser.h"
 #include "testing.h"
 #include "peg-parser/simple-tokenize.h"
@@ -10,6 +12,7 @@
 #include <numeric>
 #include <regex>
 #include <string>
+#include <vector>
 
 #include "json.h"
 
@@ -25,9 +28,31 @@ static void test_tagged_peg_parser(testing & t);
 static void test_permute(testing & t);
 
 int main(int argc, char * argv[]) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    // this test takes an optional filter as its only positional argument
+    std::string filter;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else if (filter.empty()) {
+            filter = argv[i];
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-chat-peg-parser");
+
     testing t(std::cout);
-    if (argc >= 2) {
-        t.set_filter(argv[1]);
+    if (!filter.empty()) {
+        t.set_filter(filter);
     }
 
     const char * verbose = getenv("LLAMA_TEST_VERBOSE");
@@ -43,7 +68,10 @@ int main(int argc, char * argv[]) {
     t.test("tagged peg parser", test_tagged_peg_parser);
     t.test("permute", test_permute);
 
-    return t.summary();
+    const int rc = t.summary();
+    LOG("%s: %s\n", "test-chat-peg-parser", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }
 
 static json create_tools() {

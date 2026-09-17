@@ -13,6 +13,10 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -86,7 +90,16 @@ static double nmse_cropped(const float * y, const float * ref, int64_t T_out, in
     return num / (den + 1e-30);
 }
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-col2im-1d");
+
     int fails = 0;
 
     for (const col2im_case & c : CASES) {
@@ -148,12 +161,16 @@ int main(void) {
         if (!ok) {
             fails++;
         }
-        printf("col2im_1d K=%2d OC=%2d T_in=%3d s0=%d p0=%d: nmse f32=%.2e f16=%.2e bf16=%.2e %s\n",
+        LOG_INF("col2im_1d K=%2d OC=%2d T_in=%3d s0=%d p0=%d: nmse f32=%.2e f16=%.2e bf16=%.2e %s\n",
             (int) c.K, (int) c.OC, (int) c.T_in, c.s0, c.p0, e32, e16, ebf, ok ? "OK" : "FAIL");
 
         ggml_free(ctx);
     }
 
-    printf(fails == 0 ? "all col2im_1d checks passed\n" : "%d col2im_1d checks FAILED\n", fails);
-    return fails == 0 ? 0 : 1;
+    const bool ok = fails == 0;
+
+    printf(ok ? "all col2im_1d checks passed\n" : "%d col2im_1d checks FAILED\n", fails);
+    LOG("%s: %s\n", "test-col2im-1d", ok ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return ok ? 0 : 1;
 }

@@ -1,5 +1,8 @@
+#include "arg.h"
+#include "common.h"
 #include "json-schema.h"
 #include "json.h"
+#include "log.h"
 #include "testing.h"
 
 #include <cstdlib>
@@ -7,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include <vector>
 
 static common_chat_schema_document parse(const std::string & schema) {
     return common_chat_schema_from_json(common_json::parse(schema));
@@ -484,9 +488,31 @@ static void test_errors(testing & t) {
 }
 
 int main(int argc, char * argv[]) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    // this test takes an optional filter as its only positional argument
+    std::string filter;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else if (filter.empty()) {
+            filter = argv[i];
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-json-schema");
+
     testing t(std::cout);
-    if (argc >= 2) {
-        t.set_filter(argv[1]);
+    if (!filter.empty()) {
+        t.set_filter(filter);
     }
 
     const char * verbose = getenv("LLAMA_TEST_VERBOSE");
@@ -509,5 +535,8 @@ int main(int argc, char * argv[]) {
     t.test("value_types", test_value_types);
     t.test("errors", test_errors);
 
-    return t.summary();
+    const int rc = t.summary();
+    LOG("%s: %s\n", "test-json-schema", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }

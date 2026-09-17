@@ -5,7 +5,7 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if (LLAMA_BUILD_TESTS AND UNIX AND NOT GGML_BACKEND_DL)
     add_executable(test-rpc-multi-server ${PROJECT_SOURCE_DIR}/tests/test-rpc-multi-server.cpp)
-    target_link_libraries(test-rpc-multi-server PRIVATE ggml ggml-rpc)
+    target_link_libraries(test-rpc-multi-server PRIVATE ggml ggml-rpc llama-common)
     target_include_directories(test-rpc-multi-server PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
     add_test(
         NAME test-rpc-multi-server

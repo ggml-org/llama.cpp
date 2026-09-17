@@ -34,6 +34,9 @@ DEFAULT_HTTP_TIMEOUT = 60
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
 
+# set by conftest from --errors-only, makes servers run with WARN log verbosity
+errors_only: bool = False
+
 
 class ServerResponse:
     headers: dict
@@ -295,6 +298,8 @@ class ServerProcess:
         if self.gcp_compat:
             env["AIP_MODE"] = "PREDICTION"
             env["AIP_HTTP_PORT"] = str(self.server_port)
+        if errors_only and not self.debug:
+            server_args.extend(["--log-verbosity", "2"])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")

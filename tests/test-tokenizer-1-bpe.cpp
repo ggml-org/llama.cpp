@@ -2,6 +2,9 @@
 #include "common.h"
 #include "console.h"
 
+#include "arg.h"
+#include "log.h"
+
 #include "../src/unicode.h"
 
 #include <cassert>
@@ -15,25 +18,40 @@
 #include <atomic>
 
 int main(int argc, char **argv) {
-    if (argc < 2 || argc > 3) {
-        fprintf(stderr, "Usage: %s <vocab-file> [--ignore-merges]\n", argv[0]);
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    std::vector<std::string> positional;
+    bool ignore_merges = false;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (std::strcmp(argv[i], "--ignore-merges") == 0) {
+            ignore_merges = true;
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            positional.push_back(argv[i]);
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    const std::string fname = argv[1];
-    bool ignore_merges = false;
-    if (argc == 3) {
-        if (std::strcmp(argv[2], "--ignore-merges") != 0) {
-            fprintf(stderr, "Usage: %s <vocab-file> [--ignore-merges]\n", argv[0]);
-            return 1;
-        }
-        ignore_merges = true;
+    if (positional.size() != 1) {
+        LOG_ERR("Usage: %s <vocab-file> [--ignore-merges]\n", argv[0]);
+        common_log_flush(common_log_main());
+        return 1;
     }
 
-    fprintf(stderr, "%s : reading vocab from: '%s'\n", __func__, fname.c_str());
+    const std::string fname = positional[0];
+
+    LOG_INF("%s : reading vocab from: '%s'\n", __func__, fname.c_str());
 
     if (ignore_merges) {
-        fprintf(stderr, "%s : ignoring merges for tokens inside vocab\n", __func__);
+        LOG_INF("%s : ignoring merges for tokens inside vocab\n", __func__);
     }
 
     llama_model * model;
@@ -50,7 +68,8 @@ int main(int argc, char **argv) {
         model = llama_model_load_from_file(fname.c_str(), mparams);
 
         if (model == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -59,8 +78,9 @@ int main(int argc, char **argv) {
         ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
             llama_model_free(model);
+            common_log_flush(common_log_main());
             return 1;
         }
     }
@@ -69,8 +89,12 @@ int main(int argc, char **argv) {
 
     //GGML_ASSERT(llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_BPE);
     if (llama_vocab_type(vocab) != LLAMA_VOCAB_TYPE_BPE) {
+        // a vocab of another type is a skip (99), so it does not get a running line
+        common_log_flush(common_log_main());
         return 99;
     }
+
+    LOG("%s: running\n", "test-tokenizer-1-bpe");
 
 #ifdef _WIN32
     // We need this for unicode console support
@@ -80,27 +104,33 @@ int main(int argc, char **argv) {
 
     const int n_vocab = llama_vocab_n_tokens(vocab);
 
+    LOG_INF("  running vocab detokenize round-trip (%d tokens)\n", n_vocab);
+
     for (int i = 0; i < n_vocab; ++i) {
         std::string str = common_detokenize(ctx, std::vector<int>(1, i));
         try {
             auto cps = unicode_cpts_from_utf8(str);
             std::vector<llama_token> tokens = common_tokenize(ctx, str, false, true);
             if (ignore_merges && tokens.size() > 1) {
-                fprintf(stderr,
-                        "%s : error: token %d detokenizes to '%s'(%zu) but "
+                LOG_ERR("%s : error: token %d detokenizes to '%s'(%zu) but "
                         "tokenization of this to multiple tokens: [",
                         __func__, i, str.c_str(), str.length());
-                fprintf(stderr, "%d", tokens[0]);
+                // partial line: LOG_CNTV adds no prefix, error level so --errors-only keeps it
+                LOG_CNTV(LOG_LEVEL_ERROR, "%d", tokens[0]);
                 for (size_t i = 1; i < tokens.size(); i++) {
-                    fprintf(stderr, ", %d", tokens[i]);
+                    LOG_CNTV(LOG_LEVEL_ERROR, ", %d", tokens[i]);
                 }
-                fprintf(stderr, "]\n");
+                LOG_CNTV(LOG_LEVEL_ERROR, "]\n");
+                LOG("%s: %s\n", "test-tokenizer-1-bpe", "FAILED");
+                common_log_flush(common_log_main());
                 return 2;
             }
             std::string check = common_detokenize(ctx, tokens);
             if (check != str) {
-                fprintf(stderr, "%s : error: token %d detokenizes to '%s'(%zu) but tokenization of this detokenizes to '%s'(%zu)\n",
+                LOG_ERR("%s : error: token %d detokenizes to '%s'(%zu) but tokenization of this detokenizes to '%s'(%zu)\n",
                     __func__, i, str.c_str(), str.length(), check.c_str(), check.length());
+                LOG("%s: %s\n", "test-tokenizer-1-bpe", "FAILED");
+                common_log_flush(common_log_main());
                 return 2;
             }
         }
@@ -111,6 +141,8 @@ int main(int argc, char **argv) {
 
     // unicode
     {
+        LOG_INF("  running unicode codepoint round-trip\n");
+
         const int nthread = std::thread::hardware_concurrency();
 
         std::vector<std::thread> threads(nthread);
@@ -129,7 +161,7 @@ int main(int argc, char **argv) {
                     std::vector<llama_token> tokens = common_tokenize(ctx, str, false);
                     std::string check = common_detokenize(ctx, tokens);
                     if (cp != 9601 && str != check) {
-                        fprintf(stderr, "error: codepoint 0x%x detokenizes to '%s'(%zu) instead of '%s'(%zu)\n",
+                        LOG_ERR("error: codepoint 0x%x detokenizes to '%s'(%zu) instead of '%s'(%zu)\n",
                                 cp, check.c_str(), check.length(), str.c_str(), str.length());
                         errcode = 3;
                     }
@@ -142,6 +174,8 @@ int main(int argc, char **argv) {
         }
 
         if (errcode) {
+            LOG("%s: %s\n", "test-tokenizer-1-bpe", "FAILED");
+            common_log_flush(common_log_main());
             return errcode;
         }
     }
@@ -151,5 +185,7 @@ int main(int argc, char **argv) {
 
     llama_backend_free();
 
+    LOG("%s: %s\n", "test-tokenizer-1-bpe", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

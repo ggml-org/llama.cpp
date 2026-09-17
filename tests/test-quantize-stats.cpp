@@ -1,7 +1,9 @@
 #include "llama.h"
 
+#include "arg.h"
 #include "build-info.h"
 #include "common.h"
+#include "log.h"
 
 #include "../src/llama-model.h"
 
@@ -46,29 +48,31 @@ struct error_stats {
     uint64_t error_histogram[HISTOGRAM_BUCKETS];
 };
 
-static void quantize_stats_print_usage(int /*argc*/, char ** argv) {
+// print the usage text at the given level: INFO for -h, ERROR when it follows a bad argument
+static void quantize_stats_print_usage(int /*argc*/, char ** argv, ggml_log_level level) {
     quantize_stats_params params;
-    fprintf(stderr, "usage: %s [options]\n", argv[0]);
-    fprintf(stderr, "\n");
-    fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help            show this help message and exit\n");
-    fprintf(stderr, "  -m FNAME, --model FNAME\n");
-    fprintf(stderr, "                        model path (default: %s)\n", params.model.c_str());
-    fprintf(stderr, "  -r, --reference\n");
-    fprintf(stderr, "                        use reference implementation (default: false)\n");
-    fprintf(stderr, "  -v, --verbose\n");
-    fprintf(stderr, "                        verbose output (default: false)\n");
-    fprintf(stderr, "  -p, --per-layer-stats\n");
-    fprintf(stderr, "                        print stats per layer (default: false)\n");
-    fprintf(stderr, "  --histogram\n");
-    fprintf(stderr, "                        print error histogram (default: false)\n");
-    fprintf(stderr, "  -l LAYER, --include-layer LAYER\n");
-    fprintf(stderr, "                        only test layers matching pattern\n");
-    fprintf(stderr, "  -L LAYER, --exclude-layer LAYER\n");
-    fprintf(stderr, "                        exclude layers matching pattern\n");
-    fprintf(stderr, "  -t TYPE, --type TYPE\n");
-    fprintf(stderr, "                        only test given type (q4_0, q4_1)\n");
-    fprintf(stderr, "\n");
+    const int verbosity = level == GGML_LOG_LEVEL_ERROR ? LOG_LEVEL_ERROR : LOG_LEVEL_INFO;
+    LOG_TMPL(level, verbosity, "usage: %s [options]\n", argv[0]);
+    LOG_TMPL(level, verbosity, "\n");
+    LOG_TMPL(level, verbosity, "options:\n");
+    LOG_TMPL(level, verbosity, "  -h, --help            show this help message and exit\n");
+    LOG_TMPL(level, verbosity, "  -m FNAME, --model FNAME\n");
+    LOG_TMPL(level, verbosity, "                        model path (default: %s)\n", params.model.c_str());
+    LOG_TMPL(level, verbosity, "  -r, --reference\n");
+    LOG_TMPL(level, verbosity, "                        use reference implementation (default: false)\n");
+    LOG_TMPL(level, verbosity, "  -v, --verbose\n");
+    LOG_TMPL(level, verbosity, "                        verbose output (default: false)\n");
+    LOG_TMPL(level, verbosity, "  -p, --per-layer-stats\n");
+    LOG_TMPL(level, verbosity, "                        print stats per layer (default: false)\n");
+    LOG_TMPL(level, verbosity, "  --histogram\n");
+    LOG_TMPL(level, verbosity, "                        print error histogram (default: false)\n");
+    LOG_TMPL(level, verbosity, "  -l LAYER, --include-layer LAYER\n");
+    LOG_TMPL(level, verbosity, "                        only test layers matching pattern\n");
+    LOG_TMPL(level, verbosity, "  -L LAYER, --exclude-layer LAYER\n");
+    LOG_TMPL(level, verbosity, "                        exclude layers matching pattern\n");
+    LOG_TMPL(level, verbosity, "  -t TYPE, --type TYPE\n");
+    LOG_TMPL(level, verbosity, "                        only test given type (q4_0, q4_1)\n");
+    LOG_TMPL(level, verbosity, "\n");
 }
 
 // Check if a layer is included/excluded by command line
@@ -121,14 +125,14 @@ static void print_error_stats(const std::string & name, const error_stats & stat
     double rmse = sqrt(stats.total_error / (double) stats.num_samples);
     double median = find_quantile(stats, .5);
     double pct95 = find_quantile(stats, .95);
-    printf("%-50s: rmse %.8f, maxerr %.8f, 95pct<%.4f, median<%.4f\n", name.c_str(), rmse, stats.max_error, pct95, median);
+    LOG_INF("%-50s: rmse %.8f, maxerr %.8f, 95pct<%.4f, median<%.4f\n", name.c_str(), rmse, stats.max_error, pct95, median);
     if (print_histogram) {
-        printf("Error distribution:\n");
+        LOG_INF("Error distribution:\n");
         for (size_t i = 0; i < HISTOGRAM_BUCKETS; i++) {
             double lower = i * HISTOGRAM_RANGE / HISTOGRAM_BUCKETS;
             double upper = (i+1) * HISTOGRAM_RANGE / HISTOGRAM_BUCKETS;
             if (i == HISTOGRAM_BUCKETS -1) upper = INFINITY;
-            printf("[%3.4f, %3.4f): %11" PRIu64 "\n", lower, upper, stats.error_histogram[i]);
+            LOG_INF("[%3.4f, %3.4f): %11" PRIu64 "\n", lower, upper, stats.error_histogram[i]);
         }
     }
 }
@@ -226,6 +230,8 @@ static void test_roundtrip_on_layer(
 }
 
 int main(int argc, char ** argv) {
+    common_init();
+
     ggml_time_init();
 
     quantize_stats_params params;
@@ -235,11 +241,14 @@ int main(int argc, char ** argv) {
     int max_thread = 0;
     bool invalid_param = false;
     std::string arg;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
         if (arg == "-h" || arg == "--help") {
-            quantize_stats_print_usage(argc, argv);
+            quantize_stats_print_usage(argc, argv, GGML_LOG_LEVEL_INFO);
+            common_log_flush(common_log_main());
             exit(0);
         } else if (arg == "-r" || arg == "--reference") {
             params.reference = true;
@@ -280,7 +289,7 @@ int main(int argc, char ** argv) {
             if (j < GGML_TYPE_COUNT) {
                 params.include_types.push_back((ggml_type) j);
             } else {
-                fprintf(stderr, "error: %s not in list of types\n", argv[i]);
+                LOG_ERR("error: %s not in list of types\n", argv[i]);
                 invalid_param = true;
             }
         } else if (arg == "-n" || arg == "--num-threads") {
@@ -289,22 +298,38 @@ int main(int argc, char ** argv) {
                 break;
             }
             max_thread = atoi(argv[i]);
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
-            quantize_stats_print_usage(argc, argv);
+            LOG_ERR("error: unknown argument: %s\n", arg.c_str());
+            quantize_stats_print_usage(argc, argv, GGML_LOG_LEVEL_ERROR);
+            common_log_flush(common_log_main());
             return 1;
         }
     }
     if (invalid_param) {
-        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
-        quantize_stats_print_usage(argc, argv);
+        LOG_ERR("error: invalid parameter for argument: %s\n", arg.c_str());
+        quantize_stats_print_usage(argc, argv, GGML_LOG_LEVEL_ERROR);
+        common_log_flush(common_log_main());
         return 1;
     }
+    common_argv.push_back(nullptr);
+
+    // the test's own "params" is declared above, so scope the parsed one
+    {
+        common_params params;
+        params.model.path = "."; // this test takes no model
+        if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+            return 1;
+        }
+    }
+
+    LOG("%s: running\n", "test-quantize-stats");
 
     llama_print_build_info(llama_version());
 
     // load the model
-    fprintf(stderr, "Loading model\n");
+    LOG_INF("Loading model\n");
 
     const int64_t t_main_start_us = ggml_time_us();
     llama_model * model;
@@ -317,7 +342,9 @@ int main(int argc, char ** argv) {
         model = llama_model_load_from_file(params.model.c_str(), mparams);
 
         if (model == NULL) {
-            fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
+            LOG_ERR("%s: error: failed to load model '%s'\n", __func__, params.model.c_str());
+            LOG("%s: %s\n", "test-quantize-stats", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -327,8 +354,10 @@ int main(int argc, char ** argv) {
         ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
+            LOG_ERR("%s: error: failed to create context with model '%s'\n", __func__, params.model.c_str());
             llama_model_free(model);
+            LOG("%s: %s\n", "test-quantize-stats", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
     }
@@ -344,15 +373,17 @@ int main(int argc, char ** argv) {
             continue;
         }
         if (params.verbose) {
-            printf("%s: type %s, size %" PRId64 "\n", kv_tensor.first.c_str(), ggml_type_name(kv_tensor.second->type), ggml_nelements(kv_tensor.second));
+            LOG_INF("%s: type %s, size %" PRId64 "\n", kv_tensor.first.c_str(), ggml_type_name(kv_tensor.second->type), ggml_nelements(kv_tensor.second));
         }
         if (kv_tensor.second->type == GGML_TYPE_F16) {
             is_f16 = true;
         } else if (kv_tensor.second->type != GGML_TYPE_F32) {
-            fprintf(stderr, "%s: error: Quantization should be tested with a float model, "
+            LOG_ERR("%s: error: Quantization should be tested with a float model, "
                 "this model contains already quantized layers (%s is type %d)\n", __func__, kv_tensor.first.c_str(), kv_tensor.second->type);
             llama_free(ctx);
             llama_model_free(model);
+            LOG("%s: %s\n", "test-quantize-stats", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
         included_layers++;
@@ -360,9 +391,9 @@ int main(int argc, char ** argv) {
     }
 
     if (is_f16) {
-        printf("note: source model is f16\n");
+        LOG_INF("note: source model is f16\n");
     }
-    printf("testing %d layers with max size %" PRId64 "\n", included_layers, max_nelements);
+    LOG_INF("testing %d layers with max size %" PRId64 "\n", included_layers, max_nelements);
     // allocate scratch space
     std::vector<float> input_scratch;
     std::vector<char> quantized_scratch;
@@ -378,7 +409,7 @@ int main(int argc, char ** argv) {
         const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
         if (qfns_cpu->from_float && qfns->to_float) {
             if (params.verbose) {
-                printf("testing %s ...\n",  ggml_type_name(type));
+                LOG_INF("testing %s ...\n",  ggml_type_name(type));
             }
 
             ggml_quantize_init(type);
@@ -390,7 +421,7 @@ int main(int argc, char ** argv) {
                     continue;
                 }
                 if (params.verbose) {
-                    printf("  %s ...\n",  kv_tensor.first.c_str());
+                    LOG_INF("  %s ...\n",  kv_tensor.first.c_str());
                 }
                 std::string layer_name { ggml_type_name(type) };
                 layer_name += "::" + kv_tensor.first;
@@ -423,5 +454,7 @@ int main(int argc, char ** argv) {
         printf("%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0);
     }
 
+    LOG("%s: %s\n", "test-quantize-stats", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

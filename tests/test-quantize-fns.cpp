@@ -2,6 +2,8 @@
 
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "arg.h"
+#include "log.h"
 
 #undef NDEBUG
 #include <assert.h>
@@ -148,8 +150,8 @@ static int test_vec_dot_f32(bool verbose) {
         const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
         num_failed += failed;
         if (failed || verbose) {
-            printf(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
-                   n, RESULT_STR[failed], ref, result, error);
+            LOG_INF(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
+                    n, RESULT_STR[failed], ref, result, error);
         }
     }
     return num_failed;
@@ -182,7 +184,7 @@ static int test_vec_dot_q(bool verbose) {
 
         const ggml_type ei = (ggml_type)i;
 
-        printf("Testing %s\n", ggml_type_name((ggml_type) i));
+        LOG_INF("Testing %s\n", ggml_type_name((ggml_type) i));
         ggml_quantize_init(ei);
 
         if (qfns_cpu->from_float && qfns->to_float) {
@@ -201,14 +203,14 @@ static int test_vec_dot_q(bool verbose) {
             bool failed = !(total_error < max_quantization_error);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], total_error);
+                LOG_INF("%5s absolute quantization error:    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], total_error);
             }
 
             const float reference_error = reference_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
             failed = !(reference_error < MAX_QUANTIZATION_REFERENCE_ERROR);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
+                LOG_INF("%5s reference implementation error: %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], reference_error);
             }
 
             const float vec_dot_error = dot_product_error(qfns_cpu, type, test_size, test_data.data(), test_data2.data(), nullptr, nullptr, 1);
@@ -225,7 +227,7 @@ static int test_vec_dot_q(bool verbose) {
             failed = !(vec_dot_error < max_allowed_error);
             num_failed += failed;
             if (failed || verbose) {
-                printf("%5s dot product error:              %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error);
+                LOG_INF("%5s dot product error:              %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error);
             }
 
             // Test nrc=2 path for types that support it
@@ -234,7 +236,7 @@ static int test_vec_dot_q(bool verbose) {
                 failed = !(vec_dot_error_nrc2 < max_allowed_error);
                 num_failed += failed;
                 if (failed || verbose) {
-                    printf("%5s dot product error (nrc=2):    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error_nrc2);
+                    LOG_INF("%5s dot product error (nrc=2):    %s (%f)\n", ggml_type_name(type), RESULT_STR[failed], vec_dot_error_nrc2);
                 }
             }
         }
@@ -244,19 +246,34 @@ static int test_vec_dot_q(bool verbose) {
 }
 
 int main(int argc, char * argv[]) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     bool verbose = false;
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     std::string arg;
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
         if (arg == "-v") {
-            verbose = true;
+            verbose = true; // this test's own -v, not the common --verbose
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            LOG_ERR("error: unknown argument: %s\n", arg.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-quantize-fns");
 
     ggml_cpu_init();
 
@@ -265,9 +282,13 @@ int main(int argc, char * argv[]) {
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
 
+    const bool ok = num_failed == 0;
+
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
     }
 
-    return num_failed > 0;
+    LOG("%s: %s\n", "test-quantize-fns", ok ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return ok ? 0 : 1;
 }

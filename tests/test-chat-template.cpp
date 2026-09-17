@@ -13,7 +13,9 @@
 #include <cassert>
 
 #include "llama.h"
+#include "arg.h"
 #include "common.h"
+#include "log.h"
 #include "chat.h"
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -113,6 +115,10 @@ static std::string DEFAULT_JSON_WITH_TOOLS = R"({
 
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     std::vector<std::string> args(argv, argv + argc);
 
     std::string tmpl_path;
@@ -123,6 +129,8 @@ int main(int argc, char ** argv) {
     bool use_common = true;
     bool dump_prog = false;
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (size_t i = 1; i < args.size(); i++) {
         if (args[i] == "--help" || args[i] == "-h") {
             std::cout << HELP << "\n";
@@ -142,6 +150,8 @@ int main(int argc, char ** argv) {
             use_common = false;
         } else if (args[i] == "--dump-prog") {
             dump_prog = true;
+        } else if (args[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else if (tmpl_path.empty()) {
             tmpl_path = args[i];
         } else {
@@ -150,16 +160,27 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-chat-template");
 
     if (tmpl_path.empty()) {
-        return main_automated_tests();
+        const int rc = main_automated_tests();
+        LOG("%s: %s\n", "test-chat-template", rc == 0 ? "PASSED" : "FAILED");
+        common_log_flush(common_log_main());
+        return rc;
     }
 
     json input_json;
     if (!json_path.empty()) {
         std::ifstream json_file(json_path);
         if (!json_file) {
-            std::cerr << "Error: Could not open JSON file: " << json_path << "\n";
+            LOG_ERR("Error: Could not open JSON file: %s\n", json_path.c_str());
+            LOG("%s: %s\n", "test-chat-template", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
         std::string content = std::string(
@@ -180,10 +201,14 @@ int main(int argc, char ** argv) {
             std::istreambuf_iterator<char>());
         run_single(contents, input_json, use_common, dump_prog, output_path);
     } else {
-        std::cerr << "Error: PATH_TO_TEMPLATE is not a valid file or directory: " << tmpl_path << "\n";
+        LOG_ERR("Error: PATH_TO_TEMPLATE is not a valid file or directory: %s\n", tmpl_path.c_str());
+        LOG("%s: %s\n", "test-chat-template", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
+    LOG("%s: %s\n", "test-chat-template", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }
 
@@ -197,7 +222,7 @@ void run_multiple(const std::string& dir_path, bool stop_on_first_fail, const js
         // only process .jinja files
         if (entry.path().extension() == ".jinja" && entry.is_regular_file()) {
             test_count++;
-            std::cout << "\n\n=== RUNNING TEMPLATE FILE: " << entry.path().string() << " ===\n";
+            LOG_INF("=== RUNNING TEMPLATE FILE: %s ===\n", entry.path().string().c_str());
             std::ifstream infile(entry.path());
             std::string contents((std::istreambuf_iterator<char>(infile)), std::istreambuf_iterator<char>());
             try {
@@ -662,9 +687,9 @@ int main_automated_tests(void) {
     assert(res > 0);
     supported_tmpl.resize(res);
     res = llama_chat_builtin_templates(supported_tmpl.data(), supported_tmpl.size());
-    std::cout << "Built-in chat templates:\n";
+    LOG_INF("Built-in chat templates:\n");
     for (const auto *tmpl : supported_tmpl) {
-        std::cout << "  " << tmpl << "\n";
+        LOG_CNT("  %s\n", tmpl);
     }
 
     // test invalid chat template
@@ -673,7 +698,7 @@ int main_automated_tests(void) {
     const auto add_generation_prompt = true;
 
     for (const auto & test_case : test_cases) {
-        std::cout << "\n\n=== " << test_case.name << " ===\n\n";
+        LOG_INF("=== %s ===\n", test_case.name.c_str());
         auto conv = conversation;
         conv.insert(conv.end(), test_case.extra_conversation.begin(), test_case.extra_conversation.end());
         formatted_chat.resize(2048);
@@ -705,7 +730,7 @@ int main_automated_tests(void) {
         if (!test_case.supported_with_jinja) {
             continue;
         }
-        std::cout << "\n\n=== " << test_case.name << " (jinja) ===\n\n";
+        LOG_INF("=== %s (jinja) ===\n", test_case.name.c_str());
         try {
             auto msgs = messages;
             for (const auto & msg : test_case.extra_conversation) {

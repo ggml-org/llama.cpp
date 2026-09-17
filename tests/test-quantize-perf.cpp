@@ -2,6 +2,8 @@
 
 #include "ggml.h"
 #include "ggml-cpu.h"
+#include "arg.h"
+#include "log.h"
 
 #undef NDEBUG
 #include <algorithm>
@@ -101,10 +103,10 @@ static void benchmark_function(size_t size, size_t q_size, int64_t iterations, c
         min_time_us = std::min(min_time_us, end_time - start_time);
     }
 
-    printf("      min cycles/%d vals   : %9.2f\n",  QK, QK * min_time_cycles / (float) size);
-    printf("      avg cycles/%d vals   : %9.2f\n",  QK, QK * total_time_cycles / (float) (size * iterations));
-    printf("      float32 throughput   : %9.2f GB/s\n",  gigabytes_per_second(4 * size * iterations, total_time_us));
-    printf("      quantized throughput : %9.2f GB/s\n",  gigabytes_per_second(q_size * iterations, total_time_us));
+    LOG_CNT("      min cycles/%d vals   : %9.2f\n",  QK, QK * min_time_cycles / (float) size);
+    LOG_CNT("      avg cycles/%d vals   : %9.2f\n",  QK, QK * total_time_cycles / (float) (size * iterations));
+    LOG_CNT("      float32 throughput   : %9.2f GB/s\n",  gigabytes_per_second(4 * size * iterations, total_time_us));
+    LOG_CNT("      quantized throughput : %9.2f GB/s\n",  gigabytes_per_second(q_size * iterations, total_time_us));
 }
 
 static void usage(char * argv[]) {
@@ -138,12 +140,16 @@ static void usage(char * argv[]) {
 }
 
 int main(int argc, char * argv[]) {
+    common_init();
+
     quantize_perf_params params {};
 
     // read command line
 
     bool invalid_param = false;
     std::string arg;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
 
@@ -154,7 +160,7 @@ int main(int argc, char * argv[]) {
             }
             size_t size = std::stoi(argv[i]);
             if (size % 32 != 0) {
-                fprintf(stderr, "error: size %zu not divisible by 32\n", size);
+                LOG_ERR("error: size %zu not divisible by 32\n", size);
                 invalid_param = true;
                 break;
             }
@@ -203,7 +209,7 @@ int main(int argc, char * argv[]) {
             }
             int alignment = std::stoi(argv[i]);
             if (alignment < 0 || alignment > MAX_ALIGNMENT) {
-            fprintf(stderr, "error: alignment-offset must be less than %d\n", MAX_ALIGNMENT);
+            LOG_ERR("error: alignment-offset must be less than %d\n", MAX_ALIGNMENT);
                 invalid_param = true;
                 break;
             }
@@ -215,7 +221,7 @@ int main(int argc, char * argv[]) {
             }
             int number = std::stoi(argv[i]);
             if (number < 0 || number > MAX_ITERATIONS) {
-            fprintf(stderr, "error: iterations must be less than %d\n", MAX_ITERATIONS);
+            LOG_ERR("error: iterations must be less than %d\n", MAX_ITERATIONS);
                 invalid_param = true;
                 break;
             }
@@ -223,15 +229,31 @@ int main(int argc, char * argv[]) {
         } else if ((arg == "-h") || (arg == "--help")) {
             usage(argv);
             return 1;
+        } else if (arg[0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else {
-            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            LOG_ERR("error: unknown argument: %s\n", arg.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
     }
     if (invalid_param) {
-        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
+        LOG_ERR("error: invalid parameter for argument: %s\n", arg.c_str());
+        common_log_flush(common_log_main());
         return 1;
     }
+    common_argv.push_back(nullptr);
+
+    // the test's own "params" is declared above, so scope the parsed one
+    {
+        common_params params;
+        params.model.path = "."; // this test takes no model
+        if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+            return 1;
+        }
+    }
+
+    LOG("%s: running\n", "test-quantize-perf");
 
     if (params.test_sizes.empty()) {
         params.test_sizes.push_back(L1_SIZE);
@@ -271,14 +293,14 @@ int main(int argc, char * argv[]) {
         }
 
         if (qfns_cpu->from_float && qfns->to_float) {
-            printf("%s\n", ggml_type_name(type));
+            LOG_INF("  running %s\n", ggml_type_name(type));
 
             ggml_quantize_init(type);
 
             if (params.op_quantize_row_q_reference) {
-                printf("  quantize_row_q_reference\n");
+                LOG_CNT("  quantize_row_q_reference\n");
                 for (size_t size : params.test_sizes) {
-                    printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
+                    LOG_CNT("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         qfns->from_float_ref(test_data1, test_q1, size);
                         return test_q1[0];
@@ -286,13 +308,13 @@ int main(int argc, char * argv[]) {
                     size_t quantized_size = ggml_row_size(type, size);
                     benchmark_function(size, quantized_size, iterations, quantize_fn);
                 }
-                printf("\n");
+                LOG_CNT("\n");
             }
 
             if (params.op_quantize_row_q) {
-                printf("  quantize_row_q\n");
+                LOG_CNT("  quantize_row_q\n");
                 for (size_t size : params.test_sizes) {
-                    printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
+                    LOG_CNT("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         qfns_cpu->from_float(test_data1, test_q1, size);
                         return test_q1[0];
@@ -300,14 +322,14 @@ int main(int argc, char * argv[]) {
                     size_t quantized_size = ggml_row_size(type, size);
                     benchmark_function(size, quantized_size, iterations, quantize_fn);
                 }
-                printf("\n");
+                LOG_CNT("\n");
             }
 
             if (params.op_dequantize_row_q) {
-                printf("  dequantize_row_q\n");
+                LOG_CNT("  dequantize_row_q\n");
                 qfns_cpu->from_float(test_data1, test_q1, largest);
                 for (size_t size : params.test_sizes) {
-                    printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
+                    LOG_CNT("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         qfns->to_float(test_q1, test_out, size);
                         return test_out[0];
@@ -315,13 +337,13 @@ int main(int argc, char * argv[]) {
                     size_t quantized_size = ggml_row_size(type, size);
                     benchmark_function(size, quantized_size, iterations, quantize_fn);
                 }
-                printf("\n");
+                LOG_CNT("\n");
             }
 
             if (params.op_quantize_row_q_dot) {
-                printf("  quantize_row_q_dot\n");
+                LOG_CNT("  quantize_row_q_dot\n");
                 for (size_t size : params.test_sizes) {
-                    printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
+                    LOG_CNT("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
                         vdot->from_float(test_data1, test_q1, size);
@@ -330,15 +352,15 @@ int main(int argc, char * argv[]) {
                     size_t quantized_size = ggml_row_size(type, size);
                     benchmark_function(size, quantized_size, iterations, quantize_fn);
                 }
-                printf("\n");
+                LOG_CNT("\n");
             }
 
             if (params.op_vec_dot_q) {
-                printf("  vec_dot_q\n");
+                LOG_CNT("  vec_dot_q\n");
                 qfns_cpu->from_float(test_data1, test_q1, largest);
                 qfns_cpu->from_float(test_data2, test_q2, largest);
                 for (size_t size : params.test_sizes) {
-                    printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
+                    LOG_CNT("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         float result;
                         qfns_cpu->vec_dot(size, &result, 0, test_q1, 0, test_q2, 0, 1);
@@ -347,10 +369,13 @@ int main(int argc, char * argv[]) {
                     size_t quantized_size = ggml_row_size(type, size);
                     benchmark_function(size, quantized_size, iterations, quantize_fn);
                 }
-                printf("\n");
+                LOG_CNT("\n");
             }
         }
     }
 
+    // this benchmark has no failure path, so reaching this point means it all passed
+    LOG("%s: %s\n", "test-quantize-perf", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

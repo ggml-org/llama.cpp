@@ -6,11 +6,24 @@
 
 #include "../src/llama-grammar.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cassert>
 #include <stdexcept>
 
-int main()
+int main(int argc, char ** argv)
 {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-llama-grammar");
+
     llama_grammar_parser parsed_grammar;
 
     std::vector<std::pair<std::string, uint32_t>> expected = {
@@ -183,10 +196,10 @@ int main()
             // pretty print error message before asserting
             if (expected_element.type != element->type || expected_element.value != element->value)
             {
-                fprintf(stderr, "index: %d\n", index);
-                fprintf(stderr, "expected_element: %d, %u\n", expected_element.type, expected_element.value);
-                fprintf(stderr, "actual_element: %d, %u\n", element->type, element->value);
-                fprintf(stderr, "expected_element != actual_element\n");
+                LOG_ERR("index: %d\n", index);
+                LOG_ERR("expected_element: %d, %u\n", expected_element.type, expected_element.value);
+                LOG_ERR("actual_element: %d, %u\n", element->type, element->value);
+                LOG_ERR("expected_element != actual_element\n");
             }
 
             assert(expected_element.type == element->type && expected_element.value == element->value);
@@ -402,5 +415,8 @@ int main()
 
     llama_grammar_free_impl(grammar);
 
+    // the test aborts on a mismatch, so reaching this point means it passed
+    LOG("%s: %s\n", "test-llama-grammar", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

@@ -2,7 +2,9 @@
 #include <iostream>
 #include <random>
 #include <cstdlib>
+#include <vector>
 
+#include "arg.h"
 #include "json.h"
 #include "subproc.h"
 
@@ -12,6 +14,7 @@
 #include "jinja/utils.h"
 #include "jinja/caps.h"
 
+#include "log.h"
 #include "testing.h"
 
 using json = common_json;
@@ -41,6 +44,10 @@ static void test_fuzzing(testing & t);
 static bool g_python_mode = false;
 
 int main(int argc, char *argv[]) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     testing t(std::cout);
     t.verbose = true;
 
@@ -49,14 +56,24 @@ int main(int argc, char *argv[]) {
     //        only use this for cross-checking, not for correctness
     //        note: the implementation of this flag is basic, only intented to be used by maintainers
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-py") {
             g_python_mode = true;
+        } else if (arg[0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else {
             t.set_filter(arg);
         }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-jinja");
 
     t.test("whitespace control", test_whitespace_control);
     t.test("conditionals", test_conditionals);
@@ -80,7 +97,10 @@ int main(int argc, char *argv[]) {
         t.test("fuzzing", test_fuzzing);
     }
 
-    return t.summary();
+    const int rc = t.summary();
+    LOG("%s: %s\n", "test-jinja", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }
 
 static void test_whitespace_control(testing & t) {

@@ -32,7 +32,7 @@ def test_backend_ops_htp0(type_a):
         pattern = f"type_a={type_a}"
 
     result = run_snapdragon(
-        ["test-backend-ops", "-b", "HTP0", "-o", "MUL_MAT", "-p", pattern],
+        ["test-backend-ops", "-b", "HTP0", "-o", "MUL_MAT", "-p", pattern, "--errors-only"],
     )
     write_qdc_log(f"backend_ops_{type_a}.log", result.stdout or "")
     assert result.returncode == 0, (

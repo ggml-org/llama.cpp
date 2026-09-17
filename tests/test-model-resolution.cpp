@@ -468,7 +468,16 @@ static void test_task_assembly() {
     g_repos.clear();
 }
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-model-resolution");
+
     // unbuffered, so a crash cannot swallow the reports already printed
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
@@ -502,5 +511,10 @@ int main(void) {
 
     std::filesystem::remove_all(cache_dir);
     printf("test-model-resolution: all tests OK\n");
+
+    // the log worker was paused above, restart it for the verdict
+    common_log_resume(common_log_main());
+    LOG("%s: %s\n", "test-model-resolution", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

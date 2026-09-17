@@ -2,6 +2,8 @@
 #include "ggml-cpp.h"
 #include "gguf-model-data.h"
 #include "llama.h"
+#include "arg.h"
+#include "log.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -121,7 +123,7 @@ static bool parse_snapshot_file(const std::string & path, std::vector<snapshot_s
         if (line[0] == '[') {
             auto close = line.find(']');
             if (close == std::string::npos) {
-                fprintf(stderr, "parse error: missing ] in '%s'\n", line.c_str());
+                LOG_ERR("parse error: missing ] in '%s'\n", line.c_str());
                 return false;
             }
             std::string ftype_str = line.substr(1, close - 1);
@@ -134,13 +136,13 @@ static bool parse_snapshot_file(const std::string & path, std::vector<snapshot_s
 
             llama_ftype ftype = llama_ftype_from_name(ftype_str.c_str());
             if ((int) ftype < 0) {
-                fprintf(stderr, "parse error: unknown ftype '%s'\n", ftype_str.c_str());
+                LOG_ERR("parse error: unknown ftype '%s'\n", ftype_str.c_str());
                 return false;
             }
 
             ggml_type dtype = ggml_type_from_name(default_str);
             if (dtype == GGML_TYPE_COUNT) {
-                fprintf(stderr, "parse error: unknown default type '%s'\n", default_str.c_str());
+                LOG_ERR("parse error: unknown default type '%s'\n", default_str.c_str());
                 return false;
             }
 
@@ -150,13 +152,13 @@ static bool parse_snapshot_file(const std::string & path, std::vector<snapshot_s
         }
 
         if (!cur) {
-            fprintf(stderr, "parse error: tensor line before any section: '%s'\n", line.c_str());
+            LOG_ERR("parse error: tensor line before any section: '%s'\n", line.c_str());
             return false;
         }
 
         auto sp = line.rfind(' ');
         if (sp == std::string::npos) {
-            fprintf(stderr, "parse error: no space in tensor line: '%s'\n", line.c_str());
+            LOG_ERR("parse error: no space in tensor line: '%s'\n", line.c_str());
             return false;
         }
 
@@ -165,7 +167,7 @@ static bool parse_snapshot_file(const std::string & path, std::vector<snapshot_s
 
         ggml_type gt = ggml_type_from_name(ttype);
         if (gt == GGML_TYPE_COUNT) {
-            fprintf(stderr, "parse error: unknown type '%s' for tensor '%s'\n", ttype.c_str(), tname.c_str());
+            LOG_ERR("parse error: unknown type '%s' for tensor '%s'\n", ttype.c_str(), tname.c_str());
             return false;
         }
 
@@ -326,15 +328,18 @@ static std::string generate_snapshot(const std::string &       name,
 }
 
 static int run_generate(const std::string & snapshot_dir) {
-    fprintf(stderr, "This will overwrite all snapshot files in:\n  %s\n", snapshot_dir.c_str());
-    fprintf(stderr, "Continue? [y/N] ");
+    // the confirmation prompt must stay visible under --errors-only
+    LOG_WRN("This will overwrite all snapshot files in:\n  %s\n", snapshot_dir.c_str());
+    LOG_WRN("Continue? [y/N] ");
+    common_log_flush(common_log_main()); // the log is async, drain it before blocking on stdin
     int ch = fgetc(stdin);
     if (ch != 'y' && ch != 'Y') {
-        fprintf(stderr, "Aborted.\n");
+        LOG_WRN("Aborted.\n");
+        common_log_flush(common_log_main());
         return 1;
     }
 
-    fprintf(stderr, "\n");
+    LOG_WRN("\n");
 
     int n_written = 0;
 
@@ -342,10 +347,11 @@ static int run_generate(const std::string & snapshot_dir) {
         const auto & spec = model_specs[m];
         std::string  name = model_name_from_repo(spec.repo);
 
-        fprintf(stderr, "Fetching model metadata for %s from %s...\n", name.c_str(), spec.repo);
+        LOG_INF("Fetching model metadata for %s from %s...\n", name.c_str(), spec.repo);
         auto result = gguf_fetch_model_meta(spec.repo, spec.quant);
         if (!result.has_value()) {
-            fprintf(stderr, "ERROR: could not fetch model metadata for %s\n", name.c_str());
+            LOG_ERR("ERROR: could not fetch model metadata for %s\n", name.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -360,19 +366,20 @@ static int run_generate(const std::string & snapshot_dir) {
 
         std::ofstream f(path);
         if (!f.good()) {
-            fprintf(stderr, "ERROR: could not write %s\n", path.c_str());
+            LOG_ERR("ERROR: could not write %s\n", path.c_str());
             llama_quant_free(qs);
             llama_model_free(model);
+            common_log_flush(common_log_main());
             return 1;
         }
         f << content;
         n_written++;
-        fprintf(stderr, "  wrote %s\n", path.c_str());
+        LOG_INF("  wrote %s\n", path.c_str());
         llama_quant_free(qs);
         llama_model_free(model);
     }
 
-    fprintf(stderr, "%d files written\n", n_written);
+    LOG_INF("%d files written\n", n_written);
     return 0;
 }
 
@@ -384,8 +391,8 @@ static bool run_test_section(quantize_state_impl * qs, mock_tensors & mt, const 
     // verify default_type matches what llama_ftype_get_default_type returns
     ggml_type computed_default = llama_ftype_get_default_type(section.ftype);
     if (computed_default != section.default_type) {
-        printf("  FAIL  [%s] default type mismatch: file says %s, code says %s\n", llama_ftype_to_name(section.ftype),
-               ggml_type_name(section.default_type), ggml_type_name(computed_default));
+        LOG_INF("  FAIL  [%s] default type mismatch: file says %s, code says %s\n", llama_ftype_to_name(section.ftype),
+                ggml_type_name(section.default_type), ggml_type_name(computed_default));
         return false;
     }
 
@@ -409,15 +416,15 @@ static bool run_test_section(quantize_state_impl * qs, mock_tensors & mt, const 
         }
 
         if (got != expected) {
-            printf("  FAIL  %-50s %-10s expected %s, got %s\n", name, llama_ftype_to_name(section.ftype),
-                   ggml_type_name(expected), ggml_type_name(got));
+            LOG_INF("  FAIL  %-50s %-10s expected %s, got %s\n", name, llama_ftype_to_name(section.ftype),
+                    ggml_type_name(expected), ggml_type_name(got));
             all_pass = false;
         }
     }
 
     if (n_override_found != (int) section.overrides.size()) {
-        printf("  FAIL  [%s] override count mismatch: listed %d, matched %d\n", llama_ftype_to_name(section.ftype),
-               (int) section.overrides.size(), n_override_found);
+        LOG_INF("  FAIL  [%s] override count mismatch: listed %d, matched %d\n", llama_ftype_to_name(section.ftype),
+                (int) section.overrides.size(), n_override_found);
         all_pass = false;
     }
 
@@ -432,11 +439,11 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
     for (int m = 0; m < n_model_specs; m++) {
         const auto & spec = model_specs[m];
         std::string  name = model_name_from_repo(spec.repo);
-        printf("=== %s ===\n", name.c_str());
+        LOG_INF("=== %s ===\n", name.c_str());
 
         auto result = gguf_fetch_model_meta(spec.repo, spec.quant, "", false);
         if (!result.has_value()) {
-            printf("  SKIP  (could not fetch model metadata)\n\n");
+            LOG_INF("  SKIP  (could not fetch model metadata)\n\n");
             total_skip++;
             continue;
         }
@@ -450,7 +457,7 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
         std::string                   snapshot_path = snapshot_dir + "/" + snapshot_file_from_name(name) + ".schema";
         std::vector<snapshot_section> sections;
         if (!parse_snapshot_file(snapshot_path, sections)) {
-            printf("  SKIP  (could not read snapshot file: %s)\n\n", snapshot_path.c_str());
+            LOG_INF("  SKIP  (could not read snapshot file: %s)\n\n", snapshot_path.c_str());
             llama_quant_free(qs);
             llama_model_free(model);
             total_skip++;
@@ -469,9 +476,9 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
             }
         }
 
-        printf("  %s  %s: %d/%d ftype sections passed (%d tensors)\n", model_fail == 0 ? "PASS" : "FAIL", name.c_str(),
-               model_pass, model_pass + model_fail, (int) mt.tensors.size());
-        printf("\n");
+        LOG_INF("  %s  %s: %d/%d ftype sections passed (%d tensors)\n", model_fail == 0 ? "PASS" : "FAIL", name.c_str(),
+                model_pass, model_pass + model_fail, (int) mt.tensors.size());
+        LOG_CNT("\n");
 
         if (model_fail == 0) {
             total_pass++;
@@ -498,23 +505,43 @@ static int run_remote_tests(const std::string & snapshot_dir, const char * argv0
 }
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     std::string snapshot_dir = SNAPSHOT_DIR;
     bool        generate     = false;
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--generate") == 0) {
             generate = true;
         } else if (strcmp(argv[i], "--snapshot-dir") == 0 && i + 1 < argc) {
             snapshot_dir = argv[++i];
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-quant-type-selection");
 
     if (generate) {
-        return run_generate(snapshot_dir);
+        const int rc = run_generate(snapshot_dir);
+        LOG("%s: %s\n", "test-quant-type-selection", rc == 0 ? "PASSED" : "FAILED");
+        common_log_flush(common_log_main());
+        return rc;
     }
 
     // suppress llama log warnings during test (e.g. tensor type fallback messages)
     llama_log_set([](enum ggml_log_level, const char *, void *) {}, nullptr);
 
-    return run_remote_tests(snapshot_dir, argv[0]);
+    const int rc = run_remote_tests(snapshot_dir, argv[0]);
+    LOG("%s: %s\n", "test-quant-type-selection", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }

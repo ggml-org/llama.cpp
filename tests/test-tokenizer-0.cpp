@@ -2,6 +2,9 @@
 #include "common.h"
 #include "console.h"
 
+#include "arg.h"
+#include "log.h"
+
 #include <cstdio>
 #include <string>
 #include <map>
@@ -63,7 +66,7 @@ static llama_tests read_tests(const std::string & fname_inp, const std::string &
 
     std::ifstream ifs_inp(fname_inp);
     if (!ifs_inp) {
-        fprintf(stderr, "%s : error: could not open file '%s'\n", __func__, fname_inp.c_str());
+        LOG_ERR("%s : error: could not open file '%s'\n", __func__, fname_inp.c_str());
         return tests;
     }
 
@@ -71,7 +74,7 @@ static llama_tests read_tests(const std::string & fname_inp, const std::string &
 
     std::ifstream ifs_out(fname_out);
     if (!ifs_out) {
-        fprintf(stderr, "%s : error: could not open file '%s'\n", __func__, fname_out.c_str());
+        LOG_ERR("%s : error: could not open file '%s'\n", __func__, fname_out.c_str());
         return tests;
     }
 
@@ -96,7 +99,7 @@ static llama_tests read_tests(const std::string & fname_inp, const std::string &
     }
 
     if (sinp.size() != sout.size()) {
-        fprintf(stderr, "%s : error: input and output files have different number of tests\n", __func__);
+        LOG_ERR("%s : error: input and output files have different number of tests\n", __func__);
         return tests;
     }
 
@@ -124,22 +127,44 @@ static llama_tests read_tests(const std::string & fname_inp, const std::string &
 }
 
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s vocab-file [text-file]\n", argv[0]);
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    std::vector<std::string> positional;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            positional.push_back(argv[i]);
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    const std::string fname = argv[1];
+    if (positional.empty()) {
+        LOG_ERR("Usage: %s vocab-file [text-file]\n", argv[0]);
+        common_log_flush(common_log_main());
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-tokenizer-0");
+
+    const std::string fname = positional[0];
 
     const std::string fname_inp = fname + ".inp";
     const std::string fname_out = fname + ".out";
 
     std::string fname_text;
-    if (argc > 2) {
-        fname_text = argv[2];
+    if (positional.size() > 1) {
+        fname_text = positional[1];
     }
 
-    fprintf(stderr, "%s : reading vocab from: '%s'\n", __func__, fname.c_str());
+    LOG_INF("%s : reading vocab from: '%s'\n", __func__, fname.c_str());
 
     llama_model * model;
     llama_context * ctx;
@@ -155,7 +180,9 @@ int main(int argc, char **argv) {
         model = llama_model_load_from_file(fname.c_str(), mparams);
 
         if (model == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            LOG("%s: %s\n", "test-tokenizer-0", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -164,8 +191,10 @@ int main(int argc, char **argv) {
         ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
             llama_model_free(model);
+            LOG("%s: %s\n", "test-tokenizer-0", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
     }
@@ -186,7 +215,9 @@ int main(int argc, char **argv) {
         const auto res = read_tests(fname_inp, fname_out);
 
         if (res.empty()) {
-            fprintf(stderr, "%s : error: no tests found\n", __func__);
+            LOG_ERR("%s : error: no tests found\n", __func__);
+            LOG("%s: %s\n", "test-tokenizer-0", "FAILED");
+            common_log_flush(common_log_main());
             exit(1);
         }
 
@@ -210,14 +241,15 @@ int main(int argc, char **argv) {
                     continue;
                 }
 
-                printf("\n");
-                printf("src: '%s'\n", test_kv.first.c_str());
-                printf("res: '%s'\n", common_detokenize(ctx, res).c_str());
-                printf("tok: ");
+                // per-data-item detail: INFO, so hidden under --errors-only
+                LOG_CNT("\n");
+                LOG_CNT("src: '%s'\n", test_kv.first.c_str());
+                LOG_CNT("res: '%s'\n", common_detokenize(ctx, res).c_str());
+                LOG_CNT("tok: ");
                 for (const auto & tok : res) {
-                    printf("%d ", tok);
+                    LOG_CNT("%d ", tok);
                 }
-                printf("\n");
+                LOG_CNT("\n");
 
                 bool correct = res.size() == test_kv.second.size();
                 for (int i = 0; i < (int) res.size() && correct; ++i) {
@@ -227,20 +259,21 @@ int main(int argc, char **argv) {
                 }
 
                 if (!correct) {
-                    fprintf(stderr, "%s : failed test:    '%s'\n", __func__, test_kv.first.c_str());
-                    fprintf(stderr, "%s : detokenized to: '%s' instead of '%s'\n", __func__,
+                    LOG_ERR("%s : failed test:    '%s'\n", __func__, test_kv.first.c_str());
+                    LOG_ERR("%s : detokenized to: '%s' instead of '%s'\n", __func__,
                         common_detokenize(ctx, res).c_str(),
                         common_detokenize(ctx, test_kv.second).c_str());
-                    fprintf(stderr, "%s : expected tokens: ", __func__);
+                    // partial line: LOG_CNTV adds no prefix, error level so --errors-only keeps it
+                    LOG_ERR("%s : expected tokens: ", __func__);
                     for (const auto & t : test_kv.second) {
-                        fprintf(stderr, "%6d '%s', ", t, common_token_to_piece(ctx, t).c_str());
+                        LOG_CNTV(LOG_LEVEL_ERROR, "%6d '%s', ", t, common_token_to_piece(ctx, t).c_str());
                     }
-                    fprintf(stderr, "\n");
-                    fprintf(stderr, "%s : got tokens:      ", __func__);
+                    LOG_CNTV(LOG_LEVEL_ERROR, "\n");
+                    LOG_ERR("%s : got tokens:      ", __func__);
                     for (const auto & t : res) {
-                        fprintf(stderr, "%6d '%s', ", t, common_token_to_piece(ctx, t).c_str());
+                        LOG_CNTV(LOG_LEVEL_ERROR, "%6d '%s', ", t, common_token_to_piece(ctx, t).c_str());
                     }
-                    fprintf(stderr, "\n");
+                    LOG_CNTV(LOG_LEVEL_ERROR, "\n");
 
                     success = false;
                 }
@@ -254,19 +287,21 @@ int main(int argc, char **argv) {
 
     // single threaded tokenization
     if (!fname_text.empty()) {
-        fprintf(stderr, "%s : tokenizing: '%s'\n", __func__, fname_text.c_str());
+        LOG_INF("%s : tokenizing: '%s'\n", __func__, fname_text.c_str());
 
         std::string text;
         {
             std::ifstream ifs(fname_text);
             if (!ifs) {
-                fprintf(stderr, "%s : error: could not open file '%s'\n", __func__, fname_text.c_str());
+                LOG_ERR("%s : error: could not open file '%s'\n", __func__, fname_text.c_str());
+                LOG("%s: %s\n", "test-tokenizer-0", "FAILED");
+                common_log_flush(common_log_main());
                 return 1;
             }
             text = std::string(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
         }
 
-        fprintf(stderr, "%s : text size: %zu\n", __func__, text.size());
+        LOG_INF("%s : text size: %zu\n", __func__, text.size());
 
         std::vector<llama_token> res;
 
@@ -277,17 +312,19 @@ int main(int argc, char **argv) {
 
             const auto t_end = ggml_time_us();
 
-            fprintf(stderr, "%s : tokenized in %.3f ms (cpp)\n", __func__, (t_end - t_start) / 1000.0);
+            LOG_INF("%s : tokenized in %.3f ms (cpp)\n", __func__, (t_end - t_start) / 1000.0);
         }
 
-        fprintf(stderr, "%s : tokens: %zu\n", __func__, res.size());
+        LOG_INF("%s : tokens: %zu\n", __func__, res.size());
 
         {
             const std::string fname_out = fname_text + ".tokcpp";
 
             std::ofstream ofs(fname_out);
             if (!ofs) {
-                fprintf(stderr, "%s : error: could not open file '%s'\n", __func__, fname_out.c_str());
+                LOG_ERR("%s : error: could not open file '%s'\n", __func__, fname_out.c_str());
+                LOG("%s: %s\n", "test-tokenizer-0", "FAILED");
+                common_log_flush(common_log_main());
                 return 1;
             }
 
@@ -297,7 +334,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        fprintf(stderr, "%s : tokens written to '%s'\n", __func__, (fname_text + ".tokcpp").c_str());
+        LOG_INF("%s : tokens written to '%s'\n", __func__, (fname_text + ".tokcpp").c_str());
     }
 
     llama_free(ctx);
@@ -305,8 +342,13 @@ int main(int argc, char **argv) {
 
     llama_backend_free();
 
+    common_log_flush(common_log_main());
+
     printf("\n");
     printf("Tests %s\n", success ? "passed" : "failed");
+
+    LOG("%s: %s\n", "test-tokenizer-0", success ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
 
     return success ? 0 : 3;
 }

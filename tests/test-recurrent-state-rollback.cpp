@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "log.h"
 #include "ggml-backend.h"
 #include "llama.h"
 
@@ -67,7 +68,7 @@ static llama_context * init_ctx(llama_model * model, llama_context_params cparam
     llama_get_memory(ctx)->state_write(collector);
     llama_memory_clear(llama_get_memory(ctx), true);
     if (collector.buffers.empty()) {
-        fprintf(stderr, "%s : no cache buffers found\n", __func__);
+        LOG_ERR("%s : no cache buffers found\n", __func__);
         llama_free(ctx);
         return nullptr;
     }
@@ -117,7 +118,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     llama_context * ctx_roll = make_ctx_multi();
     llama_context * ctx_ref  = make_ctx_multi();
     if (ctx_roll == nullptr || ctx_ref == nullptr) {
-        fprintf(stderr, "%s : failed to init multi-seq contexts\n", __func__);
+        LOG_ERR("%s : failed to init multi-seq contexts\n", __func__);
         return false;
     }
 
@@ -127,7 +128,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     };
 
     if (llama_n_rs_seq(ctx_roll) < n_rollback) {
-        fprintf(stderr, "%s : skipping because n_rs_seq is too small\n", __func__);
+        LOG_WRN("%s : skipping because n_rs_seq is too small\n", __func__);
         cleanup();
         return true;
     }
@@ -161,7 +162,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         ok = ok && !llama_memory_seq_rm(llama_get_memory(ctx_roll), (llama_seq_id) s, p0 - 1, -1);
     }
     if (!ok) {
-        fprintf(stderr, "%s : multi-seq prefill/rollback failed\n", __func__);
+        LOG_ERR("%s : multi-seq prefill/rollback failed\n", __func__);
         cleanup();
         return false;
     }
@@ -177,7 +178,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     ok = ok && llama_decode(ctx_ref, batch) == 0;
     llama_batch_free(batch);
     if (!ok) {
-        fprintf(stderr, "%s : multi-seq replay decode failed\n", __func__);
+        LOG_ERR("%s : multi-seq replay decode failed\n", __func__);
         cleanup();
         return false;
     }
@@ -193,7 +194,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         const float * l_roll = llama_get_logits_ith(ctx_roll, i);
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  i);
         if (l_roll == nullptr || l_ref == nullptr) {
-            fprintf(stderr, "%s : missing multi-seq logits at index %u\n", __func__, i);
+            LOG_ERR("%s : missing multi-seq logits at index %u\n", __func__, i);
             cleanup();
             return false;
         }
@@ -208,13 +209,13 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
 
     if (diff_max > eps) {
-        fprintf(stderr, "%s : multi-seq split replay logits mismatch (max diff %g, first at seq %u pos %d)\n",
+        LOG_ERR("%s : multi-seq split replay logits mismatch (max diff %g, first at seq %u pos %d)\n",
                 __func__, (double) diff_max, seq_first, pos_first);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : multi-seq split replay matched (max diff %g)\n", __func__, (double) diff_max);
+    LOG_INF("%s : multi-seq split replay matched (max diff %g)\n", __func__, (double) diff_max);
 
     // seq-1-only decodes must be independent of seq 0's content: diverge seq 0
     // in ctx_ref only, then compare identical seq-1-only continuations bitwise
@@ -251,13 +252,13 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
 
     if (!ok || diff_tail > eps) {
-        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g)\n",
+        LOG_ERR("%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g)\n",
                 __func__, ok ? 1 : 0, (double) diff_tail);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g)\n", __func__, (double) diff_tail);
+    LOG_INF("%s : seq-1-only decode independent of seq 0 (max diff %g)\n", __func__, (double) diff_tail);
     cleanup();
     return true;
 }
@@ -269,12 +270,12 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     llama_context * ctx_src = make_ctx(params, model, fill);
     llama_context * ctx_dst = make_ctx(params, model, fill);
     if (ctx_src == nullptr || ctx_dst == nullptr) {
-        fprintf(stderr, "%s : failed to init contexts\n", __func__);
+        LOG_ERR("%s : failed to init contexts\n", __func__);
         return 1;
     }
 
     if (llama_n_rs_seq(ctx_src) == 0) {
-        fprintf(stderr, "%s : skipping because n_rs_seq is disabled\n", __func__);
+        LOG_WRN("%s : skipping because n_rs_seq is disabled\n", __func__);
         llama_free(ctx_src);
         llama_free(ctx_dst);
         return 0;
@@ -289,13 +290,13 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     const uint32_t n_rs_seq = llama_n_rs_seq(ctx_src);
     constexpr uint32_t n_rollback = 3;
     if (n_rs_seq < n_rollback) {
-        fprintf(stderr, "%s : skipping because n_rs_seq is too small\n", __func__);
+        LOG_WRN("%s : skipping because n_rs_seq is too small\n", __func__);
         llama_free(ctx_src);
         llama_free(ctx_dst);
         return 0;
     }
     if (tokens.empty()) {
-        fprintf(stderr, "%s : not enough prompt tokens\n", __func__);
+        LOG_ERR("%s : not enough prompt tokens\n", __func__);
         return 1;
     }
     tokens.resize(n_rs_seq + 1, tokens.back());
@@ -307,11 +308,11 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     // Replaying them crosses DSV4's ratio-4 compressor boundary.
     // Rollback leaves the recurrent memory in a snapshot state (rs_idx != 0).
     if (!decode_tokens(ctx_src, tokens, n_tokens)) {
-        fprintf(stderr, "%s : failed to decode prompt\n", __func__);
+        LOG_ERR("%s : failed to decode prompt\n", __func__);
         return 1;
     }
     if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1)) {
-        fprintf(stderr, "%s : rollback failed\n", __func__);
+        LOG_ERR("%s : rollback failed\n", __func__);
         return 1;
     }
 
@@ -327,21 +328,21 @@ static int test_rollback(const common_params & params, llama_model * model, uint
             const llama_pos pos = rollback_pos + i;
             if (!decode_one(ctx_src, tokens[pos], pos) ||
                 !decode_one(ctx_dst, tokens[pos], pos)) {
-                fprintf(stderr, "%s : %s replay failed at position %d\n", __func__, mode, pos);
+                LOG_ERR("%s : %s replay failed at position %d\n", __func__, mode, pos);
                 return false;
             }
 
             const float * logits_src = llama_get_logits_ith(ctx_src, 0);
             const float * logits_dst = llama_get_logits_ith(ctx_dst, 0);
             if (logits_src == nullptr || logits_dst == nullptr) {
-                fprintf(stderr, "%s : missing %s logits at position %d\n", __func__, mode, pos);
+                LOG_ERR("%s : missing %s logits at position %d\n", __func__, mode, pos);
                 return false;
             }
 
             logits_src_replay[i].assign(logits_src, logits_src + n_vocab);
             for (int token = 0; token < n_vocab; ++token) {
                 if (logit_diff(logits_src[token], logits_dst[token]) > eps) {
-                    fprintf(stderr, "%s : %s logits mismatch at position %d, token %d (%g != %g)\n",
+                    LOG_ERR("%s : %s logits mismatch at position %d, token %d (%g != %g)\n",
                             __func__, mode, pos, token, (double) logits_src[token], (double) logits_dst[token]);
                     return false;
                 }
@@ -355,7 +356,7 @@ static int test_rollback(const common_params & params, llama_model * model, uint
 
     if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1) ||
         !llama_memory_seq_rm(llama_get_memory(ctx_dst), 0, rollback_pos, -1)) {
-        fprintf(stderr, "%s : partial rollback failed\n", __func__);
+        LOG_ERR("%s : partial rollback failed\n", __func__);
         return 1;
     }
 
@@ -373,7 +374,7 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     // non-zero at load time. The restore must wipe that state and still match.
     llama_context * ctx_dirty = make_ctx(params, model, fill);
     if (ctx_dirty == nullptr) {
-        fprintf(stderr, "%s : failed to init dirty ctx\n", __func__);
+        LOG_ERR("%s : failed to init dirty ctx\n", __func__);
         return 1;
     }
 
@@ -385,11 +386,11 @@ static int test_rollback(const common_params & params, llama_model * model, uint
         }
     }
     if (!decode_tokens(ctx_dirty, noise, n_tokens)) {
-        fprintf(stderr, "%s : dirty prompt decode failed\n", __func__);
+        LOG_ERR("%s : dirty prompt decode failed\n", __func__);
         return 1;
     }
     if (!llama_memory_seq_rm(llama_get_memory(ctx_dirty), 0, rollback_pos, -1)) {
-        fprintf(stderr, "%s : dirty rollback failed\n", __func__);
+        LOG_ERR("%s : dirty rollback failed\n", __func__);
         return 1;
     }
 
@@ -398,26 +399,26 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     for (uint32_t i = 0; i < n_rollback; ++i) {
         const llama_pos pos = rollback_pos + i;
         if (!decode_one(ctx_dirty, tokens[pos], pos)) {
-            fprintf(stderr, "%s : dirty replay failed at position %d\n", __func__, pos);
+            LOG_ERR("%s : dirty replay failed at position %d\n", __func__, pos);
             return 1;
         }
 
         const float * logits_dirty = llama_get_logits_ith(ctx_dirty, 0);
         if (logits_dirty == nullptr) {
-            fprintf(stderr, "%s : missing dirty logits at position %d\n", __func__, pos);
+            LOG_ERR("%s : missing dirty logits at position %d\n", __func__, pos);
             return 1;
         }
 
         for (int token = 0; token < n_vocab; ++token) {
             if (logit_diff(logits_src_replay[i][token], logits_dirty[token]) > eps) {
-                fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g)\n",
+                LOG_ERR("%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g)\n",
                         __func__, pos, token, (double) logits_src_replay[i][token], (double) logits_dirty[token]);
                 return 1;
             }
         }
     }
 
-    fprintf(stderr, "%s : recurrent rollback checkpoint restored successfully\n", __func__);
+    LOG_INF("%s : recurrent rollback checkpoint restored successfully\n", __func__);
     llama_free(ctx_src);
     llama_free(ctx_dst);
     llama_free(ctx_dirty);
@@ -442,26 +443,36 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    LOG("%s: running\n", "test-recurrent-state-rollback");
+
     ggml_backend_load_all();
 
     common_init_result_ptr llama_init = common_init_from_params(params);
     llama_model * model = llama_init->model();
     if (model == nullptr) {
-        fprintf(stderr, "%s : failed to init model\n", __func__);
+        LOG_ERR("%s : failed to init model\n", __func__);
+        LOG("%s: %s\n", "test-recurrent-state-rollback", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
     if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
-        fprintf(stderr, "%s : skipping for non-recurrent model\n", __func__);
+        LOG_WRN("%s : skipping for non-recurrent model\n", __func__);
+        LOG("%s: %s\n", "test-recurrent-state-rollback", "PASSED");
+        common_log_flush(common_log_main());
         return 0;
     }
 
     for (uint8_t fill : { 0, 0x3e }) {
-        fprintf(stderr, "%s : testing with cache fill 0x%02x\n", __func__, fill);
+        LOG_INF("%s : testing with cache fill 0x%02x\n", __func__, fill);
         if (test_rollback(params, model, fill) != 0) {
+            LOG("%s: %s\n", "test-recurrent-state-rollback", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
     }
 
+    LOG("%s: %s\n", "test-recurrent-state-rollback", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

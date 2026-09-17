@@ -8,6 +8,10 @@
 
 #include "json.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cassert>
 #include <regex>
 
@@ -30,12 +34,12 @@ struct TestCase {
     std::string expected_grammar;
 
     void _print_failure_header() const {
-        fprintf(stderr, "#\n# Test '%s' failed.\n#\n%s\n", name.c_str(), schema.c_str());
+        LOG_ERR("#\n# Test '%s' failed.\n#\n%s\n", name.c_str(), schema.c_str());
     }
     void verify(const std::string & actual_grammar) const {
         if (trim(actual_grammar) != trim(expected_grammar)) {
         _print_failure_header();
-        fprintf(stderr, "# EXPECTED:\n%s\n# ACTUAL:\n%s\n", expected_grammar.c_str(), actual_grammar.c_str());
+        LOG_ERR("# EXPECTED:\n%s\n# ACTUAL:\n%s\n", expected_grammar.c_str(), actual_grammar.c_str());
         assert(false);
         }
     }
@@ -48,24 +52,24 @@ struct TestCase {
             }
         } catch (const std::runtime_error & ex) {
             _print_failure_header();
-            fprintf(stderr, "# GRAMMAR ERROR: %s\n", ex.what());
+            LOG_ERR("# GRAMMAR ERROR: %s\n", ex.what());
             assert(false);
         }
     }
     void verify_status(TestCaseStatus status) const {
         if (status != expected_status) {
             _print_failure_header();
-            fprintf(stderr, "# EXPECTED STATUS: %s\n", expected_status == SUCCESS ? "SUCCESS" : "FAILURE");
-            fprintf(stderr, "# ACTUAL STATUS: %s\n", status == SUCCESS ? "SUCCESS" : "FAILURE");
+            LOG_ERR("# EXPECTED STATUS: %s\n", expected_status == SUCCESS ? "SUCCESS" : "FAILURE");
+            LOG_ERR("# ACTUAL STATUS: %s\n", status == SUCCESS ? "SUCCESS" : "FAILURE");
             assert(false);
         }
     }
 };
 
 static void test_all(const std::string & title, std::function<void(const TestCase &)> runner) {
-    fprintf(stderr, "#\n# %s\n#\n", title.c_str());
+    LOG_INF("#\n# %s\n#\n", title.c_str());
     auto test = [&](const TestCase & tc) {
-        fprintf(stderr, "- %s%s\n", tc.name.c_str(), tc.expected_status == FAILURE ? " (failure expected)" : "");
+        LOG_INF("- %s%s\n", tc.name.c_str(), tc.expected_status == FAILURE ? " (failure expected)" : "");
         runner(tc);
     };
 
@@ -1510,20 +1514,29 @@ static void test_all(const std::string & title, std::function<void(const TestCas
     });
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-json-schema-to-grammar");
+
     test_all("JSON schema conversion", [](const TestCase & tc) {
         try {
             tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
         } catch (const std::invalid_argument & ex) {
-            fprintf(stderr, "Error: %s\n", ex.what());
+            LOG_ERR("Error: %s\n", ex.what());
             tc.verify_status(FAILURE);
         }
     });
 
     // a document parsed up front gives the same grammar as the JSON, recursion included
     {
-        fprintf(stderr, "- parsed document\n");
+        LOG_INF("- parsed document\n");
         auto schema = common_json::parse(R"""({
             "$ref": "#/$defs/node",
             "$defs": {
@@ -1539,7 +1552,7 @@ int main() {
 
     // a property node carries its $ref target, so its grammar names the ref rule
     {
-        fprintf(stderr, "- sub-schema $ref\n");
+        LOG_INF("- sub-schema $ref\n");
         auto parameters = common_json::parse(R"""({
             "type": "object",
             "properties": {"item": {"$ref": "#/$defs/item"}},
@@ -1577,4 +1590,8 @@ int main() {
             tc.verify_expectation_parseable();
         }
     });
+
+    // the test aborts on a failure, so reaching this point means it passed
+    LOG("%s: %s\n", "test-json-schema-to-grammar", "PASSED");
+    common_log_flush(common_log_main());
 }

@@ -8,12 +8,12 @@ set -eu
 
 WORKERS="${PYTEST_WORKERS:-auto}"
 
-if [ $# -lt 1 ]
+if [ $# -lt 1 ] || [ "$1" = "--errors-only" ]
 then
     if [[ "${SLOW_TESTS:-0}" == 1 ]]; then
-        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal "$@"
     else
-        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow"
+        pytest --durations=30 -v -x -n "${WORKERS}" --dist=worksteal -m "not slow" "$@"
     fi
 else
     pytest --durations=30 -n "${WORKERS}" --dist=worksteal "$@"

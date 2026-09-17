@@ -2,6 +2,10 @@
 
 #include "common.h"
 
+// "log.h" cannot be included here: clip-impl.h (pulled in by test-mtmd-impl.cpp) defines the
+// LOG_* macros unconditionally, which conflicts with log.h and is an error with -Werror
+int common_log_get_verbosity_thold(void);
+
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -28,8 +32,15 @@ struct testing {
     std::string skip_reason;
 
     static constexpr std::size_t status_column = 80;
+    // LOG_LEVEL_WARN, see common/log.h
+    static constexpr int log_level_warn = 2;
 
     explicit testing(std::ostream &os = std::cout) : out(os) {}
+
+    // hide the per-test detail when only warnings and errors are requested
+    bool show_details() const {
+        return common_log_get_verbosity_thold() > log_level_warn;
+    }
 
     std::string indent() const {
         if (stack.empty()) {
@@ -89,6 +100,10 @@ struct testing {
     }
 
     void print_result(const std::string &label, int new_failures, int new_assertions, const std::string &extra = "", bool was_skipped = false) const {
+        if (new_failures == 0 && !show_details()) {
+            return; // hide [PASS]/[SKIP], always report failures
+        }
+
         std::string line = indent() + label;
 
         std::string details;
@@ -131,7 +146,9 @@ struct testing {
         }
 
         ++tests;
-        out << indent() << name << "\n";
+        if (show_details()) {
+            out << indent() << name << "\n";
+        }
 
         int before_failures   = failures;
         int before_assertions = assertions;
@@ -174,7 +191,9 @@ struct testing {
         }
 
         ++tests;
-        out << indent() << "[bench] " << name << "\n";
+        if (show_details()) {
+            out << indent() << "[bench] " << name << "\n";
+        }
 
         int before_failures   = failures;
         int before_assertions = assertions;
@@ -263,6 +282,7 @@ struct testing {
         out << "failures   : " << failures << "\n";
         out << "exceptions : " << exceptions << "\n";
         out << "skipped    : " << skipped << "\n";
+        out << (failures == 0 ? "PASSED" : "FAILED") << "\n";
         return failures == 0 ? 0 : 1;
     }
 };
