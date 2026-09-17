@@ -1,6 +1,7 @@
 #pragma once
 #include "llama-kv-stream-resident.h"
 #include "llama-kv-stream-publication.h"
+#include "llama-memory-transition.h"
 
 struct llama_kv_stream_session_config {
     llama_kv_stream_policy_config policy;
@@ -8,10 +9,13 @@ struct llama_kv_stream_session_config {
     bool measure = false;
     bool native_graph_attention = false;
     bool resume_decode = false;
+    llama_memory_resource_id pool_resource = 0;
+    llama_memory_stage_id prefill_stage = 0;
+    llama_memory_stage_id decode_stage = 0;
 };
 
 // Serial append-only device consumer. The backend outlives the session; recurrent state belongs to the text model.
-class llama_kv_stream_session {
+class llama_kv_stream_session : public llama_memory_consumer {
 public:
     ~llama_kv_stream_session();
     static std::unique_ptr<llama_kv_stream_session> create(ggml_backend_t backend,
@@ -43,6 +47,10 @@ public:
     bool set_attention_workspace(ggml_backend_memory_lease_t lease, bool decode);
     void release_graphs();
     size_t captured_layers() const;
+
+    // Prepare a release-before-commit pool resize for the common memory-transition coordinator.
+    bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,
+            std::unique_ptr<llama_memory_preparation> & output) override;
 private:
     bool rebind_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode, bool growing);
     llama_kv_stream_session();
