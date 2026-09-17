@@ -4581,10 +4581,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
 
             // The q8_1 mmq path has its own (larger) shmem layout, check it separately.
-            // K-quants use the _int_k warptiles, others use _int.
+            // K-quants and IQ3_S use the _int_k warptiles, others use _int.
             const bool is_k_quant = (t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q3_K ||
                                      t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K ||
-                                     t == GGML_TYPE_Q6_K);
+                                     t == GGML_TYPE_Q6_K || t == GGML_TYPE_IQ3_S);
             const auto & s_int   = is_k_quant ? s_warptile_mmq_int_k   : s_warptile_mmq_int;
             const auto & m_int   = is_k_quant ? m_warptile_mmq_int_k   : m_warptile_mmq_int;
             const auto & l_int   = is_k_quant ? l_warptile_mmq_int_k   : l_warptile_mmq_int;
