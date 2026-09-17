@@ -553,7 +553,8 @@ static int test_layer_input_order() {
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             auto device = ggml_backend_dev_get(i);
             all_ok = test_layer_input_order({device}, false, LLAMA_SPLIT_MODE_LAYER, capture) == 0 && all_ok;
-            if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)), "CUDA") == 0) {
+            const char * backend = ggml_backend_reg_name(ggml_backend_dev_backend_reg(device));
+            if (strcmp(backend, "CUDA") == 0 || strcmp(backend, "WebGPU") == 0) {
                 all_ok = test_layer_input_order({device}, true, LLAMA_SPLIT_MODE_LAYER, capture) == 0 && all_ok;
             }
             if (ggml_backend_dev_buffer_type(device) != ggml_backend_cpu_buffer_type()) {
