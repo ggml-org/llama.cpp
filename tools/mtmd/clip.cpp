@@ -1116,6 +1116,11 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
                 const int  n_frames = params && params->feats ? (int) (params->feats->size() / n_latent) : 1;
                 builder = std::make_unique<clip_graph_pockettts_gen>(ctx, img, gen_process, n_step, n_frames);
             } break;
+        case PROJECTOR_TYPE_SOPRANO:
+            {
+                const int n_frames = params && params->feats ? (int) (params->feats->size() / 512) : 2;
+                builder = std::make_unique<clip_graph_soprano>(ctx, img, n_frames);
+            } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 const auto  gen_process = params ? params->gen_process : CLIP_GEN_PROCESS_GEN_CODE;
@@ -1823,6 +1828,11 @@ struct clip_model_loader {
                                 "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
                         }
                     } break;
+                case PROJECTOR_TYPE_SOPRANO:
+                    if (hparams.n_layer != 8 || hparams.n_embd != 768 || hparams.n_ff != 2304 || hparams.projection_dim != 512) {
+                        throw std::runtime_error("unsupported Soprano decoder configuration");
+                    }
+                    break;
                 case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                     {
                         // ECAPA-TDNN speaker encoder, mel front-end uses the Slaney default (fmin=0, fmax=sr/2)
@@ -2239,7 +2249,8 @@ struct clip_model_loader {
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
-            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN);
+            model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
+            model.proj_type != PROJECTOR_TYPE_SOPRANO);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -2909,6 +2920,46 @@ struct clip_model_loader {
 
                     model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_SOPRANO:
+                {
+                    auto get_vocos = [&](const std::string & name, std::initializer_list<int64_t> shape) {
+                        auto * t = get_tensor(name);
+                        int i = 0;
+                        for (int64_t n : shape) {
+                            if (t->ne[i++] != n) {
+                                throw std::runtime_error("invalid Soprano tensor shape: " + name);
+                            }
+                        }
+                        for (; i < GGML_MAX_DIMS; ++i) {
+                            if (t->ne[i] != 1) {
+                                throw std::runtime_error("invalid Soprano tensor shape: " + name);
+                            }
+                        }
+                        return t;
+                    };
+                    auto & v = model.vocos;
+                    v.input_w       = get_vocos("a.gen.wav.input.weight", {512, 768});
+                    v.input_b       = get_vocos("a.gen.wav.input.bias", {768});
+                    v.norm_w        = get_vocos("a.gen.wav.norm.weight", {768});
+                    v.norm_b        = get_vocos("a.gen.wav.norm.bias", {768});
+                    v.output_norm_w = get_vocos("a.gen.wav.output_norm.weight", {768});
+                    v.output_norm_b = get_vocos("a.gen.wav.output_norm.bias", {768});
+                    v.output_w      = get_vocos("a.gen.wav.output.weight", {768, 2050});
+                    v.output_b      = get_vocos("a.gen.wav.output.bias", {2050});
+                    v.blocks.resize(hparams.n_layer);
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & b = v.blocks[il];
+                        b.dwconv_w = get_vocos(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "weight"), {3, 1, 768});
+                        b.dwconv_b = get_vocos(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "bias"), {768});
+                        b.norm_w   = get_vocos(string_format(TN_A_GEN_WAV_UP_NORM, il, "weight"), {768});
+                        b.norm_b   = get_vocos(string_format(TN_A_GEN_WAV_UP_NORM, il, "bias"), {768});
+                        b.pw1_w    = get_vocos(string_format(TN_A_GEN_WAV_UP_PW1, il, "weight"), {768, 2304});
+                        b.pw1_b    = get_vocos(string_format(TN_A_GEN_WAV_UP_PW1, il, "bias"), {2304});
+                        b.pw2_w    = get_vocos(string_format(TN_A_GEN_WAV_UP_PW2, il, "weight"), {2304, 768});
+                        b.pw2_b    = get_vocos(string_format(TN_A_GEN_WAV_UP_PW2, il, "bias"), {768});
+                        b.gamma    = get_vocos(string_format(TN_A_GEN_WAV_UP_GAMMA, il), {768});
+                    }
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                 {
@@ -4345,6 +4396,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 // pooling gives one speaker embedding, whatever the clip length is
                 n_patches = 1;
             } break;
+        case PROJECTOR_TYPE_SOPRANO:
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
@@ -5155,6 +5207,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             {
                 set_pockettts_tfm_inputs();
             } break;
+        case PROJECTOR_TYPE_SOPRANO:
+            {
+                set_input_f32("inp_feats", *params->feats);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
                 if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
@@ -5812,13 +5868,18 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         }
     }
     if (params->out_audio != nullptr) {
-        ggml_tensor * audio = ggml_graph_get_tensor(gf, "out_audio");
+        ggml_tensor * audio = ggml_graph_get_tensor(gf, model.proj_type == PROJECTOR_TYPE_SOPRANO ? "out_spectrum" : "out_audio");
         if (audio == nullptr) {
             GGML_ABORT("out_audio requested but graph has no \"out_audio\" tensor");
         }
         auto & out_audio = *params->out_audio;
         out_audio.resize(ggml_nelements(audio));
         ggml_backend_tensor_get(audio, out_audio.data(), 0, ggml_nbytes(audio));
+
+        if (model.proj_type == PROJECTOR_TYPE_SOPRANO) {
+            std::vector<float> spectrum = std::move(out_audio);
+            clip_graph_soprano::decode_spectrum(spectrum, out_audio);
+        }
 
         // drop the tail audio that comes from the code-0 rear padding
         const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
@@ -6003,6 +6064,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             return ctx->model.spk_proj_w->ne[1];
+        case PROJECTOR_TYPE_SOPRANO:
+            return ctx->model.vocos.input_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             return ctx->model.gen_input_lin_w->ne[1];
         case PROJECTOR_TYPE_PARAKEET:

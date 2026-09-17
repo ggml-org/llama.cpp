@@ -208,6 +208,11 @@ class Qwen3Model(Qwen2Model):
 
         super().set_vocab()
 
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        if tokenizer.convert_tokens_to_ids("[TEXT]") == 1 and tokenizer.convert_tokens_to_ids("[START]") == 2 and tokenizer.convert_tokens_to_ids("[STOP]") == 3:
+            return "soprano"
+        return super().get_vocab_base_pre(tokenizer)
+
     def _find_rerank_config(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)

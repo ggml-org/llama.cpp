@@ -545,6 +545,10 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_SOPRANO:
+                regex_exprs = { "\\p{N}", "\\s+|[\\p{L}\\p{N}_]+|[^\\p{L}\\p{N}_\\s]+" };
+                byte_encode = false;
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -612,7 +616,22 @@ struct llm_tokenizer_bpe_session {
 
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        std::string normalized;
+        if (vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
+            bool space = false;
+            for (uint32_t cpt : unicode_cpts_from_utf8(text)) {
+                if (unicode_cpt_flags_from_cpt(cpt).is_whitespace) {
+                    if (!space) { normalized += ' '; }
+                    space = true;
+                } else {
+                    // Unicode full lowercase expands LATIN CAPITAL LETTER I WITH DOT ABOVE.
+                    normalized += cpt == 0x0130 ? "i\xcc\x87" : unicode_cpt_to_utf8(unicode_tolower(cpt));
+                    space = false;
+                }
+            }
+        }
+        const auto & input_text = vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_SOPRANO ? normalized : text;
+        const auto word_collection = unicode_regex_split(input_text, tokenizer.regex_exprs, tokenizer.byte_encode);
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
@@ -708,7 +727,9 @@ struct llm_tokenizer_bpe_session {
                 const std::string str = std::string(symbol.text, symbol.n);
                 const auto token = vocab.text_to_token(str);
 
-                if (token == LLAMA_TOKEN_NULL) {
+                if (token == LLAMA_TOKEN_NULL && tok_pre == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
+                    output.push_back(vocab.token_unk());
+                } else if (token == LLAMA_TOKEN_NULL) {
                     for (auto j = str.begin(); j != str.end(); ++j) {
                         llama_token token_multibyte = LLAMA_TOKEN_NULL;
                         if (tokenizer.byte_encode) {
@@ -2210,6 +2231,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "modern-bert") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT2;
             } else if (
+                    tokenizer_pre == "soprano") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SOPRANO;
+                special_unk_id = 0;
+                special_eos_id = 3;
+                add_bos = false;
+            } else if (
                     tokenizer_pre == "jais-2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_JAIS2;
             } else if (
@@ -2914,6 +2941,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
                 attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
             }
+        }
+
+        if (pre_type == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
+            special_eog_ids.insert(special_eos_id);
         }
 
         // sanity checks
@@ -3657,6 +3688,9 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                     return _try_copy(token_text.data(), token_text.size());
                 }
                 if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
+                    if (pre_type == LLAMA_VOCAB_PRE_TYPE_SOPRANO) {
+                        return _try_copy(token_text.data(), token_text.size());
+                    }
                     if (escape_whitespaces) {
                         // SPM-style BPE: tokens contain ▁ for spaces
                         std::string result = token_text;

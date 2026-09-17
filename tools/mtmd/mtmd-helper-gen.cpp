@@ -993,8 +993,166 @@ private:
     std::vector<char> out_buf;
 };
 
+// Soprano uses the hidden state that predicts each non-EOS token, including the prompt's last state.
+class soprano_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    void reset() override {
+        prompt.clear();
+        features.clear();
+        h_next.clear();
+        audio.clear();
+        wav.clear();
+        pos = 0;
+        prompt_pos = 0;
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        if (n_embd != 512 || inp->speaker_ref || !inp->prompt || inp->prompt_len == 0 || inp->prompt_len > INT32_MAX ||
+            inp->seq_id < 0 || (uint32_t) inp->seq_id >= llama_n_seq_max(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano requires text and a 512-d backbone, without a speaker reference\n");
+            return 1;
+        }
+        seq_id = inp->seq_id;
+        out_type = inp->out_type;
+        const llama_token text = find_special_token(vocab, "[TEXT]");
+        const llama_token start = find_special_token(vocab, "[START]");
+        const llama_token stop = find_special_token(vocab, "[STOP]");
+        if (text != 1 || start != 2 || stop != 3) {
+            LOG_ERR("mtmd_helper_gen_audio: incompatible soprano vocabulary\n");
+            return 1;
+        }
+        const int required = llama_tokenize(vocab, inp->prompt, inp->prompt_len, nullptr, 0, false, false);
+        if (required >= 0 || required < -509 || (uint32_t) (-required + 3) >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano prompt must fit within 512 tokens and the context\n");
+            return 1;
+        }
+        const int n = -required;
+        prompt.resize(n + 3);
+        prompt[0] = stop;
+        prompt[1] = text;
+        if (llama_tokenize(vocab, inp->prompt, inp->prompt_len, prompt.data() + 2, n, false, false) != n) {
+            return 1;
+        }
+        prompt.back() = start;
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset soprano sequence\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    int32_t step_prompt(int32_t n_batch) override {
+        if (n_batch <= 0 || prompt.empty()) {
+            return -1;
+        }
+        const int n = std::min(n_batch, (int) prompt.size() - prompt_pos);
+        if (n == 0) {
+            return 0;
+        }
+        if (!decode(prompt.data() + prompt_pos, n)) {
+            return -1;
+        }
+        prompt_pos += n;
+        return (int) prompt.size() - prompt_pos;
+    }
+
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        *h_state_out = nullptr;
+        *out_stop = false;
+        if (sampled < 0 || sampled >= llama_vocab_n_tokens(vocab) || !h_state_in || prompt_pos != (int) prompt.size() || prompt.empty()) {
+            return 1;
+        }
+        if (llama_vocab_is_eog(vocab, sampled) || features.size() / n_embd >= 512) {
+            *out_stop = true;
+            return 0;
+        }
+        if ((uint32_t) pos >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano context exhausted\n");
+            return 1;
+        }
+        features.insert(features.end(), h_state_in, h_state_in + n_embd);
+        if (!decode(&sampled, 1)) {
+            features.resize(features.size() - n_embd);
+            return 1;
+        }
+        const float * h = llama_get_embeddings_ith(lctx, -1);
+        if (!h) {
+            return 1;
+        }
+        h_next.assign(h, h + n_embd);
+        *h_state_out = h_next.data();
+        return 0;
+    }
+
+    int32_t get_output(int32_t * sample_rate, const char ** data, size_t * data_len, int64_t * n_samples) override {
+        if (features.size() < 2 * (size_t) n_embd) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano needs at least two generated frames\n");
+            return 1;
+        }
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+        inp.feats = features.data();
+        inp.n_feats = features.size();
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
+            return 1;
+        }
+        audio.assign(out.audio, out.audio + out.n_samples);
+        *sample_rate = info.sample_rate;
+        if (n_samples) { *n_samples = audio.size(); }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *data = (const char *) audio.data();
+            *data_len = audio.size() * sizeof(float);
+        } else {
+            wav.clear();
+            if (!write_wav16(wav, audio, info.sample_rate)) {
+                return 1;
+            }
+            *data = wav.data();
+            *data_len = wav.size();
+        }
+        return 0;
+    }
+
+private:
+    bool decode(llama_token * tokens, int n) {
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        batch.n_tokens = n;
+        for (int i = 0; i < n; ++i) {
+            batch.token[i] = tokens[i];
+            batch.pos[i] = pos + i;
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = seq_id;
+            batch.logits[i] = i == n - 1;
+        }
+        const int ret = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: soprano backbone decode failed\n");
+            return false;
+        }
+        pos += n;
+        return true;
+    }
+
+    llama_seq_id seq_id = 0;
+    llama_pos pos = 0;
+    int prompt_pos = 0;
+    std::vector<llama_token> prompt;
+    std::vector<float> features;
+    std::vector<float> h_next;
+    std::vector<float> audio;
+    std::vector<char> wav;
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
+        case MTMD_GEN_AUDIO_TYPE_SOPRANO:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new soprano_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new qwen3tts_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_POCKETTTS:
