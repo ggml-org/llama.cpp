@@ -1300,8 +1300,8 @@ static bool ggml_cl_flash_attn_reconstruct_aos(
     temp.data = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, parent_nbytes, NULL, &err);
     CL_CHECK(err);
 
-    cl_kernel kernel = is_q8_0 ? backend_ctx->kernel_restore_block_q8_0
-                               : backend_ctx->kernel_restore_block_q4_0;
+    cl_kernel kernel = is_q8_0 ? backend_ctx->repack.kernel_restore_block_q8_0
+                               : backend_ctx->repack.kernel_restore_block_q4_0;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra_q));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra_d));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &temp.data));
@@ -1370,11 +1370,11 @@ static bool ggml_cl_flash_attn_dequant_kv_gpu(
 
     cl_kernel kernel;
     if (target_type == GGML_TYPE_F16) {
-        kernel = is_q8_0 ? backend_ctx->kernel_dequant_q8_0_f16_view_aos
-                         : backend_ctx->kernel_dequant_q4_0_f16_view_aos;
+        kernel = is_q8_0 ? backend_ctx->repack.kernel_dequant_q8_0_f16_view_aos
+                         : backend_ctx->repack.kernel_dequant_q4_0_f16_view_aos;
     } else {
-        kernel = is_q8_0 ? backend_ctx->kernel_dequant_q8_0_f32_view_aos
-                         : backend_ctx->kernel_dequant_q4_0_f32_view_aos;
+        kernel = is_q8_0 ? backend_ctx->repack.kernel_dequant_q8_0_f32_view_aos
+                         : backend_ctx->repack.kernel_dequant_q4_0_f32_view_aos;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &src_buf));

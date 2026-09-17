@@ -16,12 +16,12 @@ void ggml_cl_load_kernels_unary_ext(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 #define CL_UNARY_EXT_K(op) \
-        CL_CHECK((backend_ctx->kernel_##op##_f32    = clCreateKernel(prog, "kernel_" #op "_f32",    &err), err)); \
-        CL_CHECK((backend_ctx->kernel_##op##_f32_4  = clCreateKernel(prog, "kernel_" #op "_f32_4",  &err), err)); \
-        CL_CHECK((backend_ctx->kernel_##op##_f32_nc = clCreateKernel(prog, "kernel_" #op "_f32_nc", &err), err)); \
-        CL_CHECK((backend_ctx->kernel_##op##_f16    = clCreateKernel(prog, "kernel_" #op "_f16",    &err), err)); \
-        CL_CHECK((backend_ctx->kernel_##op##_f16_4  = clCreateKernel(prog, "kernel_" #op "_f16_4",  &err), err)); \
-        CL_CHECK((backend_ctx->kernel_##op##_f16_nc = clCreateKernel(prog, "kernel_" #op "_f16_nc", &err), err));
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f32    = clCreateKernel(prog, "kernel_" #op "_f32",    &err), err)); \
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f32_4  = clCreateKernel(prog, "kernel_" #op "_f32_4",  &err), err)); \
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f32_nc = clCreateKernel(prog, "kernel_" #op "_f32_nc", &err), err)); \
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f16    = clCreateKernel(prog, "kernel_" #op "_f16",    &err), err)); \
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f16_4  = clCreateKernel(prog, "kernel_" #op "_f16_4",  &err), err)); \
+        CL_CHECK((backend_ctx->unary_ext.kernel_##op##_f16_nc = clCreateKernel(prog, "kernel_" #op "_f16_nc", &err), err));
         CL_UNARY_EXT_K(sgn)
         CL_UNARY_EXT_K(step)
         CL_UNARY_EXT_K(elu)
@@ -113,8 +113,9 @@ static void ggml_cl_unary_ext(ggml_backend_t backend, const ggml_tensor * src0, 
 void FN(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) { \
     UNUSED(src1);                                                                                      \
     ggml_backend_opencl_context *c = (ggml_backend_opencl_context *)backend->context;                  \
-    ggml_cl_unary_ext(backend, src0, dst, c->kernel_##OP##_f32, c->kernel_##OP##_f32_4, c->kernel_##OP##_f32_nc, \
-                      c->kernel_##OP##_f16, c->kernel_##OP##_f16_4, c->kernel_##OP##_f16_nc);           \
+    ggml_cl_unary_ext(backend, src0, dst, c->unary_ext.kernel_##OP##_f32, c->unary_ext.kernel_##OP##_f32_4,      \
+                      c->unary_ext.kernel_##OP##_f32_nc, c->unary_ext.kernel_##OP##_f16,                         \
+                      c->unary_ext.kernel_##OP##_f16_4, c->unary_ext.kernel_##OP##_f16_nc);                      \
 }
 
 GGML_CL_UNARY_EXT_WRAP(ggml_cl_sgn,         sgn)

@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_sigmoid(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_sigmoid_f32 = clCreateKernel(prog, "kernel_sigmoid_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_sigmoid_f16 = clCreateKernel(prog, "kernel_sigmoid_f16", &err), err));
+        CL_CHECK((backend_ctx->sigmoid.kernel_sigmoid_f32 = clCreateKernel(prog, "kernel_sigmoid_f32", &err), err));
+        CL_CHECK((backend_ctx->sigmoid.kernel_sigmoid_f16 = clCreateKernel(prog, "kernel_sigmoid_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -41,12 +41,12 @@ void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, const ggm
 
     cl_kernel kernel;
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        kernel = backend_ctx->kernel_sigmoid_f32;
+        kernel = backend_ctx->sigmoid.kernel_sigmoid_f32;
     } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-        kernel = backend_ctx->kernel_sigmoid_f16;
+        kernel = backend_ctx->sigmoid.kernel_sigmoid_f16;
     } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
         // bf16 converted to f16
-        kernel = backend_ctx->kernel_sigmoid_f16;
+        kernel = backend_ctx->sigmoid.kernel_sigmoid_f16;
     } else {
         GGML_ASSERT(false && "Unsupported data types for sigmoid (input and output must be both f32 or f16)");
     }

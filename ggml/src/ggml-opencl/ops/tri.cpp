@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_tri(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_tri = clCreateKernel(prog, "kernel_tri_f32", &err), err));
+        CL_CHECK((backend_ctx->tri.kernel_tri = clCreateKernel(prog, "kernel_tri_f32", &err), err));
         GGML_LOG_CONT(".");
 
         CL_CHECK(clReleaseProgram(prog));
@@ -44,7 +44,7 @@ void ggml_cl_tri(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
     const int     ne0  = dst->ne[0];
     const int     ne1  = dst->ne[1];
 
-    cl_kernel kernel = backend_ctx->kernel_tri;
+    cl_kernel kernel = backend_ctx->tri.kernel_tri;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));

@@ -11,8 +11,8 @@ void ggml_cl_load_kernels_conv_2d_dw(ggml_backend_opencl_context * backend_ctx) 
     const std::string kernel_src = read_file("conv2_dw.cl");
 #endif
     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-    CL_CHECK((backend_ctx->kernel_conv2d_dw_f32_f32 = clCreateKernel(prog, "kernel_conv2d_dw_f32_f32", &err), err));
-    CL_CHECK((backend_ctx->kernel_conv2d_dwf16_f32 = clCreateKernel(prog, "kernel_conv2d_dwf16_f32", &err), err));
+    CL_CHECK((backend_ctx->conv_2d_dw.kernel_conv2d_dw_f32_f32 = clCreateKernel(prog, "kernel_conv2d_dw_f32_f32", &err), err));
+    CL_CHECK((backend_ctx->conv_2d_dw.kernel_conv2d_dwf16_f32 = clCreateKernel(prog, "kernel_conv2d_dwf16_f32", &err), err));
     CL_CHECK(clReleaseProgram(prog));
     GGML_LOG_CONT(".");
 }
@@ -56,9 +56,9 @@ void ggml_cl_conv2_dw(ggml_backend_t backend, const ggml_tensor * src0, const gg
 
     cl_kernel kernel;
     if (src0->type == GGML_TYPE_F32) {
-        kernel = backend_ctx->kernel_conv2d_dw_f32_f32;
+        kernel = backend_ctx->conv_2d_dw.kernel_conv2d_dw_f32_f32;
     } else if (src0->type == GGML_TYPE_F16) {
-        kernel = backend_ctx->kernel_conv2d_dwf16_f32;
+        kernel = backend_ctx->conv_2d_dw.kernel_conv2d_dwf16_f32;
     } else {
         GGML_ASSERT(false && "Unsupported data type combination for conv2_dw");
     }

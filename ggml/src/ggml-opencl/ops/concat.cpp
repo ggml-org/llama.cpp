@@ -15,11 +15,11 @@ void ggml_cl_load_kernels_concat(ggml_backend_opencl_context * backend_ctx) {
 #endif
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_concat_b1 = clCreateKernel(prog, "kernel_concat_b1", &err), err));
-        CL_CHECK((backend_ctx->kernel_concat_b2 = clCreateKernel(prog, "kernel_concat_b2", &err), err));
-        CL_CHECK((backend_ctx->kernel_concat_b4 = clCreateKernel(prog, "kernel_concat_b4", &err), err));
-        CL_CHECK((backend_ctx->kernel_concat_b8 = clCreateKernel(prog, "kernel_concat_b8", &err), err));
-        CL_CHECK((backend_ctx->kernel_concat_b4_pack = clCreateKernel(prog, "kernel_concat_b4_pack", &err), err));
+        CL_CHECK((backend_ctx->concat.kernel_concat_b1 = clCreateKernel(prog, "kernel_concat_b1", &err), err));
+        CL_CHECK((backend_ctx->concat.kernel_concat_b2 = clCreateKernel(prog, "kernel_concat_b2", &err), err));
+        CL_CHECK((backend_ctx->concat.kernel_concat_b4 = clCreateKernel(prog, "kernel_concat_b4", &err), err));
+        CL_CHECK((backend_ctx->concat.kernel_concat_b8 = clCreateKernel(prog, "kernel_concat_b8", &err), err));
+        CL_CHECK((backend_ctx->concat.kernel_concat_b4_pack = clCreateKernel(prog, "kernel_concat_b4_pack", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -81,13 +81,13 @@ void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, const ggml
     const bool concat_pack = (dim == 0 && ne0 < 32 && ts == 4);
     cl_kernel kernel;
     if (concat_pack) {
-        kernel = backend_ctx->kernel_concat_b4_pack;
+        kernel = backend_ctx->concat.kernel_concat_b4_pack;
     } else {
         switch (ts) {
-            case 1:  kernel = backend_ctx->kernel_concat_b1; break;
-            case 2:  kernel = backend_ctx->kernel_concat_b2; break;
-            case 4:  kernel = backend_ctx->kernel_concat_b4; break;
-            case 8:  kernel = backend_ctx->kernel_concat_b8; break;
+            case 1:  kernel = backend_ctx->concat.kernel_concat_b1; break;
+            case 2:  kernel = backend_ctx->concat.kernel_concat_b2; break;
+            case 4:  kernel = backend_ctx->concat.kernel_concat_b4; break;
+            case 8:  kernel = backend_ctx->concat.kernel_concat_b8; break;
             default: GGML_ABORT("unsupported concat element size: %zu", ts);
         }
     }

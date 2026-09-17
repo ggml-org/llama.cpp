@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_relu(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_relu = clCreateKernel(prog, "kernel_relu", &err), err));
+        CL_CHECK((backend_ctx->relu.kernel_relu = clCreateKernel(prog, "kernel_relu", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -38,7 +38,7 @@ void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
     cl_ulong offset0 = extra0->offset + src0->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
-    cl_kernel kernel = backend_ctx->kernel_relu;
+    cl_kernel kernel = backend_ctx->relu.kernel_relu;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));

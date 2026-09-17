@@ -74,7 +74,7 @@ void ggml_cl_load_kernels_gated_delta_net(ggml_backend_opencl_context * backend_
 
                     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), opts);
 
-                    CL_CHECK((backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp] =
+                    CL_CHECK((backend_ctx->gated_delta_net.kernel_gated_delta_net_f32[si][kda][tgpp] =
                                 clCreateKernel(prog, "kernel_gated_delta_net", &err), err));
                     CL_CHECK(clReleaseProgram(prog));
                 }
@@ -142,7 +142,7 @@ void ggml_cl_gated_delta_net(ggml_backend_t backend, ggml_tensor * dst) {
     // spw needs adjustment when S_v != 128
     const int spw  = (tgpp == 0) ? 1 : 1;
 
-    cl_kernel kernel = backend_ctx->kernel_gated_delta_net_f32[si][kda][tgpp];
+    cl_kernel kernel = backend_ctx->gated_delta_net.kernel_gated_delta_net_f32[si][kda][tgpp];
     GGML_ASSERT(kernel != nullptr);
 
     const cl_uint s_off = S_v * H_v * n_tokens * n_seqs;

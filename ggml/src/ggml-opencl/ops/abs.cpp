@@ -15,12 +15,12 @@ void ggml_cl_load_kernels_abs(ggml_backend_opencl_context * backend_ctx) {
 #endif
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_abs_f32    = clCreateKernel(prog, "kernel_abs_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_abs_f32_4  = clCreateKernel(prog, "kernel_abs_f32_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_abs_f32_nc = clCreateKernel(prog, "kernel_abs_f32_nc", &err), err));
-        CL_CHECK((backend_ctx->kernel_abs_f16    = clCreateKernel(prog, "kernel_abs_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_abs_f16_4  = clCreateKernel(prog, "kernel_abs_f16_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_abs_f16_nc = clCreateKernel(prog, "kernel_abs_f16_nc", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f32    = clCreateKernel(prog, "kernel_abs_f32", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f32_4  = clCreateKernel(prog, "kernel_abs_f32_4", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f32_nc = clCreateKernel(prog, "kernel_abs_f32_nc", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f16    = clCreateKernel(prog, "kernel_abs_f16", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f16_4  = clCreateKernel(prog, "kernel_abs_f16_4", &err), err));
+        CL_CHECK((backend_ctx->abs.kernel_abs_f16_nc = clCreateKernel(prog, "kernel_abs_f16_nc", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -64,16 +64,16 @@ void ggml_cl_abs(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         int n = ggml_nelements(dst);
         if (n % 4 == 0) {
             if (src0->type == GGML_TYPE_F32) {
-                kernel = backend_ctx->kernel_abs_f32_4;
+                kernel = backend_ctx->abs.kernel_abs_f32_4;
             } else {
-                kernel = backend_ctx->kernel_abs_f16_4;
+                kernel = backend_ctx->abs.kernel_abs_f16_4;
             }
             n /= 4;
         } else {
             if (src0->type == GGML_TYPE_F32) {
-                kernel = backend_ctx->kernel_abs_f32;
+                kernel = backend_ctx->abs.kernel_abs_f32;
             } else {
-                kernel = backend_ctx->kernel_abs_f16;
+                kernel = backend_ctx->abs.kernel_abs_f16;
             }
         }
 
@@ -94,9 +94,9 @@ void ggml_cl_abs(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
     } else {
         // Handle non-contiguous input
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_abs_f32_nc;
+            kernel = backend_ctx->abs.kernel_abs_f32_nc;
         } else {
-            kernel = backend_ctx->kernel_abs_f16_nc;
+            kernel = backend_ctx->abs.kernel_abs_f16_nc;
         }
 
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));

@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_group_norm(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_group_norm         = clCreateKernel(prog, "kernel_group_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_group_norm_mul_add = clCreateKernel(prog, "kernel_group_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->group_norm.kernel_group_norm         = clCreateKernel(prog, "kernel_group_norm", &err), err));
+        CL_CHECK((backend_ctx->group_norm.kernel_group_norm_mul_add = clCreateKernel(prog, "kernel_group_norm_mul_add", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -48,7 +48,7 @@ void ggml_opencl_op_group_norm_fused(ggml_backend_t backend, ggml_tensor * gn_te
     memcpy(&groups, gn_tensor->op_params, sizeof(int));
     memcpy(&eps, (char *)gn_tensor->op_params + sizeof(int), sizeof(float));
 
-    cl_kernel kernel = backend_ctx->kernel_group_norm_mul_add;
+    cl_kernel kernel = backend_ctx->group_norm.kernel_group_norm_mul_add;
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
     int ne = ggml_nelements(src0);
     int group_size = ne / groups;
@@ -96,7 +96,7 @@ void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0, const 
     const int ne02 = src0->ne[2];
     const int ne = ne00*ne01*ne02;
 
-    cl_kernel kernel = backend_ctx->kernel_group_norm;
+    cl_kernel kernel = backend_ctx->group_norm.kernel_group_norm;
 
     size_t sgs = 64;
     if (backend_ctx->gpu_family == ADRENO) {

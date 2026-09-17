@@ -16,10 +16,10 @@ void ggml_cl_load_kernels_add(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_add         = clCreateKernel(prog, "kernel_add", &err), err));
-        CL_CHECK((backend_ctx->kernel_add_row     = clCreateKernel(prog, "kernel_add_row", &err), err));
-        CL_CHECK((backend_ctx->kernel_add_f16     = clCreateKernel(prog, "kernel_add_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_add_row_f16 = clCreateKernel(prog, "kernel_add_row_f16", &err), err));
+        CL_CHECK((backend_ctx->add.kernel_add         = clCreateKernel(prog, "kernel_add", &err), err));
+        CL_CHECK((backend_ctx->add.kernel_add_row     = clCreateKernel(prog, "kernel_add_row", &err), err));
+        CL_CHECK((backend_ctx->add.kernel_add_f16     = clCreateKernel(prog, "kernel_add_f16", &err), err));
+        CL_CHECK((backend_ctx->add.kernel_add_row_f16 = clCreateKernel(prog, "kernel_add_row_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -85,7 +85,7 @@ void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
     if (dst->type == GGML_TYPE_F32) {
         GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
         if (bcast_row) {
-            kernel = backend_ctx->kernel_add_row;
+            kernel = backend_ctx->add.kernel_add_row;
             const int ne = ne00 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
@@ -95,7 +95,7 @@ void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
             CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_ulong), &offsetd));
             CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &ne));
         } else {
-            kernel = backend_ctx->kernel_add;
+            kernel = backend_ctx->add.kernel_add;
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
@@ -133,7 +133,7 @@ void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         const int type_src0 = (src0->type == GGML_TYPE_F32);
         const int type_src1 = (src1->type == GGML_TYPE_F32);
         if (bcast_row) {
-            kernel = backend_ctx->kernel_add_row_f16;
+            kernel = backend_ctx->add.kernel_add_row_f16;
             const int ne = ne00 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
@@ -145,7 +145,7 @@ void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
             CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &type_src0));
             CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),      &type_src1));
         } else {
-            kernel = backend_ctx->kernel_add_f16;
+            kernel = backend_ctx->add.kernel_add_f16;
             CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));

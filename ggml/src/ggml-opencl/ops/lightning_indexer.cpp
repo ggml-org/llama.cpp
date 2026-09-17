@@ -11,14 +11,14 @@ void ggml_cl_load_kernels_lightning_indexer(ggml_backend_opencl_context * backen
     const std::string kernel_src = read_file("lightning_indexer.cl");
 #endif
     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-    CL_CHECK((backend_ctx->kernel_lightning_indexer = clCreateKernel(prog, "kernel_lightning_indexer", &err), err));
+    CL_CHECK((backend_ctx->lightning_indexer.kernel_lightning_indexer = clCreateKernel(prog, "kernel_lightning_indexer", &err), err));
     CL_CHECK(clReleaseProgram(prog));
     GGML_LOG_CONT(".");
 }
 
 void ggml_cl_lightning_indexer(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
-    cl_kernel kernel = backend_ctx->kernel_lightning_indexer;
+    cl_kernel kernel = backend_ctx->lightning_indexer.kernel_lightning_indexer;
     const ggml_tensor * src2 = dst->src[2];
     const ggml_tensor * src3 = dst->src[3];
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
