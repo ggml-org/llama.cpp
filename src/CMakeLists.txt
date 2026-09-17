@@ -86,6 +86,8 @@ add_library(llama
             llama-memory-transition.h
             llama-memory-layout.cpp
             llama-memory-layout.h
+            llama-memory-budget.cpp
+            llama-memory-budget.h
             llama-memory-plan.cpp
             llama-memory-plan.h
             llama-memory-requirements.cpp
