@@ -5073,9 +5073,10 @@ struct test_mul_mat_id : public test_case {
     const int64_t n;
     const int64_t k;
     const float amax; // magnitude of src1
+    const int64_t m_v; // rows of as in memory, the experts of as are strided for m_v > m, no view for m_v == 0
 
     std::string vars() override {
-        return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, amax);
+        return VARS_TO_STR10(type_a, type_b, n_mats, n_used, b, m, n, k, amax, m_v);
     }
 
     double max_nmse_err() override {
@@ -5098,15 +5099,19 @@ struct test_mul_mat_id : public test_case {
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
-            float amax = 1.0f)
+            float amax = 1.0f, int64_t m_v = 0)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k), amax(amax) {
+            m(m), n(n), k(k), amax(amax), m_v(m_v) {
             GGML_ASSERT(n_used <= n_mats);
+            GGML_ASSERT(m_v == 0 || m_v > m);
         }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
-        ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+        ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m_v == 0 ? m : m_v, n_mats);
+        if (m_v != 0) {
+            as = ggml_view_3d(ctx, as, k, m, n_mats, as->nb[1], as->nb[2], 0);
+        }
         ggml_set_name(as, "as");
 
         ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
@@ -10013,6 +10018,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // the first rows of a KV cache: a is a view whose batches are strided by the cache length
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 8,  1, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 5120));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 8, 16, 64, {8, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 5120));
+    // as is a view whose experts are strided by more rows than it uses
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 2, false, 8, 16, 64, 1.0f, 64));
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 576, 512, 576, {1,1}, {1,1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_0, GGML_TYPE_F32, 1, 2048, 8192, {1,  1}, {1, 1}));
