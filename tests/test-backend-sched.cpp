@@ -852,7 +852,8 @@ static bool initialize_backends(std::vector<sched_backend_caps> & backends_w_cap
                 dev_type_name(ggml_backend_dev_type(dev)), ggml_backend_dev_description(dev));
 
         const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
-        if (type == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        // Exclude ACCEL devices as they run in tandem with the CPU backend and only implement matmul, the tests here require ADD
+        if (type == GGML_BACKEND_DEVICE_TYPE_CPU || type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
             continue;
         }
 
