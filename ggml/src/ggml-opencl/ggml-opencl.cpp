@@ -1440,6 +1440,7 @@ static void load_cl_kernels_argsort(ggml_backend_opencl_context *backend_ctx) {
 
 static bool use_adreno_bin_kernels(ggml_backend_opencl_context * backend_ctx) {
 #ifndef GGML_OPENCL_USE_ADRENO_BIN_KERNELS
+    GGML_UNUSED(backend_ctx);
     return false;
 #else
     if (backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
@@ -6309,6 +6310,8 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
 
     auto * backend_ctx = dev_ctx->backend_ctx;
 
+    GGML_LOG_INFO("ggml_opencl: OpenCL device: %s\n",
+        backend_ctx->device_name.c_str());
     GGML_LOG_INFO("ggml_opencl: OpenCL driver: %s\n",
         backend_ctx->driver_version.c_str());
     GGML_LOG_INFO("ggml_opencl: vector subgroup broadcast support: %s\n",
@@ -6325,11 +6328,11 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
         backend_ctx->global_mem_size/1024/1024);
     GGML_LOG_INFO("ggml_opencl: max mem alloc size: %zu MB\n",
         backend_ctx->max_alloc_size/1024/1024);
-    GGML_LOG_INFO("ggml_opencl: device max image buffer size (pixels): %lu\n",
+    GGML_LOG_INFO("ggml_opencl: device max image buffer size (pixels): %zu\n",
         backend_ctx->image_max_buffer_size);
-    GGML_LOG_INFO("ggml_opencl: device max image2d size: %lu x %lu\n",
+    GGML_LOG_INFO("ggml_opencl: device max image2d size: %zu x %zu\n",
         backend_ctx->image2d_max_width, backend_ctx->image2d_max_height);
-    GGML_LOG_INFO("ggml_opencl: device max workgroup size: %lu\n",
+    GGML_LOG_INFO("ggml_opencl: device max workgroup size: %zu\n",
         backend_ctx->max_workgroup_size);
     GGML_LOG_INFO("ggml_opencl: SVM coarse grain buffer support: %s\n",
         backend_ctx->svm_caps & CL_DEVICE_SVM_COARSE_GRAIN_BUFFER ? "true" : "false");
@@ -7627,7 +7630,7 @@ static void ggml_cl_moe_bias_glu_fused(ggml_backend_t backend, ggml_tensor * gat
     size_t global_work_size[] = { (size_t)glu->ne[1]*nth, (size_t)glu->ne[2], 1 };
     size_t local_work_size[]  = { (size_t)nth, 1, 1 };
 
-    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, (ggml_tensor *)glu);
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, glu);
 }
 
 // Fusion B: the MoE down-projection bias add feeding the combine.
@@ -7771,7 +7774,7 @@ static void ggml_cl_moe_bias_combine_fused(ggml_backend_t backend, const ggml_te
 
     size_t lws[2] = { 64, 1 };
     size_t gws[2] = { (size_t)(((n_embd4 + 63) / 64) * 64), (size_t)nt };
-    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, (ggml_tensor *)dst);
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, dst);
 }
 
 
@@ -8114,7 +8117,6 @@ static void ggml_cl_mul_mat_q4_k_glu_fused(ggml_backend_t backend, ggml_tensor *
     GGML_UNUSED(gate_tensor);
     GGML_UNUSED(up_tensor);
     GGML_UNUSED(glu_tensor);
-    GGML_ABORT("q4_K GLU fusion requires GGML_OPENCL_USE_ADRENO_KERNELS");
 #endif
 }
 
@@ -11336,7 +11338,6 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_int err;
             cl_kernel kernel = backend_ctx->kernel_restore_block_q4_0_trans4_ns;
 
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
@@ -11535,7 +11536,6 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_int err;
             // TODO: use ggml_cl_buffer to manage this temporary buffer
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
@@ -11638,7 +11638,6 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_int err;
             // TODO: use ggml_cl_buffer to manage this temporary buffer
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
