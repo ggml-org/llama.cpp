@@ -2,6 +2,7 @@
 #include "lightning-indexer.cuh"
 #include "fattn-common.cuh"
 #include "convert.cuh"
+#include "mma.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #if defined(TURING_MMA_AVAILABLE)
@@ -237,10 +238,6 @@ static __global__ void lightning_indexer_kernel_wmma(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 #if defined(GGML_USE_HIP)
-#if defined(AMD_MFMA_AVAILABLE)
-#include <rocwmma/rocwmma.hpp>
-namespace rwmma = rocwmma;
-#endif // defined(AMD_MFMA_AVAILABLE)
 
 template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_mfma(
@@ -255,7 +252,7 @@ static __global__ void lightning_indexer_kernel_mfma(
     ) {
 #if defined(AMD_MFMA_AVAILABLE)
     constexpr int MMA_DIM = 16;
-    constexpr int WAVE_SIZE = 64;
+    constexpr int WAVE_SIZE = ggml_cuda_get_physical_warp_size();
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WAVE_SIZE;
     constexpr int N_EMBD_PADDED = N_EMBD + 8;
 
@@ -329,23 +326,27 @@ static __global__ void lightning_indexer_kernel_mfma(
 
     __syncthreads();
 
-    for (int tile = i_warp; tile < N_TILES; tile += WARPS_PER_BLOCK) {
-        const int ht = tile / N_KV_TILES;
-        const int kt = tile % N_KV_TILES;
+    for (int tile_idx = i_warp; tile_idx < N_TILES; tile_idx += WARPS_PER_BLOCK) {
+        const int ht = tile_idx / N_KV_TILES;
+        const int kt = tile_idx % N_KV_TILES;
 
-        rwmma::fragment<rwmma::accumulator, MMA_DIM, MMA_DIM, MMA_DIM, float> frag_acc;
-        rwmma::fill_fragment(frag_acc, 0.0f);
+        ggml_cuda_mma::tile<MMA_DIM, MMA_DIM, float> Dqk;
 
 #pragma unroll
         for (int et = 0; et < N_EMBD_TILES; ++et) {
-            rwmma::fragment<rwmma::matrix_a, MMA_DIM, MMA_DIM, MMA_DIM, half, rwmma::row_major> frag_q;
-            rwmma::fragment<rwmma::matrix_b, MMA_DIM, MMA_DIM, MMA_DIM, half, rwmma::col_major> frag_k;
-            rwmma::load_matrix_sync(frag_q, &q_shared[ht*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED);
-            rwmma::load_matrix_sync(frag_k, &k_shared[kt*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED);
-            rwmma::mma_sync(frag_acc, frag_q, frag_k, frag_acc);
+            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2> Aq;
+            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2> Bk;
+            ggml_cuda_mma::load_generic(Aq, (const half2 *) &q_shared[ht*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED/2);
+            ggml_cuda_mma::load_generic(Bk, (const half2 *) &k_shared[kt*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED/2);
+            ggml_cuda_mma::mma(Dqk, Aq, Bk);
         }
 
-        rwmma::store_matrix_sync(&qk_shared[ht*MMA_DIM][kt*MMA_DIM], frag_acc, K_VECS_PER_BLOCK, rwmma::mem_row_major);
+#pragma unroll
+        for (int l = 0; l < Dqk.ne; ++l) {
+            const int head = ht*MMA_DIM + Dqk.get_j(l);
+            const int kv   = kt*MMA_DIM + Dqk.get_i(l);
+            qk_shared[head][kv] = Dqk.x[l];
+        }
     }
 
     __syncthreads();
@@ -613,7 +614,7 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
             constexpr int K_VECS_PER_BLOCK = 32;
             constexpr int WARPS_PER_BLOCK  = 4;
 
-            dim3 block(64, WARPS_PER_BLOCK);
+            dim3 block(ggml_cuda_info().devices[device].warp_size, WARPS_PER_BLOCK);
             int num_kv_blocks = (n_kv + (K_VECS_PER_BLOCK) - 1) / (K_VECS_PER_BLOCK);
             dim3 grid(num_kv_blocks, n_batch, n_stream);
 
