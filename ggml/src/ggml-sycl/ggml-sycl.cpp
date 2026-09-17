@@ -1011,12 +1011,25 @@ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+bool is_bmg_g31_arch(int device) {
+    return ggml_sycl_info().devices[device].hw_info.arch == gpu_arch::intel_gpu_bmg_g31;
+}
+
 static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     size_t max_alloc_size = dpct::get_current_device().get_max_mem_alloc_size();
     if (g_ggml_sycl_host_pinned_mem_2g) {
         return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
     } else {
+        ggml_backend_sycl_buffer_type_context * ctx = (ggml_backend_sycl_buffer_type_context *)buft->context;
+        int device = ctx->device;
+        if(is_bmg_g31_arch(device)) {
+            //Todo, it's workaround for BMG-G31, which has a known issue with large allocations.
+            //The max alloc size is reduced to 60% of the reported max alloc size.
+            //remove it after https://github.com/intel/compute-runtime/issues/998 is fixed.
+            max_alloc_size = max_alloc_size*0.6;
+        }
         return max_alloc_size;
+
     }
     GGML_UNUSED(buft);
 }
@@ -1484,7 +1497,7 @@ static ggml_backend_buffer_type_i ggml_backend_sycl_split_buffer_type_interface 
     /* .is_host          = */ ggml_backend_sycl_split_buffer_type_is_host,
 };
 
-ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split) {
+ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type([[maybe_unused]] int main_device, const float * tensor_split) {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_split_buffer_type\n");
 
     static std::mutex mutex;
@@ -3243,7 +3256,7 @@ inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     SYCL_CHECK(0);
 }
 
-static void ggml_sycl_set_peer_access(const int n_tokens, int main_device) {
+static void ggml_sycl_set_peer_access(const int n_tokens, [[maybe_unused]] int main_device) {
     static bool peer_access_enabled = false;
 
     const bool enable_peer_access = n_tokens <= GGML_SYCL_PEER_MAX_BATCH_SIZE;
@@ -6034,6 +6047,20 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 
+        if (node->op == GGML_OP_SSM_CONV &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+            i += 2;
+            continue;
+        }
+
+        if (node->op == GGML_OP_SSM_CONV &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, nullptr, cgraph->nodes[i + 1]);
+            i++;
+            continue;
+        }
+
         if (node->op == GGML_OP_MUL_MAT && ggml_sycl_mul_mat_glu_mmvq_fused(*sycl_ctx, cgraph, i)) {
             i += 2;
             continue;
@@ -6434,13 +6461,13 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             break;
         case GGML_OP_DSV4_HC_PRE:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                op->type == GGML_TYPE_F32;
+                op->type == GGML_TYPE_F32 && ggml_get_op_params_i32(op, 1) == 0;
         case GGML_OP_DSV4_HC_COMB:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_DSV4_HC_POST:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                op->src[2]->type == GGML_TYPE_F32 && op->src[3] != nullptr && op->src[3]->type == GGML_TYPE_F32 &&
                 op->type == GGML_TYPE_F32;
         case GGML_OP_LIGHTNING_INDEXER:
             return op->src[0]->type == GGML_TYPE_F32 &&
