@@ -386,6 +386,7 @@ static int bench_run_single(int argc, char ** argv) {
     const int64_t d3 = atoll(argv[7]), d4 = atoll(argv[8]), d5 = atoll(argv[9]);
 
     // pick the path via env; the gates read these once, at first op (fresh child process)
+#if !defined(_WIN32) // run child doesn't even run on windows anyways, avoiding warnings about this
     if (!strcmp(path, "iqp")) {
         setenv("GGML_CPU_TILED_MM", "0", 1); setenv("GGML_CPU_TILED_MM_FORCE", "0", 1);
         setenv("GGML_CPU_MM_PATH", "iqp", 1);
@@ -395,7 +396,8 @@ static int bench_run_single(int argc, char ** argv) {
     } else { // std: the default optimized GEMM (tiled off, iqp off)
         setenv("GGML_CPU_TILED_MM", "0", 1); setenv("GGML_CPU_TILED_MM_FORCE", "0", 1);
         setenv("GGML_CPU_MM_PATH", "tiled", 1);
-    }
+    }    
+#endif
 
     ggml_backend_load_all();
     ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
