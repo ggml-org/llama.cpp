@@ -60,24 +60,44 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         pin.reset();
         return retired;
     }
-    // Prepare metadata first; publish policy only after the new writer binding succeeds.
-    bool install(const llama_kv_stream_policy_state & candidate) {
-        if (revision == UINT64_MAX) return false;
-        auto replacement = std::make_unique<llama_kv_stream_binding>(content->host()->cache_id(),
-            ggml_backend_buffer_get_type(ggml_backend_memory_lease_buffer(leases[0].get())));
+    // Prepare and configure replacement metadata before retiring the active device binding.
+    bool install(const llama_kv_stream_policy_state & candidate,
+            const llama_kv_stream_policy_config & policy, ggml_backend_memory_lease_t pool) {
+        if (revision == UINT64_MAX || !pool) return false;
+        auto * buffer = ggml_backend_memory_lease_buffer(pool);
+        if (!buffer) return false;
+        lease_ptr retained(ggml_backend_memory_lease_retain(pool),ggml_backend_memory_lease_free);
+        if (!retained) return false;
+        auto replacement = std::make_unique<llama_kv_stream_binding>(
+            content->host()->cache_id(),ggml_backend_buffer_get_type(buffer),revision);
         llama_kv_stream_resident * native = nullptr;
-        if (!replacement->bind(leases[0].get(),config.policy,[&](const auto & view) {
+        if (!replacement->bind(pool,policy,[&](const auto & view) {
             auto result = llama_kv_stream_resident::create(view,content,backend,&candidate);
             native = result.get(); return result;
-        })) return false;
+        }) || !native->configure_writes(config.max_batch_rows,leases[1].get()) ||
+                !native->configure_feedback(config.measure) ||
+                !native->configure_native_graph_attention(config.native_graph_attention) ||
+                !native->configure_resumed_decode(config.resume_decode)) return false;
+        size_t next_grant = ggml_backend_buffer_get_size(buffer);
+        for (size_t i = 1; i < leases.size(); ++i) {
+            if (!leases[i]) return false;
+            const size_t bytes = ggml_backend_buffer_get_size(
+                ggml_backend_memory_lease_buffer(leases[i].get()));
+            if (bytes > SIZE_MAX-next_grant) return false;
+            next_grant += bytes;
+        }
         graphs.clear();
-        if (binding && binding->detach(*this).status != llama_memory_executor_status::retired) { poisoned = true; return false; }
+        if (binding && binding->detach(*this).status != llama_memory_executor_status::retired) {
+            poisoned = true; return false;
+        }
+        leases[0] = std::move(retained);
         binding = std::move(replacement); resident = native;
-        if (!resident->configure_writes(config.max_batch_rows,leases[1].get()) ||
-                !resident->configure_feedback(config.measure) ||
-                !resident->configure_native_graph_attention(config.native_graph_attention) ||
-                !resident->configure_resumed_decode(config.resume_decode)) { poisoned = true; return false; }
-        state = candidate; ++revision; return true;
+        config.policy = policy; state = candidate; grant = next_grant; ++revision;
+        return true;
+    }
+
+    bool install(const llama_kv_stream_policy_state & candidate) {
+        return install(candidate,config.policy,leases[0].get());
     }
 
     // Capture owned leaf aliases, never the caller's model-graph metadata or unleased mutable storage.
@@ -305,6 +325,54 @@ bool llama_kv_stream_session::failed() const noexcept { return impl->poisoned; }
 size_t llama_kv_stream_session::tokens() const noexcept { return impl->committed; }
 size_t llama_kv_stream_session::granted_bytes() const noexcept { return impl->grant; }
 uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl->revision; }
+
+bool llama_kv_stream_session::grow_pool(
+        ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
+    auto & s = *impl;
+    if (s.busy || s.running || s.poisoned || !s.publications || s.publications->failed() ||
+            !pool || s.publication.pending() || s.content->generation() != s.expected_generation ||
+            pool_bytes <= s.config.policy.pool_bytes) return false;
+    const auto frontiers = s.publications->frontiers();
+    if (frontiers.reserved != s.committed || frontiers.device != s.committed ||
+            frontiers.host != s.committed || frontiers.committed != s.committed) return false;
+    auto * buffer = ggml_backend_memory_lease_buffer(pool);
+    auto * current = ggml_backend_memory_lease_buffer(s.leases[0].get());
+    ggml_backend_memory_region region;
+    if (!buffer || !current || !ggml_backend_memory_lease_get_region(pool,&region) ||
+            !region.id || region.size < pool_bytes ||
+            ggml_backend_buffer_get_type(buffer) != ggml_backend_buffer_get_type(current) ||
+            ggml_backend_buffer_get_size(buffer) != region.size) return false;
+    const auto base = uintptr_t(ggml_backend_buffer_get_base(buffer));
+    ggml_backend_memory_region old_region;
+    if (!base || base%s.config.policy.shape.alignment || base > UINTPTR_MAX-region.size ||
+            !ggml_backend_memory_lease_get_region(s.leases[0].get(),&old_region)) return false;
+    const auto old_base = uintptr_t(ggml_backend_buffer_get_base(current));
+    if (!old_base || old_base > UINTPTR_MAX-old_region.size || region.id == old_region.id ||
+            (base < old_base+old_region.size && old_base < base+region.size)) return false;
+    for (size_t i = 1; i < s.leases.size(); ++i) {
+        ggml_backend_memory_region other;
+        auto * other_buffer = ggml_backend_memory_lease_buffer(s.leases[i].get());
+        if (!other_buffer || !ggml_backend_memory_lease_get_region(s.leases[i].get(),&other)) return false;
+        const auto address = uintptr_t(ggml_backend_buffer_get_base(other_buffer));
+        if (!address || address > UINTPTR_MAX-other.size || region.id == other.id ||
+                (base < address+other.size && address < base+region.size)) return false;
+    }
+    llama_kv_stream_policy_growth growth;
+    if (llama_kv_stream_policy_grow(
+            s.config.policy,s.committed,decode,pool_bytes,growth).status !=
+            llama_kv_stream_policy_status::success) return false;
+    session_operation guard(s.busy);
+    try {
+        return s.install(growth.state,growth.config,pool);
+    } catch (const std::bad_alloc &) {
+        return false;
+    }
+}
+
+llama_kv_stream_binding_view llama_kv_stream_session::binding_view() const noexcept {
+    const auto * view = impl->binding ? impl->binding->view() : nullptr;
+    return view ? *view : llama_kv_stream_binding_view{};
+}
 const llama_kv_stream_policy_state & llama_kv_stream_session::policy() const noexcept { return impl->state; }
 
 llama_kv_stream_publication_frontiers llama_kv_stream_session::publication_frontiers() const noexcept {

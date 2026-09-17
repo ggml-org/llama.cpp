@@ -27,7 +27,8 @@ using llama_kv_stream_binding_factory = std::function<std::unique_ptr<llama_memo
 // Buffer type/backend and queued execution pins must obey the common executor lifetime contract.
 class llama_kv_stream_binding {
 public:
-    llama_kv_stream_binding(uint64_t cache_id, ggml_backend_buffer_type_t expected_type);
+    llama_kv_stream_binding(uint64_t cache_id, ggml_backend_buffer_type_t expected_type,
+            uint64_t previous_revision = 0);
     // No implicit drain: queued users must retain their pins until backend completion.
     ~llama_kv_stream_binding() = default;
     llama_kv_stream_binding(const llama_kv_stream_binding &) = delete;

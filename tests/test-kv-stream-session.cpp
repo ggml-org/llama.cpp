@@ -150,5 +150,64 @@ int main(int argc, char ** argv) {
         t.assert_equal(size_t(0),session->tokens());
         t.assert_true(!session->produce(0,input.k,input.v));
     });
+
+    if (cuda) t.test("external_growth_rebinds_and_lazily_restores_host", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
+        block_workspace writer(f,32768,19), partial(f,f.host->layout().bytes,29);
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,{f.policy,256,4,false,true,true},
+            f.lease.get(),writer.lease.get(),partial.lease.get());
+        if (!t.assert_true(bool(session))) return;
+        if (!t.assert_true(session->restore(513))) return;
+        const auto old_view=session->binding_view();
+        const auto old_policy=session->policy();
+        const auto old_revision=session->layout_revision();
+        const auto content_generation=f.content->generation();
+        const auto mirror_epoch=f.content->mirror_epoch();
+
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        const size_t grown_bytes=f.policy.pool_bytes+8*page.bytes;
+        block_workspace grown(f,grown_bytes,41);
+        const auto arena_generation=ggml_backend_memory_arena_generation(grown.arena.get());
+        t.assert_true(!session->grow_pool(f.lease.get(),f.policy.pool_bytes,true));
+        t.assert_true(!session->grow_pool(writer.lease.get(),grown_bytes,true));
+        t.assert_equal(old_revision,session->layout_revision());
+        t.assert_equal(old_view.base,session->binding_view().base);
+        f.lease.reset();
+        if (!t.assert_true(session->grow_pool(grown.lease.get(),grown_bytes,true))) return;
+        const auto new_view=session->binding_view();
+        t.assert_equal(size_t(513),session->tokens());
+        t.assert_equal(content_generation,f.content->generation());
+        t.assert_equal(mirror_epoch,f.content->mirror_epoch());
+        t.assert_equal(old_revision+1,session->layout_revision());
+        t.assert_equal(old_view.revision+1,new_view.revision);
+        t.assert_equal(old_view.cache_id,new_view.cache_id);
+        t.assert_true(old_view.base!=new_view.base);
+        t.assert_equal(grown_bytes,new_view.capacity);
+        t.assert_equal(grown_bytes+32768+
+            ggml_backend_buffer_get_size(ggml_backend_memory_lease_buffer(partial.lease.get())),
+            session->granted_bytes());
+        const auto publication=session->publication_frontiers();
+        t.assert_equal(size_t(513),publication.reserved);
+        t.assert_equal(size_t(513),publication.device);
+        t.assert_equal(size_t(513),publication.host);
+        t.assert_equal(size_t(513),publication.committed);
+        t.assert_true(session->policy().budget.pages>old_policy.budget.pages);
+        t.assert_true(session->policy().resident_pages_per_layer>=old_policy.resident_pages_per_layer);
+        t.assert_equal(arena_generation,ggml_backend_memory_arena_generation(grown.arena.get()));
+        t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(f.arena.get()));
+
+        session_inputs input(backend.get(),1); block_inputs attn(f,514,1);
+        if (!t.assert_true(session->begin(514,1,true))) return;
+        t.assert_true(f.content->mirror_epoch()>mirror_epoch);
+        for (uint32_t layer=0;layer<4;++layer) {
+            if (!t.assert_true(session->produce(layer,input.k,input.v)) ||
+                    !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
+            close_values(t,oracle(f,layer,514,1,attn.qdata),attn.read(),1e-3f);
+        }
+        t.assert_equal(size_t(514),session->tokens());
+        grown.lease.reset();
+        session.reset();
+        t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(grown.arena.get()));
+    });
     return t.summary();
 }

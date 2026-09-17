@@ -30,8 +30,9 @@ ggml_backend_buffer_type_t llama_kv_stream_device_buffer_type(ggml_backend_dev_t
 }
 
 // Host-cache identity survives device detach and must be assigned by the cache owner.
-llama_kv_stream_binding::llama_kv_stream_binding(uint64_t id, ggml_backend_buffer_type_t type) :
-    identity(id), expected_type(type) {}
+llama_kv_stream_binding::llama_kv_stream_binding(
+        uint64_t id, ggml_backend_buffer_type_t type, uint64_t previous_revision) :
+    identity(id), revision(previous_revision), expected_type(type) {}
 
 // Validate and retain before exposing an address to native construction; publish only after capture succeeds.
 bool llama_kv_stream_binding::bind(ggml_backend_memory_lease_t lease,

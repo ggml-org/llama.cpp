@@ -70,6 +70,12 @@ struct llama_kv_stream_policy_layout {
     size_t conversion_offset = 0, conversion_bytes = 0, unused_bytes = 0;
 };
 
+struct llama_kv_stream_policy_growth {
+    llama_kv_stream_policy_config config;
+    llama_kv_stream_policy_state state;
+    llama_kv_stream_policy_layout layout;
+};
+
 enum class llama_kv_stream_policy_status {
     success, invalid_config, geometry_error, invalid_budget, invalid_state, invalid_observation,
     overflow, allocation_failed,
@@ -79,6 +85,14 @@ struct llama_kv_stream_policy_result {
     ggml_kv_stream_result geometry;
 };
 
+// Recompute a larger pool at an existing committed frontier. This does not retain or move storage.
+// Failure leaves output unchanged.
+llama_kv_stream_policy_result llama_kv_stream_policy_grow(
+        const llama_kv_stream_policy_config & current,
+        size_t active_tokens,
+        bool decode,
+        size_t pool_bytes,
+        llama_kv_stream_policy_growth & output);
 // All APIs are pure metadata calculations; failure leaves output unchanged. No allocation of KV/device storage.
 llama_kv_stream_policy_result llama_kv_stream_policy_initialize(
         const llama_kv_stream_policy_config & config, llama_kv_stream_policy_state & output);

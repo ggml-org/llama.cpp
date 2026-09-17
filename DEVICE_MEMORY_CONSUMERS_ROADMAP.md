@@ -8,7 +8,7 @@ Last source review: 2026-09-15, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`; **6.3a** is implemented and qualified for user review.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, and **6.3a** at `4b576eec7`; **6.2a** is implemented and qualified for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -412,8 +412,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.9 | Deferred | - | Final fixed/shared-budget support documentation follows 6.5c qualification. |
 | 6.1a | Committed | 37b8ec387 | Phase-preserving aligned workspace requirements, exact per-stage consumer grants, zero-size detach/return, and conservative live allocation. CPU Debug, ASan/leak, and UBSan focused suites pass. |
 | 6.1b | Committed | f1db07796 | Exact device-local shared-parent accounting; external device/host and managed-allocation reporting; alias validation; explicit transition peaks; opaque-residual reconciliation. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
-| 6.2a-6.2c | Planned | - | Externally leased KV growth, shrink, and recovery follow 6.3a. |
-| 6.3a | Ready for review | - | Explicit logical-batch text phase, repeated-notification no-op, serial return to prefill, speculative rejection, and one immutable phase across all ubatches. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
+| 6.2a | Ready for review | - | Growth-only rebind to a disjoint external device lease; current-frontier policy replan, monotonic KV revision, preserved host/publication state, lazy host reload, CUDA numerical validation, and memcheck pass. |
+| 6.2b-6.2c | Planned | - | Shrink/drain and no-dual-grant recovery remain. |
+| 6.3a | Committed | 4b576eec7 | Explicit logical-batch text phase, repeated-notification no-op, serial return to prefill, speculative rejection, and one immutable phase across all ubatches. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
 | 6.3b-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
@@ -3261,4 +3262,32 @@ TDD evidence:
 
 The large real-model CUDA context test was compiled but not run because production occupied the GPU and this stage changes only control metadata. No reclamation, arena commit, synchronization, CLI, or performance behavior is added. Stage 6.2a follows with externally leased KV growth/rebind tests.
 
-Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+Task files and this roadmap were committed by the user at `4b576eec7`. Stage **6.3a** records phase intent only and leaves conservative grants active. Stage 6.2a follows below.
+
+
+### Stage 6.2a implementation and validation
+
+Stage 6.2a adds growth-only KV rebinding from a disjoint caller-supplied device-local lease. It reuses the existing coarse binding and executor lifetime contracts; no second binding abstraction or arena allocation policy was added.
+
+The pure growth planner copies the current quant/model policy, requires a strictly larger byte budget, resets feedback/hysteresis through normal initialization, and recomputes concentrated decode or uniform prefill placement at the current committed token frontier. It materializes the complete ring/layer/conversion layout before any runtime state changes. Tests verify increased residency, changed layer/V-plane addresses, exact page conservation, and unchanged output on rejected growth.
+
+The idle session path requires a complete committed publication frontier, unchanged authoritative-host generation, a larger same-device/same-type region, absolute alignment, and non-overlap with the old pool, writer scratch, and attention workspace. It constructs and fully configures the replacement resident binding before retiring the old one. Successful publication then swaps the retained pool lease, policy, grant accounting, and resident owner together.
+
+Binding revisions now accept the prior revision seed, so replacement bindings and the session layout revision advance monotonically. Arena generation remains owned by the caller and does not become a KV validity signal. Cache identity, host-content generation, committed token frontier, and publication frontiers survive growth.
+
+No old VRAM bytes are copied into the new pool. The replacement resident starts uninitialized; its first append resets mirror validity and lazily restores the required resident ranges from authoritative host KV before attention. The real CUDA test restores a 513-token host frontier, grows to a different device address, generates token 514, and matches the independent attention oracle across four layers with maximum absolute error below 1.6e-5.
+
+TDD and validation evidence:
+
+- The first build failed because the growth plan, session growth API, and binding snapshot did not exist.
+- `test-kv-stream-policy` passes 23 cases / 139,924 assertions.
+- CUDA `test-kv-stream-session` passes 7 cases / 370 assertions, including 44 growth-specific assertions for invalid grants, revision/address changes, grant totals, frontier preservation, lazy mirror refresh, exact output, and lease release.
+- `test-kv-stream-binding` passes 15 cases / 3,097 assertions.
+- Policy and binding suites pass CPU Debug, ASan with leak detection, and UBSan.
+- Compute Sanitizer memcheck reports zero errors and zero leaked bytes for the complete CUDA session suite.
+- Nine broader KV policy, binding, content, resident, capture, session, model, budget, and phase suites pass.
+- Production was stopped only for CUDA tests and restored successfully; the server returned to listening on port 1234.
+
+This stage deliberately holds disjoint old and new pool leases while constructing the replacement. Shrink/drain behavior is 6.2b, and failure recovery without simultaneous full-budget grants is 6.2c. The model/context coordinator does not invoke growth yet; shared-parent integration remains 6.3b.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Next after review is **6.2b**, shrink/rebind with pending-copy drain and logical cache preservation.

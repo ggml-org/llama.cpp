@@ -230,6 +230,28 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     return {};
 }
 
+
+llama_kv_stream_policy_result llama_kv_stream_policy_grow(
+        const llama_kv_stream_policy_config & current, size_t active_tokens,
+        bool decode, size_t pool_bytes, llama_kv_stream_policy_growth & output) {
+    if (pool_bytes <= current.pool_bytes) return {status::invalid_budget, {}};
+    llama_kv_stream_policy_growth next;
+    next.config = current;
+    next.config.pool_bytes = pool_bytes;
+    auto result = llama_kv_stream_policy_initialize(next.config,next.state);
+    if (result.status != status::success) return result;
+    llama_kv_stream_policy_decision decision;
+    result = llama_kv_stream_policy_step(next.config,next.state,
+        {active_tokens,1,{},!decode},decision);
+    if (result.status != status::success) return result;
+    next.state = decision.next;
+    result = llama_kv_stream_policy_layout_make(
+        next.config,next.state,active_tokens,next.layout);
+    if (result.status != status::success) return result;
+    output = std::move(next);
+    return {};
+}
+
 // Ring first, then compact per-layer planes, then aligned conversion scratch; only the final tail is unused.
 llama_kv_stream_policy_result llama_kv_stream_policy_layout_make(
         const llama_kv_stream_policy_config & c, const llama_kv_stream_policy_state & s,

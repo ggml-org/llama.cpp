@@ -454,5 +454,44 @@ int main() {
         t.assert_equal(uint32_t(262), d.next.ring_slots);
     });
 
+
+    t.test("growth_replans_current_frontier_without_mutating_old_state", [](testing & t) {
+        auto current = config(24, 4);
+        llama_kv_stream_policy_state initial;
+        if (!start(t, current, initial)) return;
+        llama_kv_stream_policy_decision before;
+        if (!t.assert_true(llama_kv_stream_policy_step(
+                current, initial, observe(8), before).status == status::success)) return;
+        llama_kv_stream_policy_layout old_layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                current, before.next, 8*256, old_layout).status == status::success)) return;
+
+        llama_kv_stream_policy_growth growth;
+        const auto larger = config(64, 4).pool_bytes;
+        if (!t.assert_true(llama_kv_stream_policy_grow(
+                current, 8*256, true, larger, growth).status == status::success)) return;
+        t.assert_equal(larger, growth.config.pool_bytes);
+        t.assert_equal(uint32_t(64), growth.state.budget.pages);
+        t.assert_true(growth.state.resident_pages_per_layer >=
+            before.next.resident_pages_per_layer);
+        t.assert_true(growth.layout.conversion_offset > old_layout.conversion_offset);
+        t.assert_equal(size_t(4), growth.layout.layers.size());
+        bool moved_value_plane = false;
+        for (size_t layer = 0; layer < growth.layout.layers.size(); ++layer) {
+            moved_value_plane = moved_value_plane ||
+                growth.layout.layers[layer].offset +
+                    growth.layout.layers[layer].planes.v_offset !=
+                old_layout.layers[layer].offset +
+                    old_layout.layers[layer].planes.v_offset;
+        }
+        t.assert_true(moved_value_plane);
+
+        const auto unchanged = growth;
+        t.assert_true(llama_kv_stream_policy_grow(
+            current, 8*256, true, current.pool_bytes, growth).status == status::invalid_budget);
+        t.assert_equal(unchanged.config.pool_bytes, growth.config.pool_bytes);
+        t.assert_equal(unchanged.state.budget.pages, growth.state.budget.pages);
+        t.assert_equal(unchanged.layout.conversion_offset, growth.layout.conversion_offset);
+    });
     return t.summary();
 }
