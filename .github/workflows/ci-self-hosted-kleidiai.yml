@@ -23,7 +23,8 @@ on:
       'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
-      'ggml/src/ggml-cpu/kleidiai/**'
+      'ggml/src/*',
+      'ggml/src/ggml-cpu/**'
     ]
 
 concurrency:

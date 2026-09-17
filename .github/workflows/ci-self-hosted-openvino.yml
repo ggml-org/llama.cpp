@@ -23,6 +23,8 @@ on:
       'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
+      'ggml/src/*',
+      'ggml/src/ggml-cpu/**',
       'ggml/src/ggml-openvino/**'
     ]
 
