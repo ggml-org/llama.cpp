@@ -163,6 +163,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
+    set_tests_properties(test-chat PROPERTIES ENVIRONMENT "LLAMA_LOG_ERRORS_ONLY=1")
     llama_build_and_test(test-json-schema-to-grammar.cpp)
 
     if (NOT GGML_BACKEND_DL)

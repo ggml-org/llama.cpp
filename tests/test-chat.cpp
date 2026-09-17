@@ -15,6 +15,7 @@
 #include "log.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
 #include <fstream>
 #include <functional>
@@ -1118,6 +1119,8 @@ static bool g_force_reconstruction_test = false;
 static void test_peg_parser(common_chat_templates *                      tmpls,
                             const std::function<void(peg_test_case &)> & init,
                             bool                                         detailed_debug) {
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+
     // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
     constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
         auto len = s.size();
@@ -1442,10 +1445,11 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             size_t ctx_start = diff_pos > 60 ? diff_pos - 60 : 0;
             size_t ctx_end_e = std::min(expected_text.size(), diff_pos + 40);
             size_t ctx_end_r = std::min(reconstruction_params.prompt.size(), diff_pos + 40);
-            LOG_ERR("\x1b[31m[RECONSTRUCTION FAIL]\x1b[0m "
+            LOG_ERR("%s[RECONSTRUCTION FAIL]%s "
                     "first diff at byte %zu (expected len=%zu, reconstructed len=%zu)\n"
                     "  expected:      ...%s...\n"
                     "  reconstructed: ...%s...\n",
+                    use_color ? "\x1b[31m" : "", use_color ? "\x1b[0m" : "",
                     diff_pos, expected_text.size(), reconstruction_params.prompt.size(),
                     expected_text.substr(ctx_start, ctx_end_e - ctx_start).c_str(),
                     reconstruction_params.prompt.substr(ctx_start, ctx_end_r - ctx_start).c_str());
@@ -1461,6 +1465,18 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 }
 
+// Case-insensitive substring match against the --template filter
+static bool template_matches_filter(const std::string & template_path) {
+    if (g_template_filter.empty()) {
+        return true;
+    }
+    std::string template_path_lower = template_path;
+    std::string filter_lower        = g_template_filter;
+    std::transform(template_path_lower.begin(), template_path_lower.end(), template_path_lower.begin(), ::tolower);
+    std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
+    return template_path_lower.find(filter_lower) != std::string::npos;
+}
+
 // Fluent builder for PEG parser tests
 class peg_test_builder;
 
@@ -1474,7 +1490,11 @@ class peg_tester {
     explicit peg_tester(const std::string & template_path, const bool detailed_debug = false) :
         tmpls_(read_templates(template_path)),
         template_path_(template_path),
-        detailed_debug_(detailed_debug) {}
+        detailed_debug_(detailed_debug) {
+        if (template_matches_filter(template_path_)) {
+            LOG_INF("  running %s\n", template_path_.c_str());
+        }
+    }
 
     const std::string & template_path() const { return template_path_; }
 
@@ -1571,19 +1591,11 @@ class peg_test_builder {
     // Execute the test
     void run() {
         // Check template filter
-        if (!g_template_filter.empty()) {
-            // Case-insensitive substring match
-            std::string template_path_lower = tester_.template_path();
-            std::string filter_lower        = g_template_filter;
-            std::transform(template_path_lower.begin(), template_path_lower.end(), template_path_lower.begin(),
-                           ::tolower);
-            std::transform(filter_lower.begin(), filter_lower.end(), filter_lower.begin(), ::tolower);
-            if (template_path_lower.find(filter_lower) == std::string::npos) {
-                // Skip this test
-                return;
-            }
+        if (!template_matches_filter(tester_.template_path())) {
+            // Skip this test
+            return;
         }
-        LOG_INF("\n\x1b[38;5;126m[%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
+        LOG_TRC("\n\x1b[38;5;126m[%s]\x1b[0m\n%s\n\n", tester_.template_path().c_str(), tc_.input.c_str());
         test_peg_parser(tester_.tmpls_.get(), [this](peg_test_case & t) { t = tc_; }, tester_.detailed_debug_);
     }
 };
@@ -7017,7 +7029,7 @@ static void test_developer_role_to_system_workaround() {
         if (params.prompt.find("<|system|>You are a helpful developer assistant.<|end|>") == std::string::npos) {
             throw std::runtime_error("Test failed: system message not found in output");
         }
-        LOG_ERR("Test 1 passed: developer role changed to system\n");
+        LOG_INF("Test 1 passed: developer role changed to system\n");
     }
 }
 
@@ -7321,6 +7333,8 @@ static void test_msg_diffs_compute() {
 }
 
 int main(int argc, char ** argv) {
+    common_init();
+
     bool detailed_debug    = false;
     bool only_run_filtered = false;
 
@@ -7342,9 +7356,18 @@ int main(int argc, char ** argv) {
         }
     }
 
+    // used by CI to keep only warnings and errors
+    if (std::getenv("LLAMA_LOG_ERRORS_ONLY") != nullptr) {
+        common_log_set_verbosity_thold(LOG_LEVEL_WARN);
+    }
+
+    LOG("%s: running\n", "test-chat");
+
     if (only_run_filtered) {
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All template tests passed!" << '\n';
+        LOG("%s: %s\n", "test-chat", "PASSED");
+        common_log_flush(common_log_main());
         return 0;
     }
 
@@ -7407,5 +7430,7 @@ int main(int argc, char ** argv) {
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }
+    LOG("%s: %s\n", "test-chat", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }
