@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_diag_mask_inf(ggml_backend_opencl_context * backend_ct
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf_8 = clCreateKernel(prog, "kernel_diag_mask_inf_8", &err), err));
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf   = clCreateKernel(prog, "kernel_diag_mask_inf", &err), err));
+        CL_CHECK((backend_ctx->diag_mask_inf.kernel_diag_mask_inf_8 = clCreateKernel(prog, "kernel_diag_mask_inf_8", &err), err));
+        CL_CHECK((backend_ctx->diag_mask_inf.kernel_diag_mask_inf   = clCreateKernel(prog, "kernel_diag_mask_inf", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -48,7 +48,7 @@ void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * src0, con
     cl_kernel kernel;
 
     if (ne00%8 == 0) {
-        kernel = backend_ctx->kernel_diag_mask_inf_8;
+        kernel = backend_ctx->diag_mask_inf.kernel_diag_mask_inf_8;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
@@ -63,7 +63,7 @@ void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * src0, con
 
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
-        kernel = backend_ctx->kernel_diag_mask_inf;
+        kernel = backend_ctx->diag_mask_inf.kernel_diag_mask_inf;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));

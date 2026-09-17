@@ -16,10 +16,10 @@ void ggml_cl_load_kernels_sqrt(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_sqrt_cont_f32     = clCreateKernel(prog, "kernel_sqrt_cont_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_sqrt_cont_f32_4   = clCreateKernel(prog, "kernel_sqrt_cont_f32_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_sqrt_cont_f16     = clCreateKernel(prog, "kernel_sqrt_cont_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_sqrt_cont_f16_4   = clCreateKernel(prog, "kernel_sqrt_cont_f16_4", &err), err));
+        CL_CHECK((backend_ctx->sqrt.kernel_sqrt_cont_f32     = clCreateKernel(prog, "kernel_sqrt_cont_f32", &err), err));
+        CL_CHECK((backend_ctx->sqrt.kernel_sqrt_cont_f32_4   = clCreateKernel(prog, "kernel_sqrt_cont_f32_4", &err), err));
+        CL_CHECK((backend_ctx->sqrt.kernel_sqrt_cont_f16     = clCreateKernel(prog, "kernel_sqrt_cont_f16", &err), err));
+        CL_CHECK((backend_ctx->sqrt.kernel_sqrt_cont_f16_4   = clCreateKernel(prog, "kernel_sqrt_cont_f16_4", &err), err));
 
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
@@ -47,16 +47,16 @@ void ggml_cl_sqrt(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
     int n = ggml_nelements(dst);
     if (n % 4 == 0) {
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_sqrt_cont_f32_4;
+            kernel = backend_ctx->sqrt.kernel_sqrt_cont_f32_4;
         } else {
-            kernel = backend_ctx->kernel_sqrt_cont_f16_4;
+            kernel = backend_ctx->sqrt.kernel_sqrt_cont_f16_4;
         }
         n /= 4;
     } else {
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_sqrt_cont_f32;
+            kernel = backend_ctx->sqrt.kernel_sqrt_cont_f32;
         } else {
-            kernel = backend_ctx->kernel_sqrt_cont_f16;
+            kernel = backend_ctx->sqrt.kernel_sqrt_cont_f16;
         }
     }
 

@@ -16,12 +16,12 @@ void ggml_cl_load_kernels_gelu(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gelu         = clCreateKernel(prog, "kernel_gelu", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_4       = clCreateKernel(prog, "kernel_gelu_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_erf     = clCreateKernel(prog, "kernel_gelu_erf", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_erf_4   = clCreateKernel(prog, "kernel_gelu_erf_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_quick   = clCreateKernel(prog, "kernel_gelu_quick", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_quick_4 = clCreateKernel(prog, "kernel_gelu_quick_4", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu         = clCreateKernel(prog, "kernel_gelu", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu_4       = clCreateKernel(prog, "kernel_gelu_4", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu_erf     = clCreateKernel(prog, "kernel_gelu_erf", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu_erf_4   = clCreateKernel(prog, "kernel_gelu_erf_4", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu_quick   = clCreateKernel(prog, "kernel_gelu_quick", &err), err));
+        CL_CHECK((backend_ctx->gelu.kernel_gelu_quick_4 = clCreateKernel(prog, "kernel_gelu_quick_4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -48,10 +48,10 @@ void ggml_cl_gelu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
     int n = ggml_nelements(dst);
 
     if (n % 4 == 0) {
-        kernel = backend_ctx->kernel_gelu_4;
+        kernel = backend_ctx->gelu.kernel_gelu_4;
         n /= 4;
     } else {
-        kernel = backend_ctx->kernel_gelu;
+        kernel = backend_ctx->gelu.kernel_gelu;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
@@ -86,10 +86,10 @@ void ggml_cl_gelu_erf(ggml_backend_t backend, const ggml_tensor * src0, const gg
     int n = ggml_nelements(dst);
 
     if (n % 4 == 0) {
-        kernel = backend_ctx->kernel_gelu_erf_4;
+        kernel = backend_ctx->gelu.kernel_gelu_erf_4;
         n /= 4;
     } else {
-        kernel = backend_ctx->kernel_gelu_erf;
+        kernel = backend_ctx->gelu.kernel_gelu_erf;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
@@ -124,10 +124,10 @@ void ggml_cl_gelu_quick(ggml_backend_t backend, const ggml_tensor * src0, const 
     int n = ggml_nelements(dst);
 
     if (n % 4 == 0) {
-        kernel = backend_ctx->kernel_gelu_quick_4;
+        kernel = backend_ctx->gelu.kernel_gelu_quick_4;
         n /= 4;
     } else {
-        kernel = backend_ctx->kernel_gelu_quick;
+        kernel = backend_ctx->gelu.kernel_gelu_quick;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));

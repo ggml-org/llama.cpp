@@ -16,9 +16,9 @@ void ggml_cl_load_kernels_rms_norm(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_rms_norm     = clCreateKernel(prog, "kernel_rms_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_rms_norm_mul = clCreateKernel(prog, "kernel_rms_norm_mul", &err), err));
-        CL_CHECK((backend_ctx->kernel_rms_norm_mul_add = clCreateKernel(prog, "kernel_rms_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->rms_norm.kernel_rms_norm     = clCreateKernel(prog, "kernel_rms_norm", &err), err));
+        CL_CHECK((backend_ctx->rms_norm.kernel_rms_norm_mul = clCreateKernel(prog, "kernel_rms_norm_mul", &err), err));
+        CL_CHECK((backend_ctx->rms_norm.kernel_rms_norm_mul_add = clCreateKernel(prog, "kernel_rms_norm_mul_add", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -68,7 +68,7 @@ void ggml_opencl_op_rms_norm_mul_add_fused(ggml_backend_t backend, ggml_tensor *
     else if (backend_ctx->gpu_family == INTEL) sgs = 32;
     else GGML_ASSERT(false && "Unsupported GPU");
 
-    cl_kernel kernel = backend_ctx->kernel_rms_norm_mul_add;
+    cl_kernel kernel = backend_ctx->rms_norm.kernel_rms_norm_mul_add;
 
     int nth = sgs;
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
@@ -155,7 +155,7 @@ void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, const gg
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-    cl_kernel kernel = backend_ctx->kernel_rms_norm;
+    cl_kernel kernel = backend_ctx->rms_norm.kernel_rms_norm;
 
     // Note, this kernel declares local memory in kernel args and the size
     // depends on subgroup size.
@@ -261,7 +261,7 @@ void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * rms_nor
         GGML_ASSERT(false && "Unsupported GPU");
     }
 
-    cl_kernel kernel = backend_ctx->kernel_rms_norm_mul;
+    cl_kernel kernel = backend_ctx->rms_norm.kernel_rms_norm_mul;
 
     int nth = sgs;
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);

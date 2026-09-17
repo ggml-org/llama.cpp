@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_solve_tri(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_solve_tri_f32 = clCreateKernel(prog, "kernel_solve_tri_f32", &err), err));
+        CL_CHECK((backend_ctx->solve_tri.kernel_solve_tri_f32 = clCreateKernel(prog, "kernel_solve_tri_f32", &err), err));
         GGML_LOG_CONT(".");
         CL_CHECK(clReleaseProgram(prog));
     }
@@ -40,7 +40,7 @@ void ggml_cl_solve_tri(ggml_backend_t backend, const ggml_tensor * src0, const g
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
-    cl_kernel kernel = backend_ctx->kernel_solve_tri_f32;
+    cl_kernel kernel = backend_ctx->solve_tri.kernel_solve_tri_f32;
     GGML_ASSERT(kernel != nullptr);
 
     const int n = src0->ne[0];

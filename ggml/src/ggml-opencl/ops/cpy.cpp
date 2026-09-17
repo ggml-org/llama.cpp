@@ -18,23 +18,23 @@ void ggml_cl_load_kernels_cpy(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(),
             no_cpy_pack ? compile_opts + " -DGGML_CL_NO_CPY_PACK" : compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_cpy_f16_f16 = clCreateKernel(prog, "kernel_cpy_f16_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_cpy_f16_f32 = clCreateKernel(prog, "kernel_cpy_f16_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_cpy_f32_f16 = clCreateKernel(prog, "kernel_cpy_f32_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_cpy_f32_f32 = clCreateKernel(prog, "kernel_cpy_f32_f32", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_f16_f16 = clCreateKernel(prog, "kernel_cpy_f16_f16", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_f16_f32 = clCreateKernel(prog, "kernel_cpy_f16_f32", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_f32_f16 = clCreateKernel(prog, "kernel_cpy_f32_f16", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_f32_f32 = clCreateKernel(prog, "kernel_cpy_f32_f32", &err), err));
         if (!no_cpy_pack) {
-            CL_CHECK((backend_ctx->kernel_cpy_f32_f32_pack = clCreateKernel(prog, "kernel_cpy_f32_f32_pack", &err), err));
+            CL_CHECK((backend_ctx->cpy.kernel_cpy_f32_f32_pack = clCreateKernel(prog, "kernel_cpy_f32_f32_pack", &err), err));
         }
         {   // optional: without it ggml_cl_cpy keeps the row-mapped kernel
             cl_int err_flat = CL_SUCCESS;
             cl_kernel k = clCreateKernel(prog, "kernel_cpy_f32_f32_flat", &err_flat);
             if (err_flat == CL_SUCCESS) {
-                backend_ctx->kernel_cpy_f32_f32_flat = k;
+                backend_ctx->cpy.kernel_cpy_f32_f32_flat = k;
             }
         }
-        CL_CHECK((backend_ctx->kernel_cpy_i32_i32 = clCreateKernel(prog, "kernel_cpy_i32_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_cpy_i32_f32 = clCreateKernel(prog, "kernel_cpy_i32_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_cpy_f32_i32 = clCreateKernel(prog, "kernel_cpy_f32_i32", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_i32_i32 = clCreateKernel(prog, "kernel_cpy_i32_i32", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_i32_f32 = clCreateKernel(prog, "kernel_cpy_i32_f32", &err), err));
+        CL_CHECK((backend_ctx->cpy.kernel_cpy_f32_i32 = clCreateKernel(prog, "kernel_cpy_f32_i32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -73,11 +73,11 @@ void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         const char * e = getenv("GGML_OPENCL_CPY_FLAT");
         return !(e && e[0] == '0');
     }();
-    if (cpy_flat_on && backend_ctx->kernel_cpy_f32_f32_flat != nullptr &&
+    if (cpy_flat_on && backend_ctx->cpy.kernel_cpy_f32_f32_flat != nullptr &&
         src0t == GGML_TYPE_F32 && src1t == GGML_TYPE_F32 &&
         ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
         ggml_nelements(src0) == ggml_nelements(src1)) {
-        cl_kernel k = backend_ctx->kernel_cpy_f32_f32_flat;
+        cl_kernel k = backend_ctx->cpy.kernel_cpy_f32_f32_flat;
         const cl_ulong nelem = (cl_ulong) ggml_nelements(src0);
         const cl_ulong n4    = nelem / 4;
 
@@ -104,15 +104,15 @@ void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         case GGML_TYPE_F32:
             switch (src1t) {
                 case GGML_TYPE_I32:
-                    kernel = backend_ctx->kernel_cpy_f32_i32;
+                    kernel = backend_ctx->cpy.kernel_cpy_f32_i32;
                     break;
                 case GGML_TYPE_F16:
-                    kernel = backend_ctx->kernel_cpy_f32_f16;
+                    kernel = backend_ctx->cpy.kernel_cpy_f32_f16;
                     break;
                 case GGML_TYPE_F32:
-                    kernel = (ne00 < 32 && backend_ctx->kernel_cpy_f32_f32_pack)
-                                       ? backend_ctx->kernel_cpy_f32_f32_pack
-                                       : backend_ctx->kernel_cpy_f32_f32;
+                    kernel = (ne00 < 32 && backend_ctx->cpy.kernel_cpy_f32_f32_pack)
+                                       ? backend_ctx->cpy.kernel_cpy_f32_f32_pack
+                                       : backend_ctx->cpy.kernel_cpy_f32_f32;
                     break;
                 default:
                     GGML_ASSERT(false && "not implemented");
@@ -121,10 +121,10 @@ void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         case GGML_TYPE_F16:
             switch (src1t) {
                 case GGML_TYPE_F16:
-                    kernel = backend_ctx->kernel_cpy_f16_f16;
+                    kernel = backend_ctx->cpy.kernel_cpy_f16_f16;
                     break;
                 case GGML_TYPE_F32:
-                    kernel = backend_ctx->kernel_cpy_f16_f32;
+                    kernel = backend_ctx->cpy.kernel_cpy_f16_f32;
                     break;
                 default:
                     GGML_ASSERT(false && "not implemented");
@@ -133,10 +133,10 @@ void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         case GGML_TYPE_I32:
             switch (src1t) {
                 case GGML_TYPE_F32:
-                    kernel = backend_ctx->kernel_cpy_i32_f32;
+                    kernel = backend_ctx->cpy.kernel_cpy_i32_f32;
                     break;
                 case GGML_TYPE_I32:
-                    kernel = backend_ctx->kernel_cpy_i32_i32;
+                    kernel = backend_ctx->cpy.kernel_cpy_i32_i32;
                     break;
                 default:
                     GGML_ASSERT(false && "not implemented");
@@ -167,7 +167,7 @@ void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
     CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb12));
     CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb13));
 
-    if (kernel == backend_ctx->kernel_cpy_f32_f32_pack) {
+    if (kernel == backend_ctx->cpy.kernel_cpy_f32_f32_pack) {
         const int maxwg = (int)backend_ctx->get_kernel_workgroup_size(kernel);
         const int base  = MIN(64, maxwg);
         const int tpr   = MIN(ne00, base);                 // threads per row

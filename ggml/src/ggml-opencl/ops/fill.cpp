@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_fill(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_fill = clCreateKernel(prog, "kernel_fill_f32", &err), err));
+        CL_CHECK((backend_ctx->fill.kernel_fill = clCreateKernel(prog, "kernel_fill_f32", &err), err));
         GGML_LOG_CONT(".");
 
         CL_CHECK(clReleaseProgram(prog));
@@ -40,7 +40,7 @@ void ggml_cl_fill(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
 
     const int64_t n = ggml_nelements(dst);
 
-    cl_kernel kernel = backend_ctx->kernel_fill;
+    cl_kernel kernel = backend_ctx->fill.kernel_fill;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offsetd));

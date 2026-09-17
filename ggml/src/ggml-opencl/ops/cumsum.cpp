@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_cumsum(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog;
         prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_cumsum_blk = clCreateKernel(prog, "kernel_cumsum_blk", &err), err));
-        CL_CHECK((backend_ctx->kernel_cumsum_add = clCreateKernel(prog, "kernel_cumsum_add", &err), err));
+        CL_CHECK((backend_ctx->cumsum.kernel_cumsum_blk = clCreateKernel(prog, "kernel_cumsum_blk", &err), err));
+        CL_CHECK((backend_ctx->cumsum.kernel_cumsum_add = clCreateKernel(prog, "kernel_cumsum_add", &err), err));
         GGML_LOG_CONT(".");
         CL_CHECK(clReleaseProgram(prog));
     }
@@ -44,7 +44,7 @@ void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, const ggml
     GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
     GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
 
-    cl_kernel kernel = backend_ctx->kernel_cumsum_blk;
+    cl_kernel kernel = backend_ctx->cumsum.kernel_cumsum_blk;
 
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
     int nth = 1;
@@ -94,7 +94,7 @@ void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, const ggml
         // computes a partial sum and stores to dst, tmp_buffer contains the sum
         // of the each workgroup; cumsum this buffer and add to the partial sums in dst
         cl_ulong offsett = 0;
-        kernel = backend_ctx->kernel_cumsum_blk;
+        kernel = backend_ctx->cumsum.kernel_cumsum_blk;
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
         CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_ulong), &offsett));
         CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_mem),   &tmp_buffer.buffer));
@@ -116,7 +116,7 @@ void ggml_cl_cumsum(ggml_backend_t backend, const ggml_tensor * src0, const ggml
         size_t local_work_size_1[] = { (size_t)nth, 1, 1};
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_1, local_work_size_1, dst);
 
-        kernel = backend_ctx->kernel_cumsum_add;
+        kernel = backend_ctx->cumsum.kernel_cumsum_add;
         CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &tmp_buffer.buffer));
         CL_CHECK(clSetKernelArg(kernel,   1, sizeof(cl_mem),   &extrad->data_device));
         CL_CHECK(clSetKernelArg(kernel,   2, sizeof(cl_ulong), &offsetd));

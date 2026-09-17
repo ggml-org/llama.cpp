@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max = clCreateKernel(prog, "kernel_soft_max", &err), err));
+        CL_CHECK((backend_ctx->soft_max.kernel_soft_max = clCreateKernel(prog, "kernel_soft_max", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -33,7 +33,7 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_f16 = clCreateKernel(prog, "kernel_soft_max_f16", &err), err));
+        CL_CHECK((backend_ctx->soft_max.kernel_soft_max_f16 = clCreateKernel(prog, "kernel_soft_max_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -50,7 +50,7 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_4 = clCreateKernel(prog, "kernel_soft_max_4", &err), err));
+        CL_CHECK((backend_ctx->soft_max.kernel_soft_max_4 = clCreateKernel(prog, "kernel_soft_max_4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -67,7 +67,7 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(prog, "kernel_soft_max_4_f16", &err), err));
+        CL_CHECK((backend_ctx->soft_max.kernel_soft_max_4_f16 = clCreateKernel(prog, "kernel_soft_max_4_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -157,15 +157,15 @@ void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, const gg
 
     if (ne00%4 == 0) {
         if (use_f16) {
-            kernel = backend_ctx->kernel_soft_max_4_f16;
+            kernel = backend_ctx->soft_max.kernel_soft_max_4_f16;
         } else {
-            kernel = backend_ctx->kernel_soft_max_4;
+            kernel = backend_ctx->soft_max.kernel_soft_max_4;
         }
     } else {
         if (use_f16) {
-            kernel = backend_ctx->kernel_soft_max_f16;
+            kernel = backend_ctx->soft_max.kernel_soft_max_f16;
         } else {
-            kernel = backend_ctx->kernel_soft_max;
+            kernel = backend_ctx->soft_max.kernel_soft_max;
         }
     }
 

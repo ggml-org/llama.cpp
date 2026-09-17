@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_norm(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_norm         = clCreateKernel(prog, "kernel_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_norm_mul_add = clCreateKernel(prog, "kernel_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->norm.kernel_norm         = clCreateKernel(prog, "kernel_norm", &err), err));
+        CL_CHECK((backend_ctx->norm.kernel_norm_mul_add = clCreateKernel(prog, "kernel_norm_mul_add", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -50,7 +50,7 @@ void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
         nth *= 2;
     }
 
-    cl_kernel kernel = backend_ctx->kernel_norm;
+    cl_kernel kernel = backend_ctx->norm.kernel_norm;
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong),  &offset0));
@@ -109,7 +109,7 @@ void ggml_opencl_op_norm_fused(ggml_backend_t backend, ggml_tensor * norm_tensor
     else if (backend_ctx->gpu_family == INTEL) sgs = 32;
     else GGML_ASSERT(false && "Unsupported GPU");
 
-    cl_kernel kernel = backend_ctx->kernel_norm_mul_add;
+    cl_kernel kernel = backend_ctx->norm.kernel_norm_mul_add;
 
     int nth = sgs;
     int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);

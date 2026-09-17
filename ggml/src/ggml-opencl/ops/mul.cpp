@@ -16,10 +16,10 @@ void ggml_cl_load_kernels_mul(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul         = clCreateKernel(prog, "kernel_mul", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_row     = clCreateKernel(prog, "kernel_mul_row", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_f16     = clCreateKernel(prog, "kernel_mul_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_mul_row_f16 = clCreateKernel(prog, "kernel_mul_row_f16", &err), err));
+        CL_CHECK((backend_ctx->mul.kernel_mul         = clCreateKernel(prog, "kernel_mul", &err), err));
+        CL_CHECK((backend_ctx->mul.kernel_mul_row     = clCreateKernel(prog, "kernel_mul_row", &err), err));
+        CL_CHECK((backend_ctx->mul.kernel_mul_f16     = clCreateKernel(prog, "kernel_mul_f16", &err), err));
+        CL_CHECK((backend_ctx->mul.kernel_mul_row_f16 = clCreateKernel(prog, "kernel_mul_row_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -90,9 +90,9 @@ void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         int ne = ne00 / 4;
 
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_mul_row;
+            kernel = backend_ctx->mul.kernel_mul_row;
         } else {
-            kernel = backend_ctx->kernel_mul_row_f16;
+            kernel = backend_ctx->mul.kernel_mul_row_f16;
         }
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
@@ -104,9 +104,9 @@ void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &ne));
     } else {
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_mul;
+            kernel = backend_ctx->mul.kernel_mul;
         } else {
-            kernel = backend_ctx->kernel_mul_f16;
+            kernel = backend_ctx->mul.kernel_mul_f16;
         }
 
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
