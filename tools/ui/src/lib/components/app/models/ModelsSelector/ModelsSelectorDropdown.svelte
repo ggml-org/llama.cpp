@@ -31,7 +31,11 @@
 		currentModel?: string | null;
 		disabled?: boolean;
 		forceForegroundText?: boolean;
-		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
+		onModelChange?: (
+			modelId: string,
+			modelName: string,
+			backendId?: string
+		) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
 

@@ -57,9 +57,12 @@ function normalizeBaseUrl(url: string): string | null {
 	}
 }
 
-/** Features a backend supports, derived from its protocol. */
-export function getBackendCapabilities(backend: Backend): BackendCapabilities {
-	return BACKEND_CAPABILITIES[backend.protocol] ?? BACKEND_CAPABILITIES.openai;
+/**
+ * Features a backend supports, derived from its protocol. A missing backend
+ * (unknown model, early startup) gets the plain compatible defaults.
+ */
+export function getBackendCapabilities(backend?: Backend): BackendCapabilities {
+	return BACKEND_CAPABILITIES[backend?.protocol ?? 'openai'] ?? BACKEND_CAPABILITIES.openai;
 }
 
 /** Wire quirks for a backend: protocol defaults overridden by the backend. */

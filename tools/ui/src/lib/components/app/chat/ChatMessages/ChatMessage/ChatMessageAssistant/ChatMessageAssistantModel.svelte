@@ -2,7 +2,8 @@
 	import { ModelBadge, ModelsSelectorDropdown } from '$lib/components/app';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, serverStore } from '$lib/stores';
-	import { copyToClipboard } from '$lib/utils';
+	import { copyToClipboard, getBackendCapabilities } from '$lib/utils';
+	import { getBackend } from '$lib/utils/api-base';
 
 	interface Props {
 		displayedModel: string | null;
@@ -15,7 +16,6 @@
 	// same selectability rule as the form selector: router mode, or any backend
 	// that exposes a selectable model list
 	let isSelectable = $derived(serverStore.isRouterMode || !serverStore.capabilities.props);
-	let canLoadModels = $derived(serverStore.capabilities.loadUnload);
 
 	let pendingModel = $state<string | null>(null);
 
@@ -28,11 +28,14 @@
 	<ModelsSelectorDropdown
 		currentModel={pendingModel ?? displayedModel}
 		disabled={isLoading}
-		onModelChange={async (modelId: string, modelName: string) => {
+		onModelChange={async (modelId: string, modelName: string, backendId?: string) => {
+			// capability of the picked model's own backend, not the active one
+			const loadsOnRequest = getBackendCapabilities(getBackend(backendId)).loadUnload;
 			const status = modelsStore.getModelStatus(modelId);
 
-			// external backends load the model implicitly on the request
-			if (canLoadModels && status !== ServerModelStatus.LOADED) {
+			// only a llama.cpp server loads up front; remote backends load the
+			// model with the request itself
+			if (loadsOnRequest && status !== ServerModelStatus.LOADED) {
 				pendingModel = modelId;
 
 				try {
