@@ -104,6 +104,12 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     const std::string GEN_PROMPT   = "<｜Assistant｜>";
     const std::string TC_SEPARATOR = "\n\n";
 
+    // lets the server find user turns in the prompt and place context checkpoints there
+    data.message_delimiters = {
+        { COMMON_CHAT_ROLE_ASSISTANT, GEN_PROMPT },
+        { COMMON_CHAT_ROLE_USER, "<｜User｜>" },
+    };
+
     data.prompt = common_chat_template_direct_apply_impl(
         tmpl, inputs, adjusted_messages, std::nullopt, additional_context);
     data.generation_prompt = common_chat_template_generation_prompt_impl(
