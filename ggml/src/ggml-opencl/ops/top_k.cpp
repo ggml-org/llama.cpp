@@ -11,8 +11,8 @@ void ggml_cl_load_kernels_top_k(ggml_backend_opencl_context * backend_ctx) {
     const std::string kernel_src = read_file("top_k.cl");
 #endif
     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-    CL_CHECK((backend_ctx->kernel_top_k_f32 = clCreateKernel(prog, "kernel_top_k_f32", &err), err));
-    CL_CHECK((backend_ctx->kernel_top_k_merge_f32 = clCreateKernel(prog, "kernel_top_k_merge_f32", &err), err));
+    CL_CHECK((backend_ctx->top_k.kernel_top_k_f32 = clCreateKernel(prog, "kernel_top_k_f32", &err), err));
+    CL_CHECK((backend_ctx->top_k.kernel_top_k_merge_f32 = clCreateKernel(prog, "kernel_top_k_merge_f32", &err), err));
     CL_CHECK(clReleaseProgram(prog));
     GGML_LOG_CONT(".");
 }
@@ -32,7 +32,7 @@ void ggml_cl_top_k(ggml_backend_t backend, const ggml_tensor * src0, const ggml_
     GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
 
     const int k = dst->ne[0];
-    cl_kernel kernel = backend_ctx->kernel_top_k_f32;
+    cl_kernel kernel = backend_ctx->top_k.kernel_top_k_f32;
     const int max_wg = backend_ctx->get_kernel_workgroup_size(kernel);
 
     int nth = 1;
@@ -75,7 +75,7 @@ void ggml_cl_top_k(ggml_backend_t backend, const ggml_tensor * src0, const ggml_
 
     if (tiled) {
         // The global top-k is contained in the top-k of each tile.
-        kernel = backend_ctx->kernel_top_k_merge_f32;
+        kernel = backend_ctx->top_k.kernel_top_k_merge_f32;
         const int max_wg_merge = backend_ctx->get_kernel_workgroup_size(kernel);
 
         int nth_merge = 1;

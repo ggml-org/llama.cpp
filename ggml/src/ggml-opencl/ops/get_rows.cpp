@@ -16,10 +16,10 @@ void ggml_cl_load_kernels_get_rows(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_get_rows_f32  = clCreateKernel(prog, "kernel_get_rows_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_get_rows_i32  = clCreateKernel(prog, "kernel_get_rows_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_get_rows_f16  = clCreateKernel(prog, "kernel_get_rows_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_get_rows_q4_0 = clCreateKernel(prog, "kernel_get_rows_q4_0", &err), err));
+        CL_CHECK((backend_ctx->get_rows.kernel_get_rows_f32  = clCreateKernel(prog, "kernel_get_rows_f32", &err), err));
+        CL_CHECK((backend_ctx->get_rows.kernel_get_rows_i32  = clCreateKernel(prog, "kernel_get_rows_i32", &err), err));
+        CL_CHECK((backend_ctx->get_rows.kernel_get_rows_f16  = clCreateKernel(prog, "kernel_get_rows_f16", &err), err));
+        CL_CHECK((backend_ctx->get_rows.kernel_get_rows_q4_0 = clCreateKernel(prog, "kernel_get_rows_q4_0", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -54,16 +54,16 @@ void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, const gg
 
     switch (src0->type) {
         case GGML_TYPE_F32:
-            kernel = backend_ctx->kernel_get_rows_f32;
+            kernel = backend_ctx->get_rows.kernel_get_rows_f32;
             break;
         case GGML_TYPE_I32:
-            kernel = backend_ctx->kernel_get_rows_i32;
+            kernel = backend_ctx->get_rows.kernel_get_rows_i32;
             break;
         case GGML_TYPE_F16:
-            kernel = backend_ctx->kernel_get_rows_f16;
+            kernel = backend_ctx->get_rows.kernel_get_rows_f16;
             break;
         case GGML_TYPE_Q4_0:
-            kernel = backend_ctx->kernel_get_rows_q4_0;
+            kernel = backend_ctx->get_rows.kernel_get_rows_q4_0;
             break;
         default:
             GGML_ASSERT(false && "not implemented");

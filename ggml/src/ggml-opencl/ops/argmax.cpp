@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_argmax(ggml_backend_opencl_context * backend_ctx) {
         const std::string kernel_src = read_file("argmax.cl");
 #endif
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_argmax_f32_i32 = clCreateKernel(prog, "kernel_argmax_f32_i32", &err), err));
+        CL_CHECK((backend_ctx->argmax.kernel_argmax_f32_i32 = clCreateKernel(prog, "kernel_argmax_f32_i32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         backend_ctx->kernels_loaded_argmax = true;
     }
@@ -44,7 +44,7 @@ void ggml_cl_argmax(ggml_backend_t backend, const ggml_tensor * src0, const ggml
     const int nrows = ggml_nrows(src0);
     constexpr int nth = 64;
 
-    cl_kernel kernel = backend_ctx->kernel_argmax_f32_i32;
+    cl_kernel kernel = backend_ctx->argmax.kernel_argmax_f32_i32;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));

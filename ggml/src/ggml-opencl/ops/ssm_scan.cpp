@@ -14,13 +14,13 @@ void ggml_cl_load_kernels_ssm_scan(ggml_backend_opencl_context * backend_ctx) {
 #endif
     cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-    CL_CHECK((backend_ctx->kernel_ssm_scan_f32 = clCreateKernel(prog, "kernel_ssm_scan_f32", &err), err));
-    CL_CHECK((backend_ctx->kernel_ssm_scan_f32_mamba2_d128 = clCreateKernel(prog, "kernel_ssm_scan_f32_mamba2_d128", &err), err));
-    CL_CHECK((backend_ctx->kernel_ssm_scan_f32_mamba2_d256 = clCreateKernel(prog, "kernel_ssm_scan_f32_mamba2_d256", &err), err));
+    CL_CHECK((backend_ctx->ssm_scan.kernel_ssm_scan_f32 = clCreateKernel(prog, "kernel_ssm_scan_f32", &err), err));
+    CL_CHECK((backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d128 = clCreateKernel(prog, "kernel_ssm_scan_f32_mamba2_d128", &err), err));
+    CL_CHECK((backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d256 = clCreateKernel(prog, "kernel_ssm_scan_f32_mamba2_d256", &err), err));
 
     cl_kernel * kernels[] = {
-        &backend_ctx->kernel_ssm_scan_f32_mamba2_d128,
-        &backend_ctx->kernel_ssm_scan_f32_mamba2_d256
+        &backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d128,
+        &backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d256
     };
 
     // specialized kernels use subgroups and assume subgroup size is 64,
@@ -117,14 +117,14 @@ void ggml_cl_ssm_scan(ggml_backend_t backend, ggml_tensor * dst) {
     const cl_uint K         = ggml_get_op_params_i32(dst, 0);
     const cl_ulong s_off_bytes = (cl_ulong) ggml_nelements(x) * sizeof(float);
 
-    cl_kernel kernel = backend_ctx->kernel_ssm_scan_f32;
+    cl_kernel kernel = backend_ctx->ssm_scan.kernel_ssm_scan_f32;
     size_t nth = d_state;
     if (A_ne0 == 1 && K == 1) {
         cl_kernel kernel_mamba2 = nullptr;
         if (d_state == 128) {
-            kernel_mamba2 = backend_ctx->kernel_ssm_scan_f32_mamba2_d128;
+            kernel_mamba2 = backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d128;
         } else if (d_state == 256) {
-            kernel_mamba2 = backend_ctx->kernel_ssm_scan_f32_mamba2_d256;
+            kernel_mamba2 = backend_ctx->ssm_scan.kernel_ssm_scan_f32_mamba2_d256;
         }
         if (kernel_mamba2 != nullptr) {
             kernel = kernel_mamba2;
@@ -165,7 +165,7 @@ void ggml_cl_ssm_scan(ggml_backend_t backend, ggml_tensor * dst) {
     CL_CHECK(clSetKernelArg(kernel, 30, sizeof(cl_int),   &n_group));
     CL_CHECK(clSetKernelArg(kernel, 31, sizeof(cl_int),   &n_tokens));
 
-    if (kernel == backend_ctx->kernel_ssm_scan_f32) {
+    if (kernel == backend_ctx->ssm_scan.kernel_ssm_scan_f32) {
         CL_CHECK(clSetKernelArg(kernel, 32, sizeof(cl_ulong), &s_nb1));
         CL_CHECK(clSetKernelArg(kernel, 33, sizeof(cl_ulong), &x_nb1));
         CL_CHECK(clSetKernelArg(kernel, 34, sizeof(cl_ulong), &B_nb1));

@@ -17,12 +17,12 @@ void ggml_cl_load_kernels_timestep_embedding(ggml_backend_opencl_context * backe
         if (!kernel_src.empty()) {
             cl_program prog =
                 build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-            CL_CHECK((backend_ctx->kernel_timestep_embedding = clCreateKernel(prog, "kernel_timestep_embedding", &err), err));
+            CL_CHECK((backend_ctx->timestep_embedding.kernel_timestep_embedding = clCreateKernel(prog, "kernel_timestep_embedding", &err), err));
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         } else {
             GGML_LOG_WARN("ggml_opencl: timestep_embedding kernel source not found or empty. This op will not be available.\n");
-            backend_ctx->kernel_timestep_embedding = nullptr;
+            backend_ctx->timestep_embedding.kernel_timestep_embedding = nullptr;
         }
     }
 }
@@ -37,7 +37,7 @@ void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    if (backend_ctx->kernel_timestep_embedding == nullptr) {
+    if (backend_ctx->timestep_embedding.kernel_timestep_embedding == nullptr) {
         GGML_LOG_WARN("%s: timestep_embedding kernel not available, skipping OpenCL execution.\n", __func__);
         return;
     }
@@ -52,7 +52,7 @@ void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor * src0
     const int max_period  = dst->op_params[1];
     const int dst_nb1_bytes = dst->nb[1];
 
-    cl_kernel kernel = backend_ctx->kernel_timestep_embedding;
+    cl_kernel kernel = backend_ctx->timestep_embedding.kernel_timestep_embedding;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra_src0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &off_src0));

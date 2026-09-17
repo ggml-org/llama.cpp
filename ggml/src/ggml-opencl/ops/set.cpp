@@ -51,9 +51,9 @@ void ggml_cl_set(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
 
     // then copy src1 to dst with specified offset
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-        kernel = backend_ctx->kernel_cpy_f32_f32;
+        kernel = backend_ctx->cpy.kernel_cpy_f32_f32;
     } else if (src1->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_I32) {
-        kernel = backend_ctx->kernel_cpy_i32_i32;
+        kernel = backend_ctx->cpy.kernel_cpy_i32_i32;
     } else {
         GGML_ASSERT(false && "not implemented");
     }

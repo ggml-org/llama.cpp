@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_im2col(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_im2col_f32 = clCreateKernel(prog, "kernel_im2col_f32", &err), err));
+        CL_CHECK((backend_ctx->im2col.kernel_im2col_f32 = clCreateKernel(prog, "kernel_im2col_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -33,7 +33,7 @@ void ggml_cl_load_kernels_im2col(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_im2col_f16 = clCreateKernel(prog, "kernel_im2col_f16", &err), err));
+        CL_CHECK((backend_ctx->im2col.kernel_im2col_f16 = clCreateKernel(prog, "kernel_im2col_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -88,9 +88,9 @@ void ggml_cl_im2col(ggml_backend_t backend, const ggml_tensor * src0, const ggml
     cl_kernel kernel;
 
     if(dst->type == GGML_TYPE_F16) {
-        kernel = backend_ctx->kernel_im2col_f16;
+        kernel = backend_ctx->im2col.kernel_im2col_f16;
     } else {
-        kernel = backend_ctx->kernel_im2col_f32;
+        kernel = backend_ctx->im2col.kernel_im2col_f32;
     }
 
     CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &extra1->data_device));

@@ -20,28 +20,28 @@ void ggml_cl_load_kernels_conv_2d(ggml_backend_opencl_context * backend_ctx) {
                 if (!kernel_src.empty()) {
                     cl_program prog_f16 =
                         build_program_from_source(backend_ctx, kernel_src.c_str(), (std::string(compile_opts) + " -DUSE_FP16=1").c_str());
-                    CL_CHECK((backend_ctx->kernel_conv_2d_f16 = clCreateKernel(prog_f16, "kernel_conv_2d", &err), err));
+                    CL_CHECK((backend_ctx->conv_2d.kernel_conv_2d_f16 = clCreateKernel(prog_f16, "kernel_conv_2d", &err), err));
                     CL_CHECK(clReleaseProgram(prog_f16));
                     GGML_LOG_CONT(".");
                     cl_program prog_f32 =
                         build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-                    CL_CHECK((backend_ctx->kernel_conv_2d_f32 = clCreateKernel(prog_f32, "kernel_conv_2d", &err), err));
+                    CL_CHECK((backend_ctx->conv_2d.kernel_conv_2d_f32 = clCreateKernel(prog_f32, "kernel_conv_2d", &err), err));
                     CL_CHECK(clReleaseProgram(prog_f32));
                     GGML_LOG_CONT(".");
                 } else {
                     GGML_LOG_WARN("ggml_opencl: conv2d kernel source not found or empty. This op will not be available.\n");
-                    backend_ctx->kernel_conv_2d_f16 = nullptr;
-                    backend_ctx->kernel_conv_2d_f32 = nullptr;
+                    backend_ctx->conv_2d.kernel_conv_2d_f16 = nullptr;
+                    backend_ctx->conv_2d.kernel_conv_2d_f32 = nullptr;
                 }
                 if (!kernel_src_f16_f32.empty()) {
                     cl_program prog_f16_f32 =
                         build_program_from_source(backend_ctx, kernel_src_f16_f32.c_str(), compile_opts);
-                    CL_CHECK((backend_ctx->kernel_conv_2d_f16_f32 = clCreateKernel(prog_f16_f32, "kernel_conv_2d", &err), err));
+                    CL_CHECK((backend_ctx->conv_2d.kernel_conv_2d_f16_f32 = clCreateKernel(prog_f16_f32, "kernel_conv_2d", &err), err));
                     CL_CHECK(clReleaseProgram(prog_f16_f32));
                     GGML_LOG_CONT(".");
                 } else {
                     GGML_LOG_WARN("ggml_opencl: conv2d_f16_f32 kernel source not found or empty. This op will not be available.\n");
-                    backend_ctx->kernel_conv_2d_f16_f32 = nullptr;
+                    backend_ctx->conv_2d.kernel_conv_2d_f16_f32 = nullptr;
                 }
     }
 }
@@ -108,13 +108,13 @@ void ggml_cl_conv_2d(ggml_backend_t backend, const ggml_tensor * src0, const ggm
     size_t shmem_size;
 
     if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16) {
-        kernel = backend_ctx->kernel_conv_2d_f16;
+        kernel = backend_ctx->conv_2d.kernel_conv_2d_f16;
         shmem_size = (size_t)(BS_K * BS_CRS * sizeof(cl_half) + BS_CRS * (BS_NPQ / VEC_SIZE) * sizeof(cl_half4));
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
-        kernel = backend_ctx->kernel_conv_2d_f32;
+        kernel = backend_ctx->conv_2d.kernel_conv_2d_f32;
         shmem_size = (size_t)(BS_K * BS_CRS * sizeof(cl_float) + BS_CRS * (BS_NPQ / VEC_SIZE) * sizeof(cl_float4));
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32) {
-        kernel = backend_ctx->kernel_conv_2d_f16_f32;
+        kernel = backend_ctx->conv_2d.kernel_conv_2d_f16_f32;
         shmem_size = (size_t)(BS_K * BS_CRS * sizeof(cl_half) + BS_CRS * (BS_NPQ / VEC_SIZE) * sizeof(cl_float4));
     } else {
         GGML_ASSERT(false && "Unsupported data type combination for conv2d");

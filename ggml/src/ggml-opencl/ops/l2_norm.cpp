@@ -16,7 +16,7 @@ void ggml_cl_load_kernels_l2_norm(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_l2_norm_f32     = clCreateKernel(prog, "kernel_l2_norm_f32", &err), err));
+        CL_CHECK((backend_ctx->l2_norm.kernel_l2_norm_f32     = clCreateKernel(prog, "kernel_l2_norm_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -53,7 +53,7 @@ void ggml_cl_l2_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggm
         GGML_ASSERT(false && "Unsupported GPU");
     }
 
-    cl_kernel kernel = backend_ctx->kernel_l2_norm_f32;
+    cl_kernel kernel = backend_ctx->l2_norm.kernel_l2_norm_f32;
 
     int nth = sgs;
     while (nth < ne00 && nth < (int)backend_ctx->get_kernel_workgroup_size(kernel)) {

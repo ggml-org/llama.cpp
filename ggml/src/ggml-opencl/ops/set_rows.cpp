@@ -16,18 +16,18 @@ void ggml_cl_load_kernels_set_rows(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_set_rows_f32_i64     = clCreateKernel(prog, "kernel_set_rows_f32_i64",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f32_i32     = clCreateKernel(prog, "kernel_set_rows_f32_i32",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f16_i64     = clCreateKernel(prog, "kernel_set_rows_f16_i64",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f16_i32     = clCreateKernel(prog, "kernel_set_rows_f16_i32",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i64    = clCreateKernel(prog, "kernel_set_rows_q8_0_i64",    &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i32    = clCreateKernel(prog, "kernel_set_rows_q8_0_i32",    &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i64     = clCreateKernel(prog, "kernel_set_rows_q4_0_i64",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i32     = clCreateKernel(prog, "kernel_set_rows_q4_0_i32",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i32", &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_f32_i64     = clCreateKernel(prog, "kernel_set_rows_f32_i64",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_f32_i32     = clCreateKernel(prog, "kernel_set_rows_f32_i32",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_f16_i64     = clCreateKernel(prog, "kernel_set_rows_f16_i64",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_f16_i32     = clCreateKernel(prog, "kernel_set_rows_f16_i32",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q8_0_i64    = clCreateKernel(prog, "kernel_set_rows_q8_0_i64",    &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q8_0_i32    = clCreateKernel(prog, "kernel_set_rows_q8_0_i32",    &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q8_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i64", &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q8_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i32", &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q4_0_i64     = clCreateKernel(prog, "kernel_set_rows_q4_0_i64",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q4_0_i32     = clCreateKernel(prog, "kernel_set_rows_q4_0_i32",     &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q4_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i64", &err), err));
+        CL_CHECK((backend_ctx->set_rows.kernel_set_rows_q4_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -72,33 +72,33 @@ void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, const gg
 
     if (q8_0_soa) {
         kernel = (src1->type == GGML_TYPE_I64)
-                    ? backend_ctx->kernel_set_rows_q8_0_soa_i64
-                    : backend_ctx->kernel_set_rows_q8_0_soa_i32;
+                    ? backend_ctx->set_rows.kernel_set_rows_q8_0_soa_i64
+                    : backend_ctx->set_rows.kernel_set_rows_q8_0_soa_i32;
     } else if (q4_0_soa) {
         kernel = (src1->type == GGML_TYPE_I64)
-                    ? backend_ctx->kernel_set_rows_q4_0_soa_i64
-                    : backend_ctx->kernel_set_rows_q4_0_soa_i32;
+                    ? backend_ctx->set_rows.kernel_set_rows_q4_0_soa_i64
+                    : backend_ctx->set_rows.kernel_set_rows_q4_0_soa_i32;
     } else {
         switch (dst->type) {
             case GGML_TYPE_F32:
                 kernel = (src1->type == GGML_TYPE_I64)
-                            ? backend_ctx->kernel_set_rows_f32_i64
-                            : backend_ctx->kernel_set_rows_f32_i32;
+                            ? backend_ctx->set_rows.kernel_set_rows_f32_i64
+                            : backend_ctx->set_rows.kernel_set_rows_f32_i32;
                 break;
             case GGML_TYPE_F16:
                 kernel = (src1->type == GGML_TYPE_I64)
-                            ? backend_ctx->kernel_set_rows_f16_i64
-                            : backend_ctx->kernel_set_rows_f16_i32;
+                            ? backend_ctx->set_rows.kernel_set_rows_f16_i64
+                            : backend_ctx->set_rows.kernel_set_rows_f16_i32;
                 break;
             case GGML_TYPE_Q8_0:
                 kernel = (src1->type == GGML_TYPE_I64)
-                            ? backend_ctx->kernel_set_rows_q8_0_i64
-                            : backend_ctx->kernel_set_rows_q8_0_i32;
+                            ? backend_ctx->set_rows.kernel_set_rows_q8_0_i64
+                            : backend_ctx->set_rows.kernel_set_rows_q8_0_i32;
                 break;
             case GGML_TYPE_Q4_0:
                 kernel = (src1->type == GGML_TYPE_I64)
-                            ? backend_ctx->kernel_set_rows_q4_0_i64
-                            : backend_ctx->kernel_set_rows_q4_0_i32;
+                            ? backend_ctx->set_rows.kernel_set_rows_q4_0_i64
+                            : backend_ctx->set_rows.kernel_set_rows_q4_0_i32;
                 break;
             default:
                 GGML_ABORT("not implemented");
@@ -199,4 +199,3 @@ void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, const gg
     // ne01 == 0 makes global_work_size[0] zero here; enqueue_ndrange_kernel drops the empty range.
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
-

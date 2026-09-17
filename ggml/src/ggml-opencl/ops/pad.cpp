@@ -16,12 +16,12 @@ void ggml_cl_load_kernels_pad(ggml_backend_opencl_context * backend_ctx) {
         if (!kernel_src.empty()) {
             cl_program prog =
                 build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-            CL_CHECK((backend_ctx->kernel_pad = clCreateKernel(prog, "kernel_pad", &err), err));
+            CL_CHECK((backend_ctx->pad.kernel_pad = clCreateKernel(prog, "kernel_pad", &err), err));
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         } else {
             GGML_LOG_WARN("ggml_opencl: pad kernel source not found or empty. Pad operations will not be available.\n");
-            backend_ctx->kernel_pad = nullptr;
+            backend_ctx->pad.kernel_pad = nullptr;
         }
     }
 }
@@ -36,7 +36,7 @@ void ggml_cl_pad(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor *
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    if (backend_ctx->kernel_pad == nullptr) {
+    if (backend_ctx->pad.kernel_pad == nullptr) {
         GGML_LOG_WARN("%s: pad kernel not available, skipping OpenCL execution.\n", __func__);
         return;
     }
@@ -76,7 +76,7 @@ void ggml_cl_pad(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor *
     const int lp3 = ((const int*)(dst->op_params))[6];
     const int rp3 = ((const int*)(dst->op_params))[7];
 
-    cl_kernel kernel = backend_ctx->kernel_pad;
+    cl_kernel kernel = backend_ctx->pad.kernel_pad;
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &extra_src0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong),  &off_src0));
