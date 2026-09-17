@@ -1748,7 +1748,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     n_queued_tokens += n_tokens_all;
 
     output_swaps.clear();
-    embd_layer_inp_ids.clear();
+    embd_token_ids.clear();
 
     sched_reserve();
 
@@ -1958,7 +1958,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        extract_layer_inputs(res, ubatch);
+        bool extracted_all_tokens = extract_layer_inputs(res, ubatch, n_tokens_prev);
 
         // extract nextn embeddings before
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
@@ -1976,7 +1976,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
                 ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                extracted_all_tokens = extracted_all_tokens || !masked;
             }
+        }
+
+        if (extracted_all_tokens) {
+            GGML_ASSERT(ubatch.data && ubatch.data->batch_ids.size() == ubatch.n_tokens);
+            GGML_ASSERT(embd_token_ids.size() == (size_t) n_tokens_prev);
+            const auto & batch_ids = ubatch.data->batch_ids;
+            embd_token_ids.insert(embd_token_ids.end(), batch_ids.begin(), batch_ids.end());
         }
 
         if (has_samplers) {
@@ -2215,9 +2223,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     return n_outputs_max;
 }
 
-void llama_context::extract_layer_inputs(const llm_graph_result * res, const llama_ubatch & ubatch) {
+bool llama_context::extract_layer_inputs(const llm_graph_result * res, const llama_ubatch & ubatch, size_t token_offset) {
     const size_t n_tokens = ubatch.n_tokens;
-    const size_t token_offset = embd_layer_inp_ids.size();
     bool extracted = false;
     for (uint32_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
         if (!cparams.embeddings_layer_inp[il]) {
@@ -2247,11 +2254,7 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, const lla
         ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
         extracted = true;
     }
-    if (extracted) {
-        GGML_ASSERT(ubatch.data && ubatch.data->batch_ids.size() == n_tokens);
-        const auto & batch_ids = ubatch.data->batch_ids;
-        embd_layer_inp_ids.insert(embd_layer_inp_ids.end(), batch_ids.begin(), batch_ids.end());
-    }
+    return extracted;
 }
 
 void llama_context::output_reorder() {
@@ -2274,7 +2277,7 @@ void llama_context::output_reorder() {
             }
         }
 
-        if (embd_nextn.size > 0) {
+        if (embd_nextn.size > 0 && cparams.embeddings_nextn_masked) {
             for (uint64_t k = 0; k < n_embd_out; k++) {
                 std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
             }
@@ -2310,12 +2313,17 @@ void llama_context::output_reorder() {
 
     output_swaps.clear();
 
-    // Layer inputs contain all token rows, independent of logits selection.
+    // Layer inputs and unmasked NextN embeddings contain all token rows, independent of logits selection.
     const size_t n_embd = model.hparams.n_embd;
-    for (size_t i = 0; i < embd_layer_inp_ids.size(); ++i) {
-        while (embd_layer_inp_ids[i] != (int32_t) i) {
-            const int32_t j = embd_layer_inp_ids[i];
-            GGML_ASSERT(j >= 0 && (size_t) j < embd_layer_inp_ids.size());
+    for (size_t i = 0; i < embd_token_ids.size(); ++i) {
+        while (embd_token_ids[i] != (int32_t) i) {
+            const int32_t j = embd_token_ids[i];
+            GGML_ASSERT(j >= 0 && (size_t) j < embd_token_ids.size());
+            if (embd_nextn.has_data() && !cparams.embeddings_nextn_masked) {
+                for (size_t k = 0; k < n_embd_out; ++k) {
+                    std::swap(embd_nextn.data[i*n_embd_out + k], embd_nextn.data[j*n_embd_out + k]);
+                }
+            }
             for (auto & layer : embd_layer_inp) {
                 if (layer.has_data()) {
                     for (size_t k = 0; k < n_embd; ++k) {
@@ -2323,10 +2331,10 @@ void llama_context::output_reorder() {
                     }
                 }
             }
-            std::swap(embd_layer_inp_ids[i], embd_layer_inp_ids[j]);
+            std::swap(embd_token_ids[i], embd_token_ids[j]);
         }
     }
-    embd_layer_inp_ids.clear();
+    embd_token_ids.clear();
 }
 
 //

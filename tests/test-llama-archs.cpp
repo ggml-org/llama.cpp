@@ -13,6 +13,7 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -401,10 +402,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     return ret;
 }
 
-static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
+static void set_row_order_tensor_data(ggml_tensor * tensor, void * userdata) {
     ggml_backend_tensor_memset(tensor, 0, 0, ggml_nbytes(tensor));
     const bool embedding = strcmp(tensor->name, "token_embd.weight") == 0;
-    if (!embedding && strstr(tensor->name, "rope_freqs.weight") == nullptr) {
+    const bool nextn = userdata != nullptr;
+    const bool output_norm = nextn && strcmp(tensor->name, "output_norm.weight") == 0;
+    if (!embedding && !output_norm && strstr(tensor->name, "rope_freqs.weight") == nullptr) {
         return;
     }
 
@@ -412,6 +415,10 @@ static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
     std::vector<float> values(ggml_nelements(tensor));
     for (size_t i = 0; i < values.size(); ++i) {
         values[i] = embedding ? float(i / tensor->ne[0] + 1) : 1.0f;
+        if (embedding && nextn) {
+            // Encode token IDs as signs so the final RMS norm preserves distinct rows.
+            values[i] = ((i / tensor->ne[0]) >> (i % tensor->ne[0] % 7)) & 1 ? 1.0f : -1.0f;
+        }
     }
     if (tensor->type == GGML_TYPE_F32) {
         ggml_backend_tensor_set(tensor, values.data(), 0, ggml_nbytes(tensor));
@@ -425,9 +432,14 @@ static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
     }
 }
 
+enum class row_order_capture { layers, nextn, both, nextn_masked };
+
 static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & devices, bool flash_attn,
-        llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER) {
-    auto gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+        llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, row_order_capture capture = row_order_capture::layers) {
+    const bool nextn = capture != row_order_capture::layers;
+    const bool layers = capture == row_order_capture::layers || capture == row_order_capture::both;
+    const bool masked = capture == row_order_capture::nextn_masked;
+    auto gguf_ctx = get_gguf_ctx(nextn ? LLM_ARCH_QWEN35 : LLM_ARCH_LLAMA, false);
     auto mp = llama_model_default_params();
     const auto device = devices.front();
     auto devs = devices;
@@ -435,7 +447,7 @@ static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & device
     mp.devices = devs.data();
     mp.split_mode = split_mode;
     mp.n_gpu_layers = ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU ? 0 : 99;
-    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_row_order_tensor_data, nullptr, mp));
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_row_order_tensor_data, nextn ? &capture : nullptr, mp));
     if (!model) {
         throw std::runtime_error("failed to create row-order model");
     }
@@ -458,8 +470,13 @@ static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & device
                     if (!ctx) {
                         throw std::runtime_error("failed to create row-order context");
                     }
-                    for (uint32_t layer : {0u, 1u}) {
-                        llama_set_embeddings_layer_inp(ctx.get(), layer, true);
+                    if (layers) {
+                        for (uint32_t layer : {0u, 1u}) {
+                            llama_set_embeddings_layer_inp(ctx.get(), layer, true);
+                        }
+                    }
+                    if (nextn) {
+                        llama_set_embeddings_nextn(ctx.get(), true, masked);
                     }
                     auto batch = llama_batch_init(n_tokens, 0, 1);
                     for (int i = 0; i < n_tokens; ++i) {
@@ -468,36 +485,59 @@ static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & device
                         common_batch_add(batch, i + 1, pos, {seq}, dense || pos == n_tokens / 2 - 1);
                     }
                     int wrong_rows = 0;
+                    int checked_rows = 0;
                     for (int repeat = 0; repeat < 2; ++repeat) {
                         llama_memory_clear(llama_get_memory(ctx.get()), true);
                         if (llama_decode(ctx.get(), batch) != 0) {
                             llama_batch_free(batch);
                             throw std::runtime_error("failed to decode row-order batch");
                         }
-                        for (uint32_t layer : {0u, 1u, 0u, 1u}) {
-                            const float * values = llama_get_embeddings_layer_inp(ctx.get(), layer);
-                            bool reported = false;
-                            for (int i = 0; i < n_tokens; ++i) {
-                                for (int k = 0; k < n_embd; ++k) {
-                                    if (values[i*n_embd + k] != float(i + 2)) {
-                                        if (!reported) {
-                                            printf("layer=%u row=%d: expected %g, got %g\n", layer, i, double(i + 2), double(values[i*n_embd + k]));
-                                            reported = true;
-                                        }
-                                        ++wrong_rows;
-                                        break;
+                        // NextN first on one decode, layer inputs first on the next; repeat both getters.
+                        for (int read = 0; read < 2; ++read) {
+                            for (int index = 0; index < 3; ++index) {
+                                const int output = repeat == 0 ? 2 - index : index;
+                                if ((output == 2 && !nextn) || (output != 2 && !layers)) {
+                                    continue;
+                                }
+                                const float * values = output == 2 ? llama_get_embeddings_nextn(ctx.get()) :
+                                                                    llama_get_embeddings_layer_inp(ctx.get(), output);
+                                bool reported = false;
+                                int row = 0;
+                                for (int i = 0; i < n_tokens; ++i) {
+                                    if (output == 2 && masked && !batch.logits[i]) {
+                                        continue;
                                     }
+                                    const float * ith = output == 2 ? llama_get_embeddings_nextn_ith(ctx.get(), i) : values + row*n_embd;
+                                    ++checked_rows;
+                                    for (int k = 0; k < n_embd; ++k) {
+                                        float expected = nextn ? (((i + 1) >> (k % 7)) & 1 ? 1.0f : -1.0f) : float(i + 2);
+                                        if (output == 2) {
+                                            expected /= std::sqrt(1.0f + 1e-5f);
+                                        }
+                                        if (std::abs(values[row*n_embd + k] - expected) > 1e-4f ||
+                                            std::abs(ith[k] - expected) > 1e-4f || !std::isfinite(ith[k]) ||
+                                            !std::isfinite(values[row*n_embd + k])) {
+                                            if (!reported) {
+                                                printf("output=%d row=%d: expected %g, got %g (ith=%g)\n", output, i, double(expected), double(values[row*n_embd + k]), double(ith[k]));
+                                                reported = true;
+                                            }
+                                            ++wrong_rows;
+                                            break;
+                                        }
+                                    }
+                                    ++row;
                                 }
                             }
                         }
                     }
                     llama_batch_free(batch);
-                    printf("layer-input-order: device=%s, split=%s, flash=%s, %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
+                    printf("layer-input-order: device=%s, split=%s, flash=%s, capture=%s, %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
                             ggml_backend_dev_name(device), split_mode == LLAMA_SPLIT_MODE_TENSOR ? "tensor" : "layer",
                             flash_attn ? "on" : "off",
+                            nextn ? (masked ? "nextn-masked" : (layers ? "both" : "nextn")) : "layers",
                             unified ? "unified" : "separate", n_ubatch,
                             interleaved ? "interleaved" : "grouped", dense ? "dense" : "sparse",
-                            wrong_rows, 8*n_tokens);
+                            wrong_rows, checked_rows);
                     all_ok = all_ok && wrong_rows == 0;
                 }
             }
@@ -508,19 +548,21 @@ static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & device
 
 static int test_layer_input_order() {
     bool all_ok = true;
-    std::vector<ggml_backend_dev_t> devices_meta;
-    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-        auto device = ggml_backend_dev_get(i);
-        all_ok = test_layer_input_order({device}, false) == 0 && all_ok;
-        if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)), "CUDA") == 0) {
-            all_ok = test_layer_input_order({device}, true) == 0 && all_ok;
+    for (auto capture : {row_order_capture::layers, row_order_capture::nextn, row_order_capture::both, row_order_capture::nextn_masked}) {
+        std::vector<ggml_backend_dev_t> devices_meta;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto device = ggml_backend_dev_get(i);
+            all_ok = test_layer_input_order({device}, false, LLAMA_SPLIT_MODE_LAYER, capture) == 0 && all_ok;
+            if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)), "CUDA") == 0) {
+                all_ok = test_layer_input_order({device}, true, LLAMA_SPLIT_MODE_LAYER, capture) == 0 && all_ok;
+            }
+            if (ggml_backend_dev_buffer_type(device) != ggml_backend_cpu_buffer_type()) {
+                devices_meta.push_back(device);
+            }
         }
-        if (ggml_backend_dev_buffer_type(device) != ggml_backend_cpu_buffer_type()) {
-            devices_meta.push_back(device);
+        if (!devices_meta.empty()) {
+            all_ok = test_layer_input_order(devices_meta, true, LLAMA_SPLIT_MODE_TENSOR, capture) == 0 && all_ok;
         }
-    }
-    if (!devices_meta.empty()) {
-        all_ok = test_layer_input_order(devices_meta, true, LLAMA_SPLIT_MODE_TENSOR) == 0 && all_ok;
     }
     return all_ok ? 0 : 1;
 }
