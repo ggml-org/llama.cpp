@@ -718,22 +718,37 @@ private:
 class tools_io_container : public tools_io_isolate {
 public:
     tools_io_container(std::string bin, std::string container_id, std::string cwd = "")
-        : tools_io_isolate(std::move(cwd)), bin(std::move(bin)), container_id(std::move(container_id)) {}
+        : tools_io_isolate(std::move(cwd)), bin(std::move(bin)), container_id(std::move(container_id)) {
+        is_apptainer = (bin == "apptainer");
+    }
 
 protected:
     std::vector<std::string> build_argv(const std::vector<std::string> & inner, bool needs_stdin) const override {
-        std::vector<std::string> argv = {bin, "exec"};
-        if (needs_stdin) {
-            argv.push_back("-i");
+        if (is_apptainer) {
+            // For Apptainer, use 'apptainer exec' directly on the image
+            std::vector<std::string> argv = {bin, "exec"};
+            if (needs_stdin) {
+                argv.push_back("-i");
+            }
+            argv.push_back(container_id); // This is actually the image path for Apptainer
+            argv.insert(argv.end(), inner.begin(), inner.end());
+            return argv;
+        } else {
+            // For Docker/Podman, use the original behavior
+            std::vector<std::string> argv = {bin, "exec"};
+            if (needs_stdin) {
+                argv.push_back("-i");
+            }
+            argv.push_back(container_id);
+            argv.insert(argv.end(), inner.begin(), inner.end());
+            return argv;
         }
-        argv.push_back(container_id);
-        argv.insert(argv.end(), inner.begin(), inner.end());
-        return argv;
     }
 
 private:
     std::string bin;
     std::string container_id;
+    bool is_apptainer = false;
 };
 
 // a remote host reached over ssh
@@ -803,11 +818,21 @@ struct container_runtime_spec {
                 return true;
             }
         }
+
+        // Apptainer support - for Apptainer we don't use the -container: pattern
+        static const char * apptainer_bin = "apptainer";
+        const std::string apptainer_prefix = std::string(apptainer_bin) + ":";
+        if (spec.rfind(apptainer_prefix, 0) == 0) {
+            out = {apptainer_bin, spec.substr(apptainer_prefix.size()), false};
+            return true;
+        }
+
         return false;
     }
 
     // same risk as the ssh target: an id starting with '-' would become an engine option,
     // e.g. --privileged
+    // For Apptainer, container IDs are typically UUIDs or hashes, but we'll use the same validation
     static bool is_valid_id(const std::string & id) {
         if (id.empty() || !std::isalnum((unsigned char) id[0])) {
             return false;
@@ -827,7 +852,11 @@ static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     }
     container_runtime_spec container;
     if (container_runtime_spec::parse(runtime, container)) {
-        // spawning belongs to the runtime that owns the container, a tool call only attaches
+        // For Apptainer, we don't need a running container, just the image path
+        if (container.bin == "apptainer") {
+            return std::make_unique<tools_io_container>(container.bin, container.arg, cwd);
+        }
+        // For Docker/Podman, we need a running container
         if (!container.attach) {
             throw std::runtime_error("tool runtime must name a running container: " + runtime);
         }
@@ -1876,19 +1905,30 @@ struct server_tools_container_runtime : server_tools_runtime {
     }
 
     ~server_tools_container_runtime() override {
-        // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
-        proc.close_stdin();
-        proc.join();
+        // For Docker/Podman: closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
+        // For Apptainer: we need to explicitly stop the container
+        if (bin == "apptainer") {
+            stop_apptainer_container();
+        } else {
+            proc.close_stdin();
+            proc.join();
+        }
     }
 
     // respawns a container that died on its own, so the returned spec always names a running one
     std::string spec() override {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!proc.alive()) {
-            SRV_WRN("%s tools runtime container \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
-            spawn();
+        if (bin == "apptainer") {
+            // For Apptainer, return the image path directly
+            return bin + ":" + image;
+        } else {
+            // For Docker/Podman, keep the original behavior
+            if (!proc.alive()) {
+                SRV_WRN("%s tools runtime container \"%s\" died, respawning\n", bin.c_str(), container_id.c_str());
+                spawn();
+            }
+            return bin + "-container:" + container_id;
         }
-        return bin + "-container:" + container_id;
     }
 
 private:
@@ -1898,12 +1938,21 @@ private:
     common_subproc proc; // `<engine> run` client that keeps the container alive
     std::mutex mutex;
 
-    // spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
-    // so the container stays alive until we close it (see destructor) or it is killed from the outside
+    // Spawns the appropriate container based on the runtime
     void spawn() {
         // create() writes over the handle it is given, so the previous one is released first
         proc.join();
 
+        if (bin == "apptainer") {
+            spawn_apptainer();
+        } else {
+            spawn_docker_podman();
+        }
+    }
+
+    // Spawns "<engine> run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
+    // so the container stays alive until we close it (see destructor) or it is killed from the outside
+    void spawn_docker_podman() {
         std::error_code ec;
         fs::path cidfile = fs::temp_directory_path(ec) / string_format(
             "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
@@ -1929,6 +1978,34 @@ private:
             throw std::runtime_error("timed out waiting for " + bin + " container to start (image: " + image + ")");
         }
         container_id = cid;
+    }
+
+    // Spawns an Apptainer container with appropriate flags
+    void spawn_apptainer() {
+        // For Apptainer, we just need to verify the image exists
+        std::vector<std::string> args = {bin, "inspect", image};
+        int options = subprocess_option_no_window
+                    | subprocess_option_inherit_environment
+                    | subprocess_option_search_user_path;
+
+        common_subproc check_proc;
+        if (!check_proc.create(args, options)) {
+            throw std::runtime_error("failed to verify apptainer image exists: " + image);
+        }
+
+        if (check_proc.join() != 0) {
+            throw std::runtime_error("apptainer image verification failed: " + image);
+        }
+
+        // For Apptainer, the "container_id" is just the image path
+        container_id = image;
+    }
+
+    // Modify the stop_apptainer_container method
+    void stop_apptainer_container() {
+        // For Apptainer, we don't need to stop anything
+        // since we're not keeping a container running
+        proc.join();
     }
 };
 
