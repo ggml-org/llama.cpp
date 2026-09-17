@@ -472,10 +472,6 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
 
     switch (tensor->type) {
     case GGML_TYPE_MXFP4:
-        layout.is_u4 = true;
-        layout.is_symmetric = true;
-        break;
-
     case GGML_TYPE_Q4_0:
         layout.is_u4 = true;
         layout.is_symmetric = true;

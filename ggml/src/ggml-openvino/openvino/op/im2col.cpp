@@ -1,7 +1,6 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
-#include "ggml-impl.h"
 
 #include <cstddef>
 #include <memory>

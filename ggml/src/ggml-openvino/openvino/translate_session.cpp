@@ -344,7 +344,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         }
     };
 
-    auto node_visitor = [&](std::shared_ptr<GgmlDecoder> decoder, int node_idx) {
+    auto node_visitor = [&](const std::shared_ptr<GgmlDecoder> & decoder, int node_idx) {
         auto converted_outputs = translate_node(decoder, node_idx);
         if (converted_outputs.empty()) {
             return;

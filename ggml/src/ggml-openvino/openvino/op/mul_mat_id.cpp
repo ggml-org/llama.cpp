@@ -42,7 +42,7 @@ ov::Output<ov::Node> slice_axis(const ov::Output<ov::Node> & input, int64_t axis
 
 ov::Output<ov::Node> static_shape_dims_or_shapeof(const ov::Output<ov::Node> & input,
                                                   const std::vector<int> & dims) {
-    const auto partial_shape = input.get_partial_shape();
+    const auto & partial_shape = input.get_partial_shape();
     if (partial_shape.is_static()) {
         std::vector<int64_t> values;
         values.reserve(dims.size());
