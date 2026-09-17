@@ -1514,6 +1514,10 @@ void forward_flash_attn_ext_f16_tiled_vlen1024_vf16(const ggml_compute_params * 
                 }
             }
 
+            if (logit_softcap != 0.0f) {
+                rvv_softcap_tanh_inplace_f32(KQ, KV_TILE_SZ, tile_rows, kv_tile, logit_softcap);
+            }
+
             // Set padded KQ entries to -inf so softmax gives them zero weight
             if (kv_tile < KV_TILE_SZ) {
                 for (int tq = 0; tq < tile_rows; tq++) {
@@ -1521,10 +1525,6 @@ void forward_flash_attn_ext_f16_tiled_vlen1024_vf16(const ggml_compute_params * 
                         KQ[tq * KV_TILE_SZ + tk] = -INFINITY;
                     }
                 }
-            }
-
-            if (logit_softcap != 0.0f) {
-                rvv_softcap_tanh_inplace_f32(KQ, KV_TILE_SZ, tile_rows, KV_TILE_SZ, logit_softcap);
             }
 
             if (mask) {
