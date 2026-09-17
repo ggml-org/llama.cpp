@@ -279,7 +279,7 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     // OPTIMIZATION 1: Use aligned loads (_mm256_load_si256)
                     const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[s * SUBBLK]);
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
-                    
+
                     const __m256i bsums_v = _mm256_add_epi32(
                         _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2) * bs_stride + j0 + g]),
                         _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2 + 1) * bs_stride + j0 + g]));
@@ -294,7 +294,7 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                             const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
                             const __m256i d_lo = _mm256_maddubs_epi16(q0a, q1_32);
                             const __m256i d_hi = _mm256_maddubs_epi16(q0b, q1_32);
-                            
+
                             acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
                                 _mm256_madd_epi16(scales16, d_lo),
                                 _mm256_madd_epi16(scales16b, d_hi)));
@@ -500,7 +500,7 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
 
 // main microtile entry point. num_k = K-blocks per row (the narrow path reads num_k slabs at row
 // stride num_k*256 so each weight row is one long stream); slab = this call's slab. num_k=1,
-// slab=0 is the standard single-slab path (the existing call sites use the header defaults).
+// slab=0 is the standard single-slab path.
 // num_k==1 dispatches to the NK=1 instantiation, whose strides/offsets are compile-time
 // constants (shifts/scaled-leas). num_k>1 (the narrow path) uses the NK=0 runtime-strided
 // version; it is memory-bound, so one version serves all of it.
@@ -557,92 +557,76 @@ template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, con
 static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
               "block_q8_K layout changed, fix the src1 repack");
 
-// VNNI: interleave the natural [row][256] codes in-place into group-local
-// [kg][row][4] layout. Each 16-row group is self-contained in 4KB.
-// The butterfly reads all 16 rows into registers before any store (safe for
-// one chunk), but cross-chunk overlap within the 4KB group requires a temp.
+// VNNI: interleave the natural [row][k] codes in-place into the group-local
+// [kg%16][kg/16][row][4] layout. base points at row 0 (row r at base + r*row_stride);
+// n_tiles 16x16 int32 tiles are transposed to the right (tile t occupies bytes
+// [t*64, t*64+64) per row). Each 16-row group is self-contained in row_stride*16 bytes.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-
-void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp) {
-    uint8_t * base = (uint8_t *) &tile->q[grp * (TILED_MICRO * TILED_TILE_K)];
-    for (int c = 0; c < 4; c++) {
-        tiled_repack_16x16(base, c, TILED_TILE_K);
-    }
-}
-#else
-void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp) {
-    GGML_UNUSED(tile); GGML_UNUSED(grp);
-}
-#endif
-
-// In-place transpose of one 16-row x 64-k chunk of src1 codes (a 16x16 int32 tile).
-// base points at the 16-row group (row r at base + r*k_extent); c selects the chunk
-// (0..3) = 16 int32 k-groups. After the call, k-group kg reads as one 512-bit vector at
-// base + (kg%16)*k_extent + (kg/16)*64. All 16 rows load before any store and a chunk's
-// 16 rows are disjoint, so the transpose is in-place with no temp.
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_16x16(uint8_t * base, int c, int k_extent) {
-    __m512i v[16];
-    for (int r = 0; r < 16; r++) {
-        v[r] = _mm512_load_si512((const __m512i *) (base + r * k_extent + c * (TILED_MICRO * 4)));
-    }
-
-    // 16x16 int32 transpose, 4 butterfly phases
-    // Phase 1: 1-element interleave, pairs (0,1), (2,3), ..., (14,15)
-    {
-        const __m512i idx_a = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
-        const __m512i idx_b = _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
-        for (int i = 0; i < 16; i += 2) {
-            __m512i a = v[i], b = v[i+1];
-            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-            v[i+1] = _mm512_permutex2var_epi32(a, idx_b, b);
+void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride) {
+    for (int t = 0; t < n_tiles; t++) {
+        uint8_t * cbase = base + t * (TILED_MICRO * 4);
+        __m512i v[16];
+        for (int r = 0; r < 16; r++) {
+            v[r] = _mm512_load_si512((const __m512i *) (cbase + r * row_stride));
         }
-    }
-    // Phase 2: 2-element interleave, pairs (0,2), (1,3), (4,6), (5,7), ...
-    {
-        const __m512i idx_a = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
-        const __m512i idx_b = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
-        for (int i = 0; i < 16; i += 4) {
-            __m512i a = v[i],   b = v[i+2];
-            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-            v[i+2] = _mm512_permutex2var_epi32(a, idx_b, b);
-            a = v[i+1], b = v[i+3];
-            v[i+1] = _mm512_permutex2var_epi32(a, idx_a, b);
-            v[i+3] = _mm512_permutex2var_epi32(a, idx_b, b);
-        }
-    }
-    // Phase 3: 4-element interleave, pairs (0,4), (1,5), ..., (7,11), (8,12), ...
-    {
-        const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
-        const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
-        for (int i = 0; i < 16; i += 8) {
-            for (int j = 0; j < 4; j++) {
-                __m512i a = v[i+j], b = v[i+4+j];
-                v[i+j]   = _mm512_permutex2var_epi32(a, idx_a, b);
-                v[i+4+j] = _mm512_permutex2var_epi32(a, idx_b, b);
+
+        // 16x16 int32 transpose, 4 butterfly phases
+        // Phase 1: 1-element interleave, pairs (0,1), (2,3), ..., (14,15)
+        {
+            const __m512i idx_a = _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+            const __m512i idx_b = _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+            for (int i = 0; i < 16; i += 2) {
+                __m512i a = v[i], b = v[i+1];
+                v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                v[i+1] = _mm512_permutex2var_epi32(a, idx_b, b);
             }
         }
-    }
-    // Phase 4: 8-element interleave, pairs (0,8), (1,9), ..., (7,15)
-    {
-        const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
-        const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
-        for (int i = 0; i < 8; i++) {
-            __m512i a = v[i], b = v[i+8];
-            v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
-            v[i+8] = _mm512_permutex2var_epi32(a, idx_b, b);
+        // Phase 2: 2-element interleave, pairs (0,2), (1,3), (4,6), (5,7), ...
+        {
+            const __m512i idx_a = _mm512_setr_epi32(0, 1, 16, 17, 4, 5, 20, 21, 8, 9, 24, 25, 12, 13, 28, 29);
+            const __m512i idx_b = _mm512_setr_epi32(2, 3, 18, 19, 6, 7, 22, 23, 10, 11, 26, 27, 14, 15, 30, 31);
+            for (int i = 0; i < 16; i += 4) {
+                __m512i a = v[i],   b = v[i+2];
+                v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                v[i+2] = _mm512_permutex2var_epi32(a, idx_b, b);
+                a = v[i+1], b = v[i+3];
+                v[i+1] = _mm512_permutex2var_epi32(a, idx_a, b);
+                v[i+3] = _mm512_permutex2var_epi32(a, idx_b, b);
+            }
         }
-    }
+        // Phase 3: 4-element interleave, pairs (0,4), (1,5), ..., (7,11), (8,12), ...
+        {
+            const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+            const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+            for (int i = 0; i < 16; i += 8) {
+                for (int j = 0; j < 4; j++) {
+                    __m512i a = v[i+j], b = v[i+4+j];
+                    v[i+j]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                    v[i+4+j] = _mm512_permutex2var_epi32(a, idx_b, b);
+                }
+            }
+        }
+        // Phase 4: 8-element interleave, pairs (0,8), (1,9), ..., (7,15)
+        {
+            const __m512i idx_a = _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+            const __m512i idx_b = _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+            for (int i = 0; i < 8; i++) {
+                __m512i a = v[i], b = v[i+8];
+                v[i]   = _mm512_permutex2var_epi32(a, idx_a, b);
+                v[i+8] = _mm512_permutex2var_epi32(a, idx_b, b);
+            }
+        }
 
-    // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15
-    static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
-    for (int g = 0; g < 16; g++) {
-        _mm512_store_si512((void *) (base + col_order[g] * k_extent + c * (TILED_MICRO * 4)), v[g]);
+        // store: v[g] holds 16 int32s for k-group col_order[g], rows 0..15
+        static const int col_order[16] = {0, 8, 1, 9, 4, 12, 5, 13, 2, 10, 3, 11, 6, 14, 7, 15};
+        for (int g = 0; g < 16; g++) {
+            _mm512_store_si512((void *) (cbase + col_order[g] * row_stride), v[g]);
+        }
     }
 }
 #else
-void tiled_repack_16x16(uint8_t * base, int c, int k_extent) {
-    GGML_UNUSED(base); GGML_UNUSED(c); GGML_UNUSED(k_extent);
+void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride) {
+    GGML_UNUSED(base); GGML_UNUSED(n_tiles); GGML_UNUSED(row_stride);
 }
 #endif
 

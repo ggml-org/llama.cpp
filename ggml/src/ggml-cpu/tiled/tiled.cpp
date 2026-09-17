@@ -298,14 +298,16 @@ static void tiled_unpack_src0(const block_iq2_xxs * rows, int64_t row_stride, in
 
             uint32_t aux32[2];
             const uint8_t * aux8 = (const uint8_t *) aux32;
+            uint64_t g[4];
+            uint8_t signs4[4];
             for (int ib32 = 0; ib32 < NB; ib32++) {
                 memcpy(aux32, x.qs + 4 * ib32, 2 * sizeof(uint32_t));
                 tile->scales[s_off + ib32] = (int32_t) (2 * (aux32[1] >> 28) + 1);
                 for (int l = 0; l < 4; l++) {
-                    const uint64_t entry = iq2xxs_grid[aux8[l]];
-                    const uint8_t signs = ksigns_iq2xs[(aux32[1] >> (7 * l)) & 127];
-                    tiled_unpk_sign8((const uint8_t *) &entry, signs, &tile->q[q_off + 32 * ib32 + 8 * l]);
+                    g[l] = iq2xxs_grid[aux8[l]];
+                    signs4[l] = ksigns_iq2xs[(aux32[1] >> (7 * l)) & 127];
                 }
+                tiled_unpk_sign32(g[0], g[1], g[2], g[3], signs4, &tile->q[q_off + 32 * ib32]);
             }
         }
     }
@@ -327,15 +329,17 @@ static void tiled_unpack_src0(const block_iq2_xs * rows, int64_t row_stride, int
             const block_iq2_xs & x = rows[r * row_stride + slab];
             tile->d[d_off] = ggml_fp16_to_fp32(x.d) * 0.125f;
 
+            uint64_t g[4];
+            uint8_t signs4[4];
             for (int ib32 = 0; ib32 < QK_K / 32; ib32++) {
                 tile->scales[s_off + 2 * ib32 + 0] = (int32_t) (2 * (x.scales[ib32] & 0xf) + 1);
                 tile->scales[s_off + 2 * ib32 + 1] = (int32_t) (2 * (x.scales[ib32] >> 4) + 1);
                 const uint16_t * q = x.qs + 4 * ib32;
                 for (int l = 0; l < 4; l++) {
-                    const uint64_t entry = iq2xs_grid[q[l] & 511];
-                    const uint8_t signs = ksigns_iq2xs[q[l] >> 9];
-                    tiled_unpk_sign8((const uint8_t *) &entry, signs, &tile->q[q_off + 32 * ib32 + 8 * l]);
+                    g[l] = iq2xs_grid[q[l] & 511];
+                    signs4[l] = ksigns_iq2xs[q[l] >> 9];
                 }
+                tiled_unpk_sign32(g[0], g[1], g[2], g[3], signs4, &tile->q[q_off + 32 * ib32]);
             }
         }
     }
@@ -359,13 +363,14 @@ static void tiled_unpack_src0(const block_iq2_s * rows, int64_t row_stride, int 
 
             const uint8_t * qs = x.qs;
             const uint8_t * signs = x.qs + QK_K / 8; // packed sign bytes share the qs array, same as the reference
+            uint64_t g[4];
             for (int ib32 = 0; ib32 < QK_K / 32; ib32++) {
                 tile->scales[s_off + 2 * ib32 + 0] = (int32_t) (2 * (x.scales[ib32] & 0xf) + 1);
                 tile->scales[s_off + 2 * ib32 + 1] = (int32_t) (2 * (x.scales[ib32] >> 4) + 1);
                 for (int l = 0; l < 4; l++) {
-                    const uint64_t entry = iq2s_grid[qs[l] | (x.qh[ib32] << (8 - 2 * l) & 0x300)];
-                    tiled_unpk_sign8((const uint8_t *) &entry, signs[l], &tile->q[q_off + 32 * ib32 + 8 * l]);
+                    g[l] = iq2s_grid[qs[l] | (x.qh[ib32] << (8 - 2 * l) & 0x300)];
                 }
+                tiled_unpk_sign32(g[0], g[1], g[2], g[3], signs, &tile->q[q_off + 32 * ib32]);
                 qs += 4;
                 signs += 4;
             }
@@ -391,20 +396,17 @@ static void tiled_unpack_src0(const block_iq3_xxs * rows, int64_t row_stride, in
 
             const uint8_t * qs = x.qs;
             const uint8_t * scales_and_signs = x.qs + QK_K / 4; // 4 bytes per 32: code bits in the top nibble, signs in 7-bit chunks
+            uint64_t g[4];
+            uint8_t signs4[4];
             for (int ib32 = 0; ib32 < QK_K / 32; ib32++) {
                 const uint32_t aux32 = *(const uint32_t *) (scales_and_signs + 4 * ib32);
                 tile->scales[s_off + ib32] = (int32_t) (2 * (aux32 >> 28) + 1);
                 for (int l = 0; l < 4; l++) {
-                    const uint32_t e1 = iq3xxs_grid[qs[2 * l + 0]];
-                    const uint32_t e2 = iq3xxs_grid[qs[2 * l + 1]];
-                    const uint8_t signs = ksigns_iq2xs[(aux32 >> (7 * l)) & 127];
-                    // out[j] = e1 byte j, out[j + 4] = e2 byte j
-                    uint8_t t[8] = {
-                        (uint8_t) e1, (uint8_t) (e1 >> 8), (uint8_t) (e1 >> 16), (uint8_t) (e1 >> 24),
-                        (uint8_t) e2, (uint8_t) (e2 >> 8), (uint8_t) (e2 >> 16), (uint8_t) (e2 >> 24),
-                    };
-                    tiled_unpk_sign8(t, signs, &tile->q[q_off + 32 * ib32 + 8 * l]);
+                    // bytes 8*l .. 8*l+7: low entry e1 (4 values) then high entry e2 (4 values)
+                    g[l] = (uint64_t) iq3xxs_grid[qs[2 * l + 1]] << 32 | iq3xxs_grid[qs[2 * l + 0]];
+                    signs4[l] = ksigns_iq2xs[(aux32 >> (7 * l)) & 127];
                 }
+                tiled_unpk_sign32(g[0], g[1], g[2], g[3], signs4, &tile->q[q_off + 32 * ib32]);
                 qs += 8;
             }
         }
@@ -434,16 +436,13 @@ static void tiled_unpack_src0(const block_iq3_s * rows, int64_t row_stride, int 
                 tile->scales[s_off + ib32 + 0] = (int32_t) (1 + 2 * (x.scales[ib32 / 2] & 0xf));
                 tile->scales[s_off + ib32 + 1] = (int32_t) (1 + 2 * (x.scales[ib32 / 2] >> 4));
                 for (int h = 0; h < 2; h++) {
+                    uint64_t g[4];
                     for (int l = 0; l < 4; l++) {
-                        const uint32_t e1 = iq3s_grid[qs[2 * l + 0] | ((qh[h] << (8 - 2 * l)) & 256)];
-                        const uint32_t e2 = iq3s_grid[qs[2 * l + 1] | ((qh[h] << (7 - 2 * l)) & 256)];
-                        // out[j] = e1 byte j, out[j + 4] = e2 byte j
-                        uint8_t t[8] = {
-                            (uint8_t) e1, (uint8_t) (e1 >> 8), (uint8_t) (e1 >> 16), (uint8_t) (e1 >> 24),
-                            (uint8_t) e2, (uint8_t) (e2 >> 8), (uint8_t) (e2 >> 16), (uint8_t) (e2 >> 24),
-                        };
-                        tiled_unpk_sign8(t, signs[l], &tile->q[q_off + (ib32 + h) * 32 + 8 * l]);
+                        // bytes 8*l .. 8*l+7: low entry e1 (4 values) then high entry e2 (4 values)
+                        g[l] = (uint64_t) iq3s_grid[qs[2 * l + 1] | ((qh[h] << (7 - 2 * l)) & 256)] << 32
+                             |  iq3s_grid[qs[2 * l + 0] | ((qh[h] << (8 - 2 * l)) & 256)];
                     }
+                    tiled_unpk_sign32(g[0], g[1], g[2], g[3], signs, &tile->q[q_off + (ib32 + h) * 32]);
                     qs += 8;
                     signs += 4;
                 }
@@ -545,8 +544,8 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
     const int bs_stride = (num_k == 1) ? TILED_TILE_ROWS : TILED_MICRO;
     const int n16 = TILED_TILE_K / TILED_MICRO;
     // natural [row][k] fill, zero-pad ragged tail; codes stay natural here, the driver
-    // repacks them per 16-row band just-in-time (tiled_repack_src1_band / tiled_repack_16x16)
-    // so only the bands actually swept are repacked and each is L1-hot for its uses
+    // repacks them just-in-time via tiled_repack_codes (per 16-row band on the standard path,
+    // the whole chunk on the narrow path) so each repacked region is L1-hot for its uses
     for (int slab = 0; slab < num_k; slab++) {
         const int q_off = slab * TILED_TILE_K;
         for (int r = 0; r < n_padded; r++) {
@@ -659,28 +658,12 @@ size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst) {
     return 64 + n_tasks * ggml_tiled_ws_size();  // 64 for alignment plus scratch for each thread
 }
 
-// the GEMM is profitable at this many src1 rows (MUL_MAT: src1->ne[1], MUL_MAT_ID: the
-// expert's routed row count); below it, fall back to optimized vec_dot. The narrow (small
-// n_src1) path takes [8,16]; the standard 256x256 path takes the rest.
-#define TILED_MIN_BATCH 8
-
-static bool ggml_tiled_min_batch(int64_t rows) {
-    // FORCE (test/bench only) takes the tiled path even when unprofitable
-    return ggml_tiled_matmul_forced() || rows >= TILED_MIN_BATCH;
-}
 
 // narrow-path K chunk: the long per-row weight stream is read k_extent at a time, capped so
-// the (16 weight + n_rows activation) * k_extent working set stays L1-resident. k_extent is
-// the largest multiple of 256 that fits and divides K (0 if none). Env-tunable L1 budget.
-// The buffer ceiling: 16 weight rows at row stride k_extent must fit the src0 tile's
-// TILED_TILE_ROWS*TILED_TILE_K codes, so k_extent <= TILED_TILE_ROWS*TILED_TILE_K/TILED_MICRO.
+// the (16 weight + n_rows activation) * k_extent working set stays L1-resident.
 static int ggml_tiled_narrow_k_extent(int64_t n_rows, int64_t ne00) {
-    int l1 = 32 * 1024;
-    const char * e = getenv("GGML_CPU_TILED_MM_NARROW_L1");
-    if (e) {
-        const long v = atol(e);
-        if (v > 0) l1 = (int) v;
-    }
+    int l1 = 31 * 1024;  // fit weights in 31k to leave room for scales
+
     int rows = (int) n_rows;
     if (rows < TILED_MICRO) rows = TILED_MICRO;
     int ke = l1 / (TILED_MICRO + rows);
@@ -691,14 +674,6 @@ static int ggml_tiled_narrow_k_extent(int64_t n_rows, int64_t ne00) {
         ke -= TILED_TILE_K;
     }
     return ke < TILED_TILE_K ? 0 : ke;
-}
-
-// the narrow path is taken for n_src1/cne1 in [8,16] when a valid k_extent divides K
-static bool ggml_tiled_narrow_enabled(int64_t rows, int64_t ne00) {
-    if (rows < TILED_MIN_BATCH || rows > TILED_MICRO) {
-        return false;
-    }
-    return ggml_tiled_narrow_k_extent(rows, ne00) != 0;
 }
 
 // dense narrow writeback: acc is the 16 x n_src1 result (row stride buf_stride), dst rows are
@@ -751,8 +726,7 @@ static void tiled_store_window(const float * buf, int n_src0, int n_src1, int bu
 // MUL_MAT_ID (MoE): src1 rows are gathered per output row (expert dispatch) and dst rows are
 // scattered back. The expert's cne1 gathered q8_K rows are staged once per expert into
 // thread-local scratch (contiguous rows, plus the [k/4][row][4] interleave on VNNI) so the
-// unpack and microtile are reused unchanged from mul_mat. Each thread stages the rows itself,
-// no cross-thread sync; staging is small vs the gemm.
+// unpack and microtile are reused unchanged from mul_mat.
 
 // src0 rows per g group; finer than the TILED_TILE_K kernel tile so all threads stay busy at small ne01
 #define TILED_MMID_GROUP 64
@@ -822,11 +796,9 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
                                  expert_rows[2 * (k + m) + 1] * dst->nb[2]);
     }
 
-    // narrow path (small nrows): the weight is read as long per-row K streams (k_extent at a
-    // time) so the (16 weight + nrows) * k_extent working set stays L1-resident. Reuses the
-    // standard tiles/kernel: num_k slabs live in the tile at row stride num_k*256, one standard
-    // MAC per slab reads the slab-th one.
-    if (nrows <= TILED_MICRO && ggml_tiled_narrow_enabled(nrows, ne00)) {
+    // narrow path (small nrows): we're memory bound in this case so do longer, skinny tiled in order
+    // to have contiguous reads and improve memory bandwidth
+    if (nrows <= TILED_MICRO) {
         const int k_extent = ggml_tiled_narrow_k_extent(nrows, ne00);
         const int num_k = k_extent / TILED_TILE_K;
         for (int64_t k0 = 0; k0 < ne00; k0 += k_extent) {
@@ -834,12 +806,8 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
             // activation: one 16-row band (nrows <= 16). Unpack the whole k_extent chunk (all
             // slabs) so each activation row is a long stream, then repack each slab in place
             tiled_unpack_src1_q8_K(rows, nrows, &ws->src1, kstart, num_k);
-            for (int slab = 0; slab < num_k; slab++) {
-                uint8_t * base = (uint8_t *) &ws->src1.q[slab * TILED_TILE_K]; // band 0, row 0, slab offset
-                for (int c = 0; c < 4; c++) {
-                    tiled_repack_16x16(base, c, k_extent);
-                }
-            }
+            // repack the whole k_extent chunk in place: num_k slabs x 4 tiles, 16 rows, row stride num_k*256
+            tiled_repack_codes((uint8_t *) &ws->src1.q[0], num_k * 4, k_extent);
             // weight groups (16 at a time): unpack the k_extent chunk of the group (the long per-row
             // read), then one standard MAC per slab accumulating into the same acc rows
             for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
@@ -861,7 +829,7 @@ static void tiled_mmid_gemm_window(struct ggml_tensor * dst, const struct ggml_t
             // 16x16 microtiles sweeping the window; repack each src1 band just-in-time
             // (j0-outer) so only the bands actually used are repacked and each is L1-hot
             for (int64_t ir1 = 0; ir1 < nrows; ir1 += TILED_MICRO) {
-                tiled_repack_src1_band(&ws->src1, (int) (ir1 / TILED_MICRO));
+                tiled_repack_codes((uint8_t *) &ws->src1.q[ir1 * TILED_TILE_K], 4, TILED_TILE_K);
                 for (int64_t ir0 = r; ir0 < r_end; ir0 += TILED_MICRO) {
                     tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
                         (int) (ir0 - r), (int) ir1, 1, 0,
@@ -1015,11 +983,9 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
             // result buffer zeroed once per macrotile
             memset(ws->acc, 0, (size_t)TILED_TILE_ROWS * TILED_TILE_ROWS * sizeof(float));
 
-            if (n_src1 <= TILED_MICRO && ggml_tiled_narrow_enabled(n_src1, ne00)) {
-                // narrow path: the weight is read as long per-row K streams (k_extent at a time)
-                // so the (16 weight + n_src1 activation) * k_extent working set stays L1-resident.
-                // Reuses the standard tiles/kernel: num_k slabs live in the tile at row stride
-                // num_k*256, one standard MAC per slab reads the slab-th one.
+            if (n_src1 <= TILED_MICRO) {
+                // narrow path: if we have few enough rows, we're memory bound
+                // Do longer, skinner tiles so we have longer contiguous reads and improve bandwidth
                 const int k_extent = ggml_tiled_narrow_k_extent(n_src1, ne00);
                 const int num_k = k_extent / TILED_TILE_K;
                 for (int64_t k0 = 0; k0 < ne00; k0 += k_extent) {
@@ -1027,12 +993,8 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                     // activation: one 16-row band (n_src1 <= 16). Unpack the whole k_extent chunk
                     // (all slabs) so each activation row is a long stream, then repack each slab in place
                     tiled_unpack_src1_q8_K(rows, n_src1, &ws->src1, kstart, num_k);
-                    for (int slab = 0; slab < num_k; slab++) {
-                        uint8_t * base = (uint8_t *) &ws->src1.q[slab * TILED_TILE_K]; // band 0, row 0, slab offset
-                        for (int c = 0; c < 4; c++) {
-                            tiled_repack_16x16(base, c, k_extent);
-                        }
-                    }
+                    // repack the whole k_extent chunk in place, if kernel wants to: num_k slabs x 4 tiles, 16 rows, row stride num_k*256
+                    tiled_repack_codes((uint8_t *) &ws->src1.q[0], num_k * 4, k_extent);
                     // weight groups: unpack the k_extent chunk of each 16-row group (the long per-row
                     // read), then one standard MAC per slab accumulating into the same acc rows
                     for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
@@ -1052,10 +1014,9 @@ static void ggml_compute_forward_mul_mat_tiled_one_chunk(
                     tiled_unpack_src0((const B *) (src0_row + iir0 * nb01 + kblk * src0_bs), src0_stride, n_src0, &ws->src0, 1);
                     tiled_unpack_src1_q8_K(rows, n_src1, &ws->src1, kblk, 1);
 
-                    // 16x16 microtiles sweeping the window; repack each src1 band just-in-time
-                    // (j0-outer) so only the bands actually used are repacked and each is L1-hot
+                    // 16x16 microtiles sweeping the window; repack each src1 band before first use
                     for (int64_t ir1 = iir1; ir1 < iir1_end; ir1 += MICRO) {
-                        tiled_repack_src1_band(&ws->src1, (int) ((ir1 - iir1) / MICRO));
+                        tiled_repack_codes((uint8_t *) &ws->src1.q[(ir1 - iir1) * TILED_TILE_K], 4, TILED_TILE_K);
                         for (int64_t ir0 = iir0; ir0 < iir0_end; ir0 += MICRO) {
                             tiled_run_microtile<SUBBLK, HAS_MIN, BIAS>(ws->src0, ws->src1,
                                 (int) (ir0 - iir0), (int) (ir1 - iir1), 1, 0,
@@ -1245,6 +1206,11 @@ static bool ggml_tiled_matmul_type_dispatch(const struct ggml_compute_params * p
         default:
             return false;
     }
+}
+
+static bool ggml_tiled_min_batch(int64_t rows) {
+    //  Profitable at rows >= 8, take even when unprofitable if we're forced
+    return rows >= 8 || ggml_tiled_matmul_forced();
 }
 
 // tiled K-quant matmul; returns true if the op was computed here,
