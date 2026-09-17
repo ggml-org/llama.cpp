@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import sys
+from pathlib import Path
 
 from typing import Iterable, TYPE_CHECKING
 
@@ -16,6 +18,19 @@ from .base import ModelBase, TextModel, gguf, logger
 @ModelBase.example("EleutherAI/pythia-70m")
 class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX
+
+    def set_vocab(self):
+        super().set_vocab()
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        # for elmod inject precompiled NFKC normalization rules
+        if tokpre == "elmod":
+            precompiled_charsmap_path = Path(sys.path[0]) / 'models' / 'norm-nfkc.bin'
+            precompiled_charsmap = open(precompiled_charsmap_path, "rb").read()
+            self.gguf_writer.add_precompiled_charsmap(precompiled_charsmap)
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_context_length(self.hparams["max_position_embeddings"])
