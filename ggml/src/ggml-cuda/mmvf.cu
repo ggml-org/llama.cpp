@@ -8,13 +8,13 @@ template <typename T>
 using mmvf_y_t = std::conditional_t<std::is_same_v<T, ggml_fp8_e4m3_t>, nv_bfloat16, float>;
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-static __device__ __forceinline__ nv_bfloat16 mmvf_f8_e4m3_to_bf16(uint8_t bits) {
+static __device__ __forceinline__ nv_bfloat162 mmvf_f8x2_e4m3_to_bf162(__nv_fp8x2_storage_t x) {
 #if defined(FP8_AVAILABLE)
-    __nv_fp8_e4m3 value;
-    value.__x = bits;
-    return static_cast<nv_bfloat16>(value);
+    return static_cast<nv_bfloat162>(__nv_cvt_fp8x2_to_bf162raw(x, __NV_E4M3));
 #else
-    return static_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(bits));
+    return make_bfloat162(
+        static_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x & 0xFF)),
+        static_cast<nv_bfloat16>(ggml_cuda_f8_e4m3_to_fp32(x >> 8)));
 #endif
 }
 #endif
@@ -333,19 +333,17 @@ static __global__ void mul_mat_vec_f(
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
         const nv_bfloat162 * y2 = (const nv_bfloat162 *) y;
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+        const __nv_fp8x2_storage_t * x2 = reinterpret_cast<const __nv_fp8x2_storage_t *>(x);
+        const __nv_fp8x2_storage_t * gate_x2 = reinterpret_cast<const __nv_fp8x2_storage_t *>(gate_x);
         nv_bfloat162 sum_bf[ncols_dst] = {};
         nv_bfloat162 sum_bf_gate[ncols_dst] = {};
 
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
-            const nv_bfloat162 tmpx = make_bfloat162(
-                mmvf_f8_e4m3_to_bf16(x[2*col2 + 0].bits),
-                mmvf_f8_e4m3_to_bf16(x[2*col2 + 1].bits));
+            const nv_bfloat162 tmpx = mmvf_f8x2_e4m3_to_bf162(x2[col2]);
             nv_bfloat162 tmpx_gate = {};
             if constexpr (has_fusion) {
                 if (use_gate) {
-                    tmpx_gate = make_bfloat162(
-                        mmvf_f8_e4m3_to_bf16(gate_x[2*col2 + 0].bits),
-                        mmvf_f8_e4m3_to_bf16(gate_x[2*col2 + 1].bits));
+                    tmpx_gate = mmvf_f8x2_e4m3_to_bf162(gate_x2[col2]);
                 }
             }
 #pragma unroll
@@ -758,6 +756,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     GGML_ASSERT(        nb10       == ts_src1);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
     GGML_ASSERT(        nb0        == ts_dst);
+    GGML_ASSERT(src0->type != GGML_TYPE_F8_E4M3 || (uintptr_t) src0->data % alignof(uint16_t) == 0);
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
@@ -780,6 +779,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
         }
         if (fusion->gate) {
             GGML_ASSERT(fusion->gate->type == src0->type && ggml_are_same_stride(fusion->gate, src0));
+            GGML_ASSERT(src0->type != GGML_TYPE_F8_E4M3 || (uintptr_t) fusion->gate->data % alignof(uint16_t) == 0);
             fusion_local.gate = fusion->gate->data;
         }
         if (fusion->gate_bias) {
