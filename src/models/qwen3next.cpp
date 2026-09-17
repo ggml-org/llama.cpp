@@ -1,5 +1,28 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
+#include <limits>
+
+struct QuantFilterModule {
+    float scale;
+    float inv_scale;
+
+    QuantFilterModule(float qs_val) {
+        scale = (float)(std::numeric_limits<int32_t>::max() & (int32_t)qs_val);
+        inv_scale = 1.0f / scale;
+    }
+
+    ggml_tensor * forward(ggml_context * ctx0, ggml_tensor * x) {
+        ggml_tensor * scaled = ggml_scale(ctx0, x, scale);
+        ggml_tensor * rounded = ggml_round(ctx0, scaled);
+        ggml_tensor * result = ggml_scale(ctx0, rounded, inv_scale);
+
+        return result;
+    }
+
+    ggml_tensor * backward(ggml_context * /*ctx0*/, ggml_tensor * x) {
+        return x;
+    }
+};
 
 void llama_model_qwen3next::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
@@ -287,6 +310,8 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
+    QuantFilterModule quant_filter_v(512);
+    Vcur = quant_filter_v.forward(ctx0, Vcur);
     cb(Vcur, "Vcur", il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
@@ -306,6 +331,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
     cb(cur, "attn_gated", il);
 
     cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+
+    QuantFilterModule quant_filter(512);
+    cur = quant_filter.forward(ctx0, cur);
     cb(cur, "attn_output", il);
 
     return cur;
@@ -476,6 +504,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
 
     ggml_tensor * conv_qkv_mix = conv_output_silu;
 
+    QuantFilterModule quant_filter(512);
+    conv_qkv_mix = quant_filter.forward(ctx0, conv_qkv_mix);
+
     // Calculate the total conv dimension
     int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
     int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
@@ -559,6 +590,9 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     // Reshape back to original dimensions
     cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
 
+    //QuantFilterModule quant_filter(512);
+    cur = quant_filter.forward(ctx0, cur);
+    
     return cur;
 }
 
@@ -607,8 +641,13 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
             cb(ffn_shexp, "ffn_shexp_gated", il);
 
             cur = ggml_add(ctx0, moe_out, ffn_shexp);
+            
+            QuantFilterModule quant_filter_ffn(512);
+            cur = quant_filter_ffn.forward(ctx0, cur);
             cb(cur, "ffn_out", il);
         } else {
+            QuantFilterModule quant_filter_moe(512);
+            cur = quant_filter_moe.forward(ctx0, cur);
             cur = moe_out;
         }
     } else {
@@ -619,6 +658,8 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
             model.layers[il].ffn_down, NULL, NULL,
             NULL,
             LLM_FFN_SILU, LLM_FFN_PAR, il);
+        QuantFilterModule quant_filter_moe(512);
+        cur = quant_filter_moe.forward(ctx0, cur);
         cb(cur, "ffn_out", il);
     }
     return cur;
@@ -722,6 +763,9 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
+    
+    QuantFilterModule quant_filter_v(512);
+    Vcur = quant_filter_v.forward(ctx0, Vcur);
     cb(Vcur, "mtp_Vcur", il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f
