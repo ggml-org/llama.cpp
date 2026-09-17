@@ -48,6 +48,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     llama_memory_execution pending;
     std::unique_ptr<llama_memory_workspace> workspace;
     std::unique_ptr<llama_memory_transition> transition;
+    llama_memory_text_phase_tracker text_phase;
 
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
@@ -240,3 +241,12 @@ void llama_context_memory::synchronize() { ggml_backend_sched_synchronize(impl->
 bool llama_context_memory::uses_arenas() const noexcept { return !impl->arenas.empty(); }
 
 const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept { return impl->bindings; }
+
+llama_memory_text_phase_result llama_context_memory::signal_text_phase(
+        const llama_memory_text_phase_signal & signal) noexcept {
+    return impl->text_phase.notify(signal);
+}
+
+llama_memory_text_phase_snapshot llama_context_memory::text_phase() const noexcept {
+    return impl->text_phase.snapshot();
+}

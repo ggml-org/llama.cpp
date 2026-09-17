@@ -1501,7 +1501,9 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(
+        const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx,
+        llama_memory_text_phase phase, ggml_status & ret) {
     llama_kv_stream_model * stream = nullptr;
     if (cparams.kv_stream_pool_bytes) {
         static const std::vector<ggml_backend_memory_lease_t> empty;
@@ -1510,7 +1512,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ret = GGML_STATUS_FAILED; return nullptr;
         }
         if (!mctx || gtype != LLM_GRAPH_TYPE_DEFAULT ||
-                !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->kv_stream_begin(ubatch,cparams.kv_stream_decode)) {
+                (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode) ||
+                !static_cast<llama_memory_hybrid_context *>(mctx)->get_attn()->kv_stream_begin(
+                    ubatch, phase == llama_memory_text_phase::decode)) {
             LLAMA_LOG_ERROR("%s: KV streaming rejected non-serial/non-append execution\n",__func__);
             ret = GGML_STATUS_FAILED; return nullptr;
         }
@@ -1668,7 +1672,8 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     cparams.causal_attn = false;
 
     ggml_status status;
-    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
+    const auto * res = process_ubatch(
+        ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, llama_memory_text_phase::unspecified, status);
 
     cparams.causal_attn = causal_attn_org;
 
@@ -1922,6 +1927,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
 
+    const auto text_phase = cparams.kv_stream_pool_bytes ?
+        (cparams.kv_stream_decode ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
+        llama_memory_text_phase::unspecified;
+
     if (output_all) {
         // require that all tokens are output
         if (n_outputs_all != n_tokens_all) {
@@ -1951,6 +1960,22 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     embd_batch_idxs.clear();
 
     sched_reserve();
+
+    if (cparams.kv_stream_pool_bytes && compute_memory) {
+        const auto phase_result = compute_memory->signal_text_phase({
+            text_phase,
+            n_tokens_all,
+            cparams.n_seq_max == 1,
+            cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !batch_inp.embd,
+            cparams.ctx_other != nullptr || cparams.n_rs_seq != 0 ||
+                (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1),
+        });
+        if (phase_result.status != llama_memory_text_phase_status::changed &&
+                phase_result.status != llama_memory_text_phase_status::unchanged) {
+            LLAMA_LOG_ERROR("%s: rejected unsupported text phase signal\n", __func__);
+            return -2;
+        }
+    }
 
     bool did_optimize = false;
 
@@ -2037,7 +2062,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(
+            ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), text_phase, status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module

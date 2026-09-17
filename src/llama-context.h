@@ -149,10 +149,11 @@ struct llama_context {
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
     llm_graph_result * process_ubatch(
-                const llama_ubatch & ubatch,
-                    llm_graph_type   gtype,
-            llama_memory_context_i * mctx,
-                       ggml_status & ret);
+                    const llama_ubatch & ubatch,
+                        llm_graph_type   gtype,
+                llama_memory_context_i * mctx,
+            llama_memory_text_phase   phase,
+                           ggml_status & ret);
 
     int encode(const llama_batch_ext & batch_inp);
     int decode(const llama_batch_ext & batch_inp);

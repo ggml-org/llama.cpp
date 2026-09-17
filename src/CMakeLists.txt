@@ -88,6 +88,8 @@ add_library(llama
             llama-memory-layout.h
             llama-memory-budget.cpp
             llama-memory-budget.h
+            llama-memory-phase.cpp
+            llama-memory-phase.h
             llama-memory-plan.cpp
             llama-memory-plan.h
             llama-memory-requirements.cpp

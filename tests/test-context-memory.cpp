@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstring>
 
+using phase_status = llama_memory_text_phase_status;
+using text_phase = llama_memory_text_phase;
+
 struct fixture {
     ggml_backend_ptr device;
     ggml_backend_ptr cpu{ggml_backend_cpu_init()};
@@ -219,6 +222,30 @@ int main(int argc, char ** argv) {
         auto invalid = plan;
         invalid.phase_sizes[1].pop_back();
         t.assert_true(!llama_context_memory::create(f.sched.get(), f.backends, invalid));
+    });
+
+    t.test("phase_signals_do_not_change_conservative_workspace", [&](testing & t) {
+        fixture f(dev);
+        auto owner = llama_context_memory::create(f.sched.get(), f.backends, f.groups);
+        if (!t.assert_true(bool(owner))) {
+            return;
+        }
+        const auto bytes = ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get());
+        auto result = owner->signal_text_phase({text_phase::prefill, 513, true, true, false});
+        t.assert_true(result.status == phase_status::changed);
+        t.assert_true(owner->signal_text_phase({text_phase::prefill, 1, true, true, false}).status ==
+            phase_status::unchanged);
+        t.assert_true(owner->signal_text_phase({text_phase::decode, 1, true, true, false}).status ==
+            phase_status::changed);
+        const auto before = owner->text_phase();
+        t.assert_true(owner->signal_text_phase({text_phase::decode, 1, true, true, true}).status ==
+            phase_status::unsupported_execution);
+        const auto after = owner->text_phase();
+        t.assert_true(after.phase == before.phase);
+        t.assert_equal(before.revision, after.revision);
+        t.assert_equal(bytes, ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
+        f.rebuild();
+        f.run(t, *owner, 5);
     });
 
     if (dev) {

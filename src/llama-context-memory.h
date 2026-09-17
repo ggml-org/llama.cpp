@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-memory-executor.h"
+#include "llama-memory-phase.h"
 #include "llama-context-workspace.h"
 
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
@@ -25,6 +26,10 @@ public:
     ggml_status compute_async(ggml_cgraph * graph);
     // Observe completion without rebuilding the immutable lease-validation state on the next token.
     void synchronize();
+
+    // Record logical text intent without changing grants or invoking the transition coordinator.
+    llama_memory_text_phase_result signal_text_phase(const llama_memory_text_phase_signal & signal) noexcept;
+    llama_memory_text_phase_snapshot text_phase() const noexcept;
     bool uses_arenas() const noexcept;
     // Borrowed handles; consumers retain them before capturing addresses from this workspace.
     const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
