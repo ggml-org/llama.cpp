@@ -518,6 +518,8 @@ extern "C" {
               struct llama_model_params   params);
 
     // Load a model from an open FILE pointer
+    // The GGUF is read from the current position, so it can be embedded in a larger file
+    // mmap needs the GGUF data section at a file offset to be aligned to the CPU tensor alignment (32 bytes)
     LLAMA_API struct llama_model * llama_model_load_from_file_ptr(
                                    FILE * file,
               struct llama_model_params   params);
@@ -680,6 +682,11 @@ extern "C" {
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
             const char * path_lora);
+
+    // Load a LoRA adapter from an open FILE pointer, reading from its current position
+    LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init_from_file_ptr(
+            struct llama_model * model,
+            FILE * file);
 
     // Functions to access the adapter's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
