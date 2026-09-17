@@ -26,7 +26,11 @@ export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
 	useGlobalSelection?: () => boolean;
 	onModelChange?: () =>
-		| ((modelId: string, modelName: string) => Promise<boolean> | boolean | void)
+		| ((
+				modelId: string,
+				modelName: string,
+				backendId?: string
+		  ) => Promise<boolean> | boolean | void)
 		| undefined;
 	onOpenChange?: (open: boolean) => void;
 }
@@ -266,7 +270,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		let shouldCloseMenu = true;
 
 		if (onModelChange) {
-			const result = await onModelChange(rawModelId(option.id), option.model);
+			const result = await onModelChange(rawModelId(option.id), option.model, option.backendId);
 
 			if (result === false) {
 				shouldCloseMenu = false;
@@ -285,7 +289,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			});
 		}
 
-		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
+		// only the built-in server loads on request, and only in router mode
+		const canLoadHere = option.backendId === LOCAL_BACKEND_ID && isRouter;
+
+		if (!onModelChange && canLoadHere && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 
 			modelsStore.status
