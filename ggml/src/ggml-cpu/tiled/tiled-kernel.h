@@ -4,7 +4,8 @@
 
 // Currently only optimized for x86, new architectures should implement:
 // tiled_run_microtile:  16x16 microkernel
-// tiled_repack_codes: in-place 16-row src1 repack (no-op if the MAC wants the natural layout)
+// tiled_repack_src0: Optional repack/recalculation of src0, per macrotile
+// tiled_repack_src1: Optional repack/recalculation of src1, per microtile-band
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
 // LUT value expansion routines: tiled_lut8, tiled_unpk_sign32, tiled_unpk_tern8
 
@@ -78,7 +79,7 @@ inline void tiled_unpk_or(uint8_t * dst, const uint8_t * src) {
 }
 
 
-// Unpacking kernels for IQ quants TODO normalize the layout with the bit unpackers
+// Unpacking kernels for IQ quants 
 
 // LUT value expansion for the LUT-based formats (iq4_xs, iq grids): the bit unpackers
 // above give the indices, these expand 8/16 of them to widened codes in one pass
@@ -115,6 +116,10 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
     _mm_storel_epi64((__m128i *) dst, _mm_packus_epi16(p, _mm_setzero_si128()));
 }
 #else
+
+// Scalar definitions for unpackers.
+
+
 inline void tiled_unpk_nib4(const uint8_t * src, uint8_t * lo, uint8_t * hi) {
     for (int l = 0; l < 32; l++) { lo[l] = (uint8_t) (src[l] & 0xF); hi[l] = (uint8_t) (src[l] >> 4); }
 }
@@ -150,19 +155,20 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 // over one 256-K slab held in the tiles into a j-major float buffer
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
-// num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256 (each weight
-// row one long stream) and the call reads the slab-th one; the standard path passes
-// num_k=1, slab=0 so the single-slab layout is unchanged.
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+// ACTBIAS (AVX2 only): the activation is pre-biased +128 by tiled_repack_src1, 
+// num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256 
+// (Default case is num_k=1, 256x256 tiles, we go to longer num_k to improve memory bandwidth when num_rows is small)
+template <int SUBBLK, bool HAS_MIN, int BIAS, bool ACTBIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
-// Repack a 16-row block of src1 codes in-place into the VNNI group-local [kg%16][kg/16][row][4]
-// layout. base points at row 0 (row r at base + r*row_stride); n_tiles 16x16 int32 tiles are
-// transposed to the right (tile t occupies bytes [t*64, t*64+64) of each row). row_stride is in
-// bytes (TILED_TILE_K for the standard path, num_k*TILED_TILE_K for the narrow path). All 16 rows
-// of a tile load before any store and a tile's rows are disjoint, so it is in-place with no temp.
-// No-op on non-VNNI.
-void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride);
+// Optional repack, if profitable for the kernel.  
+// Repacks one 16-row band of src1 codes, called by driver as we reach each 16-row band in outer loop
+void tiled_repack_src1(tiled_tile_src1 * src1, int row0, int num_k, bool bias);
+
+// Optional repack, if profitable for the kernel
+// Repack the entire src0 panel in place, called by the driver immediately after dequant
+template <int SUBBLK>
+void tiled_repack_src0(tiled_tile_src0 * tile, int n_rows, int num_k, int BIAS, bool corr);
 
 

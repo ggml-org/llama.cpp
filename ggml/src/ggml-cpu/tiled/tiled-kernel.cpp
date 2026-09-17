@@ -217,9 +217,13 @@ static void tiled_run_microtile_vnni(const tiled_tile_src0 & src0, const tiled_t
 // still gives 16 i16 lanes (0..7 = subblock sp, 8..15 = sp+1), but the
 // scale is applied per 128-bit half.
 // With BIAS != 0 the q0 codes are biased (up to 241) and a maddubs i16 pair
-// overflows, so q0 is split into 4-bit halves and the dot is the sum of two
-// maddubs, each pair then <= 2*15*127
-template <int SUBBLK, bool HAS_MIN, int BIAS, int NK>
+// overflows, so the weight is debiased (w = q0 - BIAS, small). Two MACs:
+//   ACTBIAS: activation pre-biased (+128) by repack, one maddubs(q1b, w); the +128 is
+//     corrected out in the epilogue (128*sum_s scales[s]*w_bsum[s], precomputed in repack_src0).
+//     Fits only when the debiased weight magnitude Wmax <= 64 (2*255*Wmax < 32767).
+//   else (iq4_xs, Wmax = 127): the signed-int8 sign trick, ax = |w|, sy = q1*sign(w),
+//     one maddubs (2*127*127 < 32767) so it always fits.
+template <int SUBBLK, bool HAS_MIN, int BIAS, int NK, bool ACTBIAS>
 static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                      int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     constexpr int NB = TILED_TILE_K / SUBBLK;
@@ -266,7 +270,6 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                 q1_ptr[t] = &src1.q[(j0 + g + t) * qk_stride + qk_off];
             }
 
-            __m256i corr = _mm256_setzero_si256();
             __m256i s2   = _mm256_setzero_si256();
 
             __m256i acc[GROUP];
@@ -280,26 +283,26 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[s * SUBBLK]);
                     const __m256i scales16 = _mm256_set1_epi16(scales_row[s]);
 
-                    const __m256i bsums_v = _mm256_add_epi32(
-                        _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2) * bs_stride + j0 + g]),
-                        _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2 + 1) * bs_stride + j0 + g]));
-
                     if constexpr (BIAS != 0) {
-                        const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
-                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F));
-                        const __m256i scales16b = _mm256_set1_epi16(16 * scales_row[s]);
-
-                        #pragma GCC unroll 8
-                        for (int t = 0; t < GROUP; t++) {
-                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
-                            const __m256i d_lo = _mm256_maddubs_epi16(q0a, q1_32);
-                            const __m256i d_hi = _mm256_maddubs_epi16(q0b, q1_32);
-
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
-                                _mm256_madd_epi16(scales16, d_lo),
-                                _mm256_madd_epi16(scales16b, d_hi)));
+                        const __m256i w = _mm256_sub_epi8(q0_32, _mm256_set1_epi8((int8_t) BIAS)); // debiased weight
+                        if constexpr (ACTBIAS) {
+                            // activation pre-biased (+128) by repack; q1b unsigned, w signed
+                            #pragma GCC unroll 8
+                            for (int t = 0; t < GROUP; t++) {
+                                const __m256i q1b_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
+                                acc[t] = _mm256_add_epi32(acc[t],
+                                    _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(q1b_32, w)));
+                            }
+                        } else {
+                            // iq4_xs (Wmax > 64 overflows act-bias): sign trick, both operands <= 127
+                            const __m256i ax = _mm256_sign_epi8(w, w);
+                            #pragma GCC unroll 8
+                            for (int t = 0; t < GROUP; t++) {
+                                const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][s * SUBBLK]);
+                                acc[t] = _mm256_add_epi32(acc[t],
+                                    _mm256_madd_epi16(scales16, _mm256_maddubs_epi16(ax, _mm256_sign_epi8(q1_32, w))));
+                            }
                         }
-                        corr = _mm256_sub_epi32(corr, _mm256_mullo_epi32(bsums_v, _mm256_set1_epi32(BIAS * scales_row[s])));
                     } else {
                         #pragma GCC unroll 8
                         for (int t = 0; t < GROUP; t++) {
@@ -310,6 +313,9 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     }
 
                     if constexpr (HAS_MIN) {
+                        const __m256i bsums_v = _mm256_add_epi32(
+                            _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2) * bs_stride + j0 + g]),
+                            _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + s * 2 + 1) * bs_stride + j0 + g]));
                         s2 = _mm256_add_epi32(s2, _mm256_mullo_epi32(bsums_v, _mm256_set1_epi32(mins_row[s])));
                     }
                 }
@@ -317,24 +323,26 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                 for (int sp = 0; sp < NB; sp += 2) {
                     const __m256i q0_32 = _mm256_load_si256((const __m256i *) &q0[sp * SUBBLK]);
                     const __m256i scalesv = _mm256_set_m128i(_mm_set1_epi16(scales_row[sp + 1]), _mm_set1_epi16(scales_row[sp]));
-                    const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp) * bs_stride + j0 + g]);
-                    const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp + 1) * bs_stride + j0 + g]);
-
                     if constexpr (BIAS != 0) {
-                        const __m256i q0a = _mm256_and_si256(q0_32, _mm256_set1_epi8(0x0F));
-                        const __m256i q0b = _mm256_and_si256(_mm256_srli_epi16(q0_32, 4), _mm256_set1_epi8(0x0F));
-                        const __m256i scalesvb = _mm256_set_m128i(_mm_set1_epi16(16 * scales_row[sp + 1]), _mm_set1_epi16(16 * scales_row[sp]));
-
-                        #pragma GCC unroll 8
-                        for (int t = 0; t < GROUP; t++) {
-                            const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
-                            acc[t] = _mm256_add_epi32(acc[t], _mm256_add_epi32(
-                                _mm256_madd_epi16(scalesv, _mm256_maddubs_epi16(q0a, q1_32)),
-                                _mm256_madd_epi16(scalesvb, _mm256_maddubs_epi16(q0b, q1_32))));
+                        const __m256i w = _mm256_sub_epi8(q0_32, _mm256_set1_epi8((int8_t) BIAS)); // debiased weight
+                        if constexpr (ACTBIAS) {
+                            // activation pre-biased (+128) by repack; q1b unsigned, w signed
+                            #pragma GCC unroll 8
+                            for (int t = 0; t < GROUP; t++) {
+                                const __m256i q1b_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
+                                acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
+                                    scalesv, _mm256_maddubs_epi16(q1b_32, w)));
+                            }
+                        } else {
+                            // iq4_xs (Wmax > 64 overflows act-bias): sign trick, both operands <= 127
+                            const __m256i ax = _mm256_sign_epi8(w, w);
+                            #pragma GCC unroll 8
+                            for (int t = 0; t < GROUP; t++) {
+                                const __m256i q1_32 = _mm256_load_si256((const __m256i *) &q1_ptr[t][sp * SUBBLK]);
+                                acc[t] = _mm256_add_epi32(acc[t], _mm256_madd_epi16(
+                                    scalesv, _mm256_maddubs_epi16(ax, _mm256_sign_epi8(q1_32, w))));
+                            }
                         }
-                        corr = _mm256_sub_epi32(corr, _mm256_add_epi32(
-                            _mm256_mullo_epi32(bsums0_v, _mm256_set1_epi32(BIAS * scales_row[sp])),
-                            _mm256_mullo_epi32(bsums1_v, _mm256_set1_epi32(BIAS * scales_row[sp + 1]))));
                     } else {
                         #pragma GCC unroll 8
                         for (int t = 0; t < GROUP; t++) {
@@ -345,6 +353,8 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
                     }
 
                     if constexpr (HAS_MIN) {
+                        const __m256i bsums0_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp) * bs_stride + j0 + g]);
+                        const __m256i bsums1_v = _mm256_load_si256((const __m256i *) &src1.bsums[(bs_off + sp + 1) * bs_stride + j0 + g]);
                         s2 = _mm256_add_epi32(s2, _mm256_add_epi32(
                             _mm256_mullo_epi32(bsums0_v, _mm256_set1_epi32(mins_row[sp])),
                             _mm256_mullo_epi32(bsums1_v, _mm256_set1_epi32(mins_row[sp + 1]))));
@@ -361,8 +371,9 @@ static void tiled_run_microtile_avx2(const tiled_tile_src0 & src0, const tiled_t
             }
             __m256i s1_vec = _mm256_load_si256((const __m256i *) s1_vals);
 
-            if constexpr (BIAS != 0) {
-                s1_vec = _mm256_add_epi32(s1_vec, corr);
+            if constexpr (BIAS != 0 && ACTBIAS) {
+                // act-bias correction: raw = desired + 128*sum_s scales[s]*w_bsum[s]; corr precomputed in repack_src0
+                s1_vec = _mm256_sub_epi32(s1_vec, _mm256_set1_epi32(mins_row[0]));
             }
 
             const __m256 src1_d_vec = _mm256_load_ps(&src1.d[seff * TILED_MICRO + j0 + g]);
@@ -428,7 +439,6 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
         for (int g = 0; g < TILED_MICRO; g += GROUP) {
             const int8_t * q1g[GROUP];
             __m128i acc[GROUP];
-            __m128i corr = _mm_setzero_si128(); // -BIAS * sum_s scales_s * bsums_s, 1 lane per col (vanishes via constexpr)
             __m128i s2 = _mm_setzero_si128();   // sum_s mins_s * bsums_s
             for (int t = 0; t < GROUP; t++) {
                 q1g[t] = &src1.q[(j0 + g + t) * qk_stride + qk_off];
@@ -437,21 +447,24 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
 
             for (int s = 0; s < NB; s++) {
                 const __m128i scales16 = _mm_set1_epi16(scales_row[s]);
-                __m128i bsums_v = _mm_setzero_si128(); // per-col bsums as a 4-lane i32 vector
+                if constexpr (HAS_MIN) {
+                    __m128i bsums_v = _mm_setzero_si128(); // per-col bsums as a 4-lane i32 vector
+                    for (int u = 0; u < NS; u++) {
+                        bsums_v = _mm_add_epi32(bsums_v, _mm_loadu_si128(
+                            (const __m128i *) &src1.bsums[(bs_off + s * NS + u) * bs_stride + j0 + g]));
+                    }
+                    s2 = _mm_add_epi32(s2, _mm_mullo_epi32(bsums_v, _mm_set1_epi32(mins_row[s])));
+                }
                 for (int u = 0; u < NS; u++) {
                     const __m128i a16 = _mm_loadu_si128((const __m128i *) &q0[s * SUBBLK + u * 16]);
-                    bsums_v = _mm_add_epi32(bsums_v, _mm_loadu_si128(
-                        (const __m128i *) &src1.bsums[(bs_off + s * NS + u) * bs_stride + j0 + g]));
                     if constexpr (BIAS != 0) {
-                        // biased codes overflow the maddubs i16 pairs, split into 4-bit halves
-                        const __m128i a16a = _mm_and_si128(a16, _mm_set1_epi8(0x0F));
-                        const __m128i a16b = _mm_and_si128(_mm_srli_epi16(a16, 4), _mm_set1_epi8(0x0F)); // srli is per 16-bit lane, mask out the neighbor bleed
-                        const __m128i scales16b = _mm_set1_epi16(16 * scales_row[s]);
+                        // debiased weight w = a16 - BIAS; signed dot via the sign trick (see header)
+                        const __m128i a16s = _mm_sub_epi8(a16, _mm_set1_epi8((int8_t) BIAS));
+                        const __m128i ax    = _mm_sign_epi8(a16s, a16s);
                         for (int t = 0; t < GROUP; t++) {
                             const __m128i q1_16 = _mm_loadu_si128((const __m128i *) &q1g[t][s * SUBBLK + u * 16]);
-                            acc[t] = _mm_add_epi32(acc[t], _mm_add_epi32(
-                                _mm_madd_epi16(scales16, _mm_maddubs_epi16(a16a, q1_16)),
-                                _mm_madd_epi16(scales16b, _mm_maddubs_epi16(a16b, q1_16))));
+                            acc[t] = _mm_add_epi32(acc[t],
+                                _mm_madd_epi16(scales16, _mm_maddubs_epi16(ax, _mm_sign_epi8(q1_16, a16s))));
                         }
                     } else {
                         for (int t = 0; t < GROUP; t++) {
@@ -461,30 +474,20 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
                         }
                     }
                 }
-                if constexpr (BIAS != 0) {
-                    corr = _mm_sub_epi32(corr, _mm_mullo_epi32(bsums_v, _mm_set1_epi32(BIAS * scales_row[s])));
-                }
-                if constexpr (HAS_MIN) {
-                    s2 = _mm_add_epi32(s2, _mm_mullo_epi32(bsums_v, _mm_set1_epi32(mins_row[s])));
-                }
             }
 
-            int32_t corr_s[GROUP] = { 0, 0, 0, 0 };
             int32_t s2_s[GROUP] = { 0, 0, 0, 0 };
-            if constexpr (BIAS != 0) {
-                _mm_storeu_si128((__m128i *) corr_s, corr);
-            }
             if constexpr (HAS_MIN) {
                 _mm_storeu_si128((__m128i *) s2_s, s2);
             }
 
             for (int t = 0; t < GROUP; t++) {
-                // 4 i32 lanes -> scalar (the per-pair dot, pre-correction)
+                // 4 i32 lanes -> scalar
                 __m128i v = _mm_shuffle_epi32(acc[t], _MM_SHUFFLE(2, 3, 0, 1));
                 acc[t] = _mm_add_epi32(acc[t], v);
                 v = _mm_shuffle_epi32(acc[t], _MM_SHUFFLE(1, 0, 3, 2));
                 acc[t] = _mm_add_epi32(acc[t], v);
-                const int32_t s1 = _mm_cvtsi128_si32(acc[t]) + corr_s[t];
+                const int32_t s1 = _mm_cvtsi128_si32(acc[t]);
 
                 float res = d0 * (float) s1;
                 if constexpr (HAS_MIN) {
@@ -504,7 +507,7 @@ static void tiled_run_microtile_avx(const tiled_tile_src0 & src0, const tiled_ti
 // num_k==1 dispatches to the NK=1 instantiation, whose strides/offsets are compile-time
 // constants (shifts/scaled-leas). num_k>1 (the narrow path) uses the NK=0 runtime-strided
 // version; it is memory-bound, so one version serves all of it.
-template <int SUBBLK, bool HAS_MIN, int BIAS>
+template <int SUBBLK, bool HAS_MIN, int BIAS, bool ACTBIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride) {
     const bool standard = (num_k == 1);
@@ -516,9 +519,9 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
     }
 #elif defined(__AVX2__)
     if (standard) {
-        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 1>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 1, ACTBIAS>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     } else {
-        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 0>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
+        tiled_run_microtile_avx2<SUBBLK, HAS_MIN, BIAS, 0, ACTBIAS>(src0, src1, i0, j0, num_k, slab, buf, buf_stride);
     }
 #elif defined(__AVX__)
     if (standard) {
@@ -536,18 +539,27 @@ void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & s
 }
 
 // explicit instantiations for the in-use formats (q4_K and q5_K share the constants)
-template void tiled_run_microtile<32, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// ACTBIAS selects the act-bias MAC (Wmax <= 64); iq4_xs (Wmax 127) keeps the sign trick
+// q4_K / q5_K: BIAS = 0
+ template void tiled_run_microtile<32, true, 0, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
-// iq4_xs and the other iq types: LUT-expanded codes, BIAS = 128
-template void tiled_run_microtile<32, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// iq4_xs: sign trick (Wmax 127 overflows act-bias)
+template void tiled_run_microtile<32, false, 128, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                   int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
-template void tiled_run_microtile<16, false, 128>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// iq2_xxs, iq3_xxs, iq3_s, iq1_s: act-bias (Wmax <= 62)
+template void tiled_run_microtile<32, false, 128, true>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                   int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
-template void tiled_run_microtile<16, false, 32>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// iq2_xs, iq2_s, iq1_m: act-bias
+template void tiled_run_microtile<16, false, 128, true>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+                                                  int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
+// q6_K: act-bias (Wmax 32)
+template void tiled_run_microtile<16, false, 32, true>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                  int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
-template void tiled_run_microtile<16, false, 4>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// q3_K: act-bias (Wmax 4)
+template void tiled_run_microtile<16, false, 4, true>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                 int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
-template void tiled_run_microtile<16, true, 0>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
+// q2_K: BIAS = 0
+template void tiled_run_microtile<16, true, 0, false>(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                                                int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
 
@@ -562,7 +574,11 @@ static_assert(sizeof(block_q8_K) == 292 && offsetof(block_q8_K, qs) == 4,
 // n_tiles 16x16 int32 tiles are transposed to the right (tile t occupies bytes
 // [t*64, t*64+64) per row). Each 16-row group is self-contained in row_stride*16 bytes.
 #if defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__)
-void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride) {
+void tiled_repack_src1(tiled_tile_src1 * src1, int row0, int num_k, bool bias) {
+    GGML_UNUSED(bias);
+    const int n_tiles = num_k * (TILED_TILE_K / (TILED_MICRO * 4));
+    const int row_stride = num_k * TILED_TILE_K;
+    uint8_t * base = (uint8_t *) src1->q + row0 * row_stride;
     for (int t = 0; t < n_tiles; t++) {
         uint8_t * cbase = base + t * (TILED_MICRO * 4);
         __m512i v[16];
@@ -624,10 +640,80 @@ void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride) {
         }
     }
 }
+#elif defined(__AVX2__)
+// act-bias: pre-bias the activation in place (+128) so the MAC's maddubs(q1b, w) sees unsigned bytes;
+// no transpose on AVX2 (natural layout). 16 rows x n_tiles*64 bytes, row r at base + r*row_stride
+void tiled_repack_src1(tiled_tile_src1 * src1, int row0, int num_k, bool bias) {
+    if (!bias) {
+        return;
+    }
+    const int row_stride = num_k * TILED_TILE_K;
+    uint8_t * base = (uint8_t *) src1->q + row0 * row_stride;
+    const int nbytes = row_stride; // full row width
+    const __m256i b128 = _mm256_set1_epi8((int8_t) 0x80);
+    for (int r = 0; r < TILED_MICRO; r++) {
+        uint8_t * row = base + r * row_stride;
+        for (int off = 0; off < nbytes; off += 32) {
+            const __m256i v = _mm256_loadu_si256((const __m256i *) (row + off));
+            _mm256_storeu_si256((__m256i *) (row + off), _mm256_xor_si256(v, b128));
+        }
+    }
+}
 #else
-void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride) {
-    GGML_UNUSED(base); GGML_UNUSED(n_tiles); GGML_UNUSED(row_stride);
+void tiled_repack_src1(tiled_tile_src1 * src1, int row0, int num_k, bool bias) {
+    GGML_UNUSED(src1); GGML_UNUSED(row0); GGML_UNUSED(num_k); GGML_UNUSED(bias);
 }
 #endif
+
+#if defined(__AVX2__)
+// sum 32 unsigned bytes to int32 (via maddubs -> int16 pairs -> hsum)
+static int32_t tiled_byte_sum_32(const uint8_t * p) {
+    const __m256i dot = _mm256_maddubs_epi16(_mm256_loadu_si256((const __m256i *) p), _mm256_set1_epi8(1));
+    const __m256i sum = _mm256_madd_epi16(_mm256_set1_epi16(1), dot); // 8 int32
+    // reduce 8 lanes: lo+hi -> 4 lanes, hadd -> 2, hadd -> 1 (a single hadd pair only folds 4 lanes)
+    const __m128i t = _mm_add_epi32(_mm256_castsi256_si128(sum), _mm256_extracti128_si256(sum, 1));
+    const __m128i h = _mm_hadd_epi32(t, t);
+    return _mm_cvtsi128_si32(_mm_hadd_epi32(h, h));
+}
+// sum 16 unsigned bytes to int32
+static int32_t tiled_byte_sum_16(const uint8_t * p) {
+    const __m128i dot = _mm_maddubs_epi16(_mm_loadu_si128((const __m128i *) p), _mm_set1_epi8(1));
+    const __m128i sum = _mm_madd_epi16(_mm_set1_epi16(1), dot); // 4 int32
+    const __m128i h = _mm_hadd_epi32(sum, sum);
+    return _mm_cvtsi128_si32(_mm_hadd_epi32(h, h));
+}
+#endif
+
+// act-bias: precompute the per-weight-row correction corr = 128*sum_s scales[s]*w_bsum[s] where
+// w_bsum[s] = sum of the debiased weight bytes in subblock s. Stored in mins[r][0] (unused for
+// HAS_MIN = false, which is exactly the act-bias case). Reused across all act bands and weight groups.
+// No-op off AVX2 (the act-bias MAC is AVX2-only) and when corr is false (iq4_xs / BIAS = 0).
+template <int SUBBLK>
+void tiled_repack_src0(tiled_tile_src0 * tile, int n_rows, int num_k, int BIAS, bool corr) {
+#if defined(__AVX2__)
+    if (!corr) {
+        return;
+    }
+    constexpr int NB = TILED_TILE_K / SUBBLK;
+    const int nb_stride = NB * num_k;
+    for (int slab = 0; slab < num_k; slab++) {
+        for (int r = 0; r < n_rows; r++) {
+            const uint8_t * q = &tile->q[r * (num_k * TILED_TILE_K) + slab * TILED_TILE_K];
+            const int32_t * scales = &tile->scales[r * nb_stride + slab * NB];
+            int32_t corr_val = 0;
+            for (int s = 0; s < NB; s++) {
+                const int32_t qsum = (SUBBLK == 32) ? tiled_byte_sum_32(&q[s * SUBBLK]) : tiled_byte_sum_16(&q[s * SUBBLK]);
+                corr_val += 128 * scales[s] * (qsum - SUBBLK * BIAS);
+            }
+            tile->mins[r * nb_stride + slab * NB] = corr_val;
+        }
+    }
+#else
+    GGML_UNUSED(tile); GGML_UNUSED(n_rows); GGML_UNUSED(num_k); GGML_UNUSED(BIAS); GGML_UNUSED(corr);
+#endif
+}
+
+template void tiled_repack_src0<16>(tiled_tile_src0 * tile, int n_rows, int num_k, int BIAS, bool corr);
+template void tiled_repack_src0<32>(tiled_tile_src0 * tile, int n_rows, int num_k, int BIAS, bool corr);
 
 
