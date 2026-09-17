@@ -7,6 +7,7 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+constant bool FC_mul_mm_id_amax [[function_constant(FC_MUL_MM + 6)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -584,8 +585,8 @@ kernel void kernel_mul_mm_id(
     const short lb1 = (short) tiitg/NL1; // 0 .. NR1-1, this thread's row of the B tile
 
     // power-of-two rescaling
-    const float s1_inv   = ((device const float *) amax)[0];
-    const float s1_scale = ((device const float *) amax)[1];
+    const float s1_inv   = FC_mul_mm_id_amax ? ((device const float *) amax)[0] : 1.0f;
+    const float s1_scale = FC_mul_mm_id_amax ? ((device const float *) amax)[1] : 1.0f;
 
 #ifndef GGML_METAL_HAS_TENSOR
     S0_8x8 ma[4];
