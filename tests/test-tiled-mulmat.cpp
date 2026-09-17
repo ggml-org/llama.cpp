@@ -366,6 +366,193 @@ static double time_graph_compute_best(ggml_backend_t backend, struct ggml_cgraph
     return best;
 }
 
+// Single-path bench in an isolated process. Re-exec'd by bench_run_child: the tiled gate is
+// process-static (it reads GGML_CPU_TILED_MM once), so std and iqp (both need the tiled
+// switch off) cannot share a process with the in-process tiled column. The child sets the
+// path env before any op, times one path (best of n_reps, L3 flushed, use_ref=false), then
+// reports max_err/rmse vs the stock vec_dot reference (use_ref). Prints one parsable line.
+//   argv: <op> <path> <type> <n_reps> <d0> <d1> <d2> <d3> <d4> <d5>
+//   dense dims: M N K (rest ignored);  mmid dims: K R E k b_slots batch
+static int bench_run_single(int argc, char ** argv) {
+    if (argc < 10) {
+        fprintf(stderr, "bench_run_single: expected op path type n_reps d0..d5\n");
+        return 1;
+    }
+    const char * op   = argv[0];
+    const char * path = argv[1];
+    const int type    = atoi(argv[2]);
+    const int nreps   = atoi(argv[3]);
+    const int64_t d0 = atoll(argv[4]), d1 = atoll(argv[5]), d2 = atoll(argv[6]);
+    const int64_t d3 = atoll(argv[7]), d4 = atoll(argv[8]), d5 = atoll(argv[9]);
+
+    // pick the path via env; the gates read these once, at first op (fresh child process)
+    if (!strcmp(path, "iqp")) {
+        setenv("GGML_CPU_TILED_MM", "0", 1); setenv("GGML_CPU_TILED_MM_FORCE", "0", 1);
+        setenv("GGML_CPU_MM_PATH", "iqp", 1);
+    } else if (!strcmp(path, "tiled")) {
+        setenv("GGML_CPU_TILED_MM", "1", 1); setenv("GGML_CPU_TILED_MM_FORCE", "1", 1);
+        setenv("GGML_CPU_MM_PATH", "tiled", 1);
+    } else { // std: the default optimized GEMM (tiled off, iqp off)
+        setenv("GGML_CPU_TILED_MM", "0", 1); setenv("GGML_CPU_TILED_MM_FORCE", "0", 1);
+        setenv("GGML_CPU_MM_PATH", "tiled", 1);
+    }
+
+    ggml_backend_load_all();
+    ggml_backend_t backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+    if (!backend) {
+        fprintf(stderr, "bench_run_single: no CPU backend\n");
+        return 1;
+    }
+    cpu_set_n_threads(backend, 8);
+
+    struct ggml_init_params ip = { 1024*1024*1024, nullptr, true };
+    struct ggml_context * ctx = ggml_init(ip);
+
+    struct ggml_tensor * src0, * src1, * ids_t = NULL, * dst;
+    struct ggml_cgraph * gf;
+    int64_t n_out;
+    if (!strcmp(op, "dense")) {
+        const int64_t M = d0, N = d1, K = d2;
+        src1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, N, M);
+        src0 = ggml_new_tensor_2d(ctx, (ggml_type) type, N, K);
+        gf = ggml_new_graph(ctx);
+        dst = ggml_mul_mat(ctx, src0, src1);
+        ggml_build_forward_expand(gf, dst);
+        n_out = M * K;
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        (void) buf;
+        srand(0xBEEF);
+        float * s1 = gen_rand_f32(M * N);
+        float * s0 = gen_rand_f32(N * K);
+        fill_tensor(src1, s1, M, N, GGML_TYPE_F32);
+        fill_tensor(src0, s0, K, N, (ggml_type) type);
+        free(s1); free(s0);
+    } else { // mmid
+        const int64_t K = d0, R = d1, E = d2, k = d3, b_slots = d4, batch = d5;
+        int64_t ne_as[4]  = { K, R, E, 1 };
+        int64_t ne_b[4]   = { K, b_slots, batch, 1 };
+        int64_t ne_ids[4] = { k, batch, 1, 1 };
+        src0  = ggml_new_tensor(ctx, (ggml_type) type, 4, ne_as);
+        src1  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b);
+        ids_t = ggml_new_tensor(ctx, GGML_TYPE_I32, 4, ne_ids);
+        gf = ggml_new_graph(ctx);
+        dst = ggml_mul_mat_id(ctx, src0, src1, ids_t);
+        ggml_build_forward_expand(gf, dst);
+        n_out = R * k * batch;
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+        (void) buf;
+        int32_t * ids = (int32_t *) malloc(k * batch * sizeof(int32_t));
+        for (int64_t t = 0; t < batch; t++)
+            for (int64_t e = 0; e < k; e++)
+                ids[t * k + e] = (int32_t) ((t * k + e) % E);
+        srand(0xBEEF);
+        float * b_data  = gen_rand_f32(K * b_slots * batch);
+        float * as_data = gen_rand_f32(K * R * E);
+        fill_tensor(src1, b_data, b_slots * batch, K, GGML_TYPE_F32);
+        fill_tensor(src0, as_data, R * E, K, (ggml_type) type);
+        ggml_backend_tensor_set(ids_t, ids, 0, ggml_nbytes(ids_t));
+        free(b_data); free(as_data); free(ids);
+    }
+
+    // time the selected path (best of n_reps, L3 flushed); all three paths use use_ref=false
+    const size_t flush_size = 256 * 1024 * 1024;
+    void * flush_buf = malloc(flush_size);
+    cpu_set_use_ref(backend, false);
+    const double t = time_graph_compute_best(backend, gf, nreps, flush_buf, flush_size);
+    free(flush_buf);
+
+    // path output vs the stock reference (use_ref) -> max_err/rmse
+    float * out = (float *) malloc(n_out * sizeof(float));
+    float * ref = (float *) malloc(n_out * sizeof(float));
+    cpu_set_use_ref(backend, false);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, out, 0, ggml_nbytes(dst));
+    cpu_set_use_ref(backend, true);
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_tensor_get(dst, ref, 0, ggml_nbytes(dst));
+    float maxerr, rmse;
+    compare_f32(ref, out, n_out, &maxerr, &rmse);
+
+    const double flops = !strcmp(op, "dense") ? 2.0 * d0 * d1 * d2 : 2.0 * (double) d0 * d1 * d3 * d5;
+    printf("BENCH1 %s %s time=%.6f tflops=%.3f maxerr=%.5e rmse=%.5e\n",
+           op, path, t, flops / (t * 1e12), maxerr, rmse);
+    fflush(stdout);
+
+    free(out); free(ref);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+    return 0;
+}
+
+// Parent-side helper: re-exec this binary in single-path mode (bench_run_single) with the
+// given path env, and parse its result. Returns false if the spawn or parse fails.
+static bool bench_run_child(const char * op, const char * path, int type, int nreps,
+                            int64_t d0, int64_t d1, int64_t d2, int64_t d3, int64_t d4, int64_t d5,
+                            double * out_time, float * out_maxerr, float * out_rmse) {
+#if defined(_WIN32)
+    (void) op; (void) path; (void) type; (void) nreps;
+    (void) d0; (void) d1; (void) d2; (void) d3; (void) d4; (void) d5;
+    (void) out_time; (void) out_maxerr; (void) out_rmse;
+    return false; // re-exec not wired up on Windows
+#else
+    char exe[4096];
+    ssize_t l = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (l < 0) return false;
+    exe[l] = 0;
+
+    int pfd[2];
+    if (pipe(pfd) != 0) return false;
+
+    pid_t pid = fork();
+    if (pid < 0) { close(pfd[0]); close(pfd[1]); return false; }
+    if (pid == 0) {
+        dup2(pfd[1], 1);
+        close(pfd[0]); close(pfd[1]);
+        char a_type[32], a_reps[32], a0[32], a1[32], a2[32], a3[32], a4[32], a5[32];
+        snprintf(a_type, sizeof(a_type), "%d", type);
+        snprintf(a_reps, sizeof(a_reps), "%d", nreps);
+        snprintf(a0, sizeof(a0), "%lld", (long long) d0);
+        snprintf(a1, sizeof(a1), "%lld", (long long) d1);
+        snprintf(a2, sizeof(a2), "%lld", (long long) d2);
+        snprintf(a3, sizeof(a3), "%lld", (long long) d3);
+        snprintf(a4, sizeof(a4), "%lld", (long long) d4);
+        snprintf(a5, sizeof(a5), "%lld", (long long) d5);
+        char bench1_arg[] = "--bench1";
+        char op_c[32], path_c[32];
+        snprintf(op_c, sizeof(op_c), "%s", op);
+        snprintf(path_c, sizeof(path_c), "%s", path);
+        char * const argv[] = { exe, bench1_arg, op_c, path_c, a_type, a_reps, a0, a1, a2, a3, a4, a5, NULL };
+        execv(exe, argv);
+        _exit(127);
+    }
+
+    close(pfd[1]);
+    char buf[2048] = {0};
+    size_t off = 0;
+    ssize_t r;
+    while (off < sizeof(buf) - 1 && (r = read(pfd[0], buf + off, sizeof(buf) - 1 - off)) > 0) {
+        off += (size_t) r;
+    }
+    close(pfd[0]);
+    int status;
+    waitpid(pid, &status, 0);
+    buf[off] = 0;
+
+    char * line = strstr(buf, "BENCH1 ");
+    if (!line) return false;
+    double time_s;
+    float maxerr, rmse;
+    if (sscanf(line, "BENCH1 %*s %*s time=%lf tflops=%*f maxerr=%e rmse=%e",
+               &time_s, &maxerr, &rmse) != 3) {
+        return false;
+    }
+    *out_time = time_s;
+    *out_maxerr = maxerr;
+    *out_rmse = rmse;
+    return true;
+#endif
+}
+
 // Fetch the repack extra buffer type through the public proc-address API
 static ggml_backend_buffer_type_t get_cpu_repack_buft(void) {
     ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -860,6 +1047,13 @@ static void print_mmid_ab_table(int64_t K, int64_t R, int64_t n_experts, int64_t
 }
 
 int main(int argc, char ** argv) {
+    // isolated single-path child: re-exec'd by --bench (see bench_run_child) to measure the
+    // std and iqp paths with the tiled switch off -- the tiled gate is process-static, so
+    // the tiled-off paths need their own process. Runs before the tiled env is set below.
+    if (argc > 1 && !strcmp(argv[1], "--bench1")) {
+        return bench_run_single(argc - 2, argv + 2);
+    }
+
     bool run_bench = false;
     bool run_fuzz = false;
     for (int i = 1; i < argc; ++i) {
