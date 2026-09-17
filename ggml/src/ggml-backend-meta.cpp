@@ -2464,16 +2464,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     return GGML_STATUS_SUCCESS;
 }
 
-static void ggml_backend_meta_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph, struct ggml_backend_graph_optimize_params * params) {
-    ggml_backend_meta_context * ctx = (ggml_backend_meta_context *) backend->context;
-
-    for (auto & bc : ctx->backend_configs) {
-        if (bc.backend->iface.graph_optimize) {
-            bc.backend->iface.graph_optimize(bc.backend, cgraph, params);
-        }
-    }
-}
-
 static const ggml_backend_i ggml_backend_meta_i = {
     /* .get_name                = */ ggml_backend_meta_get_name,
     /* .free                    = */ ggml_backend_meta_free,
@@ -2490,7 +2480,7 @@ static const ggml_backend_i ggml_backend_meta_i = {
     /* .graph_compute           = */ ggml_backend_meta_graph_compute,
     /* .event_record            = */ nullptr,
     /* .event_wait              = */ nullptr,
-    /* .graph_optimize          = */ ggml_backend_meta_graph_optimize,
+    /* .graph_optimize          = */ nullptr,
 };
 
 bool ggml_backend_is_meta(ggml_backend_t backend) {
