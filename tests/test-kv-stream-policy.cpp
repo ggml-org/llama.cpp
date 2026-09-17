@@ -466,7 +466,7 @@ int main() {
         if (!t.assert_true(llama_kv_stream_policy_layout_make(
                 current, before.next, 8*256, old_layout).status == status::success)) return;
 
-        llama_kv_stream_policy_growth growth;
+        llama_kv_stream_policy_rebind growth;
         const auto larger = config(64, 4).pool_bytes;
         if (!t.assert_true(llama_kv_stream_policy_grow(
                 current, 8*256, true, larger, growth).status == status::success)) return;
@@ -492,6 +492,40 @@ int main() {
         t.assert_equal(unchanged.config.pool_bytes, growth.config.pool_bytes);
         t.assert_equal(unchanged.state.budget.pages, growth.state.budget.pages);
         t.assert_equal(unchanged.layout.conversion_offset, growth.layout.conversion_offset);
+    });
+
+    t.test("shrink_replans_minimum_pool_with_streamed_layers", [](testing & t) {
+        auto current = config(64,4);
+        llama_kv_stream_policy_state initial;
+        if (!start(t,current,initial)) return;
+        llama_kv_stream_policy_decision before;
+        if (!t.assert_true(llama_kv_stream_policy_step(
+                current,initial,observe(8),before).status == status::success)) return;
+        llama_kv_stream_policy_layout old_layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                current,before.next,8*256,old_layout).status == status::success)) return;
+
+        llama_kv_stream_policy_rebind shrink;
+        const auto minimum=config(5,4).pool_bytes;
+        if (!t.assert_true(llama_kv_stream_policy_shrink(
+                current,8*256,true,minimum,shrink).status == status::success)) return;
+        t.assert_equal(minimum,shrink.config.pool_bytes);
+        t.assert_equal(uint32_t(5),shrink.state.budget.pages);
+        t.assert_equal(uint32_t(0),shrink.state.resident_pages_per_layer);
+        t.assert_equal(uint32_t(5),shrink.state.ring_slots);
+        t.assert_equal(uint32_t(8),shrink.state.decode_active_pages);
+        t.assert_true(shrink.layout.conversion_offset<old_layout.conversion_offset);
+        for (const auto & layer:shrink.layout.layers) {
+            t.assert_equal(uint32_t(0),layer.capacity_pages);
+            t.assert_equal(uint32_t(8),layer.streamed_pages);
+            t.assert_equal(uint32_t(2),layer.waves);
+        }
+
+        const auto unchanged=shrink;
+        t.assert_true(llama_kv_stream_policy_shrink(
+            current,8*256,true,current.pool_bytes,shrink).status == status::invalid_budget);
+        t.assert_equal(unchanged.config.pool_bytes,shrink.config.pool_bytes);
+        t.assert_equal(unchanged.state.ring_slots,shrink.state.ring_slots);
     });
     return t.summary();
 }

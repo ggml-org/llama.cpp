@@ -230,12 +230,12 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     return {};
 }
 
-
-llama_kv_stream_policy_result llama_kv_stream_policy_grow(
+static llama_kv_stream_policy_result resize_plan(
         const llama_kv_stream_policy_config & current, size_t active_tokens,
-        bool decode, size_t pool_bytes, llama_kv_stream_policy_growth & output) {
-    if (pool_bytes <= current.pool_bytes) return {status::invalid_budget, {}};
-    llama_kv_stream_policy_growth next;
+        bool decode, size_t pool_bytes, bool growing, llama_kv_stream_policy_rebind & output) {
+    if ((growing && pool_bytes <= current.pool_bytes) ||
+            (!growing && pool_bytes >= current.pool_bytes)) return {status::invalid_budget, {}};
+    llama_kv_stream_policy_rebind next;
     next.config = current;
     next.config.pool_bytes = pool_bytes;
     auto result = llama_kv_stream_policy_initialize(next.config,next.state);
@@ -250,6 +250,18 @@ llama_kv_stream_policy_result llama_kv_stream_policy_grow(
     if (result.status != status::success) return result;
     output = std::move(next);
     return {};
+}
+
+llama_kv_stream_policy_result llama_kv_stream_policy_grow(
+        const llama_kv_stream_policy_config & current, size_t active_tokens,
+        bool decode, size_t pool_bytes, llama_kv_stream_policy_rebind & output) {
+    return resize_plan(current,active_tokens,decode,pool_bytes,true,output);
+}
+
+llama_kv_stream_policy_result llama_kv_stream_policy_shrink(
+        const llama_kv_stream_policy_config & current, size_t active_tokens,
+        bool decode, size_t pool_bytes, llama_kv_stream_policy_rebind & output) {
+    return resize_plan(current,active_tokens,decode,pool_bytes,false,output);
 }
 
 // Ring first, then compact per-layer planes, then aligned conversion scratch; only the final tail is unused.

@@ -209,5 +209,64 @@ int main(int argc, char ** argv) {
         session.reset();
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(grown.arena.get()));
     });
+
+    if (cuda) t.test("external_shrink_drains_old_work_and_preserves_cache", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
+        block_workspace writer(f,32768,19),partial(f,f.host->layout().bytes,29);
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,{f.policy,256,4,false,true,false},
+            f.lease.get(),writer.lease.get(),partial.lease.get());
+        if (!t.assert_true(bool(session))||!t.assert_true(session->restore(513))) return;
+        const auto old_view=session->binding_view();
+        const auto old_revision=session->layout_revision();
+        const auto content_generation=f.content->generation();
+        const auto mirror_epoch=f.content->mirror_epoch();
+
+        ggml_kv_stream_layout page;ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        ggml_kv_stream_execution execution;ggml_kv_stream_resolve(f.policy.shape,f.policy.capabilities,256,execution);
+        const size_t minimum=(f.policy.layers+1)*page.bytes+execution.conversion.bytes;
+        block_workspace shrunk(f,minimum,51);
+
+        ggml_context_ptr pending_ctx(ggml_init({4096,nullptr,true}));
+        auto * pending_tensor=ggml_new_tensor_1d(pending_ctx.get(),GGML_TYPE_F32,64);
+        if (!t.assert_true(ggml_backend_tensor_alloc(
+                old_view.buffer,pending_tensor,old_view.base)==GGML_STATUS_SUCCESS)) return;
+        std::vector<float> expected(64),copied(64);
+        for (size_t i=0;i<expected.size();++i) expected[i]=float(i)+.5f;
+        ggml_backend_tensor_set_async(backend.get(),pending_tensor,expected.data(),0,expected.size()*sizeof(float));
+        ggml_backend_tensor_get_async(backend.get(),pending_tensor,copied.data(),0,copied.size()*sizeof(float));
+
+        t.assert_true(!session->shrink_pool(shrunk.lease.get(),f.policy.pool_bytes,true));
+        t.assert_equal(old_revision,session->layout_revision());
+        f.lease.reset();
+        if (!t.assert_true(session->shrink_pool(shrunk.lease.get(),minimum,true))) return;
+        const auto new_view=session->binding_view();
+        t.assert_true(copied==expected);
+        t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(f.arena.get()));
+        t.assert_equal(old_revision+1,session->layout_revision());
+        t.assert_equal(old_view.revision+1,new_view.revision);
+        t.assert_true(old_view.base!=new_view.base);
+        t.assert_equal(minimum,new_view.capacity);
+        t.assert_equal(uint32_t(5),session->policy().budget.pages);
+        t.assert_equal(uint32_t(0),session->policy().resident_pages_per_layer);
+        t.assert_equal(content_generation,f.content->generation());
+        t.assert_equal(mirror_epoch,f.content->mirror_epoch());
+        const auto publication=session->publication_frontiers();
+        t.assert_equal(size_t(513),publication.reserved);
+        t.assert_equal(size_t(513),publication.device);
+        t.assert_equal(size_t(513),publication.host);
+        t.assert_equal(size_t(513),publication.committed);
+
+        session_inputs input(backend.get(),1);block_inputs attn(f,514,1);
+        if (!t.assert_true(session->begin(514,1,true))) return;
+        t.assert_true(f.content->mirror_epoch()>mirror_epoch);
+        for (uint32_t layer=0;layer<4;++layer) {
+            if (!t.assert_true(session->produce(layer,input.k,input.v))||
+                    !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
+            close_values(t,oracle(f,layer,514,1,attn.qdata),attn.read(),1e-3f);
+        }
+        t.assert_equal(size_t(514),session->tokens());
+        shrunk.lease.reset();session.reset();
+        t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(shrunk.arena.get()));
+    });
     return t.summary();
 }

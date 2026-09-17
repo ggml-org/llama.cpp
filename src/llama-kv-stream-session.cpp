@@ -328,10 +328,21 @@ uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl
 
 bool llama_kv_stream_session::grow_pool(
         ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
+    return rebind_pool(pool,pool_bytes,decode,true);
+}
+
+bool llama_kv_stream_session::shrink_pool(
+        ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
+    return rebind_pool(pool,pool_bytes,decode,false);
+}
+
+bool llama_kv_stream_session::rebind_pool(
+        ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode, bool growing) {
     auto & s = *impl;
     if (s.busy || s.running || s.poisoned || !s.publications || s.publications->failed() ||
             !pool || s.publication.pending() || s.content->generation() != s.expected_generation ||
-            pool_bytes <= s.config.policy.pool_bytes) return false;
+            (growing ? pool_bytes <= s.config.policy.pool_bytes :
+                       pool_bytes >= s.config.policy.pool_bytes)) return false;
     const auto frontiers = s.publications->frontiers();
     if (frontiers.reserved != s.committed || frontiers.device != s.committed ||
             frontiers.host != s.committed || frontiers.committed != s.committed) return false;
@@ -357,13 +368,16 @@ bool llama_kv_stream_session::grow_pool(
         if (!address || address > UINTPTR_MAX-other.size || region.id == other.id ||
                 (base < address+other.size && address < base+region.size)) return false;
     }
-    llama_kv_stream_policy_growth growth;
-    if (llama_kv_stream_policy_grow(
-            s.config.policy,s.committed,decode,pool_bytes,growth).status !=
-            llama_kv_stream_policy_status::success) return false;
+    llama_kv_stream_policy_rebind replacement;
+    const auto planned = growing ?
+        llama_kv_stream_policy_grow(
+            s.config.policy,s.committed,decode,pool_bytes,replacement) :
+        llama_kv_stream_policy_shrink(
+            s.config.policy,s.committed,decode,pool_bytes,replacement);
+    if (planned.status != llama_kv_stream_policy_status::success) return false;
     session_operation guard(s.busy);
     try {
-        return s.install(growth.state,growth.config,pool);
+        return s.install(replacement.state,replacement.config,pool);
     } catch (const std::bad_alloc &) {
         return false;
     }

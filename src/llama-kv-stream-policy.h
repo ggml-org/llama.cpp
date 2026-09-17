@@ -70,7 +70,7 @@ struct llama_kv_stream_policy_layout {
     size_t conversion_offset = 0, conversion_bytes = 0, unused_bytes = 0;
 };
 
-struct llama_kv_stream_policy_growth {
+struct llama_kv_stream_policy_rebind {
     llama_kv_stream_policy_config config;
     llama_kv_stream_policy_state state;
     llama_kv_stream_policy_layout layout;
@@ -92,7 +92,14 @@ llama_kv_stream_policy_result llama_kv_stream_policy_grow(
         size_t active_tokens,
         bool decode,
         size_t pool_bytes,
-        llama_kv_stream_policy_growth & output);
+        llama_kv_stream_policy_rebind & output);
+// Recompute a smaller pool at an existing committed frontier. Failure leaves output unchanged.
+llama_kv_stream_policy_result llama_kv_stream_policy_shrink(
+        const llama_kv_stream_policy_config & current,
+        size_t active_tokens,
+        bool decode,
+        size_t pool_bytes,
+        llama_kv_stream_policy_rebind & output);
 // All APIs are pure metadata calculations; failure leaves output unchanged. No allocation of KV/device storage.
 llama_kv_stream_policy_result llama_kv_stream_policy_initialize(
         const llama_kv_stream_policy_config & config, llama_kv_stream_policy_state & output);

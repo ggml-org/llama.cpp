@@ -31,8 +31,9 @@ public:
     size_t granted_bytes() const noexcept;
     uint64_t layout_revision() const noexcept;
 
-    // Grow into a disjoint caller-owned pool while idle. Host contents and token frontier remain authoritative.
+    // Resize into a disjoint caller-owned pool while idle. Host contents and token frontier remain authoritative.
     bool grow_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode);
+    bool shrink_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode);
     // Snapshot only; callers must not use it as a lifetime guard.
     llama_kv_stream_binding_view binding_view() const noexcept;
     const llama_kv_stream_policy_state & policy() const noexcept;
@@ -43,6 +44,7 @@ public:
     void release_graphs();
     size_t captured_layers() const;
 private:
+    bool rebind_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode, bool growing);
     llama_kv_stream_session();
     struct implementation;
     std::unique_ptr<implementation> impl;
