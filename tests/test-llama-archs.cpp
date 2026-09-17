@@ -425,11 +425,15 @@ static void set_row_order_tensor_data(ggml_tensor * tensor, void *) {
     }
 }
 
-static int test_layer_input_order(ggml_backend_dev_t device, bool flash_attn) {
+static int test_layer_input_order(const std::vector<ggml_backend_dev_t> & devices, bool flash_attn,
+        llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER) {
     auto gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
     auto mp = llama_model_default_params();
-    ggml_backend_dev_t devices[] = {device, nullptr};
-    mp.devices = devices;
+    const auto device = devices.front();
+    auto devs = devices;
+    devs.push_back(nullptr);
+    mp.devices = devs.data();
+    mp.split_mode = split_mode;
     mp.n_gpu_layers = ggml_backend_dev_type(device) == GGML_BACKEND_DEVICE_TYPE_CPU ? 0 : 99;
     llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_row_order_tensor_data, nullptr, mp));
     if (!model) {
@@ -463,34 +467,37 @@ static int test_layer_input_order(ggml_backend_dev_t device, bool flash_attn) {
                         const int pos = interleaved ? i / 2 : i % (n_tokens / 2);
                         common_batch_add(batch, i + 1, pos, {seq}, dense || pos == n_tokens / 2 - 1);
                     }
-                    const int result = llama_decode(ctx.get(), batch);
-                    llama_batch_free(batch);
-                    if (result != 0) {
-                        throw std::runtime_error("failed to decode row-order batch");
-                    }
-
                     int wrong_rows = 0;
-                    for (uint32_t layer : {0u, 1u}) {
-                        const float * values = llama_get_embeddings_layer_inp(ctx.get(), layer);
-                        bool reported = false;
-                        for (int i = 0; i < n_tokens; ++i) {
-                            for (int k = 0; k < n_embd; ++k) {
-                                if (values[i*n_embd + k] != float(i + 2)) {
-                                    if (!reported) {
-                                        printf("layer=%u row=%d: expected %g, got %g\n", layer, i, double(i + 2), double(values[i*n_embd + k]));
-                                        reported = true;
+                    for (int repeat = 0; repeat < 2; ++repeat) {
+                        llama_memory_clear(llama_get_memory(ctx.get()), true);
+                        if (llama_decode(ctx.get(), batch) != 0) {
+                            llama_batch_free(batch);
+                            throw std::runtime_error("failed to decode row-order batch");
+                        }
+                        for (uint32_t layer : {0u, 1u, 0u, 1u}) {
+                            const float * values = llama_get_embeddings_layer_inp(ctx.get(), layer);
+                            bool reported = false;
+                            for (int i = 0; i < n_tokens; ++i) {
+                                for (int k = 0; k < n_embd; ++k) {
+                                    if (values[i*n_embd + k] != float(i + 2)) {
+                                        if (!reported) {
+                                            printf("layer=%u row=%d: expected %g, got %g\n", layer, i, double(i + 2), double(values[i*n_embd + k]));
+                                            reported = true;
+                                        }
+                                        ++wrong_rows;
+                                        break;
                                     }
-                                    ++wrong_rows;
-                                    break;
                                 }
                             }
                         }
                     }
-                    printf("layer-input-order: device=%s, flash=%s, %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
-                            ggml_backend_dev_name(device), flash_attn ? "on" : "off",
+                    llama_batch_free(batch);
+                    printf("layer-input-order: device=%s, split=%s, flash=%s, %s, ubatch=%u, %s, %s: %d/%d wrong rows\n",
+                            ggml_backend_dev_name(device), split_mode == LLAMA_SPLIT_MODE_TENSOR ? "tensor" : "layer",
+                            flash_attn ? "on" : "off",
                             unified ? "unified" : "separate", n_ubatch,
                             interleaved ? "interleaved" : "grouped", dense ? "dense" : "sparse",
-                            wrong_rows, 2*n_tokens);
+                            wrong_rows, 8*n_tokens);
                     all_ok = all_ok && wrong_rows == 0;
                 }
             }
@@ -501,12 +508,19 @@ static int test_layer_input_order(ggml_backend_dev_t device, bool flash_attn) {
 
 static int test_layer_input_order() {
     bool all_ok = true;
+    std::vector<ggml_backend_dev_t> devices_meta;
     for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         auto device = ggml_backend_dev_get(i);
-        all_ok = test_layer_input_order(device, false) == 0 && all_ok;
+        all_ok = test_layer_input_order({device}, false) == 0 && all_ok;
         if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(device)), "CUDA") == 0) {
-            all_ok = test_layer_input_order(device, true) == 0 && all_ok;
+            all_ok = test_layer_input_order({device}, true) == 0 && all_ok;
         }
+        if (ggml_backend_dev_buffer_type(device) != ggml_backend_cpu_buffer_type()) {
+            devices_meta.push_back(device);
+        }
+    }
+    if (!devices_meta.empty()) {
+        all_ok = test_layer_input_order(devices_meta, true, LLAMA_SPLIT_MODE_TENSOR) == 0 && all_ok;
     }
     return all_ok ? 0 : 1;
 }
