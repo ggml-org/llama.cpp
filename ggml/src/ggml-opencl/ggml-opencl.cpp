@@ -738,9 +738,9 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_moe_combine_w;
     ggml_cl_buffer prealloc_splitk_partial;  // [ksplit * M] partials for split-K GEMV
 
-    // pool of persistent image1d_buffer views, keyed by
+    // pool of persistent image1d_buffer views over kv-cache layers, keyed by
     // (parent buffer, offset within parent)
-    // used by image dispatch paths to avoid per-call
+    // used by the img-variant KQ/KQV dispatch paths to avoid per-call
     // clCreateSubBuffer + clCreateImage + pending-release-queue on long-context decode
     struct ImagePoolKey {
         uintptr_t buf;
@@ -29794,7 +29794,7 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
     return out;
 }
 
-// look up or create a pooled image1d_buffer over a buffer view.
+// look up or create a pooled image1d_buffer over a KV-cache view.
 static cl_mem ggml_cl_img_pool_get_or_create(
     ggml_backend_opencl_context * backend_ctx,
     std::map<ggml_backend_opencl_context::ImagePoolKey,
