@@ -1869,7 +1869,16 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->debug_realloc = GGML_SCHED_DEBUG_REALLOC ? atoi(GGML_SCHED_DEBUG_REALLOC) : sched->debug_realloc;
 
     sched->n_backends = n_backends;
-    sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+
+    // n_copies: number of tensor copies for pipeline parallelism
+    // need n_copies >= n_gpu (n_backends - 1, since last backend is CPU)
+    // to allow each GPU to process its own copy independently
+    // but capped at GGML_SCHED_MAX_COPIES for memory safety
+    const int n_gpu = n_backends - 1;
+    sched->n_copies = parallel ? std::min(n_gpu, GGML_SCHED_MAX_COPIES) : 1;
+    if (sched->n_copies < 1) {
+        sched->n_copies = 1;
+    }
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
