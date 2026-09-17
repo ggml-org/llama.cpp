@@ -42,6 +42,20 @@ struct llama_compute_arena_binding {
     llama_compute_arena_ptr arena;
 };
 
+
+struct llama_compute_workspace_plan {
+    std::vector<ggml_backend_memory_workspace_group> groups;
+    // Phase-major sizes, with one entry per canonical buffer-type group.
+    std::vector<std::vector<size_t>> phase_sizes;
+};
+
+// Preserve each measured phase while retaining the maximum-sized canonical group metadata.
+// Failure leaves output unchanged.
+bool llama_compute_workspace_plan_make(
+        const std::vector<ggml_backend_buffer_type_t> & bufts,
+        const std::vector<size_t> & measurements,
+        size_t n_phases,
+        llama_compute_workspace_plan & output);
 // Attach arena-backed groups atomically and leave unsupported groups on scheduler allocation.
 bool llama_prepare_compute_arena_bindings(
         ggml_backend_sched_t sched,

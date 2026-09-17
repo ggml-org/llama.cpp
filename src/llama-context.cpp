@@ -651,34 +651,18 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
 
 bool llama_context::prepare_compute_arenas(
         const std::vector<size_t> & measurements, size_t n_phases) {
-    const size_t n_slots = backend_ptrs.size();
-    if (n_slots == 0 || n_phases == 0 ||
-            n_phases > std::numeric_limits<size_t>::max() / n_slots ||
-            measurements.size() != n_phases*n_slots) {
-        return false;
-    }
-
-    size_t n_groups = 0;
-    if (!ggml_backend_memory_plan_workspace_groups(
-            backend_buft.data(), measurements.data(), n_phases, n_slots, nullptr, &n_groups)) {
-        return false;
-    }
-
-    std::vector<ggml_backend_memory_workspace_group> groups(n_groups);
-    size_t groups_capacity = groups.size();
-    if (!ggml_backend_memory_plan_workspace_groups(
-            backend_buft.data(), measurements.data(), n_phases, n_slots,
-            groups.data(), &groups_capacity)) {
+    llama_compute_workspace_plan plan;
+    if (!llama_compute_workspace_plan_make(backend_buft, measurements, n_phases, plan)) {
         return false;
     }
 
     if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 && llama_context_memory::supported(backend_ptrs)) {
-        compute_memory = llama_context_memory::create(sched.get(), backend_ptrs, groups);
+        compute_memory = llama_context_memory::create(sched.get(), backend_ptrs, plan);
         return compute_memory != nullptr;
     }
 
     return llama_prepare_compute_arena_bindings(
-        sched.get(), backend_ptrs, groups, compute_arenas);
+        sched.get(), backend_ptrs, plan.groups, compute_arenas);
 }
 
 void llama_context::release_kv_workspaces(bool retiring) {

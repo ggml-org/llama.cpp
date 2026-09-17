@@ -6,9 +6,9 @@ Last source review: 2026-09-15, against the checkpoint commits below.
 
 ## Status and how to resume
 
-Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. The fixed-pool qualification identified synchronous producer publication as the first remaining optimization. It is planned as backend-neutral stage **5.6** below. Stage **5.7** is reserved for graph segmentation, stage **5.8** for strict prefill streaming, and stage **5.9** for final support and reproducibility documentation.
+Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, and **5.6e** at `d57288807`. Stage **5.6f** is implemented and qualified for user review: one backend-agnostic conformance executable validates native event-backed and synchronous-fallback publication across the available CPU, OpenCL, SYCL, Vulkan, and Meta paths.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is implemented and qualified for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -133,8 +133,8 @@ The split below preserves milestones 4-8 and all existing parent stage scopes. I
 | Milestone | Commit units | Main reason for subdivision |
 | --- | --- | --- |
 | 4 | 11 | Separate planning, asynchronous lifetimes, recovery, and the first real consumer. |
-| 5 | Original units plus named subdivisions and optimization stages 5.6-5.9 | Establish exact bounded streaming, server/cache integration, backend-neutral producer overlap, graph integration, and strict prefill optimization. |
-| 6 | 12 | Separate accounting, growth/shrink, failure handling, phase activation, and budget probing. |
+| 5 | Original units through 5.6f; stages 5.7-5.9 are non-gating follow-ups | Establish exact bounded streaming, server/cache integration, and backend-neutral producer overlap. |
+| 6 | 13 | Separate measurement, accounting, KV growth/shrink, fixed-parent integration, phase activation, recovery, and budget probing. |
 | 7 | 11 | Separate embedding lifetime, KV suspension, projector ownership/reload, and server wiring. |
 | 8 | 9, including conditional 8.2b | Separate real model adapters, capability coverage, and sustained lifecycle validation. |
 
@@ -156,10 +156,8 @@ These are planned review units, not a guarantee of final diff size or 65 mandato
 2. Through 5.4e: correct bounded block streaming and supported quant dispatch, without relying on asynchronous overlap.
 3. Through 5.4k: optimized copy/prefetch pipeline, wide micro-batches, feedback, and resident capture.
 4. Through 5.5c: real serial server/cache integration and fixed-pool reference-performance qualification.
-5. Through 5.6f: backend-neutral asynchronous K/V publication with qualified synchronous fallbacks and native adapters.
-6. Through 5.7: reduced graph segmentation without weakening execution-owner lifetimes.
-7. Through 5.8: bounded prefill streaming with acceptable numerical behavior and no full-layer gather.
-8. Through 5.9: supported-configuration and reproducibility documentation for the completed fixed-pool implementation.
+5. Through 5.6f: backend-neutral asynchronous K/V publication with qualified synchronous fallbacks and native adapters. This is the milestone 5 checkpoint.
+6. Stages 5.7-5.9 retain their identifiers as non-gating graph, strict-prefill, and documentation follow-ups after phase-sharing behavior is established.
 
 Do not enable phase-dependent grants before the fixed-pool gate passes. Do not attempt full vision eviction until text phase transitions and host/device KV separation are validated.
 
@@ -230,9 +228,9 @@ Outcome: fixed-budget adaptive streaming runs on milestone 3, independently of p
 | 5.6d | 5.6c | Connect asynchronous tickets to the writer/session with distinct device and host completions, deferred atomic K/V commit, and retained plan/source ownership across graph replacement. | Device attention can consume a completed pair while host publication remains pending; save/restore and host-driven repartition wait for host readiness; graph rebuild, retry, cancellation, and malformed completion remain closed. |
 | 5.6e | 5.6d | CUDA producer adapter: queue bounded SET_ROWS production, resident-tail publication, and direct pinned-host mirror writes; replace per-tile/per-layer drains with event dependencies. | Real CUDA delayed producer/consumer tests, mutable tail, resident/ring boundaries, multiple tiles/layers, cache save during pending D2H, capture invalidation, memcheck, unchanged logits/recurrent state, and matched performance points. |
 | 5.6f | 5.6e | Cross-backend conformance for the common protocol on CPU, SYCL, Vulkan, OpenCL, and Meta; use the synchronous fallback where native async capability is absent. | Available-backend matrix, mixed completion/failure, aliased Meta buffers, exact outputs, no leaks, explicit capability reporting, and no performance claim for a fallback or unavailable backend. |
-| 5.7 | 5.6f | Reduce managed graph segmentation through planned execution islands while preserving publication tickets, lease retention, and invalidation. | Detailed commit split follows 5.6 evidence; compare graph submissions, capture reuse, failure closure, and steady-state latency before implementation. |
-| 5.8 | 5.7 | Replace strict full-layer prefill gathering with bounded native-state continuation or another numerically qualified streaming method. | Detailed commit split follows native MMA investigation; preserve the strict gather as a control until local and recurrent-model errors and performance pass. |
-| 5.9 | 5.8 | Document supported configurations, fixed-budget semantics, asynchronous-publication capability/fallback behavior, limitations, and reproducible focused tests. | Verify documented invocations and capability matrix; no broad model/backend claim from producer-only, attention-only, or quant-only coverage. |
+| 5.7 | Deferred follow-up after 6.3c | Reduce managed graph segmentation through planned execution islands while preserving publication tickets, lease retention, and invalidation. | Compare graph submissions, capture reuse, failure closure, and steady-state latency after phase transitions establish the final graph lifecycle. |
+| 5.8 | Deferred follow-up after 6.3c | Replace strict full-layer prefill gathering with bounded native-state continuation or another numerically qualified streaming method. | Preserve the strict gather as a control until local and recurrent-model errors and performance pass against the shared-budget lifecycle. |
+| 5.9 | Deferred follow-up after 6.5c | Document supported configurations, fixed/shared-budget semantics, asynchronous-publication capability/fallback behavior, limitations, and reproducible focused tests. | Verify documented invocations and capability matrix; no broad model/backend claim from producer-only, attention-only, or quant-only coverage. |
 
 Stage 5.5a retains its original scope and is complete only after 5.5a.1-5.5a.4 pass. The integration review found independently risky producer, ownership and graph-dispatch boundaries: the existing writer used ring storage and could not run while cross-layer prefetch owned that storage. These explicit subdivisions follow the commit-sizing rule above; they do not renumber completed stages 5.5b-5.5c. Remaining optimization and documentation work is assigned to stages 5.6-5.9. The original milestone commit counts are planning estimates, not fixed totals after subdivisions.
 
@@ -250,30 +248,40 @@ Acceptance:
 
 ## Milestone 6: prefill/decode memory sharing
 
-Outcome: compute and KV share one budget; decode receives space reclaimed from larger prefill workspace.
+Outcome: compute and KV share one stable device-local parent budget; decode receives space reclaimed from larger prefill-only resources.
+
+The configured batch size, micro-batch size, output policy, attention mode, and admitted graph variants determine phase requirements. Do not replan from the instantaneous request or infer generation from a one-token batch. Weights may use managed allocation, but the shared compute/KV arena remains device-local on the initial CUDA path.
+
+The internal budget contract is fixed in 6.1b before shared allocation begins. It includes scheduler tensor workspace, the KV resident/ring pool, KV attention workspace, controllable writer/conversion/accumulator scratch, and alignment gaps. Model weights, authoritative host KV, output buffers, driver allocations, event metadata, executable metadata, and backend allocations that cannot borrow arena views are reported separately.
 
 | Commit unit | Prerequisites | Implementation boundary | Required tests / evidence |
 | --- | --- | --- | --- |
-| 6.1a | M5 | Separate prefill/decode workspace requirements for actual b/ub, output selection, and attention settings. | Partial batches, TG1, multiple context lengths, output configurations, and budget fitting only one phase. |
-| 6.1b | 6.1a | Inventory/account for backend scratch, retained ctx.pool() backing, captures, and transition peaks; define what is inside the shared grant. | Direct/conversion partials, accumulator/write scratch, overlapping lifetimes, and measured peaks versus declared accounting. |
-| 6.2a | 6.1b | KV growth/rebind using authoritative host data; rebuild K/V planes and recompute resident/ring split instead of only growing the ring. | Changed layer/V-plane bases, increased residency, lazy reload correctness, and separate arena/KV validity generations. |
+| 6.1a | M5 | Preserve separate aligned prefill/decode workspace requirements for configured b/ub and admitted output/attention graph variants; keep the conservative maximum live. | Partial and zero-size phases, TG1-shaped measurements, multiple size matrices, aliased slots, malformed measurements, budget fitting only one phase, and unchanged fixed-maximum execution. |
+| 6.1b | 6.1a | Inventory/account for backend scratch, retained ctx.pool() backing, captures, transition peaks, and every included/excluded allocation; define the stable parent budget contract. | Direct/conversion partials, accumulator/write scratch, overlapping lifetimes, allocation-class checks, measured peaks versus declared accounting, and managed weights with a device-local shared arena. |
+| 6.2a | 6.1b | KV growth/rebind from an external coarse lease using authoritative host data; rebuild K/V planes and recompute resident/ring split instead of only growing the ring. | Changed layer/V-plane bases, increased residency, lazy reload correctness, and separate arena/KV validity generations. |
 | 6.2b | 6.2a | KV shrink/rebind and pending-copy drain; invalidate moved mirrors and bounded scratch safely. | Minimum feasible capacity, concentrated layouts, ring remap, dirty tails, delayed work, and logical cache preservation. |
-| 6.2c | 6.2b | Rebind failure handling without relying on simultaneous old/new full-budget allocation. | Rejected resize, failed view/binding creation, recoverable reactivation, poisoned-session rejection, and host KV retained. |
-| 6.3a | 6.1a | Explicit text prefill/generation stage signals, with no reclamation enabled yet. | Single-token prompt versus generation, final short prompt batch, TG1, repeated notifications, and speculative execution rejection. |
-| 6.3b | 6.3a, 6.2c | Activate phase sharing: drain/invalidate, release workspace, repartition grants, bind, and rebuild only affected execution. | Real prefill-to-decode reclaim, captured-pointer safety, no-op transition, no per-token coordinator work, and measured decode pool increase. |
-| 6.4a | 6.3b | Return from expanded decode KV to prefill for serial requests and changed requirements. | Long decode then short/long prompts, repeated alternation, shrink/reload correctness, and numerical equivalence. |
-| 6.4b | 6.4a | Prompt reuse, cache restoration, and interrupted phase transitions. | Cached prefixes, restored host KV/recurrent state, cancellation at each boundary, and subsequent request or explicit invalid-session outcome. |
+| 6.2c | 6.2b | Rebind failure handling without relying on simultaneous old/new full-budget allocation. | Rejected resize, failed view/binding creation, recoverable reactivation, poisoned-session rejection, metadata rollback distinct from content reconstruction, and host KV retained. |
+| 6.3a | 6.1a | Explicit text-prefill/text-decode stage signals, with no reclamation enabled yet. | Single-token prompt versus generation, final short prompt batch, TG1, repeated notifications, serial-request boundaries, and speculative execution rejection. |
+| 6.3b | 6.3a, 6.2c | Integrate compute and KV under one stable physical parent with fixed grants equivalent to current behavior; do not reclaim by phase yet. | One parent allocation, fixed base address, exact grant accounting, legacy-option equivalence, fallback rejection, unchanged logits/state, and matched memory/performance. |
+| 6.3c | 6.3b | Activate prefill-to-decode sharing: drain/invalidate, release changed workspace, repartition grants, bind, and rebuild only affected execution. | Real reclaimed bytes, captured-pointer safety, no-op transition, parent identity unchanged, no per-token coordinator work, and measured decode-pool increase. |
+| 6.4a | 6.3c | Return from expanded decode KV to prefill for serial requests and changed requirements. | Long decode then short/long prompts, repeated alternation, shrink/reload correctness, resident reload cost, and numerical equivalence. |
+| 6.4b | 6.4a | Prompt reuse, cache restoration, cancellation, and interrupted phase transitions. | Cached prefixes, restored host KV/recurrent state, cancellation at each boundary, and subsequent request or explicit invalid-session outcome. |
 | 6.5a | 6.4b | Generalized shared-budget CLI/API option and deliberate compatibility with existing fixed-pool options. | Parsing, mutually exclusive/conflicting options, old-option behavior, and clear included/excluded allocations. |
-| 6.5b | 6.5a | Adapt maximum-pool benchmark probing to both phases and transition peaks, using existing sweep harness. | Startup-only false fits rejected, next-granule OOM boundary, successful decode/return-to-prefill, and no arbitrary new safety reserve. |
-| 6.5c | 6.5b | Transition/accounting diagnostics and qualification against the phase-arena reference. | Effective decode KV bytes, streaming onset, reclaimed workspace versus capture storage, resident reload latency separated from steady-state speed. |
+| 6.5b | 6.5a | Adapt maximum-budget probing to both phases and transition peaks, using the existing sweep harness. | Startup-only false fits rejected, next-granule OOM boundary, successful decode/return-to-prefill, one stable parent, and no arbitrary new safety reserve. |
+| 6.5c | 6.5b | Transition/accounting diagnostics and qualification against the phase-arena reference. | Effective phase grants, decode KV bytes, streaming onset, reclaimed workspace versus capture storage, resident reload latency separated from steady-state speed, and representative fixed-model A/B points. |
+
+Recommended implementation order is 6.1a, 6.1b, 6.3a, 6.2a-6.2c, 6.3b-6.3c, 6.4a-6.4b, then 6.5a-6.5c. Stage numbers describe ownership boundaries, not a requirement to implement the table strictly top to bottom.
 
 Acceptance:
 
-- Reclaimed prefill workspace measurably increases decode KV capacity.
-- Streaming begins later when additional capacity permits.
-- No common-arena transactions or new device-wide synchronization occur on ordinary steady-state tokens.
+- One parent device allocation and base address remain stable across phase transitions; only internal region grants change.
+- Reclaimed prefill workspace measurably increases decode KV capacity and delays streaming when additional capacity permits.
+- Managed model weights remain compatible with a physically device-local shared compute/KV arena.
+- No common-arena transaction, phase classification, or new device-wide synchronization occurs on ordinary steady-state tokens.
+- Arena-layout, KV-layout, content, and executable generations remain separate and stale captures are invalidated before address reuse.
+- Transition failure never requires simultaneous old/new full-budget allocations; authoritative host KV remains the reconstruction source.
 - Transition cost and throughput are comparable to `feature/kv-stream-phase-arena`.
-- The budget clearly states whether compute, KV, scratch, weights, and driver allocations are included.
+- The budget reports compute, KV, scratch, weights, host state, driver allocations, alignment gaps, and excluded allocations explicitly.
 - Executable-graph destruction and tensor-workspace reclamation are validated separately.
 - Report resident reload cost separately from steady-state throughput; do not assume repartition preserves device pages.
 
@@ -398,11 +406,12 @@ Record substage completion here only after the required validation succeeds. Exp
 | 5.6c | Committed | a53e3bf81 | Generic event-backed completion with synchronous fallback and tracked waiter teardown; fake/CPU 10/85 passed Debug, ASan, and UBSan, real CUDA 11/91 passed memcheck, and five focused regressions passed. |
 | 5.6d | Committed | 9f2fe3aff | Completion-backed K/V pair bridge and synchronous session adapter; publication 16/199 CPU and 17/207 CUDA, session 6/286, model 3/54, ASan/UBSan, two CUDA memchecks, and eight focused regressions pass. Release performance and memory remain within noise of 5.6b. |
 | 5.6e | Committed | d57288807 | Real CUDA completion-backed producer, direct pinned-host generation, resident-tail D2D, running-window producer fences and immutable per-tile plans. Focused CUDA, repeated session stress, ASan/UBSan, memcheck, exact Q3/IQ4 model equivalence and matched Release points pass. |
-| 5.6f | Ready for review | - | One common executable passes exact aliased-view ordering and mixed-failure tests on CPU and OpenCL fallback, native SYCL and Vulkan events, and composed Meta fallback. CPU leak checking and CPU/Vulkan ASan/UBSan pass; the separately identified Vulkan driver/libdbus teardown leak remains external. |
-| 5.7 | Reserved | - | Graph segmentation optimization; split only after 5.6 qualification identifies the remaining submission boundary. |
-| 5.8 | Reserved | - | Strict prefill gather replacement; split only after native MMA continuation research establishes a credible numerical contract. |
-| 5.9 | Planned | - | Supported-configuration and reproducible-test documentation after optimization qualification. |
-| 6.1a-6.5c | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 5.6f | Committed | dbd47c686 | One common executable passes exact aliased-view ordering and mixed-failure tests on CPU and OpenCL fallback, native SYCL and Vulkan events, and composed Meta fallback. CPU leak checking and CPU/Vulkan ASan/UBSan pass; the separately identified Vulkan driver/libdbus teardown leak remains external. |
+| 5.7 | Deferred | - | Non-gating graph-segmentation follow-up after 6.3c establishes the final phase-transition graph lifecycle. |
+| 5.8 | Deferred | - | Non-gating strict-prefill follow-up after 6.3c establishes shared-budget behavior. |
+| 5.9 | Deferred | - | Final fixed/shared-budget support documentation follows 6.5c qualification. |
+| 6.1a | Ready for review | - | Phase-preserving aligned workspace requirements, exact per-stage consumer grants, zero-size detach/return, and conservative live allocation. CPU Debug, ASan/leak, and UBSan focused suites pass. |
+| 6.1b-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3162,4 +3171,24 @@ The focused CPU regression set passes `test-memory-completion-backends`, `test-m
 
 No non-CUDA backend gains native streamed-attention or asynchronous producer submission in this stage. No throughput comparison is claimed for a fallback, for SYCL's host-blocking event wait, or for a backend that is unavailable on this machine. Production remained running on the NVIDIA GPU while Vulkan was restricted to the Intel device.
 
-Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. After the user commits 5.6f, parent stage **5.6** is complete and the next planned optimization is **5.7**, reduction of managed graph segmentation.
+Task files and this roadmap were committed by the user at `dbd47c686`. Parent stage **5.6** and milestone 5 are complete. Stages 5.7-5.9 remain non-gating follow-ups; milestone 6 begins below.
+
+
+### Stage 6.1a implementation and validation
+
+The first tests were red because workspace grouping collapsed every measured phase into one maximum and the workspace consumer had no phase-specific requirement metadata. The implementation now preserves an aligned size for every phase and canonical buffer-type group while retaining the maximum group size for parent-capacity planning. Invalid dimensions, overflow, unsupported buffer types, and allocation failures leave the previous output unchanged.
+
+Workspace groups may now declare exact sizes by stage. Registration publishes those sizes into the common execution plan, preparation validates exact grants, and a zero-byte phase detaches the scheduler lease instead of requiring a fake region. Legacy groups without stage metadata still request the same maximum in every named stage.
+
+Real context reservation passes the separately measured prompt-processing and TG measurements into the phase-aware plan. The context owner records a conservative maximum stage plus the distinct measured phases, but activates only the conservative stage in 6.1a. This deliberately preserves current inference behavior until explicit phase signals and shared-parent integration are implemented in 6.3.
+
+TDD evidence:
+
+- The initial build failed because the phase plan and stage metadata did not exist.
+- `test-memory-workspace` passes 20 cases / 443 assertions, including aliased slots, alignment, malformed matrices, one-phase-only budget fits, zero-size detach/return, recovery, and existing scheduler behavior.
+- `test-context-memory` passes 5 cases / 374 assertions, including repeated graph rebuild, creation failure cleanup, phase-plan validation, and conservative live grants.
+- Both suites pass CPU Debug, ASan with leak detection, and UBSan. The CUDA-enabled tree builds both tests and `llama-server`, and both suites pass in CPU mode without consuming the production GPU's remaining VRAM.
+- Eight broader memory requirement, plan, layout, transition, executor, workspace, context, and backend suites pass.
+- The implementation adds no phase transition during inference, no shared KV allocation, no CLI option, and no performance claim.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made. Next after review is **6.1b**, complete shared-budget accounting and allocation-lifetime inventory.

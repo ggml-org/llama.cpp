@@ -14,6 +14,9 @@ public:
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const std::vector<ggml_backend_memory_workspace_group> & groups);
+    static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
+            const std::vector<ggml_backend_t> & backends,
+            const llama_compute_workspace_plan & plan);
     ~llama_context_memory();
     llama_context_memory(const llama_context_memory &) = delete;
     llama_context_memory & operator=(const llama_context_memory &) = delete;

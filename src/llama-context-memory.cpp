@@ -3,8 +3,10 @@
 #include "../ggml/src/ggml-cuda-graph.h"
 #include "ggml-cpp.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -81,16 +83,33 @@ bool llama_context_memory::supported(const std::vector<ggml_backend_t> & backend
     return true;
 }
 
-// Build a fixed-lifetime coordinator with exactly the milestone-3 group capacities.
+// Preserve the old fixed-maximum construction for callers without phase measurements.
 std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends,
         const std::vector<ggml_backend_memory_workspace_group> & groups) {
-    if (!sched || !supported(backends) ||
+    llama_compute_workspace_plan plan;
+    plan.groups = groups;
+    plan.phase_sizes.assign(2, std::vector<size_t>(groups.size()));
+    for (auto & phase : plan.phase_sizes) {
+        for (size_t group = 0; group < groups.size(); ++group) {
+            phase[group] = groups[group].size;
+        }
+    }
+    return create(sched, backends, plan);
+}
+
+// Record distinct phase requirements while activating the conservative maximum until phase switching is enabled.
+std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
+        const std::vector<ggml_backend_t> & backends,
+        const llama_compute_workspace_plan & plan) {
+    const auto & groups = plan.groups;
+    if (!sched || !supported(backends) || plan.phase_sizes.empty() ||
             backends.size() != static_cast<size_t>(ggml_backend_sched_get_n_backends(sched))) return {};
     for (size_t i = 0; i < backends.size(); ++i) {
         if (ggml_backend_sched_get_backend(sched, static_cast<int>(i)) != backends[i]) return {};
     }
-    // Validate all group labels before the first physical allocation.
+    // Validate all group labels and phase geometry before the first physical allocation.
+    for (const auto & phase : plan.phase_sizes) if (phase.size() != groups.size()) return {};
     for (size_t i = 0; i < groups.size(); ++i) {
         const auto & group = groups[i];
         if (!group.buft || group.size == 0 || group.first_slot >= backends.size() ||
@@ -101,6 +120,12 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
         for (size_t j = 0; j < group.first_slot; ++j) {
             if (ggml_backend_sched_get_buffer_type(sched, backends[j]) == group.buft) return {};
         }
+        size_t maximum = 0;
+        for (const auto & phase : plan.phase_sizes) {
+            if (phase[i] > group.size || (phase[i] != 0 && phase[i] % group.alignment != 0)) return {};
+            maximum = std::max(maximum, phase[i]);
+        }
+        if (maximum != group.size) return {};
     }
     try {
         auto state = std::make_unique<implementation>();
@@ -110,17 +135,24 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (!context_cache_for(backend, cache)) return {};
             state->caches.push_back(cache);
         }
-        std::vector<llama_memory_workspace_group> selected;
+        std::vector<llama_memory_stage_id> stages{1};
         llama_memory_transition_target target;
-        target.stage = 1;
-        target.plan.stages = {{1, {}, {}}, {2, {1}, {}}};
+        target.plan.stages.push_back({1, {}, {}});
+        for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
+            if (phase > static_cast<size_t>(std::numeric_limits<llama_memory_stage_id>::max() - 2)) return {};
+            const llama_memory_stage_id id = phase + 2;
+            stages.push_back(id);
+            target.plan.stages.push_back({id, {id - 1}, {}});
+        }
+        target.stage = stages.front();
+
+        std::vector<llama_memory_workspace_group> selected;
         std::vector<llama_memory_transition_arena> supplied;
         for (size_t i = 0; i < groups.size(); ++i) {
             const auto & group = groups[i];
             ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(group.buft, group.size));
             if (!parent) return {};
             if (!ggml_backend_buffer_supports_views(parent.get())) continue;
-            // Match the actual factories used by the supported CPU/CUDA backend set.
             auto allocation = LLAMA_MEMORY_ALLOCATION_HOST;
             if (!ggml_backend_buft_is_host(group.buft)) {
                 allocation = std::getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") ?
@@ -135,7 +167,12 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             const uint64_t id = i + 1;
             llama_compute_arena_ptr arena(ggml_backend_memory_arena_new_from_buffer(parent.get()));
             if (!arena) return {};
-            selected.push_back({group, {id, id, allocation, llama_memory_content::discardable}});
+            llama_memory_workspace_group configured{group, {id, id, allocation, llama_memory_content::discardable}, {}};
+            configured.stages.push_back({stages.front(), group.size});
+            for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
+                configured.stages.push_back({stages[phase + 1], plan.phase_sizes[phase][i]});
+            }
+            selected.push_back(std::move(configured));
             target.plan.domains.push_back({id, allocation, LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
             target.budgets.push_back({id, allocation, group.size, group.alignment});
             supplied.push_back({id, allocation, arena.get()});
@@ -146,7 +183,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             [owner] { owner->executor.quiesce(); return true; },
             [owner] { return owner->invalidate(); },
         });
-        if (!state->workspace->register_resources(target.plan, {1, 2})) return {};
+        if (!state->workspace->register_resources(target.plan, stages)) return {};
         state->transition = std::make_unique<llama_memory_transition>(
             std::vector<llama_memory_consumer *>{state->workspace.get()});
         const auto prepared = state->transition->prepare(target);
@@ -156,6 +193,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             return {};
         }
         for (size_t i = 0; i < selected.size(); ++i) {
+            if (selected[i].stages.front().size == 0) continue;
             state->leases.emplace_back(ggml_backend_memory_arena_acquire(state->arenas[i].arena.get(), selected[i].resource.id),
                 ggml_backend_memory_lease_free);
             if (!state->leases.back()) return {};

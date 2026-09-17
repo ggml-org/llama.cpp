@@ -40,6 +40,19 @@ struct llama_memory_workspace::implementation {
                     group.alignment != ggml_backend_buft_get_alignment(group.buft) ||
                     group.size % group.alignment != 0 || resource.id == 0 || resource.domain == 0 ||
                     resource.content != llama_memory_content::discardable) return false;
+            if (!groups[i].stages.empty()) {
+                size_t maximum = 0;
+                for (size_t stage = 0; stage < groups[i].stages.size(); ++stage) {
+                    const auto & requirement = groups[i].stages[stage];
+                    if (!requirement.id || requirement.size > group.size ||
+                            (requirement.size != 0 && requirement.size % group.alignment != 0)) return false;
+                    for (size_t previous = 0; previous < stage; ++previous) {
+                        if (groups[i].stages[previous].id == requirement.id) return false;
+                    }
+                    maximum = std::max(maximum, requirement.size);
+                }
+                if (maximum != group.size) return false;
+            }
             auto * selected = ggml_backend_sched_get_backend(sched, static_cast<int>(group.first_slot));
             if (ggml_backend_sched_get_buffer_type(sched, selected) != group.buft) return false;
             for (size_t slot = 0; slot < group.first_slot; ++slot) {
@@ -51,6 +64,18 @@ struct llama_memory_workspace::implementation {
                         groups[j].resource.id == resource.id) return false;
             }
         }
+        return true;
+    }
+
+    bool stage_size(const llama_memory_workspace_group & group, llama_memory_stage_id stage, size_t & size) const {
+        if (group.stages.empty()) {
+            size = group.workspace.size;
+            return true;
+        }
+        const auto found = std::find_if(group.stages.begin(), group.stages.end(),
+            [&](const llama_memory_workspace_stage & candidate) { return candidate.id == stage; });
+        if (found == group.stages.end()) return false;
+        size = found->size;
         return true;
     }
 
@@ -195,7 +220,7 @@ llama_memory_workspace::~llama_memory_workspace() {
     GGML_ASSERT(close());
 }
 
-// Register exact measured maxima in each execution stage without modifying the plan on rejection.
+// Register exact measured phase requirements without modifying the plan on rejection.
 bool llama_memory_workspace::register_resources(
         llama_memory_execution_plan & plan, const std::vector<llama_memory_stage_id> & stages) const {
     if (!impl->valid() || stages.empty()) return false;
@@ -211,8 +236,17 @@ bool llama_memory_workspace::register_resources(
                 [&](const llama_memory_stage & candidate) { return candidate.id == stages[i]; });
             if (stage == next.stages.end()) return false;
             for (const auto & group : impl->groups) {
-                stage->requirements.push_back({group.resource.id, group.workspace.size, group.workspace.size,
+                size_t size = 0;
+                if (!impl->stage_size(group, stages[i], size)) return false;
+                stage->requirements.push_back({group.resource.id, size, size,
                     group.workspace.alignment, LLAMA_MEMORY_ACCESS_WRITE, LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+            }
+        }
+        for (const auto & group : impl->groups) {
+            if (group.stages.empty()) continue;
+            if (group.stages.size() != stages.size()) return false;
+            for (const auto & configured : group.stages) {
+                if (std::find(stages.begin(), stages.end(), configured.id) == stages.end()) return false;
             }
         }
         if (llama_memory_plan_validate(next).status != llama_memory_plan_status::success) return false;
@@ -238,10 +272,12 @@ bool llama_memory_workspace::prepare(const llama_memory_transition_target & targ
             [&](const llama_memory_resource & candidate) { return candidate.id == group.resource.id; });
         const auto requirement = std::find_if(stage->requirements.begin(), stage->requirements.end(),
             [&](const llama_memory_requirement & candidate) { return candidate.resource == group.resource.id; });
+        size_t size = 0;
+        if (!impl->stage_size(group, target.stage, size)) return false;
         if (resource == target.plan.resources.end() || resource->domain != group.resource.domain ||
                 resource->allocation_class != group.resource.allocation_class || resource->content != llama_memory_content::discardable ||
-                requirement == stage->requirements.end() || requirement->size_min != group.workspace.size ||
-                requirement->size_preferred != group.workspace.size || requirement->alignment != group.workspace.alignment ||
+                requirement == stage->requirements.end() || requirement->size_min != size ||
+                requirement->size_preferred != size || requirement->alignment != group.workspace.alignment ||
                 requirement->access != LLAMA_MEMORY_ACCESS_WRITE ||
                 !(requirement->capabilities & LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS)) return false;
         bool found = false;
@@ -250,14 +286,13 @@ bool llama_memory_workspace::prepare(const llama_memory_transition_target & targ
             for (const auto & region : arena.regions) {
                 if (region.id != group.resource.id) continue;
                 if (found || arena.budget.domain != group.resource.domain || arena.budget.allocation_class != group.resource.allocation_class ||
-                        region.size != group.workspace.size || region.alignment != group.workspace.alignment) return false;
+                        region.size != size || region.alignment != group.workspace.alignment) return false;
                 found = true;
                 desired.push_back({i, a, region});
             }
         }
-        if (!found) return false;
+        if (found != (size != 0)) return false;
     }
-    if (desired.empty()) return true;
     auto next = std::make_unique<implementation::proposal>(*impl, std::move(desired), true, true);
     impl->pending = true;
     output = std::move(next);

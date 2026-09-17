@@ -5,6 +5,7 @@
 #include "ggml-cpu.h"
 #include "../ggml/src/ggml-backend-impl.h"
 
+#include <algorithm>
 #include <cstring>
 
 struct fixture {
@@ -193,6 +194,31 @@ int main(int argc, char ** argv) {
         other.iface.alloc_buffer = ggml_backend_cpu_buffer_type()->iface.alloc_buffer;
         auto owner = llama_context_memory::create(sched.get(), backends, groups);
         t.assert_true(bool(owner));
+    });
+
+    t.test("phase_aware_owner_keeps_conservative_live_grant", [&](testing & t) {
+        fixture f(dev);
+        llama_compute_workspace_plan plan;
+        plan.groups = f.groups;
+        plan.phase_sizes.assign(2, std::vector<size_t>(f.groups.size()));
+        for (size_t group = 0; group < f.groups.size(); ++group) {
+            const size_t alignment = f.groups[group].alignment;
+            const size_t smaller = std::max(alignment, f.groups[group].size / 2 / alignment * alignment);
+            plan.phase_sizes[0][group] = smaller;
+            plan.phase_sizes[1][group] = f.groups[group].size;
+        }
+        auto owner = llama_context_memory::create(f.sched.get(), f.backends, plan);
+        if (!t.assert_true(bool(owner))) {
+            return;
+        }
+        t.assert_equal(plan.groups[0].size,
+            ggml_backend_sched_get_buffer_size(f.sched.get(), f.device.get()));
+        f.rebuild();
+        f.run(t, *owner, 3);
+
+        auto invalid = plan;
+        invalid.phase_sizes[1].pop_back();
+        t.assert_true(!llama_context_memory::create(f.sched.get(), f.backends, invalid));
     });
 
     if (dev) {

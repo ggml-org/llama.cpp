@@ -1,4 +1,5 @@
 #include "../src/llama-memory-workspace.h"
+#include "../src/llama-context-workspace.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
 #include "ggml-cpp.h"
@@ -68,7 +69,7 @@ struct fixture {
             if (i == 1 && !manage_second) continue;
             const auto & group = measured[i];
             const uint64_t domain = i + 1, id = i + 11;
-            groups.push_back({group, {id, domain, LLAMA_MEMORY_ALLOCATION_HOST, llama_memory_content::discardable}});
+            groups.push_back({group, {id, domain, LLAMA_MEMORY_ALLOCATION_HOST, llama_memory_content::discardable}, {}});
             parents.emplace_back(ggml_backend_memory_arena_new(group.buft, 2*group.size), ggml_backend_memory_arena_free);
             GGML_ASSERT(parents.back());
             arenas.push_back({domain, LLAMA_MEMORY_ALLOCATION_HOST, parents.back().get()});
@@ -334,6 +335,136 @@ int main() {
         t.assert_true(f.workspace->ready());
         f.compute(t);
         f.compute(t, 1);
+    });
+
+    t.test("plans_aligned_workspace_bytes_per_phase_and_buffer_group", [](testing & t) {
+        ggml_backend_buffer_type separate = *ggml_backend_cpu_buffer_type();
+        std::vector<ggml_backend_buffer_type_t> bufts = {
+            ggml_backend_cpu_buffer_type(),
+            ggml_backend_cpu_buffer_type(),
+            &separate,
+        };
+        const size_t measurements[] = {
+            4097, 8192, 0,
+            1024, 2049, 4096,
+            0,    0,    1025,
+        };
+        llama_compute_workspace_plan plan;
+        if (!t.assert_true(llama_compute_workspace_plan_make(
+                bufts, {measurements, measurements + 9}, 3, plan))) {
+            return;
+        }
+        if (!t.assert_equal(size_t(2), plan.groups.size()) ||
+                !t.assert_equal(size_t(3), plan.phase_sizes.size())) {
+            return;
+        }
+        t.assert_equal(size_t(8192), plan.groups[0].size);
+        t.assert_equal(size_t(4096), plan.groups[1].size);
+        t.assert_equal(size_t(8192), plan.phase_sizes[0][0]);
+        t.assert_equal(size_t(0), plan.phase_sizes[0][1]);
+        const auto aligned = [](size_t size, size_t alignment) {
+            return (size + alignment - 1) / alignment * alignment;
+        };
+        t.assert_equal(aligned(2049, plan.groups[0].alignment), plan.phase_sizes[1][0]);
+        t.assert_equal(size_t(4096), plan.phase_sizes[1][1]);
+        t.assert_equal(size_t(0), plan.phase_sizes[2][0]);
+        t.assert_equal(aligned(1025, plan.groups[1].alignment), plan.phase_sizes[2][1]);
+
+        const auto before = plan.phase_sizes;
+        t.assert_true(!llama_compute_workspace_plan_make(bufts, {measurements, measurements + 8}, 3, plan));
+        t.assert_equal(before.size(), plan.phase_sizes.size());
+        for (size_t phase = 0; phase < before.size(); ++phase) {
+            t.assert_equal(before[phase].size(), plan.phase_sizes[phase].size());
+            for (size_t group = 0; group < before[phase].size(); ++group) {
+                t.assert_equal(before[phase][group], plan.phase_sizes[phase][group]);
+            }
+        }
+    });
+
+    t.test("registers_distinct_phase_requirements_and_budget_fit", [](testing & t) {
+        fixture f;
+        auto groups = f.groups;
+        if (!t.assert_equal(size_t(1), groups.size())) {
+            return;
+        }
+        groups[0].stages = {{10, 8192}, {20, 4096}};
+        llama_memory_workspace workspace(
+            f.sched.get(), groups, {[] { return true; }, [] { return true; }});
+        auto plan = f.target.plan;
+        if (!t.assert_true(workspace.register_resources(plan, {10, 20}))) {
+            return;
+        }
+        t.assert_equal(size_t(8192), plan.stages[0].requirements[0].size_min);
+        t.assert_equal(size_t(4096), plan.stages[1].requirements[0].size_min);
+
+        const std::vector<llama_memory_arena_budget> budget = {{
+            groups[0].resource.domain,
+            groups[0].resource.allocation_class,
+            4096,
+            groups[0].workspace.alignment,
+        }};
+        llama_memory_layout layout;
+        t.assert_true(llama_memory_layout_minimum(plan, 10, budget, {}, layout).status ==
+            llama_memory_layout_status::placement_failed);
+        t.assert_true(llama_memory_layout_minimum(plan, 20, budget, {}, layout).status ==
+            llama_memory_layout_status::success);
+        if (t.assert_equal(size_t(1), layout.arenas.size()) &&
+                t.assert_equal(size_t(1), layout.arenas[0].regions.size())) {
+            t.assert_equal(size_t(4096), layout.arenas[0].regions[0].size);
+        }
+    });
+
+    t.test("zero_workspace_phase_is_valid_but_misaligned_phase_size_is_not", [](testing & t) {
+        fixture f;
+        auto groups = f.groups;
+        groups[0].stages = {{10, groups[0].workspace.size}, {20, 0}};
+        llama_memory_workspace valid(
+            f.sched.get(), groups, {[] { return true; }, [] { return true; }});
+        auto plan = f.target.plan;
+        t.assert_true(valid.register_resources(plan, {10, 20}));
+        t.assert_equal(size_t(0), plan.stages[1].requirements[0].size_min);
+
+        groups[0].stages[1].size = groups[0].workspace.alignment + 1;
+        llama_memory_workspace invalid(
+            f.sched.get(), groups, {[] { return true; }, [] { return true; }});
+        plan = f.target.plan;
+        t.assert_true(!invalid.register_resources(plan, {10, 20}));
+        t.assert_true(plan.resources.empty());
+    });
+
+    t.test("zero_workspace_phase_detaches_and_can_return", [](testing & t) {
+        fixture f;
+        auto groups = f.groups;
+        groups[0].stages = {{10, groups[0].workspace.size}, {20, 0}};
+        llama_memory_workspace workspace(
+            f.sched.get(), groups, {[] { return true; }, [] { return true; }});
+        auto target = f.target;
+        if (!t.assert_true(workspace.register_resources(target.plan, {10, 20}))) {
+            return;
+        }
+        llama_memory_transition transition({&workspace});
+        if (!t.assert_true(transition.prepare(target).status == status::prepared) ||
+                !t.assert_true(transition.activate(f.arenas).status == status::activated)) {
+            return;
+        }
+        t.assert_equal(groups[0].workspace.size,
+            ggml_backend_sched_get_buffer_size(f.sched.get(), f.first.get()));
+
+        target.stage = 20;
+        if (!t.assert_true(transition.prepare(target).status == status::prepared) ||
+                !t.assert_true(transition.activate(f.arenas).status == status::activated)) {
+            return;
+        }
+        t.assert_true(workspace.ready());
+        t.assert_equal(size_t(0), ggml_backend_sched_get_buffer_size(f.sched.get(), f.first.get()));
+        t.assert_equal(size_t(0), ggml_backend_memory_arena_lease_count(f.parents[0].get()));
+
+        target.stage = 10;
+        if (!t.assert_true(transition.prepare(target).status == status::prepared) ||
+                !t.assert_true(transition.activate(f.arenas).status == status::activated)) {
+            return;
+        }
+        f.compute(t);
     });
 
     return t.summary();

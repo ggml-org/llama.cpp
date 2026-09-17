@@ -3,8 +3,86 @@
 #include "ggml-cpp.h"
 #include "llama-impl.h"
 
+#include <algorithm>
+#include <limits>
 #include <new>
 #include <utility>
+
+static bool workspace_align_up(size_t size, size_t alignment, size_t & result) {
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0 ||
+            size > std::numeric_limits<size_t>::max() - (alignment - 1)) {
+        return false;
+    }
+    result = (size + alignment - 1) & ~(alignment - 1);
+    return true;
+}
+
+bool llama_compute_workspace_plan_make(
+        const std::vector<ggml_backend_buffer_type_t> & bufts,
+        const std::vector<size_t> & measurements,
+        size_t n_phases,
+        llama_compute_workspace_plan & output) {
+    const size_t n_slots = bufts.size();
+    if (n_slots == 0 || n_phases == 0 ||
+            n_phases > std::numeric_limits<size_t>::max() / n_slots ||
+            measurements.size() != n_phases * n_slots) {
+        return false;
+    }
+
+    try {
+        llama_compute_workspace_plan next;
+        size_t n_groups = 0;
+        if (!ggml_backend_memory_plan_workspace_groups(
+                bufts.data(), measurements.data(), n_phases, n_slots, nullptr, &n_groups)) {
+            return false;
+        }
+        next.groups.resize(n_groups);
+        size_t capacity = n_groups;
+        if (!ggml_backend_memory_plan_workspace_groups(
+                bufts.data(), measurements.data(), n_phases, n_slots, next.groups.data(), &capacity) ||
+                capacity != n_groups) {
+            return false;
+        }
+
+        next.phase_sizes.assign(n_phases, std::vector<size_t>(n_groups));
+        for (size_t phase = 0; phase < n_phases; ++phase) {
+            for (size_t slot = 0; slot < n_slots; ++slot) {
+                const auto group = std::find_if(
+                    next.groups.begin(), next.groups.end(),
+                    [&](const ggml_backend_memory_workspace_group & candidate) {
+                        return candidate.buft == bufts[slot];
+                    });
+                const size_t measured = measurements[phase * n_slots + slot];
+                if (group == next.groups.end()) {
+                    if (measured != 0) {
+                        return false;
+                    }
+                    continue;
+                }
+                size_t aligned = 0;
+                if (!workspace_align_up(measured, group->alignment, aligned)) {
+                    return false;
+                }
+                const size_t index = static_cast<size_t>(group - next.groups.begin());
+                next.phase_sizes[phase][index] = std::max(next.phase_sizes[phase][index], aligned);
+            }
+        }
+
+        for (size_t group = 0; group < n_groups; ++group) {
+            size_t maximum = 0;
+            for (size_t phase = 0; phase < n_phases; ++phase) {
+                maximum = std::max(maximum, next.phase_sizes[phase][group]);
+            }
+            if (maximum != next.groups[group].size) {
+                return false;
+            }
+        }
+        output = std::move(next);
+        return true;
+    } catch (const std::bad_alloc &) {
+        return false;
+    }
+}
 
 enum class llama_compute_arena_prepare_result {
     success,

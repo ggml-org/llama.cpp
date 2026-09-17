@@ -4,9 +4,15 @@
 
 #include <functional>
 
+struct llama_memory_workspace_stage {
+    llama_memory_stage_id id = 0;
+    size_t size = 0;
+};
+
 struct llama_memory_workspace_group {
     ggml_backend_memory_workspace_group workspace;
     llama_memory_resource resource;
+    std::vector<llama_memory_workspace_stage> stages;
 };
 
 // Hooks cover all executable graphs using this scheduler, including fallback groups.
@@ -27,7 +33,7 @@ public:
     llama_memory_workspace(const llama_memory_workspace &) = delete;
     llama_memory_workspace & operator=(const llama_memory_workspace &) = delete;
 
-    // Append one resource per buffer-type group and the same measured maximum to each named stage.
+    // Append one resource per buffer-type group and its configured size for each named stage.
     // No backend storage is allocated; failure leaves the plan unchanged.
     bool register_resources(llama_memory_execution_plan & plan, const std::vector<llama_memory_stage_id> & stages) const;
 
