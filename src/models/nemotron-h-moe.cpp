@@ -100,6 +100,18 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
         ggml_tensor * router_logits = build_lora_mm(layer.ffn_gate_inp, cur);
         cb(router_logits, "mtp_ffn_moe_logits", il);
 
+        ggml_tensor * ffn_shexp = build_ffn(cur,
+                layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
+                NULL,                 NULL, NULL,
+                layer.ffn_down_shexp, NULL, layer.ffn_down_shexp_s,
+                NULL,
+                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
+        cb(ffn_shexp, "mtp_ffn_shexp", il);
+
+        if (layer.ffn_latent_down) {
+            cur = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
+        }
+
         ggml_tensor * moe_out =
             build_moe_ffn(cur,
                 layer.ffn_gate_inp,
@@ -118,13 +130,9 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
                 layer.ffn_down_exps_s);
         cb(moe_out, "mtp_ffn_moe_out", il);
 
-        ggml_tensor * ffn_shexp = build_ffn(cur,
-                layer.ffn_up_shexp,   NULL, layer.ffn_up_shexp_s,
-                NULL,                 NULL, NULL,
-                layer.ffn_down_shexp, NULL, layer.ffn_down_shexp_s,
-                NULL,
-                LLM_FFN_RELU_SQR, LLM_FFN_PAR, il);
-        cb(ffn_shexp, "mtp_ffn_shexp", il);
+        if (layer.ffn_latent_up) {
+            moe_out = ggml_mul_mat(ctx0, layer.ffn_latent_up, moe_out);
+        }
 
         cur = ggml_add(ctx0, moe_out, ffn_shexp);
         cb(cur, "mtp_ffn_out", il);
