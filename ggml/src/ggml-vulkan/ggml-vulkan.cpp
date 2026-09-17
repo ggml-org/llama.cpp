@@ -1130,7 +1130,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_count_equal_i32;
     vk_pipeline pipeline_dsv4_hc_comb_f32;
     vk_pipeline pipeline_dsv4_hc_pre_f32;
+    vk_pipeline pipeline_dsv4_hc_pre_gated_f32;
     vk_pipeline pipeline_dsv4_hc_post_f32;
+    vk_pipeline pipeline_dsv4_hc_post_nocomb_f32;
     std::map<vk_solve_tri_pipeline_state, vk_pipeline> pipeline_solve_tri_f32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
@@ -1514,12 +1516,14 @@ struct vk_op_dsv4_hc_pre_push_constants {
     uint32_t n_tokens;
 
     uint32_t nbx0; uint32_t nbx1; uint32_t nbx2;
-    uint32_t nbw0; uint32_t nbw1;
+    uint32_t nbw0; uint32_t nbw1; uint32_t nbw2;
     uint32_t nbd0; uint32_t nbd1;
 
     uint32_t x_offset;
     uint32_t w_offset;
     uint32_t d_offset;
+
+    float scale;
 };
 
 struct vk_op_dsv4_hc_post_push_constants {
@@ -2737,7 +2741,7 @@ template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk
     p.x_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
     p.r_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
     p.p_offset = get_misalign_bytes(ctx, src2) / ggml_type_size(src2->type);
-    p.c_offset = get_misalign_bytes(ctx, src3) / ggml_type_size(src3->type);
+    p.c_offset = src3 ? get_misalign_bytes(ctx, src3) / ggml_type_size(src3->type) : 0;
     p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
 }
 
@@ -6173,8 +6177,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_comb_f32, "dsv4_hc_comb_f32", dsv4_hc_comb_f32_len, dsv4_hc_comb_f32_data, "main", 4, sizeof(vk_op_dsv4_hc_comb_push_constants), {tokens_per_workgroup, 1, 1}, { device->subgroup_size }, 1, true, true, device->subgroup_size);
     }
 
-    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_pre_f32,  "dsv4_hc_pre_f32",  dsv4_hc_pre_f32_len,  dsv4_hc_pre_f32_data,  "main", 3, sizeof(vk_op_dsv4_hc_pre_push_constants),  {256, 1, 1}, { 256 }, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_post_f32, "dsv4_hc_post_f32", dsv4_hc_post_f32_len, dsv4_hc_post_f32_data, "main", 5, sizeof(vk_op_dsv4_hc_post_push_constants), {256, 1, 1}, { 256 }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_pre_f32,        "dsv4_hc_pre_f32",        dsv4_hc_pre_f32_len,  dsv4_hc_pre_f32_data,  "main", 3, sizeof(vk_op_dsv4_hc_pre_push_constants),  {256, 1, 1}, { 256, 0 }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_pre_gated_f32,  "dsv4_hc_pre_gated_f32",  dsv4_hc_pre_f32_len,  dsv4_hc_pre_f32_data,  "main", 3, sizeof(vk_op_dsv4_hc_pre_push_constants),  {256, 1, 1}, { 256, 1 }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_post_f32,       "dsv4_hc_post_f32",       dsv4_hc_post_f32_len, dsv4_hc_post_f32_data, "main", 5, sizeof(vk_op_dsv4_hc_post_push_constants), {256, 1, 1}, { 256, 1 }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_dsv4_hc_post_nocomb_f32,"dsv4_hc_post_nocomb_f32",dsv4_hc_post_f32_len, dsv4_hc_post_f32_data, "main", 5, sizeof(vk_op_dsv4_hc_post_push_constants), {256, 1, 1}, { 256, 0 }, 1);
 
     for (auto &s : device->pipeline_solve_tri_f32) {
         const vk_solve_tri_pipeline_state &state = s.first;
@@ -10356,7 +10362,10 @@ static void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subc
 static void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * weights, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_dsv4_hc_pre(" << x << ", " << weights << ", " << dst << ")");
 
-    vk_pipeline pipeline = ctx->device->pipeline_dsv4_hc_pre_f32;
+    const float scale = ggml_get_op_params_f32(dst, 0);
+    const bool  gated = ggml_get_op_params_i32(dst, 1) != 0;
+
+    vk_pipeline pipeline = gated ? ctx->device->pipeline_dsv4_hc_pre_gated_f32 : ctx->device->pipeline_dsv4_hc_pre_f32;
     GGML_ASSERT(pipeline != nullptr);
 
     const uint32_t n_embd   = (uint32_t)x->ne[0];
@@ -10371,9 +10380,10 @@ static void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subct
     vk_op_dsv4_hc_pre_push_constants pc = {
         n_embd, n_tokens,
         ggml_vk_nb_elem(x, 0), ggml_vk_nb_elem(x, 1), ggml_vk_nb_elem(x, 2),
-        ggml_vk_nb_elem(weights, 0), ggml_vk_nb_elem(weights, 1),
+        ggml_vk_nb_elem(weights, 0), ggml_vk_nb_elem(weights, 1), ggml_vk_nb_elem(weights, 2),
         ggml_vk_nb_elem(dst, 0), ggml_vk_nb_elem(dst, 1),
         0, 0, 0,
+        scale,
     };
     init_pushconst_tensor_offsets(ctx, pc, x, weights, nullptr, nullptr, dst);
 
@@ -10383,7 +10393,7 @@ static void ggml_vk_dsv4_hc_pre(ggml_backend_vk_context * ctx, vk_context& subct
 static void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * x, const ggml_tensor * residual, const ggml_tensor * post, const ggml_tensor * comb, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_dsv4_hc_post(" << x << ", " << residual << ", " << post << ", " << comb << ", " << dst << ")");
 
-    vk_pipeline pipeline = ctx->device->pipeline_dsv4_hc_post_f32;
+    vk_pipeline pipeline = comb ? ctx->device->pipeline_dsv4_hc_post_f32 : ctx->device->pipeline_dsv4_hc_post_nocomb_f32;
     GGML_ASSERT(pipeline != nullptr);
 
     const uint32_t n_embd   = (uint32_t)x->ne[0];
@@ -10394,7 +10404,7 @@ static void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subc
     const vk_subbuffer x_buf = ggml_vk_tensor_subbuffer(ctx, x,        true);
     const vk_subbuffer r_buf = ggml_vk_tensor_subbuffer(ctx, residual, true);
     const vk_subbuffer p_buf = ggml_vk_tensor_subbuffer(ctx, post,     true);
-    const vk_subbuffer c_buf = ggml_vk_tensor_subbuffer(ctx, comb,     true);
+    const vk_subbuffer c_buf = comb ? ggml_vk_tensor_subbuffer(ctx, comb, true) : x_buf;
     const vk_subbuffer d_buf = ggml_vk_tensor_subbuffer(ctx, dst,      true);
 
     vk_op_dsv4_hc_post_push_constants pc = {
@@ -10402,7 +10412,7 @@ static void ggml_vk_dsv4_hc_post(ggml_backend_vk_context * ctx, vk_context& subc
         ggml_vk_nb_elem(x, 0), ggml_vk_nb_elem(x, 1),
         ggml_vk_nb_elem(residual, 0), ggml_vk_nb_elem(residual, 1), ggml_vk_nb_elem(residual, 2),
         ggml_vk_nb_elem(post, 0), ggml_vk_nb_elem(post, 1),
-        ggml_vk_nb_elem(comb, 0), ggml_vk_nb_elem(comb, 1), ggml_vk_nb_elem(comb, 2),
+        comb ? ggml_vk_nb_elem(comb, 0) : 0, comb ? ggml_vk_nb_elem(comb, 1) : 0, comb ? ggml_vk_nb_elem(comb, 2) : 0,
         ggml_vk_nb_elem(dst,  0), ggml_vk_nb_elem(dst,  1), ggml_vk_nb_elem(dst,  2),
         0, 0, 0, 0, 0,
     };
@@ -19692,10 +19702,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
                 // hc is hardcoded to 4 in the shaders. ggml only constrains it
                 // to 4 for COMB, so PRE/POST have to be checked here.
-                if (op->op == GGML_OP_DSV4_HC_PRE && (op->src[0]->ne[1] != 4 || ggml_get_op_params_i32(op, 1) != 0)) {
+                if (op->op == GGML_OP_DSV4_HC_PRE && op->src[0]->ne[1] != 4) {
                     return false;
                 }
-                if (op->op == GGML_OP_DSV4_HC_POST && (op->src[1]->ne[1] != 4 || op->src[3] == nullptr)) {
+                if (op->op == GGML_OP_DSV4_HC_POST && op->src[1]->ne[1] != 4) {
                     return false;
                 }
                 if (op->op == GGML_OP_DSV4_HC_COMB) {
@@ -20695,7 +20705,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_dsv4_hc_comb(ggml_ctx, src_clone[0], src_clone[1], src_clone[2],
                 ggml_get_op_params_f32(tensor, 0), ggml_get_op_params_i32(tensor, 1));
         } else if (tensor->op == GGML_OP_DSV4_HC_PRE) {
-            tensor_clone = ggml_dsv4_hc_pre(ggml_ctx, src_clone[0], src_clone[1]);
+            if (ggml_get_op_params_i32(tensor, 1) != 0) {
+                tensor_clone = ggml_dsv4_hc_pre_gated(ggml_ctx, src_clone[0], src_clone[1], ggml_get_op_params_f32(tensor, 0));
+            } else {
+                tensor_clone = ggml_dsv4_hc_pre(ggml_ctx, src_clone[0], src_clone[1]);
+            }
         } else if (tensor->op == GGML_OP_DSV4_HC_POST) {
             tensor_clone = ggml_dsv4_hc_post(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], src_clone[3]);
         } else if (tensor->op == GGML_OP_MEAN) {
