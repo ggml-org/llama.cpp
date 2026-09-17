@@ -4,8 +4,9 @@
 
 // Currently only optimized for x86, new architectures should implement:
 // tiled_run_microtile:  16x16 microkernel
+// tiled_repack_codes: in-place 16-row src1 repack (no-op if the MAC wants the natural layout)
 // bit unpacking routines: tiled_unpk_nib4, tiled_unpk_2bit, tiled_unpk_or
-// LUT value expansion routines: tiled_lut8, tiled_unpk_sign8, tiled_unpk_tern8
+// LUT value expansion routines: tiled_lut8, tiled_unpk_sign32, tiled_unpk_tern8
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -88,22 +89,24 @@ inline void tiled_lut8(const uint8_t * lut, const uint8_t * src, uint8_t * dst) 
 }
 
 
-// 8 grid values with a per-lane sign flip: bit j of sign selects -src[j], else src[j];
-// result is (v + 128) or (128 - v) mod 256, safe for v < 128
-// sign is expanded to per-lane byte masks (0xFF / 0x00) so the AND is a per-lane select;
-// ksign_spread maps a nibble n to a word whose byte j is 0xFF if bit j of n
-static const uint32_t ksign_spread[16] = {
-    0x00000000, 0x000000FF, 0x0000FF00, 0x0000FFFF,
-    0x00FF0000, 0x00FF00FF, 0x00FFFF00, 0x00FFFFFF,
-    0xFF000000, 0xFF0000FF, 0xFF00FF00, 0xFF00FFFF,
-    0xFFFF0000, 0xFFFF00FF, 0xFFFFFF00, 0xFFFFFFFF,
-};
-inline void tiled_unpk_sign8(const uint8_t * src, uint8_t sign, uint8_t * dst) {
-    const __m128i mask = _mm_setr_epi32(ksign_spread[sign & 15], ksign_spread[(sign >> 4) & 15], 0, 0);
-    const __m128i v = _mm_loadl_epi64((const __m128i *) src);
-    const __m128i m = _mm_and_si128(v, mask);
-    _mm_storel_epi64((__m128i *) dst,
-                     _mm_sub_epi8(_mm_add_epi8(v, _mm_set1_epi8((int8_t) 128)), _mm_add_epi8(m, m)));
+// 32 grid magnitudes (4 x 64-bit groups g0..g3, 8 values each) + 4 sign bytes
+// (byte l signs values 8*l .. 8*l+7) -> codes stored as (value + 128)
+inline void tiled_unpk_sign32(uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g3,
+                              const uint8_t signs[4], uint8_t * dst32) {
+    const __m256i v  = _mm256_set_epi64x((int64_t) g3, (int64_t) g2, (int64_t) g1, (int64_t) g0);
+    const __m256i sv = _mm256_shuffle_epi8(_mm256_set1_epi32((int32_t) (signs[0] | signs[1] << 8 | signs[2] << 16 | signs[3] << 24)),
+                                           _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+                                                            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3));
+    const __m256i sel  = _mm256_set1_epi64x((int64_t) 0x8040201008040201ULL);
+    // 0xFF in every lane whose sign bit is set; GFNI does the and+compare in one instruction
+#ifdef __GFNI__
+    const __m256i mask = _mm256_gf2p8affine_epi64_epi8(sel, sv, 0);
+#else
+    const __m256i mask = _mm256_cmpeq_epi8(_mm256_and_si256(sv, sel), sel);
+#endif
+    // v ^ mask - mask negates the signed lanes (v elsewhere); + 128 gives the biased code
+    const __m256i sgn  = _mm256_sub_epi8(_mm256_xor_si256(v, mask), mask);
+    _mm256_storeu_si256((__m256i *) dst32, _mm256_add_epi8(sgn, _mm256_set1_epi8((int8_t) 128)));
 }
 // 8 ternary grid bytes (0 = 0, 1 = +1, 0xFF = -1): dst[j] = 128 + delta + 8 * (int8_t) src[j]
 inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
@@ -126,8 +129,16 @@ inline void tiled_unpk_or(uint8_t * dst, const uint8_t * src) {
 inline void tiled_lut8(const uint8_t * lut, const uint8_t * src, uint8_t * dst) {
     for (int j = 0; j < 16; j++) { dst[j] = lut[src[j]]; }
 }
-inline void tiled_unpk_sign8(const uint8_t * src, uint8_t sign, uint8_t * dst) {
-    for (int j = 0; j < 8; j++) { dst[j] = (sign & (1 << j)) ? (uint8_t) (128 - src[j]) : (uint8_t) (128 + src[j]); }
+inline void tiled_unpk_sign32(uint64_t g0, uint64_t g1, uint64_t g2, uint64_t g3,
+                              const uint8_t signs[4], uint8_t * dst32) {
+    const uint64_t g[4] = { g0, g1, g2, g3 };
+    for (int l = 0; l < 4; l++) {
+        const uint8_t * v = (const uint8_t *) &g[l];
+        const uint8_t s = signs[l];
+        for (int j = 0; j < 8; j++) {
+            dst32[8 * l + j] = (s & (1 << j)) ? (uint8_t) (128 - v[j]) : (uint8_t) (128 + v[j]);
+        }
+    }
 }
 // 8 ternary grid bytes (0 = 0, 1 = +1, 0xFF = -1): dst[j] = 128 + delta + 8 * (int8_t) src[j]
 inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
@@ -140,24 +151,18 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
 // num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256 (each weight
-// row one long stream) and the call reads the slab-th one; the standard path uses num_k=1,
-// slab=0 (the defaults) so the single-slab layout is unchanged.
+// row one long stream) and the call reads the slab-th one; the standard path passes
+// num_k=1, slab=0 so the single-slab layout is unchanged.
 template <int SUBBLK, bool HAS_MIN, int BIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
-// Repack one 16-row band (group) of the natural [row][256] src1 codes in-place into the
-// VNNI group-local [kg%16][kg/16][row][4] layout. Call once per band just before it's
-// swept, so only the bands actually used are repacked and each is L1-hot for its uses.
+// Repack a 16-row block of src1 codes in-place into the VNNI group-local [kg%16][kg/16][row][4]
+// layout. base points at row 0 (row r at base + r*row_stride); n_tiles 16x16 int32 tiles are
+// transposed to the right (tile t occupies bytes [t*64, t*64+64) of each row). row_stride is in
+// bytes (TILED_TILE_K for the standard path, num_k*TILED_TILE_K for the narrow path). All 16 rows
+// of a tile load before any store and a tile's rows are disjoint, so it is in-place with no temp.
 // No-op on non-VNNI.
-void tiled_repack_src1_band(tiled_tile_src1 * tile, int grp);
-
-// Transpose one 16-row x 64-k chunk of src1 codes in place (a 16x16 int32 tile). base
-// points at the 16-row group (row r at base + r*k_extent); c selects the chunk (0..3).
-// After the call, k-group kg reads as one 512-bit vector at base + (kg%16)*k_extent +
-// (kg/16)*64. All 16 rows load before any store and a chunk's rows are disjoint, so it
-// is in-place with no temp. k_extent is the code row stride (TILED_TILE_K for the standard
-// path, num_k*TILED_TILE_K for the narrow path). No-op on non-VNNI.
-void tiled_repack_16x16(uint8_t * base, int c, int k_extent);
+void tiled_repack_codes(uint8_t * base, int n_tiles, int row_stride);
 
 

@@ -1209,10 +1209,10 @@ int main(int argc, char ** argv) {
     // are vs the vec-only reference. Each pass runs use_ref=false.
     if (run_bench) {
         printf("Starting benchmark runs.\n");
-        const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                                          GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
-                                          GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
-        const size_t n_types = sizeof(bench_types) / sizeof(bench_types[0]);
+        // const ggml_type bench_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+        //                                   GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+        //                                   GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
+        // const size_t n_types = sizeof(bench_types) / sizeof(bench_types[0]);
         // the types IQP implements (iqp_type_supported in iqp.cpp): q5_K and the IQ grid
         const ggml_type ab_types[] = { GGML_TYPE_Q5_K,
                                        GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
@@ -1260,10 +1260,10 @@ int main(int argc, char ** argv) {
             { 1024, 2048, 32,   8, 1,  512 },  // cne1 = 128, wide experts
             { 2048, 1024, 16,   8, 1, 1024 },  // cne1 = 512, long dot
         };
-        const ggml_type mmid_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
-                                         GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
-                                         GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
-        const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
+        // const ggml_type mmid_types[] = { GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K,
+        //                                  GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
+        //                                  GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
+        // const size_t n_mmid_types = sizeof(mmid_types) / sizeof(mmid_types[0]);
         const ggml_type mmid_ab_types[] = { GGML_TYPE_Q5_K,
                                             GGML_TYPE_IQ4_XS, GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S,
                                             GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M };
