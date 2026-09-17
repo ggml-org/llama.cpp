@@ -239,6 +239,11 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
 bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor);
 bool ggml_openvino_buffer_is_external(const ggml_tensor * tensor);
 
+// Drop resident pages from a non-owning GGUF mmap-backed OpenVINO buffer while
+// keeping the virtual mapping valid so tensor pointers can fault pages back in.
+// Returns the number of bytes submitted to the OS, or 0 for non-external buffers.
+size_t ggml_openvino_buffer_release_external_pages(const ggml_tensor * tensor);
+
 // Register an extra with the tensor's OpenVINO buffer context for proper lifetime management.
 // This sets tensor->extra and tracks the extra in the buffer context for cleanup.
 void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra);

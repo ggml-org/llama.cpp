@@ -38,6 +38,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -433,6 +434,40 @@ static uint64_t ggml_openvino_model_cache_mix_string(uint64_t hash, const char *
         hash = hash * 131 + static_cast<unsigned char>(*value++);
     }
     return hash * 131 + 1;
+}
+
+static size_t release_external_weight_pages(const ggml_cgraph * cgraph) {
+    std::unordered_set<ggml_backend_buffer_t> released_buffers;
+    std::unordered_set<const ggml_tensor *> visited_tensors;
+    size_t released_bytes = 0;
+
+    std::function<void(const ggml_tensor *)> visit = [&](const ggml_tensor * tensor) {
+        if (tensor == nullptr || !visited_tensors.insert(tensor).second) {
+            return;
+        }
+
+        const ggml_tensor * base = tensor;
+        while (base->view_src != nullptr) {
+            base = base->view_src;
+        }
+        if (base->buffer != nullptr && base->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+            ggml_openvino_buffer_is_external(base) && released_buffers.insert(base->buffer).second) {
+            released_bytes += ggml_openvino_buffer_release_external_pages(base);
+        }
+
+        visit(tensor->view_src);
+        for (const auto * src : tensor->src) {
+            visit(src);
+        }
+    };
+
+    for (int i = 0; i < cgraph->n_leafs; ++i) {
+        visit(cgraph->leafs[i]);
+    }
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        visit(cgraph->nodes[i]);
+    }
+    return released_bytes;
 }
 
 ov::Tensor create_ov_output_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decoder,
@@ -1924,6 +1959,18 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 
                 if (skip_weights) {
                     try {
+                        if (ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_RELEASE_MMAP_PAGES")) {
+                            const size_t released_bytes = release_external_weight_pages(cgraph);
+                            if (released_bytes > 0) {
+                                GGML_LOG_INFO("ggml-openvino: released %.2f MiB of GGUF mmap resident pages before %s blob import\n",
+                                              released_bytes / 1024.0 / 1024.0, tag);
+                                if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING")) {
+                                    fprintf(stderr,
+                                            "ggml-openvino: GGUF mmap page release before %s import: %.2f MiB\n",
+                                            tag, released_bytes / 1024.0 / 1024.0);
+                                }
+                            }
+                        }
                         std::ifstream blob_in(blob_path, std::ios::binary);
                         const int64_t import_start_time = ggml_time_us();
                         compiled_model = core.import_model(blob_in, device, model_config);

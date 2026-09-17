@@ -167,6 +167,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_SELF_CONTAINED_BLOB",
         "GGML_OPENVINO_SELF_CONTAINED_MMAP",
         "GGML_OPENVINO_SELF_CONTAINED_LAZY_IMPORT",
+        "GGML_OPENVINO_SELF_CONTAINED_RELEASE_MMAP_PAGES",
         // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
         "GGML_OPENVINO_FULL_GRAPH_KEY",
     };
