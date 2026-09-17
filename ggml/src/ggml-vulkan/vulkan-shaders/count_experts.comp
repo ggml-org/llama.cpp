@@ -33,7 +33,7 @@ layout (binding = 1) writeonly buffer D {uint data_d[];};
 // Upper bound on n_experts for the hoisted row-id path. Must match the limit in
 // ggml_vk_mul_mat_id_q_f16 (hoist_row_ids). The non-hoisted reduction below only
 // needs BLOCK_SIZE entries.
-#define MAX_EXPERTS 512
+#define MAX_EXPERTS 1024
 
 shared uint vals[MAX_EXPERTS];
 shared uint offsets[MAX_EXPERTS];
