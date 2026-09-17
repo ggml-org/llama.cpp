@@ -372,6 +372,7 @@ class ServerProcess:
         data: dict | Any | None = None,
         headers: dict | None = None,
         timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        body: bytes | str | None = None,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
@@ -379,7 +380,13 @@ class ServerProcess:
             response = requests.get(url, headers=headers, timeout=timeout)
             parse_body = True
         elif method == "POST":
-            response = requests.post(url, headers=headers, json=data, timeout=timeout)
+            # Send raw payloads without JSON serialization, including malformed or empty bodies.
+            if body is not None:
+                headers = {} if headers is None else dict(headers)
+                headers.setdefault("Content-Type", "application/json")
+                response = requests.post(url, headers=headers, data=body, timeout=timeout)
+            else:
+                response = requests.post(url, headers=headers, json=data, timeout=timeout)
             parse_body = True
         elif method == "DELETE":
             response = requests.delete(url, headers=headers, timeout=timeout)
