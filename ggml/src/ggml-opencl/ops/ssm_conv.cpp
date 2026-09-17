@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_ssm_conv(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_ssm_conv_f32_f32   = clCreateKernel(prog, "kernel_ssm_conv_f32_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_ssm_conv_f32_f32_4 = clCreateKernel(prog, "kernel_ssm_conv_f32_f32_4", &err), err));
+        CL_CHECK((backend_ctx->ssm_conv.kernel_ssm_conv_f32_f32   = clCreateKernel(prog, "kernel_ssm_conv_f32_f32", &err), err));
+        CL_CHECK((backend_ctx->ssm_conv.kernel_ssm_conv_f32_f32_4 = clCreateKernel(prog, "kernel_ssm_conv_f32_f32_4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -55,10 +55,10 @@ void ggml_cl_ssm_conv(ggml_backend_t backend, const ggml_tensor * src0, const gg
     cl_ulong nb1 = dst->nb[1];
     cl_ulong nb2 = dst->nb[2];
 
-    cl_kernel kernel = backend_ctx->kernel_ssm_conv_f32_f32;
+    cl_kernel kernel = backend_ctx->ssm_conv.kernel_ssm_conv_f32_f32;
 
     if (ne10 % 4 == 0) {
-        kernel = backend_ctx->kernel_ssm_conv_f32_f32_4;
+        kernel = backend_ctx->ssm_conv.kernel_ssm_conv_f32_f32_4;
     }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));

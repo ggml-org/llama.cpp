@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_sum_rows(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_sum_rows_f32   = clCreateKernel(prog, "kernel_sum_rows_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_sum_rows_f32_4 = clCreateKernel(prog, "kernel_sum_rows_f32_4", &err), err));
+        CL_CHECK((backend_ctx->sum_rows.kernel_sum_rows_f32   = clCreateKernel(prog, "kernel_sum_rows_f32", &err), err));
+        CL_CHECK((backend_ctx->sum_rows.kernel_sum_rows_f32_4 = clCreateKernel(prog, "kernel_sum_rows_f32_4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -57,9 +57,9 @@ void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, const gg
 
     const bool is_c4 = ne00 % 4 == 0;
     if (is_c4) {
-        kernel = backend_ctx->kernel_sum_rows_f32_4;
+        kernel = backend_ctx->sum_rows.kernel_sum_rows_f32_4;
     } else {
-        kernel = backend_ctx->kernel_sum_rows_f32;
+        kernel = backend_ctx->sum_rows.kernel_sum_rows_f32;
     }
 
     CL_CHECK(clSetKernelArg(kernel,   0, sizeof(cl_mem),   &extra0->data_device));

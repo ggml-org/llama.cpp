@@ -16,8 +16,8 @@ void ggml_cl_load_kernels_silu(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_silu   = clCreateKernel(prog, "kernel_silu", &err), err));
-        CL_CHECK((backend_ctx->kernel_silu_4 = clCreateKernel(prog, "kernel_silu_4", &err), err));
+        CL_CHECK((backend_ctx->silu.kernel_silu   = clCreateKernel(prog, "kernel_silu", &err), err));
+        CL_CHECK((backend_ctx->silu.kernel_silu_4 = clCreateKernel(prog, "kernel_silu_4", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -44,10 +44,10 @@ void ggml_cl_silu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
     int n = ggml_nelements(dst);
 
     if (n % 4 == 0) {
-        kernel = backend_ctx->kernel_silu_4;
+        kernel = backend_ctx->silu.kernel_silu_4;
         n /= 4;
     } else {
-        kernel = backend_ctx->kernel_silu;
+        kernel = backend_ctx->silu.kernel_silu;
     }
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));

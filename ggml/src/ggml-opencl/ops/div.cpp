@@ -21,10 +21,10 @@ void ggml_cl_load_kernels_div(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), div_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_div         = clCreateKernel(prog, "kernel_div", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_row     = clCreateKernel(prog, "kernel_div_row", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_f16     = clCreateKernel(prog, "kernel_div_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_row_f16 = clCreateKernel(prog, "kernel_div_row_f16", &err), err));
+        CL_CHECK((backend_ctx->div.kernel_div         = clCreateKernel(prog, "kernel_div", &err), err));
+        CL_CHECK((backend_ctx->div.kernel_div_row     = clCreateKernel(prog, "kernel_div_row", &err), err));
+        CL_CHECK((backend_ctx->div.kernel_div_f16     = clCreateKernel(prog, "kernel_div_f16", &err), err));
+        CL_CHECK((backend_ctx->div.kernel_div_row_f16 = clCreateKernel(prog, "kernel_div_row_f16", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -92,9 +92,9 @@ void ggml_cl_div(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         int ne = ne00 / 4;
 
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_div_row;
+            kernel = backend_ctx->div.kernel_div_row;
         } else {
-            kernel = backend_ctx->kernel_div_row_f16;
+            kernel = backend_ctx->div.kernel_div_row_f16;
         }
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
@@ -106,9 +106,9 @@ void ggml_cl_div(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &ne));
     } else {
         if (src0->type == GGML_TYPE_F32) {
-            kernel = backend_ctx->kernel_div;
+            kernel = backend_ctx->div.kernel_div;
         } else {
-            kernel = backend_ctx->kernel_div_f16;
+            kernel = backend_ctx->div.kernel_div_f16;
         }
 
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));

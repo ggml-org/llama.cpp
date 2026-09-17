@@ -78,8 +78,8 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             transpose_2d_as_32b(backend_ctx, extra->dm, dm, extra->size_dm, m, k/(int)blck, true, true);
         }
 #endif
-        cl_kernel kernel = extra->noshuffle ? backend_ctx->kernel_restore_block_q2_k_noshuffle
-                                           : backend_ctx->kernel_restore_block_q2_K;
+        cl_kernel kernel = extra->noshuffle ? backend_ctx->repack.kernel_restore_block_q2_k_noshuffle
+                                           : backend_ctx->repack.kernel_restore_block_q2_K;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &qs));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &sc));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &dm));
@@ -118,7 +118,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             transpose_2d_as_32b(backend_ctx, extra->q, buf_trans_q.buffer, size_q, M, K/32);
             transpose_2d_as_16b(backend_ctx, extra->d, buf_trans_d.buffer, size_d, M, K/128);
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q1_0;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q1_0;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_d.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf_unpacked.buffer));
@@ -138,7 +138,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE, ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q1_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q1_0;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
@@ -175,7 +175,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_0_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_0_trans4_ns;
 
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
@@ -234,7 +234,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_0_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_0_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_d.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_unpacked.buffer));
@@ -250,7 +250,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
         GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q4_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_0;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
@@ -275,7 +275,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_1_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_1_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -332,7 +332,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_1_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_1_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_d.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_m.buffer));
@@ -349,7 +349,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
         GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q4_1;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_1;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->m));
@@ -377,7 +377,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_0_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_0_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -432,7 +432,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_0_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_0_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_qs.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_d.buffer));
@@ -451,7 +451,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q5_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_0;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->qs));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qh));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
@@ -479,7 +479,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_1_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_1_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -540,7 +540,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             size_t global_work_size[] = {(size_t)ggml_nelements(tensor)/ggml_blck_size(tensor->type), 1, 1};
             size_t local_work_size[] = {1, 1, 1};
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_1_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_1_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_qs.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_d.buffer));
@@ -559,7 +559,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             ggml_nbytes(tensor), NULL, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q5_1;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_1;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->qs));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qh));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
@@ -587,7 +587,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_restore_block_mxfp4_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_mxfp4_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -613,7 +613,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         }
 
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_restore_block_mxfp4;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_mxfp4;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->e));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
@@ -650,7 +650,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (enable_adreno_trans_weight(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q8_0_trans;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q8_0_trans;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -678,7 +678,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             return;
         }
 #endif
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q8_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q8_0;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->d));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
@@ -727,7 +727,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             cl_uchar mask_0F = 0x0F;
             cl_uchar mask_F0 = 0xF0;
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_iq4_nl_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq4_nl_noshuffle;
             cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
 
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
@@ -745,7 +745,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             return;
         }
 #endif
-        cl_kernel kernel = backend_ctx->kernel_restore_block_iq4_nl;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_iq4_nl;
         cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
@@ -828,7 +828,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_k_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -885,7 +885,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             transpose_2d_as_16b(backend_ctx, extra->dm, buf_trans_dm.buffer, size_dm, M, K/256);
             transpose_2d_as_8b (backend_ctx, extra->s,  buf_trans_s.buffer,  size_s,  M, K/256*12, true, true);
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q4_K_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_K_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &buf_trans_s.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &buf_trans_d.buffer));
@@ -906,7 +906,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q4_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q4_K;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->s));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->d));
@@ -941,7 +941,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_k_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -1006,7 +1006,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             transpose_2d_as_16b(backend_ctx, extra->d,  buf_trans_d.buffer,  size_d,  M, K/256);
             transpose_2d_as_16b(backend_ctx, extra->dm, buf_trans_dm.buffer, size_dm, M, K/256);
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q5_K_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_K_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_s));
@@ -1028,7 +1028,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q5_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q5_K;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra->q));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qh));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->s));
@@ -1114,7 +1114,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             cl_mem data_device = ggml_cl_create_temp_download_buffer(context, queue, ggml_nbytes(tensor), tensor->name);
             GGML_ASSERT(data_device != NULL && "get_tensor: temp download buffer alloc failed");
 
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q6_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q6_k_trans4_ns;
 
             cl_uchar mask_0F = 0x0F;
             cl_uchar mask_F0 = 0xF0;
@@ -1187,7 +1187,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
             // unpack
             cl_uchar mask = 0xFF;
             cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
-            cl_kernel kernel = backend_ctx->kernel_restore_block_q6_K_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q6_K_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_ql.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &s_buffer));
@@ -1213,7 +1213,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
 
         cl_uchar mask = 0xFF;
         cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
-        cl_kernel kernel = backend_ctx->kernel_restore_block_q6_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_restore_block_q6_K;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra->ql));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qh));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra->s));
@@ -1251,7 +1251,7 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
         cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE, size, NULL, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_convert_f16_to_bf16;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_f16_to_bf16;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &off_src));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &data_device));
@@ -1280,4 +1280,3 @@ void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, const g
 
     GGML_UNUSED(buffer);
 }
-

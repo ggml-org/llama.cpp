@@ -179,7 +179,7 @@ void transpose_2d_as_8b(
     bool blocking,
     bool auto_local
 ) {
-    transpose_2d(backend_ctx, backend_ctx->kernel_transpose_8_buf,
+    transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_8_buf,
         src, dst, size, stride, rows, blocking, auto_local);
 }
 
@@ -189,7 +189,7 @@ void transpose_2d_as_16b(
     cl_int stride, cl_int rows,
     bool blocking
 ) {
-    transpose_2d(backend_ctx, backend_ctx->kernel_transpose_16_buf,
+    transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_16_buf,
         src, dst, size, stride, rows, blocking);
 }
 
@@ -200,7 +200,7 @@ void transpose_2d_as_32b(
     bool blocking,
     bool auto_local
 ) {
-    transpose_2d(backend_ctx, backend_ctx->kernel_transpose_32_buf,
+    transpose_2d(backend_ctx, backend_ctx->mul_mat.kernel_transpose_32_buf,
         src, dst, size, stride, rows, blocking, auto_local);
 }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -454,8 +454,8 @@ bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_c
 // we store SOA'ed tensors in a map in set_tensor, check against that map
 bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (!backend_ctx->kernel_gemv_noshuffle_q4_0_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin) {
+    if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q4_0_f32_32b_trans ||
+        !backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -470,8 +470,8 @@ bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 
 bool use_q4_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (!backend_ctx->kernel_gemv_noshuffle_q4_k_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin) {
+    if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q4_k_f32_32b_trans ||
+        !backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -487,8 +487,8 @@ bool use_q4_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 
 bool use_q5_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (!backend_ctx->kernel_gemv_noshuffle_q5_k_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin) {
+    if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q5_k_f32_32b_trans ||
+        !backend_ctx->mul_mat.kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin) {
         return false;
     }
     return (tensor->ne[0] % 256 == 0) && (tensor->ne[1] % 64 == 0);
@@ -501,8 +501,8 @@ bool use_q5_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const 
 
 bool use_q6_k_bin_kernels(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    if (!backend_ctx->kernel_gemv_noshuffle_q6_k_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin) {
+    if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q6_k_f32_32b_trans ||
+        !backend_ctx->mul_mat.kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights

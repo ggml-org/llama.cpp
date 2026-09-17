@@ -15,83 +15,83 @@ void ggml_cl_load_kernels_repack(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_convert_block_q1_0  = clCreateKernel(prog, "kernel_convert_block_q1_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q1_0  = clCreateKernel(prog, "kernel_restore_block_q1_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_0_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_0_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_0_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_0_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_0  = clCreateKernel(prog, "kernel_convert_block_q4_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_0  = clCreateKernel(prog, "kernel_restore_block_q4_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_0_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_0_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_0_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_0_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_1_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_1_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_1_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_1_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_1  = clCreateKernel(prog, "kernel_convert_block_q4_1", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_1  = clCreateKernel(prog, "kernel_restore_block_q4_1", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_1_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_1_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_1_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_1_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_0  = clCreateKernel(prog, "kernel_convert_block_q5_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_0  = clCreateKernel(prog, "kernel_restore_block_q5_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_0_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_0_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_0_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_0_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_1_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_1_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_1_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_1_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_0_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_0_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_0_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_0_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_1  = clCreateKernel(prog, "kernel_convert_block_q5_1", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_1  = clCreateKernel(prog, "kernel_restore_block_q5_1", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_1_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_1_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_1_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_1_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_k_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q1_0  = clCreateKernel(prog, "kernel_convert_block_q1_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q1_0  = clCreateKernel(prog, "kernel_restore_block_q1_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_0_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_0_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_0_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_0_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_0  = clCreateKernel(prog, "kernel_convert_block_q4_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_0  = clCreateKernel(prog, "kernel_restore_block_q4_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_0_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_0_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_0_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_0_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_1_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_1_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_1_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_1_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_1  = clCreateKernel(prog, "kernel_convert_block_q4_1", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_1  = clCreateKernel(prog, "kernel_restore_block_q4_1", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_1_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_1_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_1_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_1_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_0  = clCreateKernel(prog, "kernel_convert_block_q5_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_0  = clCreateKernel(prog, "kernel_restore_block_q5_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_0_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_0_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_0_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_0_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_1_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_1_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_1_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_1_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_0_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_0_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_0_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_0_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_1  = clCreateKernel(prog, "kernel_convert_block_q5_1", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_1  = clCreateKernel(prog, "kernel_restore_block_q5_1", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_1_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_1_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_1_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_1_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q4_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q4_k_trans4_ns", &err), err));
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_k_tiled_ns = clCreateKernel(prog, "kernel_convert_block_q4_k_tiled_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_k_tiled_ns = clCreateKernel(prog, "kernel_convert_block_q4_k_tiled_ns", &err), err));
 #endif
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_k_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_k_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q6_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q6_k_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q6_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q6_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q5_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q5_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_k_trans4_ns = clCreateKernel(prog, "kernel_convert_block_q6_k_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q6_k_trans4_ns = clCreateKernel(prog, "kernel_restore_block_q6_k_trans4_ns", &err), err));
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        CL_CHECK((backend_ctx->kernel_convert_block_q6_k_tiled_ns = clCreateKernel(prog, "kernel_convert_block_q6_k_tiled_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_k_tiled_ns = clCreateKernel(prog, "kernel_convert_block_q6_k_tiled_ns", &err), err));
 #endif
-        CL_CHECK((backend_ctx->kernel_convert_block_mxfp4 = clCreateKernel(prog, "kernel_convert_block_mxfp4", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_mxfp4_trans = clCreateKernel(prog, "kernel_convert_block_mxfp4_trans", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_mxfp4_trans4_ns = clCreateKernel(prog, "kernel_convert_block_mxfp4_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_mxfp4_trans4_ns = clCreateKernel(prog, "kernel_restore_block_mxfp4_trans4_ns", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_mxfp4_trans = clCreateKernel(prog, "kernel_restore_block_mxfp4_trans", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_mxfp4 = clCreateKernel(prog, "kernel_restore_block_mxfp4", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q8_0  = clCreateKernel(prog, "kernel_convert_block_q8_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q8_0  = clCreateKernel(prog, "kernel_restore_block_q8_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q8_0_trans  = clCreateKernel(prog, "kernel_restore_block_q8_0_trans", &err), err));
-        CL_CHECK((backend_ctx->kernel_dequant_q8_0_f16_view_aos = clCreateKernel(prog, "kernel_dequant_q8_0_f16_view_aos", &err), err));
-        CL_CHECK((backend_ctx->kernel_dequant_q8_0_f32_view_aos = clCreateKernel(prog, "kernel_dequant_q8_0_f32_view_aos", &err), err));
-        CL_CHECK((backend_ctx->kernel_dequant_q4_0_f16_view_aos = clCreateKernel(prog, "kernel_dequant_q4_0_f16_view_aos", &err), err));
-        CL_CHECK((backend_ctx->kernel_dequant_q4_0_f32_view_aos = clCreateKernel(prog, "kernel_dequant_q4_0_f32_view_aos", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_K  = clCreateKernel(prog, "kernel_convert_block_q4_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_K  = clCreateKernel(prog, "kernel_restore_block_q4_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q4_K_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q4_K_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_K  = clCreateKernel(prog, "kernel_convert_block_q5_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_K  = clCreateKernel(prog, "kernel_restore_block_q5_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q5_K_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q5_K_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q2_k_noshuffle = clCreateKernel(prog, "kernel_convert_block_q2_k_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q2_k_noshuffle = clCreateKernel(prog, "kernel_restore_block_q2_k_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q2_K = clCreateKernel(prog, "kernel_convert_block_q2_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q2_K = clCreateKernel(prog, "kernel_restore_block_q2_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q6_K  = clCreateKernel(prog, "kernel_convert_block_q6_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q6_K  = clCreateKernel(prog, "kernel_restore_block_q6_K", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_q6_K_noshuffle  = clCreateKernel(prog, "kernel_convert_block_q6_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_q6_K_noshuffle  = clCreateKernel(prog, "kernel_restore_block_q6_K_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_iq4_nl = clCreateKernel(prog, "kernel_convert_block_iq4_nl", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_iq4_nl = clCreateKernel(prog, "kernel_restore_block_iq4_nl", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_block_iq4_nl_noshuffle = clCreateKernel(prog, "kernel_convert_block_iq4_nl_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_restore_block_iq4_nl_noshuffle = clCreateKernel(prog, "kernel_restore_block_iq4_nl_noshuffle", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_bf16_to_f16 = clCreateKernel(prog, "kernel_convert_bf16_to_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_convert_f16_to_bf16 = clCreateKernel(prog, "kernel_convert_f16_to_bf16", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_mxfp4 = clCreateKernel(prog, "kernel_convert_block_mxfp4", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_mxfp4_trans = clCreateKernel(prog, "kernel_convert_block_mxfp4_trans", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_mxfp4_trans4_ns = clCreateKernel(prog, "kernel_convert_block_mxfp4_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_mxfp4_trans4_ns = clCreateKernel(prog, "kernel_restore_block_mxfp4_trans4_ns", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_mxfp4_trans = clCreateKernel(prog, "kernel_restore_block_mxfp4_trans", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_mxfp4 = clCreateKernel(prog, "kernel_restore_block_mxfp4", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q8_0  = clCreateKernel(prog, "kernel_convert_block_q8_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q8_0  = clCreateKernel(prog, "kernel_restore_block_q8_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q8_0_trans  = clCreateKernel(prog, "kernel_restore_block_q8_0_trans", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_dequant_q8_0_f16_view_aos = clCreateKernel(prog, "kernel_dequant_q8_0_f16_view_aos", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_dequant_q8_0_f32_view_aos = clCreateKernel(prog, "kernel_dequant_q8_0_f32_view_aos", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_dequant_q4_0_f16_view_aos = clCreateKernel(prog, "kernel_dequant_q4_0_f16_view_aos", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_dequant_q4_0_f32_view_aos = clCreateKernel(prog, "kernel_dequant_q4_0_f32_view_aos", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_K  = clCreateKernel(prog, "kernel_convert_block_q4_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_K  = clCreateKernel(prog, "kernel_restore_block_q4_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q4_K_noshuffle = clCreateKernel(prog, "kernel_convert_block_q4_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q4_K_noshuffle = clCreateKernel(prog, "kernel_restore_block_q4_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_K  = clCreateKernel(prog, "kernel_convert_block_q5_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_K  = clCreateKernel(prog, "kernel_restore_block_q5_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q5_K_noshuffle = clCreateKernel(prog, "kernel_convert_block_q5_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q5_K_noshuffle = clCreateKernel(prog, "kernel_restore_block_q5_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q2_k_noshuffle = clCreateKernel(prog, "kernel_convert_block_q2_k_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q2_k_noshuffle = clCreateKernel(prog, "kernel_restore_block_q2_k_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q2_K = clCreateKernel(prog, "kernel_convert_block_q2_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q2_K = clCreateKernel(prog, "kernel_restore_block_q2_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_K  = clCreateKernel(prog, "kernel_convert_block_q6_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q6_K  = clCreateKernel(prog, "kernel_restore_block_q6_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_q6_K_noshuffle  = clCreateKernel(prog, "kernel_convert_block_q6_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_q6_K_noshuffle  = clCreateKernel(prog, "kernel_restore_block_q6_K_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_iq4_nl = clCreateKernel(prog, "kernel_convert_block_iq4_nl", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_iq4_nl = clCreateKernel(prog, "kernel_restore_block_iq4_nl", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_block_iq4_nl_noshuffle = clCreateKernel(prog, "kernel_convert_block_iq4_nl_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_restore_block_iq4_nl_noshuffle = clCreateKernel(prog, "kernel_restore_block_iq4_nl_noshuffle", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_bf16_to_f16 = clCreateKernel(prog, "kernel_convert_bf16_to_f16", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_convert_f16_to_bf16 = clCreateKernel(prog, "kernel_convert_f16_to_bf16", &err), err));
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q8_0 = clCreateKernel(prog, "kernel_moe_expand_scale_q8_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_0 = clCreateKernel(prog, "kernel_moe_expand_scale_q5_0", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_expand_scale_q5_K = clCreateKernel(prog, "kernel_moe_expand_scale_q5_K", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_moe_expand_scale_q8_0 = clCreateKernel(prog, "kernel_moe_expand_scale_q8_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_moe_expand_scale_q5_0 = clCreateKernel(prog, "kernel_moe_expand_scale_q5_0", &err), err));
+        CL_CHECK((backend_ctx->repack.kernel_moe_expand_scale_q5_K = clCreateKernel(prog, "kernel_moe_expand_scale_q5_K", &err), err));
 #endif
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
@@ -186,8 +186,8 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         region.size   = size_dm;
         CL_CHECK((extra->dm = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-        cl_kernel kernel = extra->noshuffle ? backend_ctx->kernel_convert_block_q2_k_noshuffle
-                                           : backend_ctx->kernel_convert_block_q2_K;
+        cl_kernel kernel = extra->noshuffle ? backend_ctx->repack.kernel_convert_block_q2_k_noshuffle
+                                           : backend_ctx->repack.kernel_convert_block_q2_K;
         cl_ulong nb_arg = (cl_ulong)n_blk;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &extra->qs));
@@ -264,7 +264,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q1_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q1_0;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
@@ -364,7 +364,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno moe q4_0 kernel needs special transpose and unshuffling
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q4_0_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_0_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -401,14 +401,14 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_0;
 
         // The optimized kernels need weights in natural order, so unshuffle.
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_q4_0_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_q4_0_noshuffle;
         }
 #else
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_0;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
@@ -517,7 +517,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno moe q4_1 kernel needs special transpose and unshuffling
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_1_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -554,13 +554,13 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
         // normal q4_1 repack
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_1;
 
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_q4_1_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_q4_1_noshuffle;
         }
 #else
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_1;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_1;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
@@ -643,7 +643,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno moe q5_0 kernel needs special transpose and unshuffling
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q5_0_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_0_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -685,7 +685,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
                     size_t mn_elems = (size_t)ne02 * ne01 * nb32;
                     extra->scale = clCreateBuffer(context, CL_MEM_READ_WRITE, sc_elems * sizeof(cl_half), NULL, &err); CL_CHECK(err);
                     extra->min   = clCreateBuffer(context, CL_MEM_READ_WRITE, mn_elems * sizeof(cl_half), NULL, &err); CL_CHECK(err);
-                    cl_kernel ek = backend_ctx->kernel_moe_expand_scale_q5_0;
+                    cl_kernel ek = backend_ctx->repack.kernel_moe_expand_scale_q5_0;
                     CL_CHECK(clSetKernelArg(ek, 0, sizeof(cl_mem), &extra->d));
                     CL_CHECK(clSetKernelArg(ek, 1, sizeof(cl_mem), &extra->scale));
                     CL_CHECK(clSetKernelArg(ek, 2, sizeof(cl_mem), &extra->min));
@@ -705,7 +705,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q5_0_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_0_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->qh));
@@ -735,7 +735,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             return;
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q5_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_0;
         cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
@@ -814,7 +814,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno moe q5_1 kernel needs special transpose and unshuffling
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q5_1_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_1_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -852,7 +852,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q5_1_noshuffle;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_1_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra->qh));
@@ -885,7 +885,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             return;
         }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q5_1;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_1;
         cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->qs));
@@ -945,7 +945,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         // Adreno moe mxfp4 kernel needs special transpose and unshuffling
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_mxfp4_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_mxfp4_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -980,7 +980,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         }
 
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_mxfp4;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_mxfp4;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
@@ -1049,7 +1049,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q8_0;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q8_0;
 
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->q));
@@ -1080,7 +1080,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
                 size_t scale_elems = (size_t)ne02 * ne01 * nb32 * 2;   // 2 per-16-seg scales / 32-block
                 extra->scale = clCreateBuffer(context, CL_MEM_READ_WRITE, scale_elems * sizeof(cl_half), NULL, &err);
                 CL_CHECK(err);
-                cl_kernel ek = backend_ctx->kernel_moe_expand_scale_q8_0;
+                cl_kernel ek = backend_ctx->repack.kernel_moe_expand_scale_q8_0;
                 CL_CHECK(clSetKernelArg(ek, 0, sizeof(cl_mem), &extra->d));
                 CL_CHECK(clSetKernelArg(ek, 1, sizeof(cl_mem), &extra->scale));
                 CL_CHECK(clSetKernelArg(ek, 2, sizeof(int), &ne00));
@@ -1148,12 +1148,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         CL_CHECK(err);
 
     #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_iq4_nl;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_iq4_nl;
         if (use_adreno_kernels(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_iq4_nl_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_iq4_nl_noshuffle;
         }
     #else
-        cl_kernel kernel = backend_ctx->kernel_convert_block_iq4_nl;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_iq4_nl;
     #endif
         cl_ulong n_blk = ggml_nelements(tensor)/ggml_blck_size(tensor->type);
         cl_uchar mask_0F = 0x0F;
@@ -1247,7 +1247,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q4_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_k_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -1295,7 +1295,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         // the final 64-row-tiled canonical layout directly into q/d/dm/s (buffer
         // sizes already match), read back by kernel_gemv_noshuffle_q4_k_f32_tiled.
         if (use_q4k_tiled(backend_ctx, tensor)) {
-            cl_kernel tk = backend_ctx->kernel_convert_block_q4_k_tiled_ns;
+            cl_kernel tk = backend_ctx->repack.kernel_convert_block_q4_k_tiled_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -1322,12 +1322,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             return;
         }
 
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_K;
         if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_q4_K_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_q4_K_noshuffle;
         }
 #else
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q4_K;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
         cl_uchar mask_0F = 0x0F;
@@ -1452,7 +1452,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q5_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_k_trans4_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -1501,7 +1501,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
                     size_t mn_elems = (size_t)ne02 * ne01 * nb32;
                     extra->scale = clCreateBuffer(context, CL_MEM_READ_WRITE, sc_elems * sizeof(cl_half), NULL, &err); CL_CHECK(err);
                     extra->min   = clCreateBuffer(context, CL_MEM_READ_WRITE, mn_elems * sizeof(cl_half), NULL, &err); CL_CHECK(err);
-                    cl_kernel ek = backend_ctx->kernel_moe_expand_scale_q5_K;
+                    cl_kernel ek = backend_ctx->repack.kernel_moe_expand_scale_q5_K;
                     CL_CHECK(clSetKernelArg(ek, 0, sizeof(cl_mem), &extra->s));
                     CL_CHECK(clSetKernelArg(ek, 1, sizeof(cl_mem), &extra->d));
                     CL_CHECK(clSetKernelArg(ek, 2, sizeof(cl_mem), &extra->dm));
@@ -1522,12 +1522,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_K;
         if (enable_adreno_trans_weight_q5_K(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_q5_K_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_q5_K_noshuffle;
         }
 #else
-        cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q5_K;
 #endif
 
         cl_uchar mask_0F = 0x0F;
@@ -1647,7 +1647,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             region.size = moe_size_d;
             CL_CHECK((extra->d = clCreateSubBuffer(extra_orig->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
 
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q6_k_trans4_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q6_k_trans4_ns;
 
             cl_uchar mask_0F = 0x0F;
             cl_uchar mask_F0 = 0xF0;
@@ -1721,7 +1721,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         // sizes already match), read back by kernel_gemv_noshuffle_q6_K_f32_tiled.
         // Bypasses the plain-SOA convert + per-array transpose below.
         if (use_q6k_tiled(backend_ctx, tensor)) {
-            cl_kernel kernel = backend_ctx->kernel_convert_block_q6_k_tiled_ns;
+            cl_kernel kernel = backend_ctx->repack.kernel_convert_block_q6_k_tiled_ns;
 
             int ne00 = tensor->ne[0];
             int ne01 = tensor->ne[1];
@@ -1755,12 +1755,12 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
         // Flatten the weights
         cl_kernel kernel;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        kernel = backend_ctx->kernel_convert_block_q6_K;
+        kernel = backend_ctx->repack.kernel_convert_block_q6_K;
         if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q6_K(backend_ctx, tensor)) {
-            kernel = backend_ctx->kernel_convert_block_q6_K_noshuffle;
+            kernel = backend_ctx->repack.kernel_convert_block_q6_K_noshuffle;
         }
 #else
-        kernel = backend_ctx->kernel_convert_block_q6_K;
+        kernel = backend_ctx->repack.kernel_convert_block_q6_K;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
         cl_uchar mask = 0xff;
@@ -1852,7 +1852,7 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
             size, const_cast<void *>(data), &err);
         CL_CHECK(err);
 
-        cl_kernel kernel = backend_ctx->kernel_convert_bf16_to_f16;
+        cl_kernel kernel = backend_ctx->repack.kernel_convert_bf16_to_f16;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &extra->data_device));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_ulong), &off_dst));
@@ -1879,4 +1879,3 @@ void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_te
 
     GGML_UNUSED(buffer);
 }
-

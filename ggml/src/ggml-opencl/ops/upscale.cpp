@@ -16,19 +16,19 @@ void ggml_cl_load_kernels_upscale(ggml_backend_opencl_context * backend_ctx) {
         if (!kernel_src.empty()) {
             cl_program prog =
                 build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-            CL_CHECK((backend_ctx->kernel_upscale = clCreateKernel(prog, "kernel_upscale", &err), err));
+            CL_CHECK((backend_ctx->upscale.kernel_upscale = clCreateKernel(prog, "kernel_upscale", &err), err));
             cl_int err_bilinear;
-            backend_ctx->kernel_upscale_bilinear = clCreateKernel(prog, "kernel_upscale_bilinear", &err_bilinear);
+            backend_ctx->upscale.kernel_upscale_bilinear = clCreateKernel(prog, "kernel_upscale_bilinear", &err_bilinear);
             if (err_bilinear != CL_SUCCESS) {
                 GGML_LOG_WARN("ggml_opencl: kernel_upscale_bilinear not found in upscale.cl. Bilinear upscale will not be available. Error: %d\n", err_bilinear);
-                backend_ctx->kernel_upscale_bilinear = nullptr;
+                backend_ctx->upscale.kernel_upscale_bilinear = nullptr;
             }
             CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         } else {
             GGML_LOG_WARN("ggml_opencl: upscale kernel source not found or empty. Upscale operations will not be available.\n");
-            backend_ctx->kernel_upscale = nullptr;
-            backend_ctx->kernel_upscale_bilinear = nullptr;
+            backend_ctx->upscale.kernel_upscale = nullptr;
+            backend_ctx->upscale.kernel_upscale_bilinear = nullptr;
         }
     }
 }
@@ -48,13 +48,13 @@ void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, ggml_tens
     cl_kernel kernel = nullptr;
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
-        kernel = backend_ctx->kernel_upscale;
+        kernel = backend_ctx->upscale.kernel_upscale;
         if (kernel == nullptr) {
             GGML_LOG_WARN("%s: nearest upscale kernel not available, skipping OpenCL execution.\n", __func__);
             return;
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        kernel = backend_ctx->kernel_upscale_bilinear;
+        kernel = backend_ctx->upscale.kernel_upscale_bilinear;
         if (kernel == nullptr) {
             GGML_LOG_WARN("%s: bilinear upscale kernel not available, skipping OpenCL execution.\n", __func__);
             return;

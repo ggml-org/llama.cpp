@@ -16,6 +16,7 @@
 #include "ggml.h"
 
 #include "cl-program-cache.h"
+#include "ops.h"
 
 #ifdef GGML_OPENCL_USE_ADRENO_BIN_KERNELS
 #include "libdl.h"
@@ -768,257 +769,71 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_total_tiles;
     ggml_cl_buffer prealloc_slot_counter;
 
-    cl_kernel kernel_add, kernel_add_row, kernel_add_f16, kernel_add_row_f16;
-    cl_kernel kernel_mul, kernel_mul_row, kernel_mul_f16, kernel_mul_row_f16;
-    cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
-    cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
-    cl_kernel kernel_add_id;
-    cl_kernel kernel_add_id_add_id_swiglu_oai;
-    cl_kernel kernel_scale_f32, kernel_scale_f32_4;
-    cl_kernel kernel_sqr_cont_f32, kernel_sqr_cont_f32_4, kernel_sqr_cont_f16, kernel_sqr_cont_f16_4;
-    cl_kernel kernel_sqrt_cont_f32, kernel_sqrt_cont_f32_4, kernel_sqrt_cont_f16, kernel_sqrt_cont_f16_4;
-    cl_kernel kernel_mean_f32, kernel_mean_f32_4;
-    cl_kernel kernel_silu, kernel_silu_4;
-    cl_kernel kernel_gelu, kernel_gelu_4;
-    cl_kernel kernel_gelu_erf, kernel_gelu_erf_4;
-    cl_kernel kernel_gelu_quick, kernel_gelu_quick_4;
-    cl_kernel kernel_relu;
-    cl_kernel kernel_sigmoid_f32, kernel_sigmoid_f16;
-    cl_kernel kernel_tri;
-    cl_kernel kernel_fill;
-    cl_kernel kernel_clamp, kernel_clamp_nc;
-    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_swiglu_clamp, kernel_geglu_erf,
-              kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_swiglu_clamp_f16,
-              kernel_geglu_erf_f16, kernel_geglu_quick_f16;
-    cl_kernel kernel_norm, kernel_norm_mul_add;
-    cl_kernel kernel_rms_norm, kernel_rms_norm_mul;
-    cl_kernel kernel_rms_norm_mul_add = nullptr;   // fused rms_norm(x)*w + b (residual)
-    cl_kernel kernel_l2_norm_f32;
-    cl_kernel kernel_group_norm, kernel_group_norm_mul_add;
-    cl_kernel kernel_diag_mask_inf, kernel_diag_mask_inf_8;
-    cl_kernel kernel_diag_f32;
-    cl_kernel kernel_soft_max, kernel_soft_max_4;
-    cl_kernel kernel_soft_max_f16, kernel_soft_max_4_f16;
+    ggml_opencl_add_kernels add = {};
+    ggml_opencl_add_id_kernels add_id = {};
+    ggml_opencl_mul_kernels mul = {};
+    ggml_opencl_div_kernels div = {};
+    ggml_opencl_sub_kernels sub = {};
+    ggml_opencl_scale_kernels scale = {};
+    ggml_opencl_sqr_kernels sqr = {};
+    ggml_opencl_sqrt_kernels sqrt = {};
+    ggml_opencl_mean_kernels mean = {};
+    ggml_opencl_silu_kernels silu = {};
+    ggml_opencl_gelu_kernels gelu = {};
+    ggml_opencl_relu_kernels relu = {};
+    ggml_opencl_sigmoid_kernels sigmoid = {};
+    ggml_opencl_tri_kernels tri = {};
+    ggml_opencl_fill_kernels fill = {};
+    ggml_opencl_clamp_kernels clamp = {};
+    ggml_opencl_glu_kernels glu = {};
+    ggml_opencl_norm_kernels norm = {};
+    ggml_opencl_rms_norm_kernels rms_norm = {};
+    ggml_opencl_l2_norm_kernels l2_norm = {};
+    ggml_opencl_group_norm_kernels group_norm = {};
+    ggml_opencl_diag_mask_inf_kernels diag_mask_inf = {};
+    ggml_opencl_diag_kernels diag = {};
+    ggml_opencl_soft_max_kernels soft_max = {};
     ggml_opencl_fa_kernels fa;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_adreno_xmem_attn_state adreno_xmem_attn;
 #endif
-    cl_kernel kernel_top_k_f32;
-    cl_kernel kernel_top_k_merge_f32;
-    cl_kernel kernel_lightning_indexer;
-    cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_i32, kernel_get_rows_q4_0;
-    cl_kernel kernel_set_rows_f32_i64, kernel_set_rows_f32_i32, kernel_set_rows_f16_i64, kernel_set_rows_f16_i32;
-    cl_kernel kernel_set_rows_q8_0_i64, kernel_set_rows_q8_0_i32;
-    cl_kernel kernel_set_rows_q8_0_soa_i64, kernel_set_rows_q8_0_soa_i32;
-    cl_kernel kernel_set_rows_q4_0_i64, kernel_set_rows_q4_0_i32;
-    cl_kernel kernel_set_rows_q4_0_soa_i64, kernel_set_rows_q4_0_soa_i32;
-    cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
-    cl_kernel kernel_rope_multi_f32, kernel_rope_multi_f16, kernel_rope_vision_f32, kernel_rope_vision_f16;
-    cl_kernel kernel_cpy_f16_f16, kernel_cpy_f16_f32, kernel_cpy_f32_f16, kernel_cpy_f32_f32, kernel_cpy_i32_i32, kernel_cpy_i32_f32, kernel_cpy_f32_i32;
-    cl_kernel kernel_cpy_f32_f32_pack = nullptr;
-    cl_kernel kernel_cpy_f32_f32_flat = nullptr;
-    cl_kernel kernel_mul_mat_f32_f32;
-    cl_kernel kernel_mul_mat_f16_f16;
-    cl_kernel kernel_mul_mat_f16_f32_1row;
-    cl_kernel kernel_mul_mat_f16_f32_mrow      = nullptr;  // multi-row decode GEMV (attn proj + lm_head)
-    cl_kernel kernel_mul_mat_f16_f32_mrow_r2   = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_mrow_r4   = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_mrow_h8   = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_mrow_h8r2 = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32;
-    cl_kernel kernel_mul_mat_f16_f32_l4;
-    cl_kernel kernel_mul_mat_f16_f32_l4_dr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_dr_ls;
-    cl_kernel kernel_mul_mat_f16_f32_l4_dr_lq;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8 = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8_pair = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8_gqa4 = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8_gqa4_img = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8_gqa_r4_img = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_x8_gqa_r2_dk256_img = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_y8 = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_y8_gqa = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_l4_y8_gqa_img = nullptr;
-    cl_kernel kernel_mul_mat_f16_f32_tiled;
-    cl_kernel kernel_adreno_xmem_pack_src_f32;
-    cl_kernel kernel_adreno_xmem_prepack_weight_f16;
-    cl_kernel kernel_gemm_xmem_f16_f32_os8;
-    cl_kernel kernel_adreno_xmem_store_dst_f32;
-    cl_kernel kernel_mul_mm_f16_f32_kqv;
-    cl_kernel kernel_mul_mm_f16_f32_kq;
-    cl_kernel kernel_mul_mat_q4_0_f32, kernel_mul_mat_q4_0_f32_v;
-    cl_kernel kernel_convert_block_q1_0, kernel_restore_block_q1_0;
-    cl_kernel kernel_convert_block_q4_0, kernel_restore_block_q4_0;
-    cl_kernel kernel_convert_block_q4_0_trans4_ns, kernel_restore_block_q4_0_trans4_ns;
-    cl_kernel kernel_convert_block_q4_1, kernel_restore_block_q4_1;
-    cl_kernel kernel_convert_block_q4_1_trans4_ns, kernel_restore_block_q4_1_trans4_ns;
-    cl_kernel kernel_convert_block_q5_0, kernel_restore_block_q5_0;
-    cl_kernel kernel_convert_block_q5_0_trans4_ns, kernel_restore_block_q5_0_trans4_ns;
-    cl_kernel kernel_convert_block_q5_1, kernel_restore_block_q5_1;
-    cl_kernel kernel_convert_block_q5_1_trans4_ns, kernel_restore_block_q5_1_trans4_ns;
-    cl_kernel kernel_convert_block_q4_k_trans4_ns, kernel_restore_block_q4_k_trans4_ns;
-    cl_kernel kernel_convert_block_q5_k_trans4_ns, kernel_restore_block_q5_k_trans4_ns;
-    cl_kernel kernel_convert_block_q6_k_trans4_ns, kernel_restore_block_q6_k_trans4_ns;
-    cl_kernel kernel_convert_block_mxfp4, kernel_convert_block_mxfp4_trans, kernel_restore_block_mxfp4, kernel_restore_block_mxfp4_trans;
-    cl_kernel kernel_convert_block_mxfp4_trans4_ns, kernel_restore_block_mxfp4_trans4_ns;
-    cl_kernel kernel_convert_block_q8_0, kernel_restore_block_q8_0, kernel_restore_block_q8_0_trans;
-    cl_kernel kernel_dequant_q8_0_f16_view_aos;
-    cl_kernel kernel_dequant_q8_0_f32_view_aos;
-    cl_kernel kernel_dequant_q4_0_f16_view_aos;
-    cl_kernel kernel_dequant_q4_0_f32_view_aos;
-    cl_kernel kernel_convert_block_q6_K_noshuffle, kernel_restore_block_q6_K_noshuffle;
-    cl_kernel kernel_convert_bf16_to_f16, kernel_convert_f16_to_bf16;
-    cl_kernel kernel_mul_mat_q4_0_f32_8x_flat;
-    cl_kernel kernel_convert_block_q4_0_noshuffle;
-    cl_kernel kernel_restore_block_q4_0_noshuffle;
-    cl_kernel kernel_convert_block_q4_1_noshuffle;
-    cl_kernel kernel_restore_block_q4_1_noshuffle;
-    cl_kernel kernel_convert_block_q5_0_noshuffle;
-    cl_kernel kernel_restore_block_q5_0_noshuffle;
-    cl_kernel kernel_convert_block_q5_1_noshuffle;
-    cl_kernel kernel_restore_block_q5_1_noshuffle;
-    cl_kernel kernel_convert_block_q4_K_noshuffle;
-    cl_kernel kernel_restore_block_q4_K_noshuffle;
-    cl_kernel kernel_convert_block_q4_K, kernel_restore_block_q4_K;
-    cl_kernel kernel_convert_block_q5_K, kernel_restore_block_q5_K;
-    cl_kernel kernel_convert_block_q5_K_noshuffle;
-    cl_kernel kernel_restore_block_q5_K_noshuffle;
-    cl_kernel kernel_convert_block_q2_k_noshuffle;
-    cl_kernel kernel_restore_block_q2_k_noshuffle;
-    cl_kernel kernel_convert_block_q2_K;
-    cl_kernel kernel_restore_block_q2_K;
-    cl_kernel kernel_convert_block_q6_K, kernel_restore_block_q6_K;
-    cl_kernel kernel_convert_block_iq4_nl, kernel_restore_block_iq4_nl;
-    cl_kernel kernel_convert_block_iq4_nl_noshuffle;
-    cl_kernel kernel_restore_block_iq4_nl_noshuffle;
-    cl_kernel kernel_mul_mv_q1_0_f32, kernel_mul_mv_q1_0_f32_flat;
-    cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat, kernel_mul_mat_q4_0_f32_1d_16x_flat;
-    cl_kernel kernel_mul_mv_q4_1_f32;
-    cl_kernel kernel_mul_mv_q4_1_f32_flat;
-    cl_kernel kernel_mul_mv_q5_0_f32;
-    cl_kernel kernel_mul_mv_q5_0_f32_flat;
-    cl_kernel kernel_mul_mv_q5_1_f32;
-    cl_kernel kernel_mul_mv_q5_1_f32_flat;
-    cl_kernel kernel_mul_mv_q2_K_f32_flat;
-    cl_kernel kernel_mul_mm_q2_k_f32_l4_lm;
-    cl_kernel kernel_gemv_noshuffle_q2_k_f32 = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q2_k_f32 = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q2_k_q8_1_dp4a = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q2_k_q8_1_dp4a_narrow = nullptr;
-    int q2_k_mv_rows = 4;
-    int q2_k_mv_nsg = 4;
-    cl_kernel kernel_mul_mv_q2_K_f32;
-    cl_kernel kernel_mul_mv_q4_K_f32;
-    cl_kernel kernel_mul_mv_q4_K_f32_flat;
-    cl_kernel kernel_mul_mv_q5_K_f32;
-    cl_kernel kernel_mul_mv_q5_K_f32_flat;
-    cl_kernel kernel_mul_mv_q6_K_f32;
-    cl_kernel kernel_mul_mv_q6_K_f32_flat;
-    cl_kernel kernel_mul_mv_mxfp4_f32, kernel_mul_mv_mxfp4_f32_flat;
-    cl_kernel kernel_mul_mv_q8_0_f32, kernel_mul_mv_q8_0_f32_flat;
-    cl_kernel kernel_mul_mv_iq4_nl_f32;
-    cl_kernel kernel_mul_mv_iq4_nl_f32_flat;
-    cl_kernel kernel_solve_tri_f32;
-    cl_kernel kernel_im2col_f32, kernel_im2col_f16;
-    cl_kernel kernel_im2col_3d_f32, kernel_im2col_3d_f16;
-    cl_kernel kernel_argmax_f32_i32;
-    cl_kernel kernel_argsort_f32_i32;
-    cl_kernel kernel_sum_rows_f32, kernel_sum_rows_f32_4;
-    cl_kernel kernel_cumsum_blk, kernel_cumsum_add;
-    cl_kernel kernel_repeat_f32;
-    cl_kernel kernel_pad;
-    cl_kernel kernel_tanh_f32, kernel_tanh_f32_4, kernel_tanh_f32_nc;
-    cl_kernel kernel_tanh_f16, kernel_tanh_f16_4, kernel_tanh_f16_nc;
-    cl_kernel kernel_neg_f32, kernel_neg_f32_4, kernel_neg_f32_nc;
-    cl_kernel kernel_neg_f16, kernel_neg_f16_4, kernel_neg_f16_nc;
-    cl_kernel kernel_exp_f32, kernel_exp_f32_4, kernel_exp_f32_nc;
-    cl_kernel kernel_exp_f16, kernel_exp_f16_4, kernel_exp_f16_nc;
-    cl_kernel kernel_expm1_f32, kernel_expm1_f32_4, kernel_expm1_f32_nc;
-    cl_kernel kernel_expm1_f16, kernel_expm1_f16_4, kernel_expm1_f16_nc;
-    cl_kernel kernel_abs_f32, kernel_abs_f32_4, kernel_abs_f32_nc;
-    cl_kernel kernel_abs_f16, kernel_abs_f16_4, kernel_abs_f16_nc;
-    cl_kernel kernel_sgn_f32, kernel_sgn_f32_4, kernel_sgn_f32_nc, kernel_sgn_f16, kernel_sgn_f16_4, kernel_sgn_f16_nc;
-    cl_kernel kernel_step_f32, kernel_step_f32_4, kernel_step_f32_nc, kernel_step_f16, kernel_step_f16_4, kernel_step_f16_nc;
-    cl_kernel kernel_elu_f32, kernel_elu_f32_4, kernel_elu_f32_nc, kernel_elu_f16, kernel_elu_f16_4, kernel_elu_f16_nc;
-    cl_kernel kernel_hardswish_f32, kernel_hardswish_f32_4, kernel_hardswish_f32_nc, kernel_hardswish_f16, kernel_hardswish_f16_4, kernel_hardswish_f16_nc;
-    cl_kernel kernel_hardsigmoid_f32, kernel_hardsigmoid_f32_4, kernel_hardsigmoid_f32_nc, kernel_hardsigmoid_f16, kernel_hardsigmoid_f16_4, kernel_hardsigmoid_f16_nc;
-    cl_kernel kernel_floor_f32, kernel_floor_f32_4, kernel_floor_f32_nc, kernel_floor_f16, kernel_floor_f16_4, kernel_floor_f16_nc;
-    cl_kernel kernel_ceil_f32, kernel_ceil_f32_4, kernel_ceil_f32_nc, kernel_ceil_f16, kernel_ceil_f16_4, kernel_ceil_f16_nc;
-    cl_kernel kernel_round_f32, kernel_round_f32_4, kernel_round_f32_nc, kernel_round_f16, kernel_round_f16_4, kernel_round_f16_nc;
-    cl_kernel kernel_trunc_f32, kernel_trunc_f32_4, kernel_trunc_f32_nc, kernel_trunc_f16, kernel_trunc_f16_4, kernel_trunc_f16_nc;
-    cl_kernel kernel_softplus_f32, kernel_softplus_f32_4, kernel_softplus_f32_nc;
-    cl_kernel kernel_softplus_f16, kernel_softplus_f16_4, kernel_softplus_f16_nc;
-    cl_kernel kernel_upscale;
-    cl_kernel kernel_upscale_bilinear;
-    cl_kernel kernel_concat_b1, kernel_concat_b2, kernel_concat_b4, kernel_concat_b8, kernel_concat_b4_pack;
-    cl_kernel kernel_conv_2d_f16;
-    cl_kernel kernel_conv_2d_f32;
-    cl_kernel kernel_conv_2d_f16_f32;
-    cl_kernel kernel_conv2d_dw_f32_f32;
-    cl_kernel kernel_conv2d_dwf16_f32;
-    cl_kernel kernel_ssm_conv_f32_f32, kernel_ssm_conv_f32_f32_4;
-    // [size_idx][kda][tgpp] where size_idx: 0=S_V=16, 1=32, 2=64, 3=128; kda: 0 or 1.
-    // tgpp 0 = TG variant (COLS_PER_LANE_GROUP=1), tgpp 1 = prefill variant (COLS_PER_LANE_GROUP=4).
-    cl_kernel kernel_gated_delta_net_f32[4][2][2] = {};
-    cl_kernel kernel_ssm_scan_f32 = nullptr;
-    cl_kernel kernel_ssm_scan_f32_mamba2_d128 = nullptr;
-    cl_kernel kernel_ssm_scan_f32_mamba2_d256 = nullptr;
-
-    cl_kernel kernel_timestep_embedding;
-    cl_kernel kernel_gemv_moe_q4_0_f32_ns, kernel_gemm_moe_q4_0_f32_ns, kernel_gemm_moe_q4_0_f32_ns_bin;
-    cl_kernel kernel_gemm_moe_q8_0_f32_ns;
-    cl_kernel kernel_gemv_moe_q4_1_f32_ns, kernel_gemm_moe_q4_1_f32_ns, kernel_gemm_moe_q4_1_f32_ns_bin;
-    cl_kernel kernel_gemv_moe_q5_0_f32_ns, kernel_gemm_moe_q5_0_f32_ns;
-    cl_kernel kernel_gemv_moe_q5_1_f32_ns, kernel_gemm_moe_q5_1_f32_ns;
-    cl_kernel kernel_gemv_moe_q4_k_f32_ns, kernel_gemm_moe_q4_k_f32_ns, kernel_gemm_moe_q4_k_f32_ns_bin;
-    cl_kernel kernel_gemv_moe_q4_k_f32_ns_wimg = nullptr;  // weight-as-texture MoE decode GEMV (opt-in)
-    cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a = nullptr;    // dp4a (int8) prefill GEMM variant
-    cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a_bin = nullptr;   // binary dp4a (int8) q4_k MoE prefill GEMM
-    cl_kernel kernel_moe_reorder_quant_a_q8_1;   // fused reorder + q8_1 quant for the dp4a GEMM
-    cl_kernel kernel_transpose_activation_q8;    // per-tile transpose of q8_1 activations for the ldck dp4a GEMM
-    cl_kernel kernel_gemm_moe_q8_1_dp4a_q80 = nullptr;   // generic dp4a MoE GEMM (MOE_QT=80), opt-in
-    cl_kernel kernel_moe_expand_scale_q8_0 = nullptr;    // q8_0 per-block d -> uniform scale[16]
-    cl_kernel kernel_gemm_moe_q8_1_dp4a_q50 = nullptr;   // generic dp4a MoE GEMM (MOE_QT=50, q5_0), opt-in
-    cl_kernel kernel_moe_expand_scale_q5_0 = nullptr;    // q5_0 d -> uniform scale[2]/min[1] per 32-block
-    cl_kernel kernel_gemm_moe_q8_1_dp4a_q5k = nullptr;   // generic dp4a MoE GEMM (MOE_QT=5, q5_K), opt-in
-    cl_kernel kernel_moe_expand_scale_q5_K = nullptr;    // q5_K 6-bit s[] -> uniform scale[16]/min[8]
-    cl_kernel kernel_gemv_moe_q5_k_f32_ns, kernel_gemm_moe_q5_k_f32_ns;
-    cl_kernel kernel_gemv_moe_q6_k_f32_ns, kernel_gemm_moe_q6_k_f32_ns, kernel_gemm_moe_q6_k_f32_ns_bin;
-    cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a = nullptr;    // dp4a (int8) q6_K MoE prefill GEMM
-    cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a_bin = nullptr;    // binary dp4a (int8) q6_k MoE prefill GEMM
-    cl_kernel kernel_gemv_moe_mxfp4_f32, kernel_gemm_moe_mxfp4_f32;
-    cl_kernel kernel_gemv_moe_mxfp4_f32_ns, kernel_gemm_moe_mxfp4_f32_ns, kernel_gemm_moe_mxfp4_f32_ns_bin;
-    cl_kernel kernel_gemv_moe_mxfp4_f32_ns_wimg = nullptr;      // weight-as-texture MoE decode GEMV
-    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a = nullptr;   // dp4a (int8) mxfp4 MoE prefill GEMM
-    cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a = nullptr;    // dp4a (int8) q4_0 MoE prefill GEMM
-    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a_bin = nullptr;   // binary dp4a (int8) mxfp4 MoE prefill GEMM
-    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin = nullptr;   // binary dp4a (int8) mxfp4 MoE prefill GEMM using ldck
-    cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a_bin = nullptr;    // binary dp4a (int8) q4_0 MoE prefill GEMM
-    cl_kernel kernel_moe_reorder_b;
-    cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
-    cl_kernel kernel_moe_scatter_stable = nullptr;   // deterministic slot assignment
-    cl_kernel kernel_moe_zero_dst;
-    cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
-    cl_kernel kernel_moe_combine_bias_f32 = nullptr;  // same, with the down-projection bias add folded in
-    cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
-    cl_kernel kernel_mul_mv_id_q8_0_f32, kernel_mul_mv_id_q8_0_f32_flat;
-    cl_kernel kernel_mul_mv_id_mxfp4_f32;
-    cl_kernel kernel_mul_mv_id_mxfp4_f32_flat;
-    cl_kernel kernel_mul_mm_f32_f32_l4_lm;
-    cl_kernel kernel_gemv_f32_f32_mc;  // multi-column (small-N) f32 GEMV for spec/MTP verify
-    cl_kernel kernel_mul_mm_f16_f32_l4_lm;
-    cl_kernel kernel_mul_mm_f16_f32_l4_lm_n8;
-    cl_kernel kernel_mul_mm_q1_0_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q5_0_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q5_1_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q8_0_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q4_k_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q5_k_f32_l4_lm;
-    cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
-    cl_kernel kernel_mul_mm_iq4_nl_f32_l4_lm;
-
+    ggml_opencl_get_rows_kernels get_rows = {};
+    ggml_opencl_set_rows_kernels set_rows = {};
+    ggml_opencl_rope_kernels rope = {};
+    ggml_opencl_cpy_kernels cpy = {};
+    ggml_opencl_repack_kernels repack = {};
+    ggml_opencl_mul_mat_kernels mul_mat = {};
+    int min_m_gemv_nsg1_q1_0 = 0;
+    int tile_n_dp4a_q4_k = 32;
+    int tile_n_dp4a_narrow_q4_k = 32;
+    int max_n_dp4a_narrow_q4_k = 16;
+    ggml_opencl_mul_mat_id_kernels mul_mat_id = {};
+    ggml_opencl_solve_tri_kernels solve_tri = {};
+    ggml_opencl_im2col_kernels im2col = {};
+    ggml_opencl_im2col_3d_kernels im2col_3d = {};
+    ggml_opencl_argmax_kernels argmax = {};
+    ggml_opencl_top_k_kernels top_k = {};
+    ggml_opencl_lightning_indexer_kernels lightning_indexer = {};
+    ggml_opencl_argsort_kernels argsort = {};
+    ggml_opencl_sum_rows_kernels sum_rows = {};
+    ggml_opencl_cumsum_kernels cumsum = {};
+    ggml_opencl_repeat_kernels repeat = {};
+    ggml_opencl_pad_kernels pad = {};
+    ggml_opencl_tanh_kernels tanh = {};
+    ggml_opencl_neg_kernels neg = {};
+    ggml_opencl_exp_kernels exp = {};
+    ggml_opencl_expm1_kernels expm1 = {};
+    ggml_opencl_abs_kernels abs = {};
+    ggml_opencl_unary_ext_kernels unary_ext = {};
+    ggml_opencl_softplus_kernels softplus = {};
+    ggml_opencl_upscale_kernels upscale = {};
+    ggml_opencl_concat_kernels concat = {};
+    ggml_opencl_conv_2d_kernels conv_2d = {};
+    ggml_opencl_conv_2d_dw_kernels conv_2d_dw = {};
+    ggml_opencl_ssm_conv_kernels ssm_conv = {};
+    ggml_opencl_gated_delta_net_kernels gated_delta_net = {};
+    ggml_opencl_ssm_scan_kernels ssm_scan = {};
+    ggml_opencl_timestep_embedding_kernels timestep_embedding = {};
     std::vector<ProfilingInfo> profiling_info;
     std::vector<ProfilingInfo> profiling_results;
 
@@ -1168,117 +983,6 @@ struct ggml_backend_opencl_context {
         }
         return kernel_bin;
     }
-
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-    // Transpose kernels
-    cl_kernel kernel_transpose_32;
-    cl_kernel kernel_transpose_32_16;
-    cl_kernel kernel_transpose_16;
-    cl_kernel kernel_transpose_8_buf;
-    cl_kernel kernel_transpose_16_buf;
-    cl_kernel kernel_transpose_32_buf;
-    cl_kernel kernel_transpose_16_4x1;
-
-    // Gemm and Gemv related programs, kernels, etc
-    cl_kernel kernel_gemm_noshuffle_q4_0_f32;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_mc3;  // multi-column (N=3) verify GEMV (spec/MTP)
-    cl_kernel kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin;
-    cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_32b_trans;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_4096_1_11008;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_4096_1_4096;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_11008_1_4096;
-    cl_kernel kernel_gemv_noshuffle_q4_0_f32_32000_1_4096;
-    cl_kernel kernel_gemv_noshuffle_q4_1_f32;
-    cl_kernel kernel_gemv_noshuffle_q4_1_f32_mc3;  // multi-column (N=3) verify GEMV (spec/MTP)
-    cl_kernel kernel_gemm_noshuffle_q4_1_f32;
-    cl_kernel kernel_gemm_noshuffle_q8_0_f32, kernel_gemm_noshuffle_q8_0_f32_bin;
-    cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a = nullptr;  // dp4a (int8) dense q8_0 prefill GEMM (opt-in)
-    cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_act_vload4 = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_wimg = nullptr;  // q8_0 dense dp4a, weights via texture (opt-in)
-    cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_ila_a8_bin = nullptr;
-    cl_kernel kernel_gemv_noshuffle_q8_0_f32;
-    cl_kernel kernel_gemv_noshuffle_q8_0_f32_splitk;  // split-K across WGs (small-M decode)
-    cl_kernel kernel_gemm_noshuffle_q1_0_f32;
-    cl_kernel kernel_gemv_noshuffle_q1_0_f32;
-    cl_kernel kernel_gemv_noshuffle_q1_0_f32_nsg1 = nullptr;
-    int min_m_gemv_nsg1_q1_0 = 0;
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32;
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_o4;  // 4-output-per-WI, long-vocab lm_head
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_tiled;  // tiled-wide layout (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_splitk; // split-K across WGs (small-M decode)
-    cl_kernel kernel_gemv_splitk_reduce_f32;         // sums split-K per-slice partials
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_glu;    // fused gate+up GEMV + GLU (FFN)
-    cl_kernel kernel_convert_block_q4_k_tiled_ns;    // tiled-wide convert (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_mc3;  // multi-column (N=3) verify GEMV
-    cl_kernel kernel_gemm_noshuffle_q4_k_f32;
-    cl_kernel kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin;
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_ila_a8_bin;
-    cl_kernel kernel_gemv_noshuffle_q4_k_f32_32b_trans;
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_act_vload4 = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg = nullptr;  // dp4a dense prefill GEMM, weights via texture (X1 opt-in)
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_narrow = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_narrow_wimg = nullptr;
-    int tile_n_dp4a_q4_k = 32;
-    int tile_n_dp4a_narrow_q4_k = 32;
-    int max_n_dp4a_narrow_q4_k = 16;
-    cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense q5_K prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a_act_vload4 = nullptr;
-    cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense q6_K prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a_act_vload4 = nullptr;
-    cl_kernel kernel_quant_a_q8_1;                    // plain activation q8_1 pre-pass
-    cl_kernel kernel_gemm_noshuffle_q4_k_f32_r1;
-    cl_kernel kernel_gemm_noshuffle_q4_k_f32_kimg;
-    cl_kernel kernel_gemm_noshuffle_q4_k_f32_cok;
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32;
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_o4;
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_o4_global;  // weights via __global (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled;      // tiled-wide layout (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_tiled_mc3;  // tiled multi-column (N=3) verify lm_head
-    cl_kernel kernel_gemm_noshuffle_q6_K_f32_tiled;      // batched (N>1) over the tiled layout
-    cl_kernel kernel_convert_block_q6_k_tiled_ns;        // tiled-wide convert (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q6_K_f32_mc3;        // multi-column (N=3) verify GEMV
-    cl_kernel kernel_gemm_noshuffle_q6_K_f32;
-    cl_kernel kernel_gemm_noshuffle_q6_K_f32_cok;
-    cl_kernel kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin;
-    cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin;
-    cl_kernel kernel_gemv_noshuffle_q6_k_f32_32b_trans;
-    cl_kernel kernel_gemv_noshuffle_q5_k_f32;
-    cl_kernel kernel_gemv_noshuffle_q5_k_f32_mc3;  // multi-column (N=3) verify GEMV (spec/MTP)
-    cl_kernel kernel_gemm_noshuffle_q5_k_f32;
-    cl_kernel kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin;
-    cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a_ila_a8_bin;
-    cl_kernel kernel_gemv_noshuffle_q5_k_f32_32b_trans;
-    cl_kernel kernel_gemv_noshuffle_q5_0_f32;
-    cl_kernel kernel_gemm_noshuffle_q5_0_f32;
-    cl_kernel kernel_gemm_noshuffle_q5_0_q8_1_dp4a = nullptr;  // dp4a (int8) dense q5_0 prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q5_0_q8_1_dp4a_wimg = nullptr;  // q5_0 dense dp4a, qs plane via texture (opt-in)
-    cl_kernel kernel_gemv_noshuffle_q5_1_f32;
-    cl_kernel kernel_gemm_noshuffle_q5_1_f32;
-    cl_kernel kernel_gemv_noshuffle_iq4_nl_f32;
-    cl_kernel kernel_gemm_noshuffle_iq4_nl_f32;
-    cl_kernel kernel_gemm_noshuffle_iq4_nl_q8_1_dp4a = nullptr;  // dp4a (int8) dense IQ4_NL prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a = nullptr;  // dp4a (int8) dense q4_0 prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a_act_vload4 = nullptr;
-    cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c4 = nullptr;
-    cl_kernel kernel_gemm_coopk_q4_0_q8_1_dp4a_c2 = nullptr;
-    int       nsg_coopk_dp4a_q4_0  = 8;
-    int       rows_coopk_dp4a_q4_0 = 4;
-    cl_kernel kernel_gemm_coopk_q4_k_q8_1_dp4a_c4 = nullptr;
-    cl_kernel kernel_gemm_coopk_q4_k_q8_1_dp4a_c2 = nullptr;
-    int       nsg_coopk_dp4a_q4_k  = 8;
-    int       rows_coopk_dp4a_q4_k = 4;
-    cl_kernel kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c4 = nullptr;
-    cl_kernel kernel_gemm_coopk_q4_k_q8_1_dp4a_bin_c2 = nullptr;
-    int       nsg_coopk_dp4a_q4_k_bin_c4 = 8;
-    int       nsg_coopk_dp4a_q4_k_bin_c2 = 8;
-    cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_c4 = nullptr;
-    cl_kernel kernel_gemm_coopk_q6_k_q8_1_dp4a_c2 = nullptr;
-    int       nsg_coopk_dp4a_q6_k  = 8;
-    int       rows_coopk_dp4a_q6_k = 4;
-#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     void free() {
         clFinish(queue);

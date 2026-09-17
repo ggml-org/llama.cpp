@@ -1473,7 +1473,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             ggml_cl_load_kernels_argmax(backend_ctx);
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_I32 &&
                    ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
-                   backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_argmax_f32_i32) >= 64;
+                   backend_ctx->get_kernel_workgroup_size(backend_ctx->argmax.kernel_argmax_f32_i32) >= 64;
         case GGML_OP_LIGHTNING_INDEXER:
             return op->src[0]->type == GGML_TYPE_F32 &&
                    (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 || op->src[1]->type == GGML_TYPE_BF16) &&
@@ -1485,7 +1485,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_ARGSORT: {
             ggml_cl_load_kernels_argsort(backend_ctx);
 
-            cl_kernel kernel = backend_ctx->kernel_argsort_f32_i32;
+            cl_kernel kernel = backend_ctx->argsort.kernel_argsort_f32_i32;
             int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
 
             int cols = 1;

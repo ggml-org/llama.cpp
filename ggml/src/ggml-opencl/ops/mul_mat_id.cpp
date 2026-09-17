@@ -31,7 +31,7 @@ void ggml_cl_moe_combine_fused(ggml_backend_t backend, const ggml_tensor * mul, 
     cl_mem   w_dev = backend_ctx->prealloc_moe_combine_w.buffer;
     cl_ulong w_off = 0;
 
-    cl_kernel kernel = backend_ctx->kernel_moe_combine_f32;
+    cl_kernel kernel = backend_ctx->mul_mat_id.kernel_moe_combine_f32;
     int a = 0;
     CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &ee->data_device));
     CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &off_e));
@@ -92,7 +92,7 @@ void ggml_cl_moe_bias_glu_fused(ggml_backend_t backend, ggml_tensor * gate_mm, c
     const float alpha = ggml_get_op_params_f32(glu, 2);
     const float limit = ggml_get_op_params_f32(glu, 3);
 
-    cl_kernel kernel = backend_ctx->kernel_add_id_add_id_swiglu_oai;
+    cl_kernel kernel = backend_ctx->mul_mat_id.kernel_add_id_add_id_swiglu_oai;
 
     int i = 0;
     CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &eg->data_device));
@@ -165,7 +165,7 @@ void ggml_cl_moe_bias_combine_fused(ggml_backend_t backend, const ggml_tensor * 
     cl_mem w_dev = backend_ctx->prealloc_moe_combine_w.buffer;
     cl_ulong w_off = 0;
 
-    cl_kernel kernel = backend_ctx->kernel_moe_combine_bias_f32;
+    cl_kernel kernel = backend_ctx->mul_mat_id.kernel_moe_combine_bias_f32;
     int i = 0;
     CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &ee->data_device));
     CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_e));
@@ -206,7 +206,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         const std::string kernel_src = read_file("moe_add_id_glu.cl");
 #endif
         cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_add_id_add_id_swiglu_oai = clCreateKernel(
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_add_id_add_id_swiglu_oai = clCreateKernel(
             prog, "kernel_add_id_add_id_swiglu_oai", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
@@ -223,9 +223,9 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
     #endif
         cl_program prog = build_program_from_source(
             backend_ctx, kernel_src.c_str(), compile_opts);
-        CL_CHECK((backend_ctx->kernel_moe_combine_f32 =
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_moe_combine_f32 =
                     clCreateKernel(prog, "kernel_moe_combine_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_moe_combine_bias_f32 =
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_moe_combine_bias_f32 =
                     clCreateKernel(prog, "kernel_moe_combine_bias_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
@@ -243,7 +243,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mv_id_q4_0_f32_8x_flat = clCreateKernel(prog, "kernel_mul_mv_id_q4_0_f32_8x_flat", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_mul_mv_id_q4_0_f32_8x_flat = clCreateKernel(prog, "kernel_mul_mv_id_q4_0_f32_8x_flat", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -260,7 +260,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mv_id_q8_0_f32 = clCreateKernel(prog, "kernel_mul_mv_id_q8_0_f32", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_mul_mv_id_q8_0_f32 = clCreateKernel(prog, "kernel_mul_mv_id_q8_0_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -277,7 +277,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mv_id_q8_0_f32_flat = clCreateKernel(prog, "kernel_mul_mv_id_q8_0_f32_flat", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_mul_mv_id_q8_0_f32_flat = clCreateKernel(prog, "kernel_mul_mv_id_q8_0_f32_flat", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -294,7 +294,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mv_id_mxfp4_f32 = clCreateKernel(prog, "kernel_mul_mv_id_mxfp4_f32", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_mul_mv_id_mxfp4_f32 = clCreateKernel(prog, "kernel_mul_mv_id_mxfp4_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -311,7 +311,7 @@ void ggml_cl_load_kernels_mul_mat_id(ggml_backend_opencl_context * backend_ctx) 
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_mul_mv_id_mxfp4_f32_flat = clCreateKernel(prog, "kernel_mul_mv_id_mxfp4_f32_flat", &err), err));
+        CL_CHECK((backend_ctx->mul_mat_id.kernel_mul_mv_id_mxfp4_f32_flat = clCreateKernel(prog, "kernel_mul_mv_id_mxfp4_f32_flat", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -369,7 +369,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     CL_CHECK(err);
 
     // Histogram
-    cl_kernel kernel = backend_ctx->kernel_moe_histogram;
+    cl_kernel kernel = backend_ctx->mul_mat_id.kernel_moe_histogram;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &hist_buf));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &ne21));
@@ -382,7 +382,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, histogram_global_size, histogram_local_size, src);
 
     // Scan
-    kernel = backend_ctx->kernel_moe_scan;
+    kernel = backend_ctx->mul_mat_id.kernel_moe_scan;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &hist_buf));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &tile_offset_buf));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &total_tiles_buf));
@@ -395,7 +395,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     backend_ctx->enqueue_ndrange_kernel(kernel, 1, scan_global_size, scan_local_size, src);
 
     // Fill
-    kernel = backend_ctx->kernel_moe_fill;
+    kernel = backend_ctx->mul_mat_id.kernel_moe_fill;
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &post_router_buf));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &total_tiles_buf));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &n_tile_size));
@@ -410,7 +410,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
     }();
 
     if (stable_scatter) {
-        kernel = backend_ctx->kernel_moe_scatter_stable;
+        kernel = backend_ctx->mul_mat_id.kernel_moe_scatter_stable;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &post_router_buf));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &emap_buf));
@@ -424,7 +424,7 @@ static void moe_router_reoerder(ggml_backend_t backend, const ggml_tensor * src,
         size_t scatter_local_size[]  = {64, 1};
         backend_ctx->enqueue_ndrange_kernel(kernel, 2, scatter_global_size, scatter_local_size, src);
     } else {
-        kernel = backend_ctx->kernel_moe_scatter;
+        kernel = backend_ctx->mul_mat_id.kernel_moe_scatter;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &post_router_buf));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &emap_buf));
@@ -568,7 +568,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
         const cl_uint ids_stride = nb21 / sizeof(int);
 
-        cl_kernel kernel_zero = backend_ctx->kernel_moe_zero_dst;
+        cl_kernel kernel_zero = backend_ctx->mul_mat_id.kernel_moe_zero_dst;
         CL_CHECK(clSetKernelArg(kernel_zero, 0, sizeof(cl_mem),  &buf_ids));
         CL_CHECK(clSetKernelArg(kernel_zero, 1, sizeof(cl_mem),  &buf_dst));
         CL_CHECK(clSetKernelArg(kernel_zero, 2, sizeof(cl_uint), &ne21));
@@ -607,7 +607,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q4_0_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q4_0_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -668,8 +668,8 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     const int  moe_bin_min   = moe_bin_min_env ? atoi(moe_bin_min_env) : 4096;
 
                     // whether bin kernels are available
-                    const bool bin_available = backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin != nullptr;
-                    const bool dp4a_bin_available = backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_bin != nullptr;
+                    const bool bin_available = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_f32_ns_bin != nullptr;
+                    const bool dp4a_bin_available = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_q8_1_dp4a_bin != nullptr;
 
                     bool use_moe_dp4a = q4_0_moe_dp4a_env
                         ? (atoi(q4_0_moe_dp4a_env) != 0)
@@ -682,8 +682,8 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     const bool use_bin_kernel = bin_available && !use_moe_dp4a;
 
                     kernel = use_bin_kernel
-                        ? backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin
-                        : backend_ctx->kernel_gemm_moe_q4_0_f32_ns;
+                        ? backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_f32_ns_bin
+                        : backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_f32_ns;
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
                     // Otherwise reuse the reordered result from previous mul_mat_id call.
@@ -742,19 +742,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         image_src1_reordered = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
                         CL_CHECK(status);
 
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                         size_t reorder_b_local_size[3] = {256, 1, 1};
                         size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                         // Dispatch reorder kernel
-                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
                     }
 
                     // MoE kernel prepare
@@ -783,7 +783,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                         // fused reorder + q8_1 quant straight from the original activations
                         const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
-                        cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                        cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                         CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                         CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                         CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -799,9 +799,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         backend_ctx->enqueue_ndrange_kernel(rq, 2, rq_global, rq_local, dst);
 
                         // dp4a GEMM
-                        cl_kernel dk = backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a;
-                        if (backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_bin) {
-                            dk = backend_ctx->kernel_gemm_moe_q4_0_q8_1_dp4a_bin;
+                        cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_q8_1_dp4a;
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_q8_1_dp4a_bin) {
+                            dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_0_q8_1_dp4a_bin;
                         }
                         int aidx = 0;
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q4_0->q_img));
@@ -864,7 +864,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
             } // fallback to generic Q4_0 MoE kernel
 
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
-            kernel = backend_ctx->kernel_mul_mv_id_q4_0_f32_8x_flat;
+            kernel = backend_ctx->mul_mat_id.kernel_mul_mv_id_q4_0_f32_8x_flat;
 
             if (backend_ctx->gpu_family == INTEL) {
                 sgs  = 16;
@@ -915,7 +915,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q4_1_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q4_1_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -966,9 +966,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q4_1_f32_ns;
-                    if (backend_ctx->kernel_gemm_moe_q4_1_f32_ns_bin) {
-                        kernel = backend_ctx->kernel_gemm_moe_q4_1_f32_ns_bin;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns_bin) {
+                        kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns_bin;
                     }
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
@@ -1015,7 +1015,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     cl_image_desc image_desc_buf_src1;
                     image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
                     image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
-                    if (backend_ctx->kernel_gemm_moe_q4_1_f32_ns_bin) {
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_1_f32_ns_bin) {
                         // bin kernel uses slightly different image format
                         image_format_buf_src1 = {CL_R, CL_FLOAT};
                         image_desc_buf_src1.image_width = static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size);
@@ -1025,19 +1025,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                     size_t reorder_b_local_size[3] = {256, 1, 1};
                     size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                     // Dispatch reorder kernel
-                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
 
                     // MoE kernel prepare
                     // Create sub buffer for dst
@@ -1101,7 +1101,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q5_0_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q5_0_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -1152,7 +1152,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q5_0_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q5_0_f32_ns;
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
                     // Otherwise reuse the reordered result from previous mul_mat_id call.
@@ -1188,7 +1188,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         const bool q5mdp4a_on = q5mdp4a_env ? (atoi(q5mdp4a_env) != 0)
                                                             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
                         const bool use_q5_moe_dp4a = q5mdp4a_on
-                            && backend_ctx->kernel_gemm_moe_q8_1_dp4a_q50 != nullptr
+                            && backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q50 != nullptr
                             && extra0_q5_0->scale != nullptr;
 
                         if (use_q5_moe_dp4a) {
@@ -1200,7 +1200,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                             const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
                             unsigned short map_ratio_q5 = ne20 / ne11;
-                            cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                            cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                             CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                             CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                             CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -1225,7 +1225,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                             CL_CHECK(status);
 
                             int ne00i = (int)ne00, ne01i = (int)ne01;
-                            cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q50;
+                            cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q50;
                             int has_min_q5 = 1;
                             int aidx = 0;
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_0->qs_img));
@@ -1278,19 +1278,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                     size_t reorder_b_local_size[3] = {256, 1, 1};
                     size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                     // Dispatch reorder kernel
-                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
 
                     // MoE kernel prepare
                     // Create sub buffer for dst
@@ -1354,7 +1354,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q5_1_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q5_1_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -1405,7 +1405,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src1_image));
                     CL_CHECK(clReleaseMemObject(buf_src2));
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q5_1_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q5_1_f32_ns;
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
                     // Otherwise reuse the reordered result from previous mul_mat_id call.
@@ -1456,19 +1456,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                     size_t reorder_b_local_size[3] = {256, 1, 1};
                     size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                     // Dispatch reorder kernel
-                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
 
                     // MoE kernel prepare
                     // Create sub buffer for dst
@@ -1538,7 +1538,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t local_size[3]  = {64, 2, 1};
                 size_t global_size[3] = {64, 2, 1};
 
-                kernel = backend_ctx->kernel_gemm_moe_q8_0_f32_ns;
+                kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q8_0_f32_ns;
 
                 if ((strstr(src0->name, "as") != NULL) || backend_ctx->toggle_reorder) {
                     moe_router_reoerder(backend, src2, ne20);
@@ -1571,7 +1571,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     const bool q8mdp4a_on = q8mdp4a_env ? (atoi(q8mdp4a_env) != 0)
                                                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
                     const bool use_q8_moe_dp4a = q8mdp4a_on
-                        && backend_ctx->kernel_gemm_moe_q8_1_dp4a_q80 != nullptr
+                        && backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q80 != nullptr
                         && extra0_q8_0->scale != nullptr;
                     if (use_q8_moe_dp4a) {
                         const size_t tok_slots = (size_t)max_post_router_tile * n_tile_size;
@@ -1582,7 +1582,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                         const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
                         unsigned short map_ratio_q8 = ne20 / ne11;
-                        cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                        cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                         CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                         CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                         CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -1608,7 +1608,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         CL_CHECK(status);
 
                         int ne00i = (int)ne00, ne01i = (int)ne01;
-                        cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q80;
+                        cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q80;
                         int has_min_q8 = 0;
                         int aidx = 0;
                         CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q8_0->q));      // flat int8 codes [expert][row][K]
@@ -1652,17 +1652,17 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                 unsigned short map_ratio = ne20 / ne11;
                 GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),         &buf_src2));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),         &buf_src1_reordered));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),         &(backend_ctx->prealloc_total_tiles.buffer)));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),   &ne00));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short), &map_ratio));
-                CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),   &n_tile_size));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),         &buf_src2));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),         &buf_src1_reordered));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),         &(backend_ctx->prealloc_total_tiles.buffer)));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),   &ne00));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short), &map_ratio));
+                CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),   &n_tile_size));
 
                 size_t reorder_b_local_size[3]  = {256, 1, 1};
                 size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
-                backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
 
                 // dst image
                 region.origin = offsetd;
@@ -1703,7 +1703,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
             }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 #ifdef GGML_OPENCL_SOA_Q
-            kernel = backend_ctx->kernel_mul_mv_id_q8_0_f32_flat;
+            kernel = backend_ctx->mul_mat_id.kernel_mul_mv_id_q8_0_f32_flat;
 
             if (backend_ctx->gpu_family == INTEL) {
                 sgs  = 16;
@@ -1739,7 +1739,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
             CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &ne0));
             CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &ne1));
 #else
-            kernel = backend_ctx->kernel_mul_mv_id_q8_0_f32;
+            kernel = backend_ctx->mul_mat_id.kernel_mul_mv_id_q8_0_f32;
 
             if (backend_ctx->gpu_family == INTEL) {
                 sgs  = 16;
@@ -1786,7 +1786,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q4_k_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q4_k_f32_ns;
 
                     // Weight-as-texture MoE decode GEMV
                     static const char * moe_decode_wimg_env = getenv("GGML_OPENCL_MOE_DECODE_WIMG");
@@ -1794,10 +1794,10 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         ? (atoi(moe_decode_wimg_env) != 0)
                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
                     const bool use_moe_decode_wimg = moe_decode_wimg_on
-                        && backend_ctx->kernel_gemv_moe_q4_k_f32_ns_wimg != nullptr
+                        && backend_ctx->mul_mat_id.kernel_gemv_moe_q4_k_f32_ns_wimg != nullptr
                         && extra0_q4_K->q_img != nullptr;
                     if (use_moe_decode_wimg) {
-                        kernel = backend_ctx->kernel_gemv_moe_q4_k_f32_ns_wimg;
+                        kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q4_k_f32_ns_wimg;
                     }
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -1850,9 +1850,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q4_k_f32_ns;
-                    if (backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin) {
-                        kernel = backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_bin) {
+                        kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_bin;
                     }
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
@@ -1874,8 +1874,8 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     // dot prod has to be available
                     use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
                     // bin kernel takes precedence, dp4a bin kernel has higher priority than normal bin kernel
-                    if (backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_bin == nullptr) {
-                        use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin == nullptr;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_q8_1_dp4a_bin == nullptr) {
+                        use_moe_dp4a = use_moe_dp4a && backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_bin == nullptr;
                     }
 
                     cl_buffer_region region;
@@ -1912,7 +1912,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         CL_CHECK(status);
                         cl_image_format image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
                         cl_image_desc image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
-                        if (backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin) {
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_f32_ns_bin) {
                             // bin kernel uses slightly different image format
                             image_format_buf_src1 = {CL_R, CL_FLOAT};
                             image_desc_buf_src1.image_width = static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size);
@@ -1920,19 +1920,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         image_src1_reordered = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
                         CL_CHECK(status);
 
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                         size_t reorder_b_local_size[3] = {256, 1, 1};
                         size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                         // Dispatch reorder kernel
-                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
                     }
 
                     // MoE kernel prepare
@@ -1961,7 +1961,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         // fused reorder + q8_1 quant straight from the original
                         // activations (no intermediate f32 reorder buffer)
                         const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
-                        cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                        cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                         CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                         CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                         CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -1977,9 +1977,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         backend_ctx->enqueue_ndrange_kernel(rq, 2, rq_global, rq_local, dst);
 
                         // dp4a GEMM
-                        cl_kernel dk = backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a;
-                        if (backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_bin) {
-                            dk = backend_ctx->kernel_gemm_moe_q4_k_q8_1_dp4a_bin;
+                        cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_q8_1_dp4a;
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_q8_1_dp4a_bin) {
+                            dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q4_k_q8_1_dp4a_bin;
                         }
 
                         int aidx = 0;
@@ -2056,7 +2056,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q5_k_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q5_k_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -2109,7 +2109,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q5_k_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q5_k_f32_ns;
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
                     // Otherwise reuse the reordered result from previous mul_mat_id call.
@@ -2145,7 +2145,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         const bool q5kmdp4a_on = q5kmdp4a_env ? (atoi(q5kmdp4a_env) != 0)
                                                               : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
                         bool use_moe_dp4a = q5kmdp4a_on
-                            && backend_ctx->kernel_gemm_moe_q8_1_dp4a_q5k != nullptr
+                            && backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q5k != nullptr
                             && extra0_q5_K->scale != nullptr;
                         // dot prod has to be available
                         use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
@@ -2159,7 +2159,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                             const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
                             unsigned short map_ratio_q5k = ne20 / ne11;
-                            cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                            cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                             CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                             CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                             CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -2184,7 +2184,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                             CL_CHECK(status);
 
                             int ne00i = (int)ne00, ne01i = (int)ne01;
-                            cl_kernel dk = backend_ctx->kernel_gemm_moe_q8_1_dp4a_q5k;
+                            cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q8_1_dp4a_q5k;
                             int has_min_q5k = 1;
                             int aidx = 0;
                             CL_CHECK(clSetKernelArg(dk, aidx++, sizeof(cl_mem), &extra0_q5_K->q_img));
@@ -2235,19 +2235,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                     unsigned short map_ratio = ne20 / ne11;
                     GGML_ASSERT(((map_ratio == 1) || (map_ratio == ne20)) && "Map ratio not supported\n");
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                    CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                    CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                     size_t reorder_b_local_size[3] = {256, 1, 1};
                     size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                     // Dispatch reorder kernel
-                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                    backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
 
                     // MoE kernel prepare
                     // Create sub buffer for dst
@@ -2313,7 +2313,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_q6_k_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_q6_k_f32_ns;
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
 
@@ -2365,9 +2365,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q6_k_f32_ns;
-                    if (backend_ctx->kernel_gemm_moe_q6_k_f32_ns_bin) {
-                        kernel = backend_ctx->kernel_gemm_moe_q6_k_f32_ns_bin;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_bin) {
+                        kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_bin;
                     }
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
@@ -2390,8 +2390,8 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     // dot prod has to be available
                     use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
                     // bin kernel takes precedence, dp4a bin kernel has higher priority than normal bin kernel
-                    if (backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_bin == nullptr) {
-                        use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q6_k_f32_ns_bin == nullptr;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_q8_1_dp4a_bin == nullptr) {
+                        use_moe_dp4a = use_moe_dp4a && backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_bin == nullptr;
                     }
 
                     cl_buffer_region region;
@@ -2429,7 +2429,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         CL_CHECK(status);
                         cl_image_format image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
                         cl_image_desc image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
-                        if (backend_ctx->kernel_gemm_moe_q6_k_f32_ns_bin) {
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_f32_ns_bin) {
                             // bin kernel uses slightly different image format
                             image_format_buf_src1 = {CL_R, CL_FLOAT};
                             image_desc_buf_src1.image_width = static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size);
@@ -2437,19 +2437,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         image_src1_reordered = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
                         CL_CHECK(status);
 
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short),  &map_ratio));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                         size_t reorder_b_local_size[3] = {256, 1, 1};
                         size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                         // Dispatch reorder kernel
-                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
                     }
 
                     // MoE kernel prepare
@@ -2478,7 +2478,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 
                         // fused reorder + q8_1 quant from the original activations
                         const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
-                        cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                        cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                         CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                         CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                         CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -2493,9 +2493,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         size_t rq_global[2] = { (size_t)(((n_kblocks + 31) / 32) * 32), tok_slots };
                         backend_ctx->enqueue_ndrange_kernel(rq, 2, rq_global, rq_local, dst);
 
-                        cl_kernel dk = backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a;
-                        if (backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_bin) {
-                            dk = backend_ctx->kernel_gemm_moe_q6_k_q8_1_dp4a_bin;
+                        cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_q8_1_dp4a;
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_q8_1_dp4a_bin) {
+                            dk = backend_ctx->mul_mat_id.kernel_gemm_moe_q6_k_q8_1_dp4a_bin;
                         }
 
                         int qi = 0;
@@ -2571,15 +2571,15 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                 size_t global_size[3] = {64, 2, 1};
 
                 if (ne12 == 1) { // for gemv
-                    kernel = backend_ctx->kernel_gemv_moe_mxfp4_f32_ns;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_mxfp4_f32_ns;
 
                     // Weight-as-texture MoE decode GEMV (see q4_K _wimg)
                     static const char * moe_decode_wimg_env = getenv("GGML_OPENCL_MOE_DECODE_WIMG");
                     const bool use_moe_decode_wimg = (moe_decode_wimg_env && (atoi(moe_decode_wimg_env) != 0))
-                        && backend_ctx->kernel_gemv_moe_mxfp4_f32_ns_wimg != nullptr
+                        && backend_ctx->mul_mat_id.kernel_gemv_moe_mxfp4_f32_ns_wimg != nullptr
                         && extra0_mxfp4->q_img != nullptr;
                     if (use_moe_decode_wimg) {
-                        kernel = backend_ctx->kernel_gemv_moe_mxfp4_f32_ns_wimg;
+                        kernel = backend_ctx->mul_mat_id.kernel_gemv_moe_mxfp4_f32_ns_wimg;
                     }
 
                     cl_mem src1_sub_buffer, buf_src1_image, buf_src2;
@@ -2630,9 +2630,9 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_mxfp4_f32_ns;
-                    if (backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin) {
-                        kernel = backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin;
+                    kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns;
+                    if (backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_bin) {
+                        kernel = backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_bin;
                     }
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
@@ -2657,13 +2657,13 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                     // ldck dp4a bin kernel (X1) has the same priority as normal bin kernel (X2/A8x), they are not expected to coexist.
                     const bool use_moe_dp4a_ldck = backend_ctx->has_integer_dot &&
                         (!mxfp4_moe_dp4a_env || atoi(mxfp4_moe_dp4a_env) != 0) &&
-                        backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_bin == nullptr &&
-                        backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr &&
-                        backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin != nullptr;
+                        backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_bin == nullptr &&
+                        backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr &&
+                        backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin != nullptr;
                     if (use_moe_dp4a_ldck) {
                         use_moe_dp4a = true;
-                    } else if (backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_bin == nullptr) {
-                        use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr;
+                    } else if (backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_bin == nullptr) {
+                        use_moe_dp4a = use_moe_dp4a && backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr;
                     }
 
                     cl_buffer_region region;
@@ -2705,7 +2705,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         cl_image_desc image_desc_buf_src1;
                         image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
                         image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
-                        if (backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin) {
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_f32_ns_bin) {
                             // bin kernel uses slightly different image format
                             image_format_buf_src1 = {CL_R, CL_FLOAT};
                             image_desc_buf_src1.image_width = static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size);
@@ -2713,19 +2713,19 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         image_src1_reordered = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &image_format_buf_src1, &image_desc_buf_src1, NULL, &status);
                         CL_CHECK(status);
 
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 5, sizeof(unsigned short), &map_ratio));
-                        CL_CHECK(clSetKernelArg(backend_ctx->kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 0, sizeof(cl_mem),        &sub_buf_src1_pre));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 1, sizeof(cl_mem),        &buf_src2));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 2, sizeof(cl_mem),        &buf_src1_reordered));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, sizeof(cl_mem),        &(backend_ctx->prealloc_total_tiles.buffer)));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 4, sizeof(unsigned int),  &ne00));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 5, sizeof(unsigned short), &map_ratio));
+                        CL_CHECK(clSetKernelArg(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 6, sizeof(unsigned int),  &n_tile_size));
 
                         size_t reorder_b_local_size[3] = {256, 1, 1};
                         size_t reorder_b_global_size[3] = {static_cast<size_t>(((ne00 / 4) + 255) / 256 * 256), static_cast<size_t>(max_post_router_tile * n_tile_size), 1};
 
                         // Dispatch reorder kernel
-                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
+                        backend_ctx->enqueue_ndrange_kernel(backend_ctx->mul_mat_id.kernel_moe_reorder_b, 3, reorder_b_global_size, reorder_b_local_size, dst);
                     }
 
                     // MoE kernel prepare
@@ -2762,7 +2762,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         // activations (no intermediate f32 reorder buffer). mxfp4 has no
                         // min term so the GEMM ignores sa, but reorder_quant still writes it.
                         const cl_uint n_kblocks = (cl_uint)(ne00 / 32);
-                        cl_kernel rq = backend_ctx->kernel_moe_reorder_quant_a_q8_1;
+                        cl_kernel rq = backend_ctx->mul_mat_id.kernel_moe_reorder_quant_a_q8_1;
                         CL_CHECK(clSetKernelArg(rq, 0, sizeof(cl_mem),         &sub_buf_src1_pre));
                         CL_CHECK(clSetKernelArg(rq, 1, sizeof(cl_mem),         &buf_src2));
                         CL_CHECK(clSetKernelArg(rq, 2, sizeof(cl_mem),         &backend_ctx->prealloc_moe_qa.buffer));
@@ -2778,14 +2778,14 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
                         backend_ctx->enqueue_ndrange_kernel(rq, 2, rq_global, rq_local, dst);
 
                         // dp4a GEMM
-                        cl_kernel dk = backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a;
-                        if (backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_bin) {
-                            dk = backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_bin;
+                        cl_kernel dk = backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a;
+                        if (backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_bin) {
+                            dk = backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_bin;
                         } else if (use_moe_dp4a_ldck) {
-                            dk = backend_ctx->kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin;
+                            dk = backend_ctx->mul_mat_id.kernel_gemm_moe_mxfp4_q8_1_dp4a_ldck_bin;
 
                             // per-tile transpose of qa/da for the ldck kernel
-                            cl_kernel tk = backend_ctx->kernel_transpose_activation_q8;
+                            cl_kernel tk = backend_ctx->mul_mat_id.kernel_transpose_activation_q8;
                             CL_CHECK(clSetKernelArg(tk, 0, sizeof(cl_mem),  &backend_ctx->prealloc_moe_qa.buffer));
                             CL_CHECK(clSetKernelArg(tk, 1, sizeof(cl_mem),  &backend_ctx->prealloc_moe_qa_trans.buffer));
                             CL_CHECK(clSetKernelArg(tk, 2, sizeof(cl_mem),  &backend_ctx->prealloc_moe_da.buffer));
@@ -2863,7 +2863,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
 #ifdef GGML_OPENCL_SOA_Q
-            kernel = backend_ctx->kernel_mul_mv_id_mxfp4_f32_flat;
+            kernel = backend_ctx->mul_mat_id.kernel_mul_mv_id_mxfp4_f32_flat;
 
             cl_mem q;
             if (backend_ctx->gpu_family == INTEL) {
@@ -2907,7 +2907,7 @@ void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const 
             CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
 #else // GGML_OPENCL_SOA_Q
-            kernel = backend_ctx->kernel_mul_mv_id_mxfp4_f32;
+            kernel = backend_ctx->mul_mat_id.kernel_mul_mv_id_mxfp4_f32;
 
             if (backend_ctx->gpu_family == INTEL) {
                 sgs  = 16;
