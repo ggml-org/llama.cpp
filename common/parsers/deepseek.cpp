@@ -106,8 +106,8 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
 
     // lets the server find user turns in the prompt and place context checkpoints there
     data.message_delimiters = {
-        { COMMON_CHAT_ROLE_ASSISTANT, GEN_PROMPT   },
-        { COMMON_CHAT_ROLE_USER,      "<｜User｜>" },
+        { COMMON_CHAT_ROLE_ASSISTANT, GEN_PROMPT },
+        { COMMON_CHAT_ROLE_USER, "<｜User｜>" },
     };
 
     data.prompt = common_chat_template_direct_apply_impl(
