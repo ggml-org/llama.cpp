@@ -289,3 +289,21 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"input": []},
+        {"input": True},
+        {"input": "hello", "encoding_format": 1},
+    ]
+)
+def test_embedding_invalid_request(data):
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data=data)
+    assert res.status_code == 400
+    assert "error" in res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
