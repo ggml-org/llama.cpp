@@ -344,6 +344,29 @@ void dequantize_q8_0_t4(device const block_q8_0 *xb, short il, thread type4 & re
     reg = (type4) (float4(qs[il]) * d);
 }
 
+// b-posit8 W8A8 (Anomly): value = lattice[code] * 2^scale_exp (lattice table bp8_lut_f in ggml-common.h)
+template <typename type4x4>
+void dequantize_bposit8(device const block_bposit8 *xb, short il, thread type4x4 & reg) {
+    device const uint8_t * qs = xb->qs + 16*il;
+    const float d = ldexp(1.0f, (int) xb->scale_exp);
+
+    float4x4 reg_f;
+
+    for (int i = 0; i < 4; ++i) {
+        reg_f[i] = float4(bp8_lut_f[qs[4*i + 0]], bp8_lut_f[qs[4*i + 1]], bp8_lut_f[qs[4*i + 2]], bp8_lut_f[qs[4*i + 3]]) * d;
+    }
+
+    reg = (type4x4) reg_f;
+}
+
+template <typename type4>
+void dequantize_bposit8_t4(device const block_bposit8 *xb, short il, thread type4 & reg) {
+    device const uint8_t * qs = xb->qs + 4*il;
+    const float d = ldexp(1.0f, (int) xb->scale_exp);
+
+    reg = (type4) (float4(bp8_lut_f[qs[0]], bp8_lut_f[qs[1]], bp8_lut_f[qs[2]], bp8_lut_f[qs[3]]) * d);
+}
+
 template <typename type4x4>
 void dequantize_mxfp4(device const block_mxfp4 * xb, short il, thread type4x4 & reg) {
     device const uint8_t * q2 = (device const uint8_t *)xb->qs;

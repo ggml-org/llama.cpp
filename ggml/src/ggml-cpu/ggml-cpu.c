@@ -279,6 +279,19 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .nrows                    = 1,
 #endif
     },
+    [GGML_TYPE_BPOSIT8] = { // b-posit8 (Anomly)
+        .from_float               = quantize_row_bposit8,
+#if defined(GGML_DETERMINISTIC)
+        // deterministic profile: W8A8, posit-coded activations, exact 256-bit quire dot (bit-identical on any HW)
+        .vec_dot                  = ggml_vec_dot_bposit8_bposit8,
+        .vec_dot_type             = GGML_TYPE_BPOSIT8,
+#else
+        // default: bf16 activations, fast fp32-accumulated dot (AVX-512 BF16 / NEON BF16 / scalar)
+        .vec_dot                  = ggml_vec_dot_bposit8_bf16,
+        .vec_dot_type             = GGML_TYPE_BF16,
+#endif
+        .nrows                    = 2,   // 2x2 micro-tile on AVX-512 VBMI / NEON; the scalar paths handle nrc = 2 too
+    },
     [GGML_TYPE_Q8_1] = {
         .from_float               = quantize_row_q8_1,
         .vec_dot_type             = GGML_TYPE_Q8_1,
