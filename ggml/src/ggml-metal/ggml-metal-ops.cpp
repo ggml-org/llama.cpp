@@ -1552,7 +1552,7 @@ int ggml_metal_op_soft_max(ggml_metal_op_t ctx, int idx) {
     if (ctx->use_fusion()) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
-        if (fusion && fusion->id == GGML_METAL_FUSION_TOPK_MOE) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_TOPK_MOE) {
             return ggml_metal_op_topk_moe(ctx, idx);
         }
     }
@@ -1663,7 +1663,7 @@ int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     if (ctx->use_fusion()) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
-        if (fusion && fusion->id == GGML_METAL_FUSION_SSM_CONV_SILU) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_SSM_CONV_SILU) {
             n_fuse = n;
             use_silu = true;
 
@@ -1941,7 +1941,7 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
 
-        if (fusion && fusion->id == GGML_METAL_FUSION_GDN_CACHE) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_GDN_CACHE) {
             const ggml_tensor * dst_cache = ctx->node(idx + 1)->src[1]; // cache view
 
             bid_out = ggml_metal_get_buffer_id(dst_cache);
@@ -3858,13 +3858,13 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
         n_fuse = n;
 
         // snake activation autofuse: mul -> sin -> sqr -> mul -> add
-        if (fusion && fusion->id == GGML_METAL_FUSION_SNAKE) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_SNAKE) {
             ctx->count_fusions(fusion);
             return ggml_metal_op_snake_fused(ctx, idx);
         }
 
         // MoE output reduction: experts * weights -> weighted sum
-        if (fusion && fusion->id == GGML_METAL_FUSION_MOE_REDUCE) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_MOE_REDUCE) {
             ctx->count_fusions(fusion);
             return ggml_metal_op_moe_reduce(ctx, idx);
         }
@@ -3926,7 +3926,7 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     // c[1] = add(c[0], b[1])
     // c[2] = add(c[1], b[2])
     // ...
-    if (use_fusion && fusion && fusion->id == GGML_METAL_FUSION_ADD_CHAIN) {
+    if (use_fusion && fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_ADD_CHAIN) {
         // the offsets of the fused addends are relative to the start of the src1 buffer
         for (int i = 1; i < n_fuse; i++) {
             args.o1[i] = ggml_metal_get_buffer_id(ctx->node(idx + i)->src[1]).offs;
@@ -4185,7 +4185,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         int n = 1;
         const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n);
 
-        if (fusion && (fusion->id == GGML_METAL_FUSION_NORM_MUL || fusion->id == GGML_METAL_FUSION_NORM_MUL_ADD)) {
+        if (fusion && (ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_NORM_MUL || ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_NORM_MUL_ADD)) {
             n_fuse = n;
 
             ctx->count_fusions(fusion);
@@ -4214,7 +4214,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
             }
         }
 
-        if (fusion && fusion->id == GGML_METAL_FUSION_NORM_SCALE) {
+        if (fusion && ggml_metal_fusion_get_id(fusion) == GGML_METAL_FUSION_NORM_SCALE) {
             n_fuse = n;
             fused_norm_scale = true;
 
@@ -5470,7 +5470,7 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
 
     int n_fuse = 1;
     const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
-    if (!fusion || fusion->id != GGML_METAL_FUSION_TOPK_MOE) {
+    if (!fusion || ggml_metal_fusion_get_id(fusion) != GGML_METAL_FUSION_TOPK_MOE) {
         return 1;
     }
 
@@ -5534,7 +5534,7 @@ int ggml_metal_op_moe_reduce(ggml_metal_op_t ctx, int idx) {
 
     int n_fuse = 1;
     const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
-    if (!fusion || fusion->id != GGML_METAL_FUSION_MOE_REDUCE) {
+    if (!fusion || ggml_metal_fusion_get_id(fusion) != GGML_METAL_FUSION_MOE_REDUCE) {
         return 1;
     }
 

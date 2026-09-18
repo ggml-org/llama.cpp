@@ -9,6 +9,34 @@
 #include <string>
 #include <vector>
 
+struct ggml_metal_fusion {
+    ggml_metal_fusion_id id;
+
+    const enum ggml_op * ops;        // op sequence (fixed length, non-empty nodes)
+    int                  n_ops;      // number of ops
+
+    const enum ggml_op * raw_ops;    // full raw op sequence (may include empty RESHAPE/VIEW nodes)
+    int                  n_raw_ops;  // number of raw ops
+
+    // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
+    // check callback below is the sole validator (used for patterns that are not elision chains,
+    // e.g. the gdn + cache-cpy write-through fusion)
+    bool unsafe;
+
+    // extra backend constraints on top of ggml_can_fuse_subgraph
+    // nodes[j] is the j-th node of the pattern; node_idxs[idx + j] is its raw graph index
+    bool (*check)(const struct ggml_metal_fusion   * fusion,
+                  const struct ggml_tensor * const * nodes,
+                  const struct ggml_cgraph         * gf,
+                  const int                        * node_idxs,
+                        int                          idx,
+                        ggml_metal_fusion_mode       mode);
+};
+
+ggml_metal_fusion_id ggml_metal_fusion_get_id(const ggml_metal_fusion * fusion) {
+    return fusion->id;
+}
+
 // ---- helpers -------------------------------------------------------------
 
 // true if two tensors live in the same Metal buffer

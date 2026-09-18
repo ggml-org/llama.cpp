@@ -41,31 +41,12 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
 } ggml_metal_fusion_id;
 
-struct ggml_metal_fusion {
-    ggml_metal_fusion_id id;
-
-    const enum ggml_op * ops;        // op sequence (fixed length, non-empty nodes)
-    int                  n_ops;      // number of ops
-
-    const enum ggml_op * raw_ops;    // full raw op sequence (may include empty RESHAPE/VIEW nodes)
-    int                  n_raw_ops;  // number of raw ops
-
-    // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
-    // check callback below is the sole validator (used for patterns that are not elision chains,
-    // e.g. the gdn + cache-cpy write-through fusion)
-    bool unsafe;
-
-    // extra backend constraints on top of ggml_can_fuse_subgraph
-    // nodes[j] is the j-th node of the pattern; node_idxs[idx + j] is its raw graph index
-    bool (*check)(const struct ggml_metal_fusion   * fusion,
-                  const struct ggml_tensor * const * nodes,
-                  const struct ggml_cgraph         * gf,
-                  const int                        * node_idxs,
-                        int                          idx,
-                        ggml_metal_fusion_mode       mode);
-};
+struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
 
 typedef struct ggml_metal_fusion ggml_metal_fusion;
+
+// access the fusion identifier without exposing the full pattern definition
+ggml_metal_fusion_id ggml_metal_fusion_get_id(const struct ggml_metal_fusion * fusion);
 
 // apply any alloc-dependencies required by the fused kernels during graph optimize
 void ggml_metal_fusion_add_alloc_deps(
