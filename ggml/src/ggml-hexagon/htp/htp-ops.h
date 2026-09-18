@@ -104,6 +104,7 @@ enum htp_op_code {
     HTP_OP_ALLREDUCE_ADD,
     HTP_OP_GLU_SWIGLU_CLAMP,
     HTP_OP_MDEV_GROUP,
+    HTP_OP_ROLL,
 
     HTP_OP_INVALID
 };
