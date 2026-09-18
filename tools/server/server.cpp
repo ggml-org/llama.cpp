@@ -474,6 +474,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
             });
         }
 
+        ctx_server.set_error_callback([&ctx_http]() {
+            ctx_http.has_error.store(true);
+        });
+
         if (!ctx_server.load_model(params)) {
             clean_up();
             if (ctx_http.thread.joinable()) {

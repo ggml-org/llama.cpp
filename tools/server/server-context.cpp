@@ -851,6 +851,7 @@ public:
     server_chat_params chat_params;
 
     server_state_callback_t callback_state = [](server_state, json) -> void {};
+    server_error_callback_t callback_error = []() -> void {};
 
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
@@ -3702,6 +3703,8 @@ private:
                 if (ret < -1) {
                     // TODO: update slot state based on llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
                     err = "Compute error.";
+                    // llama.h documents this range as fatal, the device cannot recover
+                    callback_error();
                 }
 
                 // TODO: handle ret == 2 (abort) when we start aborting
@@ -4248,6 +4251,10 @@ struct server_res_generator : server_res_spipe {
 
 void server_context::set_state_callback(server_state_callback_t callback) {
     impl->callback_state = std::move(callback);
+}
+
+void server_context::set_error_callback(server_error_callback_t callback) {
+    impl->callback_error = std::move(callback);
 }
 
 //

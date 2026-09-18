@@ -251,9 +251,10 @@ bool server_http_context::init(const common_params & params) {
     };
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
-        if (!is_ready.load()) {
+        const bool failed = has_error.load();
+        if (failed || !is_ready.load()) {
             if (frontend_paths.count(req.path)) {
-                return true; // frontend asset, allow it to load and show "loading"
+                return true; // frontend asset, allow it to load and show the state
             }
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
@@ -261,7 +262,7 @@ bool server_http_context::init(const common_params & params) {
             res.set_content(
                 safe_json_to_str(json {
                     {"error", {
-                        {"message", "Loading model"},
+                        {"message", failed ? "Compute device failed, the server must be restarted" : "Loading model"},
                         {"type", "unavailable_error"},
                         {"code", 503}
                     }}
