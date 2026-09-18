@@ -10,9 +10,7 @@
 #include <algorithm>
 #include <clocale>
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <random>
 #include <string>
 #include <vector>
@@ -131,9 +129,6 @@ struct client {
     std::string prompt;
     std::string response;
 
-    std::vector<llama_token> prompt_tokens;
-    std::vector<llama_token> gen_tokens;
-
     struct common_sampler * smpl = nullptr;
 };
 
@@ -163,8 +158,6 @@ int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     std::mt19937 rng(1234);
-    std::mt19937 token_rng(1234);
-    uint64_t logits_run_hash = 1469598103934665603ULL;
 
     common_params params;
 
@@ -190,7 +183,7 @@ int main(int argc, char ** argv) {
     const bool cont_batching = params.cont_batching;
 
     // is the system prompt shared in the cache
-    bool is_sp_shared = params.is_pp_shared;
+    const bool is_sp_shared = params.is_pp_shared;
 
     // extra text to insert in each client's prompt in order to make it larger
     const int32_t n_junk = std::max(1, params.n_junk);
@@ -211,10 +204,6 @@ int main(int argc, char ** argv) {
     auto * mem = llama_get_memory(ctx);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    const bool no_vocab = llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_NONE;
-    if (no_vocab) {
-        is_sp_shared = false;
-    }
 
     // load the prompts from an external file if there are any
     if (params.prompt.empty()) {
@@ -256,9 +245,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_token> tokens_system;
 
-    if (!no_vocab) {
-        tokens_system = common_tokenize(ctx, k_system, true);
-    }
+    tokens_system = common_tokenize(ctx, k_system, true);
     const int32_t n_tokens_system = tokens_system.size();
 
     llama_seq_id g_seq_id = 0;
@@ -338,6 +325,8 @@ int main(int argc, char ** argv) {
                     client.input    = k_prompts[rng() % k_prompts.size()];
                     client.response = "";
 
+                    // construct the prompt:
+                    // [system prompt] + [junk] + [user prompt]
                     client.n_past = 0;
                     client.prompt = "";
                     if (is_sp_shared) {
@@ -356,35 +345,12 @@ int main(int argc, char ** argv) {
 
                     common_sampler_reset(client.smpl);
 
-                    if (no_vocab) {
-                        const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-                        const int32_t n_prompt = 8;
-                        const int32_t n_gen = params.n_predict > 0 ? params.n_predict : 128;
+                    // do not prepend BOS because we have a system prompt!
+                    std::vector<llama_token> tokens_prompt;
+                    tokens_prompt = common_tokenize(ctx, client.prompt, false);
 
-                        client.prompt_tokens.resize(n_prompt);
-                        for (auto & t : client.prompt_tokens) {
-                            t = token_rng() % n_vocab;
-                        }
-                        client.gen_tokens.resize(n_gen);
-                        for (auto & t : client.gen_tokens) {
-                            t = token_rng() % n_vocab;
-                        }
-
-                        for (size_t i = 0; i < client.prompt_tokens.size(); ++i) {
-                            common_batch_add(batch, client.prompt_tokens[i], client.n_past++, { client.id + 1 }, false);
-                        }
-
-                        client.n_prompt  = n_prompt;
-                    } else {
-                        // do not prepend BOS because we have a system prompt!
-                        std::vector<llama_token> tokens_prompt;
-                        tokens_prompt = common_tokenize(ctx, client.prompt, false);
-
-                        for (size_t i = 0; i < tokens_prompt.size(); ++i) {
-                            common_batch_add(batch, tokens_prompt[i], client.n_past++, { client.id + 1 }, false);
-                        }
-
-                        client.n_prompt  = tokens_prompt.size();
+                    for (size_t i = 0; i < tokens_prompt.size(); ++i) {
+                        common_batch_add(batch, tokens_prompt[i], client.n_past++, { client.id + 1 }, false);
                     }
 
                     // extract the logits only for the last token
@@ -392,6 +358,7 @@ int main(int argc, char ** argv) {
                         batch.logits[batch.n_tokens - 1] = true;
                     }
 
+                    client.n_prompt  = tokens_prompt.size();
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
@@ -470,56 +437,26 @@ int main(int argc, char ** argv) {
                 //printf("client %d, seq %d, token %d, pos %d, batch %d\n",
                 //        client.id, client.seq_id, client.sampled, client.n_decoded, client.i_batch);
 
-                const bool no_more_tokens = no_vocab &&
-                    client.n_decoded >= (int32_t) client.gen_tokens.size();
+                const llama_token id = common_sampler_sample(client.smpl, ctx, client.i_batch - i);
 
-                const llama_token id = no_more_tokens
-                    ? 0
-                    : (no_vocab
-                        ? client.gen_tokens[client.n_decoded]
-                        : common_sampler_sample(client.smpl, ctx, client.i_batch - i));
+                common_sampler_accept(client.smpl, id, true);
 
-                const float * logits = llama_get_logits_ith(ctx, client.i_batch - i);
-                const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-                double logits_sum = 0.0;
-                uint64_t logits_hash = 1469598103934665603ULL;
-                for (int32_t j = 0; j < n_vocab; ++j) {
-                    logits_sum += logits[j];
-                    uint32_t u;
-                    memcpy(&u, &logits[j], sizeof(u));
-                    logits_hash ^= u;
-                    logits_hash *= 1099511628211ULL;
+                if (client.n_decoded == 1) {
+                    // start measuring generation time after the first token to make sure all concurrent clients
+                    // have their prompt already processed
+                    client.t_start_gen = ggml_time_us();
                 }
 
-                logits_run_hash ^= logits_hash;
-                logits_run_hash *= 1099511628211ULL;
+                const std::string token_str = common_token_to_piece(ctx, id);
 
-                fprintf(stderr, "LOGITS_SUM client=%d seq=%d n_decoded=%d sum=%.9f hash=%llu run_hash=%llu\n",
-                        client.id, client.seq_id, client.n_decoded, logits_sum,
-                        (unsigned long long) logits_hash, (unsigned long long) logits_run_hash);
-
-                if (!no_more_tokens) {
-                    if (!no_vocab) {
-                        common_sampler_accept(client.smpl, id, true);
-                    }
-
-                    if (client.n_decoded == 1) {
-                        // start measuring generation time after the first token to make sure all concurrent clients
-                        // have their prompt already processed
-                        client.t_start_gen = ggml_time_us();
-                    }
-
-                    const std::string token_str = no_vocab ? std::to_string(id) : common_token_to_piece(ctx, id);
-
-                    client.response += token_str;
-                    client.sampled = id;
-                }
+                client.response += token_str;
+                client.sampled = id;
 
                 //printf("client %d, seq %d, token %d, pos %d, batch %d: %s\n",
                 //        client.id, client.seq_id, id, client.n_decoded, client.i_batch, token_str.c_str());
 
                 if (client.n_decoded > 2 &&
-                    ((!no_vocab && llama_vocab_is_eog(vocab, id)) ||
+                    (llama_vocab_is_eog(vocab, id) ||
                      (params.n_predict > 0 && client.n_decoded >= params.n_predict) ||
                      client.response.find("User:") != std::string::npos)) {
                     // basic reverse prompt
