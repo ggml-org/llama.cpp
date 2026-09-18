@@ -4,6 +4,8 @@ constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
 constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
 constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
 
+constant int  FC_moe_reduce_n_expert_used [[function_constant(FC_MOE_REDUCE + 0)]];
+
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
@@ -466,10 +468,12 @@ kernel void kernel_moe_reduce_f32(
         return;
     }
 
-    const int64_t base = token * (int64_t) args.ne01 * args.ne00 + col;
+    const int n_expert_used = FC_moe_reduce_n_expert_used;
+
+    const int64_t base = token * (int64_t) n_expert_used * args.ne00 + col;
     float sum = 0.0f;
-    for (int e = 0; e < args.ne01; ++e) {
-        sum += experts[base + e * args.ne00] * weights[token * args.ne01 + e];
+    FOR_UNROLL (int e = 0; e < n_expert_used; ++e) {
+        sum += experts[base + e * args.ne00] * weights[token * n_expert_used + e];
     }
     dst[token * args.ne00 + col] = sum;
 }

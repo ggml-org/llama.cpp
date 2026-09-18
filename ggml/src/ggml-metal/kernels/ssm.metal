@@ -1,6 +1,7 @@
 #include "common.h"
 
 constant bool FC_ssm_conv_silu [[function_constant(FC_SSM_CONV + 1)]];
+constant int  FC_ssm_conv_nc    [[function_constant(FC_SSM_CONV + 2)]];
 
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(
@@ -15,7 +16,7 @@ kernel void kernel_ssm_conv_f32_f32(
     const int64_t i2 = tgpig.y;
     const int64_t i3 = tgpig.z;
 
-    const int64_t nc  = args.ne10;
+    const int64_t nc  = FC_ssm_conv_nc;
   //const int64_t ncs = args.ne00;
   //const int64_t nr  = args.ne01;
   //const int64_t n_t = args.ne1;
@@ -27,7 +28,7 @@ kernel void kernel_ssm_conv_f32_f32(
 
     float sumf = 0.0f;
 
-    for (int64_t i0 = 0; i0 < nc; ++i0) {
+    FOR_UNROLL (int64_t i0 = 0; i0 < nc; ++i0) {
         sumf += s[i0] * c[i0];
     }
 
@@ -46,7 +47,7 @@ kernel void kernel_ssm_conv_f32_f32_4(
     const int64_t i2 = tgpig.y;
     const int64_t i3 = tgpig.z;
 
-    const int64_t nc  = args.ne10;
+    const int64_t nc  = FC_ssm_conv_nc;
   //const int64_t ncs = args.ne00;
   //const int64_t nr  = args.ne01;
   //const int64_t n_t = args.ne1;
@@ -58,7 +59,7 @@ kernel void kernel_ssm_conv_f32_f32_4(
 
     float sumf = 0.0f;
 
-    for (int64_t i0 = 0; i0 < nc/4; ++i0) {
+    FOR_UNROLL (int64_t i0 = 0; i0 < nc/4; ++i0) {
         sumf += dot(s[i0], c[i0]);
     }
 
@@ -89,7 +90,7 @@ kernel void kernel_ssm_conv_f32_f32_batched(
     const int64_t i2_off  = tpitg.x;
     const int64_t i2      = i2_base + i2_off;
 
-    const int64_t nc  = args.ne10;  // conv kernel size (typically 4)
+    const int64_t nc  = FC_ssm_conv_nc;  // conv kernel size (typically 4)
     const int64_t n_t = args.ne1;   // number of tokens
 
     // Bounds check for partial batches at the end
@@ -107,7 +108,7 @@ kernel void kernel_ssm_conv_f32_f32_batched(
     device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
 
     float sumf = 0.0f;
-    for (int64_t i0 = 0; i0 < nc; ++i0) {
+    FOR_UNROLL (int64_t i0 = 0; i0 < nc; ++i0) {
         sumf += s[i0] * c[i0];
     }
 
@@ -134,7 +135,7 @@ kernel void kernel_ssm_conv_f32_f32_batched_4(
     const int64_t i2_off  = tpitg.x;
     const int64_t i2      = i2_base + i2_off;
 
-    const int64_t nc  = args.ne10;  // conv kernel size (typically 4)
+    const int64_t nc  = FC_ssm_conv_nc;  // conv kernel size (typically 4)
     const int64_t n_t = args.ne1;   // number of tokens
 
     // Bounds check for partial batches at the end
@@ -152,7 +153,7 @@ kernel void kernel_ssm_conv_f32_f32_batched_4(
     device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
 
     float sumf = 0.0f;
-    for (int64_t i0 = 0; i0 < nc/4; ++i0) {
+    FOR_UNROLL (int64_t i0 = 0; i0 < nc/4; ++i0) {
         sumf += dot(s[i0], c[i0]);
     }
 

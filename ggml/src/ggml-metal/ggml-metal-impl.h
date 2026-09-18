@@ -118,6 +118,7 @@
 #define FC_GATED_DELTA_NET             1600
 #define FC_NORM                        1700
 #define FC_TOPK_MOE                    1800
+#define FC_MOE_REDUCE                  1900
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -913,7 +914,6 @@ typedef struct {
     uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
-    int64_t  ne10;
     int64_t  ne11;
     uint64_t nb10;
     uint64_t nb11;
@@ -1244,7 +1244,6 @@ typedef struct {
 
 typedef struct {
     int32_t ne00; // n_embd
-    int32_t ne01; // n_expert_used
     int32_t ne02; // n_tokens
 } ggml_metal_kargs_moe_reduce;
 
