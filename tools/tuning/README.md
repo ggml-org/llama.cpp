@@ -9,6 +9,7 @@ A non-zero exit code means bad arguments or a wrong environment (no Metal device
 | tuner | tunes | table |
 |---|---|---|
 | `fa-vec` | flash-attn vec `(Q, NE)` per `(dtype, head size, KV depth, batch width)` | `fa_vec_tuned_table` |
+| `mul-mm` | mul_mm tile `(nr0, nr1)` per `(dtype, output-feature bucket, token bucket)` | `mm_tile_tuned_table`, `mm_tile_ne11_mm_min_table` |
 
 ## Adding a device to the FA-vec table
 
@@ -49,6 +50,34 @@ The tuner itself does no numerical checks, so the other head sizes have no autom
 
 If the device is not in `enum ggml_metal_device_id` yet, register it in `ggml/src/ggml-metal/ggml-metal-device.{h,m}` first.
 The tuner emits whatever token the runtime reports for the machine, so an unregistered device emits `GGML_METAL_DEVICE_GENERIC` and its rows would apply to every unknown device.
+
+## Adding a device to the mul-mm table
+
+Build on the target machine (same targets as above).
+
+Sweep the grid (4 dtypes x a shape-zoo of real weight shapes x a token ladder; about an hour):
+
+```bash
+./build/bin/ggml-metal-tuning mul-mm > mm_rows.txt 2> mm_sweep.log
+```
+
+`mm_rows.txt` holds two labelled sections of pasteable rows: paste the first into `mm_tile_tuned_table` and the second into `mm_tile_ne11_mm_min_table`.
+The min-max-regret target, the aggregate benefit gate, the real-token floor and the occupancy sanity check are already applied, so an unsampled shape falls through to the baseline tile rather than inheriting an off-ladder win.
+`mm_sweep.log` holds the per-cell timings, the mv_ext crossover the switch point is read from, every occupancy-sanity note, and every cell dropped as untrusted.
+Post both: the log is what makes the rows reviewable.
+
+Long sweeps can be split with `--dtype q4_0,f16`; the rows for one dtype do not depend on the others.
+
+Then validate the numerics, where Metal is compared against the CPU reference:
+
+```bash
+./build/bin/test-backend-ops test -o MUL_MAT -b MTL0
+```
+
+This forces every instantiated tile geometry (and the baseline) across the tile dtypes and runs the pick-lattice self-test.
+The tuner itself does no numerical checks.
+
+Only the exact device is tuned: rows are keyed to the machine that swept them, and any other device (including a sibling SKU of the same GPU family) falls through to the baseline tile, byte-for-byte identical to upstream.
 
 ## Thermal throttling
 

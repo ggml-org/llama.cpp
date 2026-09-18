@@ -1,6 +1,6 @@
 set(TARGET ggml-metal-tuning)
 
-add_executable(${TARGET} main.cpp bench.cpp fa-vec.cpp)
+add_executable(${TARGET} main.cpp bench.cpp fa-vec.cpp mul-mm.cpp)
 target_link_libraries(${TARGET} PRIVATE ggml ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)

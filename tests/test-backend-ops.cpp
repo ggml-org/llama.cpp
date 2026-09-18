@@ -11926,6 +11926,75 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
+// ---- mul_mm tile: forced-config numerical slice + pick-lattice self-test (Metal only) ----
+using set_mm_tile_override_t     = void (*)(int, int);
+using clear_mm_tile_override_t   = void (*)(void);
+using mm_tile_lattice_selftest_t = int  (*)(void);
+
+// Forces each instantiated tile geometry and checks Metal against the CPU reference,
+// then runs the pick-lattice self-test. The override is backend-global, so this runs
+// after all parallel workers have joined.
+static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+    if (!op_names_filter_selects(op_names_filter, "MUL_MAT")) {
+        return true;
+    }
+
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+
+    auto set_ov   = (set_mm_tile_override_t)     ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_mm_tile_override");
+    auto clear_ov = (clear_mm_tile_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_mm_tile_override");
+    auto selftest = (mm_tile_lattice_selftest_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_mm_tile_lattice_selftest");
+    if (!set_ov || !clear_ov || !selftest) {
+        return true;  // not the Metal backend: nothing to force
+    }
+
+    // Instantiated tile geometries + the baseline. Keep in sync with MM_TILE_FAMILY and
+    // MM_TILE_BASELINE_CFG in ggml-metal-tuning.h and the INST_MM_TILE list in mul_mm.metal:
+    // a geometry here without an instantiation resolves to a nil pipeline; one missing here
+    // ships without numerical coverage.
+    struct tile_t { int nr0, nr1; };
+    const tile_t    tiles[]  = { { 32, 8 }, { 32, 16 }, { 64, 8 }, { 64, 16 }, { 64, 32 } };
+    const ggml_type dtypes[] = { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_F16 };
+
+    const int64_t k = 4096;  // a valid block multiple for every dtype above
+
+    int n_run = 0, n_fail = 0;
+    for (auto t : tiles) {
+        for (ggml_type type_a : dtypes) {
+            // n (tokens) > 8 routes to the mm branch; two shapes exercise the aligned path
+            // and the bc_out writeback path (N_out % nr0 != 0 || tokens % nr1 != 0).
+            const struct { int64_t m, n; } shapes[] = {
+                { t.nr0 * 3,     t.nr1 * 3     },  // bc_out = false
+                { t.nr0 * 3 + 7, t.nr1 * 3 + 5 },  // bc_out = true
+            };
+            for (auto s : shapes) {
+                set_ov(t.nr0, t.nr1);
+                test_mul_mat tc(type_a, GGML_TYPE_F32, s.m, s.n, k, { 1, 1 }, { 1, 1 });
+                auto st = tc.eval(backend, backend_cpu, "MUL_MAT", nullptr);
+                clear_ov();
+
+                if (st == test_status_t::FAIL) {
+                    printf("  FAIL mul_mm tile slice: tile=%dx%d type=%s m=%lld n=%lld k=%lld\n",
+                           t.nr0, t.nr1, ggml_type_name(type_a),
+                           (long long) s.m, (long long) s.n, (long long) k);
+                    n_fail++;
+                }
+                n_run++;
+            }
+        }
+    }
+
+    const int selftest_fails = selftest();
+    if (selftest_fails != 0) {
+        printf("  FAIL mul_mm pick-lattice self-test: %d assertion(s)\n", selftest_fails);
+    }
+
+    printf("  mul_mm tile slice: %d cases run, %d failed; pick-lattice self-test %s\n",
+           n_run, n_fail, selftest_fails == 0 ? "ok" : "FAILED");
+
+    return n_fail == 0 && selftest_fails == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -12063,9 +12132,10 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool slice_ok    = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool mm_slice_ok = run_mul_mm_slice(backend, backend_cpu.get(), op_names_filter);
 
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run && slice_ok && mm_slice_ok;
     }
 
     if (mode == MODE_GRAD) {

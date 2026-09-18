@@ -5,6 +5,7 @@
 
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -803,11 +804,34 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
     constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
 
-    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+    const auto * dev_props  = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
+    const bool   has_tensor = dev_props->has_tensor;
+
+    // Pick (nr0, nr1) from the tuning table; falls back to (64,32) baseline.
+    // The tile kernel is only compiled for the non-tensor path, MM_TILE_DTYPES, and src1=f32.
+    bool tile_dtype = false;
+    for (ggml_type t : ggml_metal_tuning::MM_TILE_DTYPES) {
+        if (tsrc0 == t) { tile_dtype = true; break; }
+    }
+    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32 && tile_dtype;
+
+    // pick returns a legal cfg: tuned-table rows are static_assert'd legal and the
+    // baseline is legal. name/grid/smem are all derived from this one cfg, so they
+    // can never desync.
+    const ggml_metal_tuning::mm_tile_cfg_t cfg = tile_eligible
+        ? ggml_metal_tuning::mm_tile_pick(
+              dev_props->device_id,
+              (int) tsrc0,
+              (int64_t) op->src[0]->ne[1],   // N_out (out-feat, ne01)
+              (int64_t) op->src[1]->ne[1])   // tokens (ne11)
+        : ggml_metal_tuning::mm_tile_baseline_cfg();
+
+    const int nr0 = cfg.nr0;
+    const int nr1 = cfg.nr1;
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
-        : (op->ne[0] % 64  != 0 || op->ne[1] % 32  != 0);
+        : (op->ne[0] % nr0 != 0 || op->ne[1] % nr1 != 0);
 
     GGML_ASSERT(op->src[1]->ne[2] <= INT16_MAX && op->src[1]->ne[3] <= INT16_MAX);
     const int16_t ne12 = (int16_t) op->src[1]->ne[2];
@@ -815,7 +839,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    // baseline -> plain kernel_mul_mm; any other tile appends _tile_{nr0}x{nr1}.
+    char tile_suffix[16] = {0};
+    if (nr0 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr0 ||
+        nr1 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1) {
+        snprintf(tile_suffix, sizeof(tile_suffix), "_tile_%dx%d", nr0, nr1);
+    }
+    snprintf(base, 256, "kernel_mul_mm%s_%s_%s", tile_suffix,
+             ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
              base, bc_inp, bc_out, ne12, ne13, r2, r3);
 
@@ -838,17 +869,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     if (has_tensor) {
         res.nr0 = NRA;
         res.nr1 = NRB;
+        res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
         const size_t smem_a = NRA * N_MM_NK_TOTAL * sizeof(ggml_fp16_t);
         res.smem = smem_a;
     } else {
-        res.nr0 = 64;
-        res.nr1 = 32;
+        res.nr0 = nr0;
+        res.nr1 = nr1;
+        res.nsg = nr0 / 16;  // must match N_SG in kernel_mul_mm_tile
 
-        res.smem = bc_out ? 8192 : (4096 + 2048);
+        // smem = max(sa+sb, bc_out buffer): the writeback path reuses shmem as a
+        // NR0 x NR1 float scratch, which can exceed the sa+sb load buffers for large tiles.
+        const size_t NK = 32;
+        const size_t sa = (size_t) nr0 * NK * sizeof(ggml_fp16_t);
+        const size_t sb = (size_t) nr1 * NK * sizeof(ggml_fp16_t);
+        const size_t bc = (size_t) nr0 * nr1 * sizeof(float);
+        res.smem = bc_out ? std::max(sa + sb, bc) : (sa + sb);
     }
-
-    res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
 
     return res;
 }

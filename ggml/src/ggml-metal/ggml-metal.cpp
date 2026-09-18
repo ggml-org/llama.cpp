@@ -936,6 +936,31 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
     ggml_metal_fusion_info_set_enabled((struct ggml_metal_fusion_info *) finfo, enabled);
 }
 
+// test/tune-only override for the mul_mm tile (nr0, nr1) selection, reached via proc_address.
+static void ggml_backend_metal_tuning_set_mm_tile_override(int nr0, int nr1) {
+    ggml_metal_tuning::mm_tile_set_override({ (int16_t) nr0, (int16_t) nr1 });
+}
+
+static void ggml_backend_metal_tuning_clear_mm_tile_override(void) {
+    ggml_metal_tuning::mm_tile_clear_override();
+}
+
+static void ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override(int ne11_mm_min) {
+    ggml_metal_tuning::mm_tile_set_ne11_mm_min_override(ne11_mm_min);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_N0_bucket(int64_t N_out) {
+    return ggml_metal_tuning::mm_tile_N0_bucket(N_out);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_token_bucket(int64_t tokens) {
+    return ggml_metal_tuning::mm_tile_token_bucket(tokens);
+}
+
+static int ggml_backend_metal_tuning_mm_tile_lattice_selftest(void) {
+    return ggml_metal_tuning::mm_tile_lattice_selftest();
+}
+
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
@@ -974,6 +999,24 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_fusion_set_enabled") == 0) {
         return (void *)ggml_backend_metal_fusion_set_enabled;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_set_mm_tile_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_set_mm_tile_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_clear_mm_tile_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_clear_mm_tile_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_set_mm_tile_ne11_mm_min_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_N0_bucket") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_N0_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_token_bucket") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_token_bucket;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_mm_tile_lattice_selftest") == 0) {
+        return (void *)ggml_backend_metal_tuning_mm_tile_lattice_selftest;
     }
 
     return NULL;
