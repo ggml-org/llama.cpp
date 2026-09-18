@@ -1,9 +1,19 @@
 #include "common.cuh"
 #include "fwht.cuh"
 
-template <int N>
+template <typename T>
+static __device__ __forceinline__ float fwht_load(const T value) {
+    return value;
+}
+
+template <>
+__device__ __forceinline__ float fwht_load<half>(const half value) {
+    return __half2float(value);
+}
+
+template <int N, typename T>
 __launch_bounds__(4*ggml_cuda_get_physical_warp_size(), 1)
-__global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, const float scale) {
+__global__ void fwht_cuda(const T * src, float * dst, const int64_t n_rows, const float scale) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     const int64_t r = (int64_t) blockIdx.x * blockDim.y + threadIdx.y;
@@ -22,7 +32,7 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
     ggml_cuda_pdl_sync();
 #pragma unroll
     for (int i = 0; i < el_w; ++i) {
-        reg[i] = src[i * warp_size + lane] * scale;
+        reg[i] = fwht_load(src[i * warp_size + lane]) * scale;
     }
 
 #pragma unroll
@@ -58,15 +68,12 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
     }
 }
 
-bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
-    GGML_ASSERT(ggml_are_same_shape(src, dst));
-    if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
-        return false;
-    }
+template <typename T>
+static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
     const int     n    = src->ne[0];
     const int64_t rows = ggml_nrows(src);
 
-    const float * src_d = (const float *) src->data;
+    const T *     src_d = (const T *) src->data;
     float *       dst_d = (float *) dst->data;
 
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
@@ -84,17 +91,46 @@ bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src,
 
     switch (n) {
         case 64:
-            ggml_cuda_kernel_launch(fwht_cuda<64>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<64, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 128:
-            ggml_cuda_kernel_launch(fwht_cuda<128>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<128, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 256:
-            ggml_cuda_kernel_launch(fwht_cuda<256>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<256, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 512:
-            ggml_cuda_kernel_launch(fwht_cuda<512>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<512, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
+        default:
+            return false;
+    }
+}
+
+bool ggml_cuda_op_mul_mat_use_fwht(const struct ggml_tensor * op) {
+    const struct ggml_tensor * a = op->src[0];
+    const struct ggml_tensor * b = op->src[1];
+
+    return op->op == GGML_OP_MUL_MAT && ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+           a->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
+           (b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16) && ggml_is_contiguous(b) && ggml_is_contiguous(op) &&
+           ggml_are_same_shape(b, op);
+}
+
+bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    switch (src->type) {
+        case GGML_TYPE_F32:
+            return ggml_cuda_op_fwht_impl<float>(ctx, src, dst);
+        case GGML_TYPE_F16:
+            return ggml_cuda_op_fwht_impl<half>(ctx, src, dst);
         default:
             return false;
     }
