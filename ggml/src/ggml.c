@@ -3405,7 +3405,11 @@ struct ggml_tensor * ggml_mul_mat_ext(
         result->src[2] = scale_weight;
     }
 
-    GGML_UNUSED(scale_activations);
+    if (scale_activations) {
+        GGML_ASSERT(ggml_can_repeat(scale_activations, b));
+        result->src[3] = scale_activations;
+    }
+
     return result;
 }
 
@@ -3490,7 +3494,11 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
         result->src[3] = s;
     }
 
-    GGML_UNUSED(scale_activations);
+    if (scale_activations) {
+        GGML_ASSERT(ggml_can_repeat(scale_activations, b));
+        result->src[4] = scale_activations;
+    }
+
     return result;
 }
 
