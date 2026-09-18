@@ -1,0 +1,24 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+// Full router projection+softmax+top-k in one WG per token. EXPERIMENTAL:
+// for single-token decode this has low occupancy; split route is the default.
+layout(local_size_x=256)in;
+layout(set=0,binding=0,std430)readonly buffer X{float x[];};
+layout(set=0,binding=1,std430)readonly buffer W{float w[];};
+layout(set=0,binding=2,std430)writeonly buffer I{uint indices[];};
+layout(set=0,binding=3,std430)writeonly buffer S{float scores[];};
+layout(set=0,binding=4,std430)buffer E{uint u0;uint u1;uint errors;uint u3;}ctl;
+layout(push_constant)uniform P{uint tokens;uint experts;uint topk;uint tie_high;uint ascending;uint k;}p;
+shared float logits_shared[256];
+shared float input_tile[256];
+#include "router_select_body.glsl"
+void main(){
+ uint t=gl_WorkGroupID.x,lid=gl_LocalInvocationID.x;if(t>=p.tokens)return;
+ precise float sum=0.0;
+ for(uint base=0u;base<p.k;base+=256u){
+   input_tile[lid]=(base+lid<p.k)?x[t*p.k+base+lid]:0.0;barrier();
+   if(lid<p.experts)for(uint j=0u;j<min(256u,p.k-base);++j)sum+=w[lid*p.k+base+j]*input_tile[j];
+   barrier();
+ }
+ logits_shared[lid]=sum;barrier();select_topk(t,lid);
+}

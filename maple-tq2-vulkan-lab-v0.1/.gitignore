@@ -1,0 +1,8 @@
+build*/
+fixtures/
+__pycache__/
+*.pyc
+*.spv
+*.actual.bin
+*.expected.bin
+*.input.bin

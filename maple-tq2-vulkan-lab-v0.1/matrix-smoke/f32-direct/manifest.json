@@ -1,0 +1,84 @@
+{
+  "seed": 918,
+  "tokens": 1,
+  "hidden": 256,
+  "ffn": 256,
+  "experts": 8,
+  "topk": 2,
+  "q8": false,
+  "grouped": false,
+  "persistent": true,
+  "workgroups": 128,
+  "reuse": true,
+  "fuse_upgate": true,
+  "fuse_qkv": true,
+  "full_router": false,
+  "tie_high": false,
+  "ascending": false,
+  "device_payload_bytes": 448336,
+  "expected": {
+    "ids": {
+      "shape": [
+        1,
+        2
+      ],
+      "dtype": "uint32"
+    },
+    "scores": {
+      "shape": [
+        1,
+        2
+      ],
+      "dtype": "float32"
+    },
+    "intermediate": {
+      "shape": [
+        2,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "expert_out": {
+      "shape": [
+        2,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "moe_out": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "logits": {
+      "shape": [
+        1,
+        8
+      ],
+      "dtype": "float32"
+    },
+    "q_out": {
+      "shape": [
+        1,
+        256
+      ],
+      "dtype": "float32"
+    },
+    "k_out": {
+      "shape": [
+        1,
+        64
+      ],
+      "dtype": "float32"
+    },
+    "v_out": {
+      "shape": [
+        1,
+        64
+      ],
+      "dtype": "float32"
+    }
+  }
+}

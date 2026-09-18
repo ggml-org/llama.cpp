@@ -1,0 +1,674 @@
+[
+  {
+    "fixture": "fixture-f32",
+    "options": {
+      "seed": 918,
+      "tokens": 13,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": false,
+      "grouped": true,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": true,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 13574148,
+      "expected": {
+        "ids": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789662100.4548428
+    },
+    "plan_sha256": "8574fe77430732757a36583918baebc2403ba05f58419d03fefc3ed33cbf7cc3"
+  },
+  {
+    "fixture": "fixture-q8",
+    "options": {
+      "seed": 918,
+      "tokens": 13,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": true,
+      "grouped": true,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": true,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 13607844,
+      "expected": {
+        "ids": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789662101.691061
+    },
+    "plan_sha256": "a8a728d9eeeb0fafbcd7c9a17885b7626d8163829c7cd9ebd40d77e415e004ae"
+  },
+  {
+    "fixture": "fixture-direct-ab",
+    "options": {
+      "seed": 918,
+      "tokens": 1,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": false,
+      "grouped": false,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": false,
+      "fuse_upgate": false,
+      "fuse_qkv": false,
+      "full_router": true,
+      "tie_high": true,
+      "ascending": true,
+      "device_payload_bytes": 13300064,
+      "expected": {
+        "ids": {
+          "shape": [
+            1,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            1,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            8,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            8,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            1,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            1,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            1,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            1,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            1,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789661849.546348
+    },
+    "plan_sha256": "33b5fd4149acd7862ac1b18cfc774016c3a484279525a796d4e3ab8c646dadd2"
+  },
+  {
+    "fixture": "fixture-q8-bucket-ab",
+    "options": {
+      "seed": 918,
+      "tokens": 13,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": true,
+      "grouped": true,
+      "persistent": false,
+      "workgroups": 128,
+      "reuse": false,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 13607844,
+      "expected": {
+        "ids": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            13,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            104,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            13,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            13,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789661860.2700155
+    },
+    "plan_sha256": "02b055e1b2d8d15bf9625f08d6d1cbd357c36cd0a591a18ca59bb92d0effb360"
+  },
+  {
+    "fixture": "fixture-n184",
+    "options": {
+      "seed": 918,
+      "tokens": 184,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": true,
+      "grouped": true,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": true,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 17978148,
+      "expected": {
+        "ids": {
+          "shape": [
+            184,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            184,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            1472,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            1472,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            184,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            184,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            184,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            184,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            184,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789661863.182931
+    },
+    "plan_sha256": "bd2fda88f6fa8f7fc1a4374279acef28a4392d6ad8048bd444f02bb9c3f4b6e2"
+  },
+  {
+    "fixture": "fixture-n2048",
+    "options": {
+      "seed": 918,
+      "tokens": 2048,
+      "hidden": 256,
+      "ffn": 256,
+      "experts": 256,
+      "topk": 8,
+      "q8": true,
+      "grouped": true,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": true,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 65457956,
+      "expected": {
+        "ids": {
+          "shape": [
+            2048,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            2048,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            16384,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            16384,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            2048,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            2048,
+            64
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            2048,
+            64
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789661967.822684
+    },
+    "plan_sha256": "e4775fd3f1e4013f85ad018278f4691a23908de19fb1929310042979a665e59a"
+  },
+  {
+    "fixture": "fixture-maple-shape",
+    "options": {
+      "seed": 918,
+      "tokens": 1,
+      "hidden": 2048,
+      "ffn": 512,
+      "experts": 256,
+      "topk": 8,
+      "q8": true,
+      "grouped": false,
+      "persistent": true,
+      "workgroups": 128,
+      "reuse": true,
+      "fuse_upgate": true,
+      "fuse_qkv": true,
+      "full_router": false,
+      "tie_high": false,
+      "ascending": false,
+      "device_payload_bytes": 211468128,
+      "expected": {
+        "ids": {
+          "shape": [
+            1,
+            8
+          ],
+          "dtype": "uint32"
+        },
+        "scores": {
+          "shape": [
+            1,
+            8
+          ],
+          "dtype": "float32"
+        },
+        "intermediate": {
+          "shape": [
+            8,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "expert_out": {
+          "shape": [
+            8,
+            2048
+          ],
+          "dtype": "float32"
+        },
+        "moe_out": {
+          "shape": [
+            1,
+            2048
+          ],
+          "dtype": "float32"
+        },
+        "logits": {
+          "shape": [
+            1,
+            256
+          ],
+          "dtype": "float32"
+        },
+        "q_out": {
+          "shape": [
+            1,
+            2048
+          ],
+          "dtype": "float32"
+        },
+        "k_out": {
+          "shape": [
+            1,
+            512
+          ],
+          "dtype": "float32"
+        },
+        "v_out": {
+          "shape": [
+            1,
+            512
+          ],
+          "dtype": "float32"
+        }
+      }
+    },
+    "execution": {
+      "backend": "Mesa EGL/OpenGL software oracle",
+      "renderer": "llvmpipe (LLVM 19.1.7, 256 bits)",
+      "version": "4.5 (Core Profile) Mesa 25.0.7-2",
+      "native_integer_dot_tested": false,
+      "vulkan_tested": false,
+      "time": 1789661954.1476376
+    },
+    "plan_sha256": "8a3c8b741e3de0310b1e960ad28e7fa6d6b5900a1ff82200a050b83608a47034"
+  }
+]

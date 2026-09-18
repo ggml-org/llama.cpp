@@ -1,0 +1,11 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+layout(local_size_x=256)in;
+layout(set=0,binding=0,std430)readonly buffer L{float logits[];};
+layout(set=0,binding=1,std430)writeonly buffer I{uint indices[];};
+layout(set=0,binding=2,std430)writeonly buffer S{float scores[];};
+layout(set=0,binding=3,std430)buffer E{uint u0;uint u1;uint errors;uint u3;}ctl;
+layout(push_constant)uniform P{uint tokens;uint experts;uint topk;uint tie_high;uint ascending;}p;
+shared float logits_shared[256];
+#include "router_select_body.glsl"
+void main(){uint t=gl_WorkGroupID.x,lid=gl_LocalInvocationID.x;if(t>=p.tokens)return;logits_shared[lid]=lid<p.experts?logits[t*p.experts+lid]:0.0;barrier();select_topk(t,lid);}

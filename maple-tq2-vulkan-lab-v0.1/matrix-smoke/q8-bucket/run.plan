@@ -1,0 +1,61 @@
+MAPLE_TQ2_PLAN 1
+require_dot 1
+buffer dummy 16 "-"
+buffer input 1024 "input.input.bin"
+buffer router_w 8192 "router_w.input.bin"
+buffer up 135168 "up.input.bin"
+buffer gate 135168 "gate.input.bin"
+buffer down 135168 "down.input.bin"
+buffer control 16 "-"
+fill control 0 16 0
+buffer ids 8 "-"
+buffer scores 8 "-"
+buffer logits 32 "-"
+dispatch router_logits 1 1 1 3 1 8 256 4 input router_w logits control
+dispatch router_select 1 1 1 5 1 8 2 0 0 4 logits ids scores control
+dump logits "logits.actual.bin"
+buffer counts 32 "-"
+fill counts 0 32 0
+buffer offsets 36 "-"
+buffer cursors 32 "-"
+buffer sorted 8 "-"
+dispatch bucket_count 1 1 1 2 2 8 3 ids counts control
+dispatch bucket_prefix 1 1 1 1 8 3 counts offsets cursors
+dispatch bucket_scatter 1 1 1 2 2 8 5 ids offsets cursors sorted control
+buffer jobs 256 "-"
+dump offsets "offsets.actual.bin"
+dump sorted "sorted.actual.bin"
+buffer input_q 256 "-"
+buffer input_s 32 "-"
+dispatch quantize_q8g32 8 1 1 2 256 1 4 input input_q input_s control
+buffer intermediate 2048 "-"
+fill control 0 8 0
+dispatch build_jobs 1 1 1 3 8 256 16 3 offsets jobs control
+dispatch project_q1_f1_r1 128 1 1 12 256 256 1 2 8 2 0 0 0 0 0 0 9 up gate dummy input_q input_s sorted jobs control intermediate
+buffer intermediate_q 512 "-"
+buffer intermediate_s 64 "-"
+dispatch quantize_q8g32 16 1 1 2 256 2 4 intermediate intermediate_q intermediate_s control
+buffer expert_out 2048 "-"
+fill control 0 8 0
+dispatch build_jobs 1 1 1 3 8 256 16 3 offsets jobs control
+dispatch project_q1_f0_r1 128 1 1 12 256 256 2 2 8 2 1 0 0 0 0 0 9 down dummy dummy intermediate_q intermediate_s sorted jobs control expert_out
+buffer moe_out 1024 "-"
+dispatch reduce_experts 1 1 1 3 1 256 2 3 expert_out scores moe_out
+buffer wq 16896 "wq.input.bin"
+buffer wk 4224 "wk.input.bin"
+buffer wv 4224 "wv.input.bin"
+buffer q_out 1024 "-"
+buffer k_out 256 "-"
+buffer v_out 256 "-"
+buffer qkv_out 1536 "-"
+dispatch project_q1_f2_r1 12 1 1 12 256 384 1 1 1 0 0 256 64 0 0 0 9 wq wk wv input_q input_s dummy dummy control qkv_out
+dispatch split_qkv 2 1 1 4 1 256 64 64 4 qkv_out q_out k_out v_out
+dump ids "ids.actual.bin"
+dump scores "scores.actual.bin"
+dump intermediate "intermediate.actual.bin"
+dump expert_out "expert_out.actual.bin"
+dump moe_out "moe_out.actual.bin"
+dump q_out "q_out.actual.bin"
+dump k_out "k_out.actual.bin"
+dump v_out "v_out.actual.bin"
+dump control "control.actual.bin"

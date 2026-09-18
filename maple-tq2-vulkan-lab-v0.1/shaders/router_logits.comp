@@ -1,0 +1,16 @@
+#version 450
+layout(local_size_x=128)in;
+layout(set=0,binding=0,std430)readonly buffer X{float x[];};
+layout(set=0,binding=1,std430)readonly buffer W{float w[];};
+layout(set=0,binding=2,std430)writeonly buffer L{float logits[];};
+layout(set=0,binding=3,std430)buffer E{uint u0;uint u1;uint errors;uint u3;}ctl;
+layout(push_constant)uniform P{uint tokens;uint experts;uint k;}p;
+shared float red[128];
+void main(){
+ uint lid=gl_LocalInvocationID.x,lane=lid%16u,r=lid/16u,t=gl_WorkGroupID.y,e=gl_WorkGroupID.x*8u+r;
+ precise float sum=0.0;
+ if(e<p.experts&&t<p.tokens)for(uint j=lane;j<p.k;j+=16u)sum+=w[e*p.k+j]*x[t*p.k+j];
+ red[lid]=sum;barrier();
+ for(uint s=8u;s>0u;s>>=1u){if(lane<s)red[lid]+=red[lid+s];barrier();}
+ if(lane==0u&&e<p.experts&&t<p.tokens){if(isnan(red[lid])||isinf(red[lid]))atomicOr(ctl.errors,1u);logits[t*p.experts+e]=red[lid];}
+}

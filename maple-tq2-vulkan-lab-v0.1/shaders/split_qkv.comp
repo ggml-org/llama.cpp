@@ -1,0 +1,8 @@
+#version 450
+layout(local_size_x=256)in;
+layout(set=0,binding=0,std430)readonly buffer X{float x[];};
+layout(set=0,binding=1,std430)writeonly buffer Q{float q[];};
+layout(set=0,binding=2,std430)writeonly buffer K{float k[];};
+layout(set=0,binding=3,std430)writeonly buffer V{float v[];};
+layout(push_constant)uniform P{uint tokens;uint nq;uint nk;uint nv;}p;
+void main(){uint i=(gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x)*256u+gl_LocalInvocationID.x;uint m=p.nq+p.nk+p.nv;if(i>=p.tokens*m)return;uint t=i/m,r=i%m;if(r<p.nq)q[t*p.nq+r]=x[i];else if(r<p.nq+p.nk)k[t*p.nk+r-p.nq]=x[i];else v[t*p.nv+r-p.nq-p.nk]=x[i];}

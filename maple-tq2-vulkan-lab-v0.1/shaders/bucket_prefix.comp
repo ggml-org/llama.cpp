@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer C {uint counts[];};
+layout(set=0,binding=1,std430) writeonly buffer O {uint offsets[];};
+layout(set=0,binding=2,std430) writeonly buffer U {uint cursors[];};
+layout(push_constant) uniform P {uint experts;}p;
+shared uint scan[256];
+void main(){
+ uint t=gl_LocalInvocationID.x;scan[t]=t<p.experts?counts[t]:0u;barrier();
+ for(uint step=1u;step<256u;step<<=1u){uint v=t>=step?scan[t-step]:0u;barrier();scan[t]+=v;barrier();}
+ if(t<p.experts){offsets[t]=t==0u?0u:scan[t-1u];cursors[t]=0u;}
+ if(t==0u)offsets[p.experts]=scan[255];
+}

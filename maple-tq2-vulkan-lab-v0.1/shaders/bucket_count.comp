@@ -1,0 +1,7 @@
+#version 450
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer I { uint ids[]; };
+layout(set=0,binding=1,std430) buffer C { uint counts[]; };
+layout(set=0,binding=2,std430) buffer E { uint u0;uint u1;uint errors;uint u3;} ctl;
+layout(push_constant) uniform P {uint assignments;uint experts;}p;
+void main(){uint a=(gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x)*256u+gl_LocalInvocationID.x;if(a>=p.assignments)return;uint e=ids[a];if(e>=p.experts){atomicOr(ctl.errors,2u);return;}atomicAdd(counts[e],1u);}

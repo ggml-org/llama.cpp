@@ -1,0 +1,14 @@
+#version 450
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430) readonly buffer O{uint offsets[];};
+layout(set=0,binding=1,std430) writeonly buffer J{uvec4 jobs[];};
+layout(set=0,binding=2,std430) buffer C{uint cursor;uint njobs;uint errors;uint unused;}ctl;
+layout(push_constant)uniform P{uint experts;uint rows;uint capacity;}p;
+void main(){
+ uint e=gl_GlobalInvocationID.x;if(e>=p.experts)return;
+ uint begin=offsets[e],count=offsets[e+1u]-begin,nr=(p.rows+31u)/32u,nt=(count+3u)/4u;
+ uint n=nr*nt,base=atomicAdd(ctl.njobs,n);
+ if(base>p.capacity||n>p.capacity-base){atomicOr(ctl.errors,4u);return;}
+ for(uint t=0u;t<nt;++t)for(uint r=0u;r<nr;++r)
+  jobs[base+t*nr+r]=uvec4(e,begin+t*4u,min(4u,count-t*4u),r*32u);
+}

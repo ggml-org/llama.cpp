@@ -1,0 +1,7 @@
+#version 450
+layout(local_size_x=256)in;
+layout(set=0,binding=0,std430)readonly buffer X{float x[];};
+layout(set=0,binding=1,std430)readonly buffer S{float scores[];};
+layout(set=0,binding=2,std430)writeonly buffer Y{float y[];};
+layout(push_constant)uniform P{uint tokens;uint hidden;uint topk;}p;
+void main(){uint i=(gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x)*256u+gl_LocalInvocationID.x;if(i>=p.tokens*p.hidden)return;uint t=i/p.hidden,d=i%p.hidden;precise float acc=0.0;for(uint s=0u;s<p.topk;++s)acc+=x[(t*p.topk+s)*p.hidden+d]*scores[t*p.topk+s];y[i]=acc;}

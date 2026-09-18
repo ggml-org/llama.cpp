@@ -1,0 +1,31 @@
+#version 450
+layout(local_size_x=32) in;
+layout(set=0,binding=0,std430) readonly buffer X { float x[]; };
+layout(set=0,binding=1,std430) writeonly buffer Q { uint q[]; };
+layout(set=0,binding=2,std430) writeonly buffer S { float scales[]; };
+layout(set=0,binding=3,std430) buffer E { uint unused0; uint unused1; uint errors; uint unused3; } ctl;
+layout(push_constant) uniform P { uint k; uint rows; } p;
+shared float vmax[32];
+shared int codes[32];
+void main() {
+    uint lane=gl_LocalInvocationID.x,block=gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x;
+    if(block>=p.rows*(p.k/32u)) return;
+    float v=x[block*32u+lane];
+    if(isnan(v)||isinf(v)) { atomicOr(ctl.errors,1u); v=0.0; }
+    vmax[lane]=abs(v); barrier();
+    for(uint s=16u;s>0u;s>>=1u) {
+        if(lane<s) vmax[lane]=max(vmax[lane],vmax[lane+s]);
+        barrier();
+    }
+    float d=vmax[0]==0.0?0.0:max(vmax[0]/127.0,1.17549435e-38);
+    // Round halves away from zero (GLSL round() half-way choice is not required).
+    float a=d==0.0?0.0:v/d;
+    codes[lane]=int(clamp(sign(a)*floor(abs(a)+0.5),-127.0,127.0));
+    barrier();
+    if(lane==0u) scales[block]=d;
+    if(lane<8u) {
+        uint vv=0u;
+        for(uint j=0u;j<4u;++j) vv|=(uint(codes[lane*4u+j])&255u)<<(j*8u);
+        q[block*8u+lane]=vv;
+    }
+}

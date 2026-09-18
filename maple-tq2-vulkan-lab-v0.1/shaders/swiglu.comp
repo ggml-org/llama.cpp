@@ -1,0 +1,7 @@
+#version 450
+layout(local_size_x=256) in;
+layout(set=0,binding=0,std430)readonly buffer U{float up[];};
+layout(set=0,binding=1,std430)readonly buffer G{float gate[];};
+layout(set=0,binding=2,std430)writeonly buffer Y{float y[];};
+layout(push_constant)uniform P{uint n;}p;
+void main(){uint i=(gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x)*256u+gl_LocalInvocationID.x;if(i>=p.n)return;float g=min(gate[i],7.0),u=clamp(up[i],-7.0,7.0);float s=g>=0.0?1.0/(1.0+exp(-g)):exp(g)/(1.0+exp(g));y[i]=(g*s)*u;}

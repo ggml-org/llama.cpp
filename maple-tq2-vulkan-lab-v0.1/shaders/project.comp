@@ -1,0 +1,265 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#ifndef Q8
+#define Q8 0
+#endif
+#ifndef FUSION
+#define FUSION 0
+#endif
+#ifndef REUSE
+#define REUSE 1
+#endif
+#if Q8
+#extension GL_EXT_integer_dot_product : require
+#endif
+// FUSION: 0=one projection, 1=up+gate+clamped SwiGLU, 2=virtual Q/K/V row concat.
+// REUSE=0 is an A/B path: unpack inside the dot loop, not a recommended default.
+// Quantized weights remain GGML TQ2_0 (66 bytes/256); no full FP16 expansion.
+layout(local_size_x=128) in;
+layout(set=0,binding=0,std430) readonly buffer W0 { uint w0[]; };
+layout(set=0,binding=1,std430) readonly buffer W1 { uint w1[]; };
+layout(set=0,binding=2,std430) readonly buffer W2 { uint w2[]; };
+layout(set=0,binding=3,std430) readonly buffer X { uint x[]; };
+layout(set=0,binding=4,std430) readonly buffer XS { float xs[]; };
+layout(set=0,binding=5,std430) readonly buffer Indices { uint indices[]; };
+layout(set=0,binding=6,std430) readonly buffer Jobs { uvec4 jobs[]; };
+layout(set=0,binding=7,std430) buffer Control { uint cursor; uint njobs; uint errors; uint reserved; } ctl;
+layout(set=0,binding=8,std430) writeonly buffer Y { float y[]; };
+layout(push_constant) uniform Params {
+    uint k; uint m; uint n; uint topk;
+    uint experts; uint schedule; uint per_assignment; uint nq;
+    uint nk; uint o0; uint o1; uint o2;
+} p;
+// schedule 0: dense implicit jobs; 1: direct routed implicit jobs;
+// 2: persistent bucketed jobs; 3: bucketed one-workgroup-per-job A/B.
+// n: token rows for dense/up-gate; assignment rows for down.
+// per_assignment=0 -> input token = assignment/topk; 1 -> input row = assignment.
+// nq/nk used by QKV fusion; all byte offsets are relative to aligned descriptors.
+const uint MT=32u, NT=4u, KB=256u, PK=64u;
+shared uint s_w0[32*64];
+#if FUSION == 1
+shared uint s_w1[32*64];
+#endif
+shared float s_d0[32];
+#if FUSION == 1
+shared float s_d1[32];
+#endif
+#if Q8
+shared uint s_x[4*64];
+shared float s_xs[4*8];
+#else
+shared float s_x[4*256];
+#endif
+shared uint s_a[4];
+shared uvec4 task;
+shared uint task_index;
+
+uint word(uint bank, uint at) {
+    if (bank==0u) return w0[at];
+    if (bank==1u) return w1[at];
+    return w2[at];
+}
+uint raw32(uint bank, uint off) {
+    uint v=word(bank,off>>2u);
+    uint sh=(off&3u)*8u;
+    if (sh==0u) return v;
+    return (v>>sh)|(word(bank,(off>>2u)+1u)<<(32u-sh));
+}
+float scale16(uint bank,uint off) {
+    // TQ2 offsets and scales are even; this never crosses a 32-bit word.
+    uint bits=(word(bank,off>>2u)>>((off&3u)*8u))&65535u;
+    return unpackHalf2x16(bits).x;
+}
+uint unpack4(uint bank,uint block_base,uint lane4) {
+    // Four CONSECUTIVE elements. TQ2 is NOT ordinary contiguous 2-bit packing.
+    uint i=lane4*4u;
+    uint b=block_base+(i/128u)*32u+(i%32u);
+    uint v=(raw32(bank,b)>>(2u*((i%128u)/32u)))&0x03030303u;
+    // Independent signed-byte subtract-one without inter-byte borrows.
+    return (((v|0x80808080u)-0x01010101u)^0x80808080u);
+}
+int signed_lane(uint v,uint j) { return bitfieldExtract(int(v),int(j*8u),8); }
+void choose_weight(uint row,uint expert,out uint bank,out uint base) {
+    bank=0u; uint rr=row; uint off=p.o0;
+#if FUSION == 2
+    if(row>=p.nq+p.nk) { bank=2u; rr=row-p.nq-p.nk; off=p.o2; }
+    else if(row>=p.nq) { bank=1u; rr=row-p.nq; off=p.o1; }
+    base=off+rr*(p.k/256u)*66u;
+#else
+    base=off+(expert*p.m+rr)*(p.k/256u)*66u;
+#endif
+}
+void main() {
+    uint lid=gl_LocalInvocationID.x;
+    if(ctl.errors!=0u) return; // errors from prior dispatches are made visible by the host barrier
+    uint rows=(p.m+MT-1u)/MT;
+    uint group=gl_WorkGroupID.x+gl_WorkGroupID.y*gl_NumWorkGroups.x;
+    if(p.schedule==0u && group>=rows*((p.n+NT-1u)/NT)) return;
+    uint assignments=p.per_assignment!=0u?p.n:p.n*p.topk;
+    if(p.schedule==1u && group>=rows*assignments) return;
+    for (;;) {
+        if(lid==0u) {
+            if(p.schedule==2u) task_index=atomicAdd(ctl.cursor,1u);
+            else task_index=group;
+            if(p.schedule==0u) {
+                uint b=task_index/rows*NT;
+                task=uvec4(0u,b,min(NT,p.n-b),(task_index%rows)*MT);
+            } else if(p.schedule==1u) {
+                uint a=task_index/rows;
+                task=uvec4(indices[a],a,1u,(task_index%rows)*MT);
+            } else if(task_index<ctl.njobs) task=jobs[task_index];
+        }
+        barrier();
+        if(p.schedule>=2u && task_index>=ctl.njobs) break;
+        if(task.x>=p.experts) {
+            if(lid==0u) atomicOr(ctl.errors,2u);
+            // All threads take the same branch, including its barriers.
+            if(p.schedule!=2u) break;
+            barrier(); continue;
+        }
+        if(lid<NT) {
+            s_a[lid]=0xffffffffu;
+            if(lid<task.z) {
+                s_a[lid]=(p.schedule>=2u) ? indices[task.y+lid] : task.y+lid;
+            }
+        }
+        barrier();
+        uint t=lid/MT,r=lid%MT,row=task.w+r,a=s_a[t];
+        bool valid=(t<task.z && row<p.m && a!=0xffffffffu);
+        precise float acc0=0.0;
+#if FUSION == 1
+        precise float acc1=0.0;
+#endif
+        for(uint kb=0u;kb<p.k/KB;++kb) {
+            // Every weight row/block is unpacked ONCE per workgroup tile.
+#if REUSE
+            for(uint j=lid;j<MT*PK;j+=128u) {
+                uint rr=j/PK,pp=j%PK,rr_global=task.w+rr;
+                uint v0=0u;
+#if FUSION == 1
+                uint v1=0u;
+#endif
+                if(rr_global<p.m) {
+                    uint bank,base; choose_weight(rr_global,task.x,bank,base);
+                    v0=unpack4(bank,base+kb*66u,pp);
+#if FUSION == 1
+                    uint bg=p.o1+(task.x*p.m+rr_global)*(p.k/256u)*66u;
+                    v1=unpack4(1u,bg+kb*66u,pp);
+#endif
+                }
+                s_w0[j]=v0;
+#if FUSION == 1
+                s_w1[j]=v1;
+#endif
+            }
+#endif
+            if(lid<MT) {
+                s_d0[lid]=0.0;
+#if FUSION == 1
+                s_d1[lid]=0.0;
+#endif
+                if(task.w+lid<p.m) {
+                    uint bank,base; choose_weight(task.w+lid,task.x,bank,base);
+                    s_d0[lid]=scale16(bank,base+kb*66u+64u);
+#if FUSION == 1
+                    uint bg=p.o1+(task.x*p.m+task.w+lid)*(p.k/256u)*66u;
+                    s_d1[lid]=scale16(1u,bg+kb*66u+64u);
+#endif
+                }
+            }
+#if Q8
+            for(uint j=lid;j<NT*PK;j+=128u) {
+                uint tt=j/PK, kk=j%PK,aa=s_a[tt];
+                uint ir=(p.schedule==0u||p.per_assignment!=0u)?aa:aa/p.topk;
+                s_x[j]=(aa==0xffffffffu)?0u:x[ir*(p.k/4u)+kb*PK+kk];
+            }
+            if(lid<NT*8u) {
+                uint tt=lid/8u,gg=lid%8u,aa=s_a[tt];
+                uint ir=(p.schedule==0u||p.per_assignment!=0u)?aa:aa/p.topk;
+                s_xs[lid]=(aa==0xffffffffu)?0.0:xs[ir*(p.k/32u)+kb*8u+gg];
+            }
+#else
+            for(uint j=lid;j<NT*KB;j+=128u) {
+                uint tt=j/KB,kk=j%KB,aa=s_a[tt];
+                uint ir=(p.schedule==0u||p.per_assignment!=0u)?aa:aa/p.topk;
+                s_x[j]=(aa==0xffffffffu)?0.0:uintBitsToFloat(x[ir*p.k+kb*KB+kk]);
+            }
+#endif
+            barrier();
+            if(valid) {
+#if !REUSE
+                uint bank,base; choose_weight(row,task.x,bank,base); base+=kb*66u;
+#if FUSION == 1
+                uint bg=p.o1+(task.x*p.m+row)*(p.k/256u)*66u+kb*66u;
+#endif
+#endif
+#if Q8
+                for(uint g=0u;g<8u;++g) {
+                    int sum0=0;
+#if FUSION == 1
+                    int sum1=0;
+#endif
+                    for(uint j=0u;j<8u;++j) {
+                        uint pp=g*8u+j;
+#if REUSE
+                        uint q0=s_w0[r*PK+pp];
+#else
+                        uint q0=unpack4(bank,base,pp);
+#endif
+                        int xv=int(s_x[t*PK+pp]);
+                        sum0+=dotPacked4x8EXT(int(q0),xv);
+#if FUSION == 1
+#if REUSE
+                        uint q1=s_w1[r*PK+pp];
+#else
+                        uint q1=unpack4(1u,bg,pp);
+#endif
+                        sum1+=dotPacked4x8EXT(int(q1),xv);
+#endif
+                    }
+                    acc0+=(s_d0[r]*s_xs[t*8u+g])*float(sum0);
+#if FUSION == 1
+                    acc1+=(s_d1[r]*s_xs[t*8u+g])*float(sum1);
+#endif
+                }
+#else
+                for(uint pp=0u;pp<PK;++pp) {
+#if REUSE
+                    uint q0=s_w0[r*PK+pp];
+#else
+                    uint q0=unpack4(bank,base,pp);
+#endif
+#if FUSION == 1
+#if REUSE
+                    uint q1=s_w1[r*PK+pp];
+#else
+                    uint q1=unpack4(1u,bg,pp);
+#endif
+#endif
+                    for(uint j=0u;j<4u;++j) {
+                        float xv=s_x[t*KB+pp*4u+j];
+                        acc0+=(float(signed_lane(q0,j))*s_d0[r])*xv;
+#if FUSION == 1
+                        acc1+=(float(signed_lane(q1,j))*s_d1[r])*xv;
+#endif
+                    }
+                }
+#endif
+            }
+            barrier(); // protect shared tiles before reuse in the next K block
+        }
+        if(valid) {
+#if FUSION == 1
+            // Maple: ONLY upper clamp on gate; two-sided clamp on up.
+            float gate=min(acc1,7.0),up=clamp(acc0,-7.0,7.0);
+            float sig=gate>=0.0?1.0/(1.0+exp(-gate)):exp(gate)/(1.0+exp(gate));
+            y[a*p.m+row]=(gate*sig)*up;
+#else
+            y[a*p.m+row]=acc0;
+#endif
+        }
+        barrier();
+        if(p.schedule!=2u) break;
+
+    }
+}
