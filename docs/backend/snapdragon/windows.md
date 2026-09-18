@@ -144,6 +144,22 @@ For additional details see Microsoft guide at
 Make sure to save the PFX file, you will need it for the build procedures.
 Please note that the same certificate can be used for signing any number of builds.
 
+## Sign and install a release package
+
+The Windows arm64 Hexagon release contains the HTP libraries and `libggml-htp.inf`, but not a signed catalog. Extract the release archive, then use an elevated Powershell terminal to generate and sign the catalog. Set these paths to the extracted package, your certificate, and the Windows SDK tools installed on your system:
+
+```
+> $package="c:\Users\MyUser\Downloads\llama-bin-win-hexagon-arm64"
+> $certificate="c:\Users\MyUser\Certs\ggml-htp-v1.pfx"
+> $windowsSdkBin="c:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0"
+
+> & "$windowsSdkBin\arm64\Inf2Cat.exe" /driver:"$package" /os:10_25H2_ARM64
+> & "$windowsSdkBin\arm64\signtool.exe" sign /fd sha256 /f "$certificate" "$package\libggml-htp.cat"
+> pnputil.exe /add-driver "$package\libggml-htp.inf" /install
+```
+
+The certificate must be installed in the `Trusted Root Certification Authorities` and `Trusted Publishers` stores as described above. Test-signing must also be enabled when using a self-signed certificate.
+
 ## Build Hexagon backend with signed HTP ops libraries
 
 The overall Hexagon backend build procedure for Windows on Snapdragon is the same as for other platforms.
