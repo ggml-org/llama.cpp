@@ -1,10 +1,8 @@
 #include "models.h"
 
 void llama_model_gemma3n::load_arch_hparams(llama_model_loader & ml) {
-    uint32_t swa_period = 5;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    hparams.set_swa_pattern(swa_period);
+    load_swa_pattern(ml, 5);
 
     hparams.n_layer_kv_from_start = 20;
     hparams.f_attention_scale     = 1.0f;

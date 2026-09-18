@@ -3305,6 +3305,15 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
     }
 }
 
+void llama_model_base::load_swa_pattern(llama_model_loader & ml, uint32_t n_pattern, bool dense_first) {
+    if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
+        return;
+    }
+
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_pattern, false);
+    hparams.set_swa_pattern(n_pattern, dense_first);
+}
+
 const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {
     const auto & v = model->target_layer_ids;
     return v.empty() ? nullptr : v.data();
