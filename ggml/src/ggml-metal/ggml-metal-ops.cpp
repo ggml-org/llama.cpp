@@ -2379,17 +2379,8 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    const int32_t hint = ggml_get_op_params_i32(op, 1);
-
-    if (hint == GGML_HINT_SRC0_IS_HADAMARD) {
-        if ((op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
-            op->type == GGML_TYPE_F32 &&
-            ggml_is_contiguous(op->src[1]) &&
-            ggml_is_contiguous(op) &&
-            ggml_are_same_shape(op->src[1], op) &&
-            ggml_metal_fwht_supported_size(op->src[1]->ne[0])) {
-            return ggml_metal_op_fwht(ctx, idx);
-        }
+    if (ggml_metal_use_fwht(op)) {
+        return ggml_metal_op_fwht(ctx, idx);
     }
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 

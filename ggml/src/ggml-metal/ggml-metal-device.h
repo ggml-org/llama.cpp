@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-impl.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,6 +112,19 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 // kernel_fwht_<type>_<N> templates in misc.metal
 static inline bool ggml_metal_fwht_supported_size(int64_t n) {
     return n == 64 || n == 128 || n == 256 || n == 512;
+}
+
+// whether a Hadamard-hinted MUL_MAT is handled by the FWHT kernels. supports_op and the
+// dispatch must ask the same question: an F16 src1 that is admitted but then falls through
+// reaches the generic path, which has no F32 src0 by F16 src1 kernel.
+static inline bool ggml_metal_use_fwht(const struct ggml_tensor * op) {
+    return ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+           op->type == GGML_TYPE_F32 &&
+           (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
+           ggml_is_contiguous(op->src[1]) &&
+           ggml_is_contiguous(op) &&
+           ggml_are_same_shape(op->src[1], op) &&
+           ggml_metal_fwht_supported_size(op->src[1]->ne[0]);
 }
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_base              (ggml_metal_library_t lib, enum ggml_op op);
