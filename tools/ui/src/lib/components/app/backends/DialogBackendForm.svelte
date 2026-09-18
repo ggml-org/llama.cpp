@@ -145,6 +145,9 @@
 			<div class="space-y-3 pt-2">
 				<h3 class="text-sm font-medium">Recommended providers</h3>
 
+				<!-- TODO: a "pair by QR code" entry point belongs in this grid, next
+				     to the provider cards. -->
+
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
 					{#each BACKEND_PRESETS as preset (preset.id)}
 						<BackendPresetCard
