@@ -408,7 +408,7 @@ kernel void kernel_fwht(
         for (int j = 0; j < NE; j++) {
             const float val = reg[j];
             const float val2 = simd_shuffle_xor(val, i);
-            reg[j] = (lane & i) == 0 ? val2 + val : val2 - val;
+            reg[j] = val2 - val + 2*((lane & i) == 0)*val;
         }
     }
 
