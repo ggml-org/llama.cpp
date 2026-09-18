@@ -373,6 +373,20 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     const bool is_dsv4 = ud->model->arch == LLM_ARCH_DEEPSEEK4 ||
         (ud->model->arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0);
 
+    // a per-output-channel scale indexes the weight's ne[1], so it splits on ne[0] to match
+    if (tensor_name.size() >= 6 && tensor_name.compare(tensor_name.size() - 6, 6, ".scale") == 0) {
+        const std::string weight_name = tensor_name.substr(0, tensor_name.size() - 6) + ".weight";
+        const ggml_tensor * w = ud->model->get_tensor(weight_name.c_str());
+        if (w != nullptr) {
+            ggml_backend_meta_split_state ws = llama_meta_device_get_split_state(w, userdata);
+            if (ws.axis == GGML_BACKEND_SPLIT_AXIS_1 && tensor->ne[0] == w->ne[1]) {
+                ws.axis = GGML_BACKEND_SPLIT_AXIS_0;
+                return ws;
+            }
+        }
+        return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+    }
+
     static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
     static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
