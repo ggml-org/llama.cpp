@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "ggml-vulkan.h"
 
 #include <vulkan/vulkan_core.h>
@@ -715,6 +717,9 @@ struct vk_device_struct {
     bool shader_int64;
     bool buffer_device_address;
     bool vulkan_memory_model;
+
+    bool global_priority_support = false;
+    std::optional<vk::QueueGlobalPriorityKHR> global_priority;
 
     bool add_rms_fusion;
     uint32_t partials_binding_alignment;
