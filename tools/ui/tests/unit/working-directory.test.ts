@@ -1,4 +1,4 @@
-import { GLOB_WILDCARD, PATH_NAV_MAX_DEPTH } from '$lib/constants';
+import { GLOB, SEARCH } from '$lib/constants';
 import {
 	buildCaseInsensitiveGlob,
 	buildGlobSearchArgs,
@@ -148,7 +148,7 @@ describe('buildGlobSearchArgs', () => {
 
 		expect(args.path).toBe('~');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
-		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 		expect(args.rankQuery).toBe('proj');
 		expect(args.last).toBe('proj');
 	});
@@ -157,8 +157,8 @@ describe('buildGlobSearchArgs', () => {
 		const args = buildGlobSearchArgs('~/', '/home', DEPTH);
 
 		expect(args.path).toBe('~');
-		expect(args.include).toBe(GLOB_WILDCARD);
-		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+		expect(args.include).toBe(GLOB.WILDCARD);
+		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 	});
 
 	it('navigates an absolute path under its root', () => {
@@ -166,7 +166,7 @@ describe('buildGlobSearchArgs', () => {
 
 		expect(args.path).toBe('/usr/local');
 		expect(args.include).toBe(buildCaseInsensitiveGlob('bin'));
-		expect(args.maxDepth).toBe(PATH_NAV_MAX_DEPTH);
+		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 		expect(args.rankQuery).toBe('bin');
 		expect(args.last).toBe('bin');
 	});

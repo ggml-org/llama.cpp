@@ -1,4 +1,4 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { Copy } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ActionIcon from '$lib/components/app/actions/ActionIcon.svelte';
@@ -29,6 +29,7 @@
 >
 	<div>
 		<button type="button">before</button>
-		<ActionIcon icon={Copy} tooltip="Copy" onclick={() => {}} />
+
+		<ActionIcon icon={Copy} onclick={() => {}} tooltip="Copy" />
 	</div>
 </Story>

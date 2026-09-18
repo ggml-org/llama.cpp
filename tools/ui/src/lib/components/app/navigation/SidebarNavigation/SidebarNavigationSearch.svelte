@@ -17,5 +17,5 @@
 </script>
 
 <div class="mb-4 px-2 {className}">
-	<SearchInput bind:value {placeholder} {onInput} />
+	<SearchInput bind:value {onInput} {placeholder} />
 </div>

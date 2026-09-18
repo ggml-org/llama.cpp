@@ -4,9 +4,7 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { modelOptions, modelsStore } from '$lib/stores/models.svelte';
+	import { chatStore, conversationsStore, modelsStore } from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -18,7 +16,7 @@
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
-	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
 	// Track if URL params have been processed for this chat
 	let urlParamsProcessed = $state(false);
@@ -86,7 +84,7 @@
 			urlParamsProcessed = false; // Reset for new chat
 
 			// Skip loading if this conversation is already active (e.g., just created)
-			if (activeConversation()?.id === chatId) {
+			if (conversationsStore.activeConversation?.id === chatId) {
 				void chatStore.discoverActiveStream(chatId);
 
 				if ((qParam !== null || modelParam !== null) && !urlParamsProcessed) {
@@ -136,11 +134,11 @@
 </script>
 
 <svelte:head>
-	<title>{activeConversation()?.name || 'Chat'} - {APP_NAME}</title>
+	<title>{conversationsStore.activeConversation?.name || 'Chat'} - {APP_NAME}</title>
 </svelte:head>
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}
-	modelName={requestedModelName}
 	availableModels={availableModelNames}
+	modelName={requestedModelName}
 />

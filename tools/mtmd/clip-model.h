@@ -29,10 +29,10 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
+// all algos are Pillow-compatible (matching PIL.Image.resize output)
 enum resize_algo {
-    RESIZE_ALGO_BILINEAR, // stretch to target resolution
-    RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
-    RESIZE_ALGO_BICUBIC_PILLOW,
+    RESIZE_ALGO_BILINEAR,
+    RESIZE_ALGO_BICUBIC,
     RESIZE_ALGO_LANCZOS,
 };
 
@@ -73,7 +73,7 @@ struct clip_hparams {
     int32_t preproc_max_tiles = 0;
     int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr)
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
-    resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
+    resize_algo image_resize_algo_ov = RESIZE_ALGO_BICUBIC;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)
     pad_style image_pad_ov = PAD_NONE;  // padding style for the overview image (e.g. llava-1.6)
     std::array<uint8_t, 3> image_pad_color_rf = {0, 0, 0}; // padding color for refined image
@@ -93,11 +93,16 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+    int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
     std::vector<int32_t> wa_pattern_mode; // mimovl: per-layer window-attention mode
+
+    // deepseek4v: resize solver caps the LLM token count of the aligner grid
+    int32_t dsv4_max_n_token  = 0;
+    int32_t dsv4_max_wh_ratio = 0;
 
     // deepseek-ocr (sam)
     int32_t sam_n_layer = 0;
@@ -258,6 +263,13 @@ struct clip_layer {
     ggml_tensor * ff_gate_b = nullptr;
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
+
+    // MoE FFN (dots3note vision pyramid blocks)
+    ggml_tensor * ff_gate_inp_w  = nullptr;
+    ggml_tensor * ff_gate_exps_w = nullptr;
+    ggml_tensor * ff_up_exps_w   = nullptr;
+    ggml_tensor * ff_down_exps_w = nullptr;
+    ggml_tensor * ff_exp_probs_b = nullptr;
 
     // layernorm 2 (or pre-FFN norm)
     ggml_tensor * ln_2_w = nullptr;
@@ -716,6 +728,11 @@ struct clip_model {
 
     // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;
+
+    // deepseek4v sentinel embeddings (image_newline is reused for IMAGE_NEW_LINE)
+    ggml_tensor * token_embd_img_start = nullptr;
+    ggml_tensor * token_embd_img_end   = nullptr;
+    ggml_tensor * token_embd_img_pad   = nullptr;
     ggml_tensor * mm_patch_merger_w = nullptr;
     ggml_tensor * mm_patch_merger_b = nullptr;
 

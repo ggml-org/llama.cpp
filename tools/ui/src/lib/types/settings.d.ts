@@ -25,12 +25,15 @@ export interface SettingsEntry {
 	help: string;
 	defaultValue: SettingsConfigValue;
 	type: SettingsFieldType;
-	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
 	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	/** When true, the field is rendered as a password input (e.g. API key). */
+	isPrivate?: boolean;
+	/** When false, the setting is stored/synced but has no standalone field; it is rendered by a sibling control or a dedicated page. */
+	standaloneField?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;
@@ -55,6 +58,7 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	isPrivate?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;

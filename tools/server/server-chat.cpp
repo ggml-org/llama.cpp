@@ -153,7 +153,7 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                         prev_msg["content"] = json::array();
                     }
                     auto & prev_content = prev_msg["content"];
-                    prev_content.insert(prev_content.end(), chatcmpl_content.begin(), chatcmpl_content.end());
+                    prev_content.insert(chatcmpl_content);
                 } else {
                     item.erase("status");
                     item.erase("type");

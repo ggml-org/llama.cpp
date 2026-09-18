@@ -1,4 +1,4 @@
-import { HEIC_JPEG_QUALITY } from '$lib/constants/image-size';
+import { IMAGE } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 // heic requires a relatively large decoder, in order to reduce primary bundle size
@@ -32,7 +32,7 @@ export async function heicFileToJpegDataURL(file: File | Blob): Promise<string> 
 	const { heicTo } = await getHeicTo();
 	const jpegBlob = await heicTo({
 		blob: file,
-		quality: HEIC_JPEG_QUALITY,
+		quality: IMAGE.HEIC_JPEG_QUALITY,
 		type: MimeTypeImage.JPEG
 	});
 

@@ -5,14 +5,14 @@
 	import { ActionIcon, KeyboardShortcutInfo, SearchInput } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import {
+		ICON_CLASS_DEFAULT,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
 		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { TooltipSide } from '$lib/enums';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { SidebarAction, TooltipSide } from '$lib/enums';
+	import { conversationsStore, deviceStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -26,6 +26,7 @@
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
 		onNewChat?: () => void;
+		onSettingsClick?: () => void;
 	}
 
 	let {
@@ -35,6 +36,7 @@
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
+		onSettingsClick,
 		searchQuery = $bindable('')
 	}: Props = $props();
 
@@ -42,7 +44,7 @@
 	let showIcons = $state(false);
 	let searchInputRef = $state<HTMLInputElement | null>(null);
 
-	const isOnMobile = $derived(isMobile.current);
+	const isOnMobile = $derived(deviceStore.isMobile);
 
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
@@ -92,8 +94,8 @@
 {#if isSearchModeActive}
 	<div class="px-4 my-2">
 		<SearchInput
-			bind:value={searchQuery}
 			bind:ref={searchInputRef}
+			bind:value={searchQuery}
 			onClose={handleSearchModeDeactivate}
 			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 			placeholder="Search conversations..."
@@ -107,16 +109,24 @@
 	>
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
+			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const itemOnClick =
+				item.action === SidebarAction.NEW_CHAT
+					? () => {
+							onNewChat?.();
+							void conversationsStore.openNewChat();
+						}
+					: item.action === SidebarAction.SETTINGS
+						? () => onSettingsClick?.()
+						: item.route
+							? () => {
+									onNewChat?.();
+									goto(item.route!);
+								}
+							: isSearchOnMobile
+								? undefined
+								: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -131,8 +141,8 @@
 							: ''}"
 						href={itemHref}
 						onclick={itemOnClick}
-						variant="ghost"
 						size="default"
+						variant="ghost"
 					>
 						<span class="flex min-w-0 items-center px-0.5 gap-2">
 							{@render itemIcon(item.icon)}
@@ -156,15 +166,23 @@
 	<div class="{className} flex-col gap-1 hidden md:flex">
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
-			{@const isSearchOnMobile = item.icon === Search && isMobile.current}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
+			{@const itemOnClick =
+				item.action === SidebarAction.NEW_CHAT
+					? () => {
+							onNewChat?.();
+							void conversationsStore.openNewChat();
+						}
+					: item.action === SidebarAction.SETTINGS
+						? () => onSettingsClick?.()
+						: item.route
+							? () => {
+									onNewChat?.();
+									goto(item.route!);
+								}
+							: isSearchOnMobile
+								? undefined
+								: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -174,15 +192,15 @@
 			{#if showIcons}
 				<div transition:fade={itemTransition}>
 					<ActionIcon
-						icon={item.icon}
-						tooltip={item.tooltip}
-						tooltipSide={TooltipSide.RIGHT}
-						size="lg"
-						iconSize={ICON_CLASS_DEFAULT}
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
+						icon={item.icon}
+						iconSize={ICON_CLASS_DEFAULT}
 						onclick={itemOnClick}
+						size="lg"
+						tooltip={item.tooltip}
+						tooltipSide={TooltipSide.RIGHT}
 					/>
 				</div>
 			{/if}

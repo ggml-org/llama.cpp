@@ -1,14 +1,6 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import {
-	modelOptions,
-	modelsLoading,
-	modelsStore,
-	modelsUpdating,
-	selectedModelId,
-	singleModelName
-} from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+import { modelsStore, serverStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 import { onMount } from 'svelte';
 
@@ -54,17 +46,17 @@ export interface UseModelsSelectorReturn {
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
 	const options = $derived(
-		modelOptions().filter((option) => {
-			const modelProps = modelsStore.getModelProps(option.model);
+		modelsStore.models.filter((option) => {
+			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
 	);
-	const loading = $derived(modelsLoading());
-	const updating = $derived(modelsUpdating());
-	const activeId = $derived(selectedModelId());
-	const isRouter = $derived(isRouterMode());
-	const serverModel = $derived(singleModelName());
+	const loading = $derived(modelsStore.loading);
+	const updating = $derived(modelsStore.updating);
+	const activeId = $derived(modelsStore.selectedModelId);
+	const isRouter = $derived(serverStore.isRouterMode);
+	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
 	const onModelChange = $derived(opts.onModelChange?.());
 	const isHighlightedCurrentModelActive = $derived.by(() => {
@@ -111,7 +103,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 			if (open) {
 				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.fetchModalitiesForLoadedModels();
+					modelsStore.props.fetchModalitiesForLoadedModels();
 				});
 			}
 
@@ -151,8 +143,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 
-			modelsStore
-				.loadModel(option.model)
+			modelsStore.status
+				.load(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
 				.finally(() => (isLoadingModel = false));
 		}

@@ -13,7 +13,7 @@
 <RadioGroupPrimitive.Root
 	bind:ref
 	bind:value
-	data-slot="radio-group"
 	class={cn('grid gap-2 w-full', className)}
+	data-slot="radio-group"
 	{...restProps}
 />

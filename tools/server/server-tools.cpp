@@ -1,13 +1,13 @@
 #include "server-tools.h"
 
 #include "subproc.h"
+#include "base64.hpp"
 
 #include <filesystem>
 #include <fstream>
 #include <regex>
 #include <thread>
 #include <chrono>
-#include <ctime>
 #include <atomic>
 #include <cstring>
 #include <cctype>
@@ -864,6 +864,7 @@ static bool path_glob_match(const std::string & pattern, const std::string & rel
 //
 
 static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 16 * 1024; // 16 KB
+static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64 = 32 * 1024 * 1024; // 32 MB
 
 struct server_tool_read_file : server_tool {
     server_tool_read_file() {
@@ -899,6 +900,8 @@ struct server_tool_read_file : server_tool {
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
         bool append_loc   = json_value(params, "append_loc", false);
+        // comes from the x-resp-type header, the model cannot ask for it
+        bool as_base64    = json_value(params, "resp_type", std::string()) == "base64";
 
         auto io = make_tools_io(params);
 
@@ -906,6 +909,23 @@ struct server_tool_read_file : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
+
+        if (as_base64) {
+            if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64) {
+                return {{"error", string_format(
+                    "file too large (%zu bytes, max %zu)",
+                    (size_t)file_size, SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64)}};
+            }
+            std::string content;
+            if (!io->read_file(path, content)) {
+                return {{"error", "failed to open file: " + path}};
+            }
+            return {
+                {"base64",     base64::encode(content.data(), content.size())},
+                {"size_bytes", (size_t) content.size()},
+            };
+        }
+
         if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1) {
             return {{"error", string_format(
                 "file too large (%zu bytes, max %zu). Use start_line/end_line to read a portion.",
@@ -1672,61 +1692,6 @@ private:
 };
 
 //
-// get_datetime: returns the current date and time
-//
-
-struct server_tool_get_datetime : server_tool {
-    server_tool_get_datetime() {
-        name = "get_datetime";
-        display_name = "Get Date & Time";
-        permission_write = false;
-    }
-
-    json get_definition() const override {
-        return {
-            {"type", "function"},
-            {"function", {
-                {"name", name},
-                {"description", "Returns the current date and time in UTC"},
-                {"parameters", {
-                    {"type", "object"},
-                    {"properties", {
-                        {"format", {
-                            {"type", "string"},
-                            {"description",
-                                "strftime()-style format string for the output (default: \"%Y-%m-%dT%H:%M:%SZ\", "
-                                "e.g. ISO 8601). Choose your own format if you need something else, "
-                                "e.g. \"%A, %B %d %Y\" for a human-readable date."},
-                        }},
-                    }},
-                }},
-            }},
-        };
-    }
-
-    json invoke(json params, server_tool::stream *) const override {
-        std::string format = json_value(params, "format", std::string("%Y-%m-%dT%H:%M:%SZ"));
-
-        auto now  = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_utc;
-#ifdef _WIN32
-        gmtime_s(&tm_utc, &time);
-#else
-        gmtime_r(&time, &tm_utc);
-#endif
-
-        char buf[256];
-        size_t len = std::strftime(buf, sizeof(buf), format.c_str(), &tm_utc);
-        if (len == 0) {
-            return {{"error", "invalid format string"}};
-        }
-
-        return {{"result", std::string(buf, len)}};
-    }
-};
-
-//
 // get_info: returns runtime info (OS name/version and cwd)
 //
 
@@ -1984,6 +1949,10 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 //
 
 static std::vector<std::unique_ptr<server_tool>> build_tools() {
+    // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
+    //            we only accept minimal i/o and shell command tools here
+    //            for example, do not add: web search, get date time, etc.
+    //            high-level functionality should be added either via MCP or web UI
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
@@ -1991,7 +1960,6 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_exec_shell_command>());
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
-    tools.push_back(std::make_unique<server_tool_get_datetime>());
     tools.push_back(std::make_unique<server_tool_get_info>());
     return tools;
 }
@@ -2067,7 +2035,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
         }
     }
 
-    // append MCP tools, skipping any that collide with a built-in or another MCP tool of the same "<server>_<tool>" name
+    // append MCP tools, skipping any that collide with a server tool or another MCP tool of the same "<server>_<tool>" name
     if (!mcp_mgr.empty()) {
         std::unordered_set<std::string> seen_names;
         for (auto & t : tools) {
@@ -2135,6 +2103,15 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 params["runtime"] = runtime->spec();
             }
 
+            // x-resp-type header is only used by read_file for now
+            if (params.contains("resp_type")) {
+                params.erase("resp_type");
+            }
+            auto resp_type = get_header(req.headers, "x-resp-type");
+            if (!resp_type.empty()) {
+                params["resp_type"] = resp_type;
+            }
+
             server_tool & tool = find_tool(tools, tool_name, stream);
 
             if (stream) {
@@ -2179,7 +2156,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
                 res->status = 200;
                 res->data   = safe_json_to_str(result);
             }
-        } catch (const json::exception & e) {
+        } catch (const common_json_error & e) {
             res->status = 400;
             res->data   = safe_json_to_str(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
         } catch (const std::invalid_argument & e) {

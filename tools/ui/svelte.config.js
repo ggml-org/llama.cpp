@@ -17,9 +17,6 @@ const config = {
 			precompress: false,
 			strict: true
 		}),
-		alias: {
-			$styles: 'src/styles'
-		},
 		output: {
 			bundleStrategy: 'single'
 		},

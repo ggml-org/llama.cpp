@@ -4,10 +4,10 @@ import {
 	CWD_LINK_REGEX,
 	FILE_URI_PREFIX,
 	HOME_TILDE,
-	HOME_TILDE_PREFIX
+	HOME_TILDE_PREFIX,
+	PATH_SEPARATOR,
+	TRAILING_SLASHES_REGEX
 } from '$lib/constants';
-import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
-import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
 
 export function lastPathSegment(p: string): string {
 	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');

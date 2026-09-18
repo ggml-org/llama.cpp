@@ -1,6 +1,8 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_control_flow_attributes : require
 
+#include "utils.glsl"
+
 layout (push_constant) uniform parameter
 {
     uint ne;
@@ -31,18 +33,6 @@ uint get_idx() {
 
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_doffset() { return p.misalign_offsets & 0xFFFF; }
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
-
-uint fastdiv_L(uint packed, uint slot) {
-    return (packed >> (slot * 8)) & 0x3Fu;
-}
 
 uint src0_idx(uint idx) {
     const uint i03 = fastdiv(idx, p.ne0_012mp, fastdiv_L(p.ne0_Ls, 0));

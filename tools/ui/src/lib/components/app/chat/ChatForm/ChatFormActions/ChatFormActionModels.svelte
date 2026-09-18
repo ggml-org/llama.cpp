@@ -1,15 +1,7 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import {
-		modelOptions,
-		modelsStore,
-		selectedModelId,
-		selectedModelName
-	} from '$lib/stores/models.svelte';
-	import { isRouterMode, serverError } from '$lib/stores/server.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
+	import { getConversationModel } from '$lib/utils';
 
 	interface Props {
 		disabled?: boolean;
@@ -35,17 +27,17 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	let isRouter = $derived(isRouterMode());
-	let isOffline = $derived(!!serverError());
+	let isRouter = $derived(serverStore.isRouterMode);
+	let isOffline = $derived(!!serverStore.error);
 
 	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 
 	let lastSyncedConversationModel: string | null = null;
 
 	let selectorModel = $derived.by(() => {
-		const storeModel = selectedModelName();
+		const storeModel = modelsStore.selectedModelName;
 
 		if (storeModel && storeModel !== conversationModel) {
 			return storeModel;
@@ -60,7 +52,7 @@
 
 	$effect(() => {
 		if (conversationModel && conversationModel !== lastSyncedConversationModel) {
-			if (modelOptions().some((m) => m.model === conversationModel)) {
+			if (modelsStore.models.some((m) => m.model === conversationModel)) {
 				modelsStore.selectedModelName = conversationModel;
 				modelsStore.selectModelByName(conversationModel);
 			} else {
@@ -73,48 +65,26 @@
 			isRouter &&
 			!modelsStore.selectedModelId &&
 			modelsStore.loadedModelIds.length > 0 &&
-			activeMessages().length > 0 &&
+			conversationsStore.activeMessages.length > 0 &&
 			!conversationModel
 		) {
 			lastSyncedConversationModel = null;
-			const first = modelOptions().find((m) => modelsStore.loadedModelIds.includes(m.model));
+			const first = modelsStore.models.find((m) => modelsStore.loadedModelIds.includes(m.model));
 
 			if (first) modelsStore.selectModelById(first.id);
 		}
 	});
 
-	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = selectedModelId();
-
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-
-			if (model) return model.model;
-		}
-
-		return null;
-	});
+	let activeModelId = $derived(modelsStore.activeModelId);
 
 	let modelPropsVersion = $state(0); // Used to trigger reactivity after fetch
 
 	$effect(() => {
 		if (activeModelId) {
-			const cached = modelsStore.getModelProps(activeModelId);
+			const cached = modelsStore.props.getModelProps(activeModelId);
 
 			if (!cached) {
-				modelsStore.fetchModelProps(activeModelId).then(() => {
+				modelsStore.props.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
 				});
 			}
@@ -124,37 +94,41 @@
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
+		hasAudioModality = activeModelId ? modelsStore.props.modelSupportsAudio(activeModelId) : false;
 	});
 
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
+		hasVideoModality = activeModelId ? modelsStore.props.modelSupportsVideo(activeModelId) : false;
 	});
 
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasVisionModality = activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false;
+		hasVisionModality = activeModelId
+			? modelsStore.props.modelSupportsVision(activeModelId)
+			: false;
 	});
 
 	$effect(() => {
-		hasModelSelected = !isRouter || !!conversationModel || !!selectedModelId();
+		hasModelSelected = !isRouter || !!conversationModel || !!modelsStore.selectedModelId;
 	});
 
 	$effect(() => {
 		if (!isRouter) {
 			isSelectedModelInCache = true;
 		} else if (conversationModel) {
-			isSelectedModelInCache = modelOptions().some((option) => option.model === conversationModel);
+			isSelectedModelInCache = modelsStore.models.some(
+				(option) => option.model === conversationModel
+			);
 		} else {
-			const currentModelId = selectedModelId();
+			const currentModelId = modelsStore.selectedModelId;
 
 			if (!currentModelId) {
 				isSelectedModelInCache = false;
 			} else {
-				isSelectedModelInCache = modelOptions().some((option) => option.id === currentModelId);
+				isSelectedModelInCache = modelsStore.models.some((option) => option.id === currentModelId);
 			}
 		}
 	});
@@ -177,19 +151,19 @@
 	}
 </script>
 
-{#if isMobile.current}
+{#if deviceStore.isMobile}
 	<ModelsSelectorSheet
-		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
+		disabled={disabled || isOffline}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
 {:else}
 	<ModelsSelectorDropdown
-		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
+		disabled={disabled || isOffline}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>

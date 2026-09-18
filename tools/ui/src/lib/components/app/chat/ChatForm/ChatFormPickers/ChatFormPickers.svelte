@@ -1,7 +1,7 @@
 <script lang="ts">
-	import ChatFormCommandPicker from './ChatFormCommandPicker.svelte';
-	import ChatFormMentionPicker from './ChatFormMentionPicker.svelte';
+	import ChatFormPickerCommand from './ChatFormPickerCommand.svelte';
 	import ChatFormPickerMcpPrompts from './ChatFormPickerMcpPrompts/ChatFormPickerMcpPrompts.svelte';
+	import ChatFormPickerMention from './ChatFormPickerMention.svelte';
 	import type {
 		ChatFormCommand,
 		FileMentionEntry,
@@ -55,9 +55,9 @@
 		scopePath
 	}: Props = $props();
 
-	let commandPickerRef: ChatFormCommandPicker | undefined = $state(undefined);
+	let commandPickerRef: ChatFormPickerCommand | undefined = $state(undefined);
 	let promptPickerRef: ChatFormPickerMcpPrompts | undefined = $state(undefined);
-	let mentionPickerRef: ChatFormMentionPicker | undefined = $state(undefined);
+	let mentionPickerRef: ChatFormPickerMention | undefined = $state(undefined);
 
 	/** Delegate keyboard events to the active picker child; true if handled. */
 	export function handleKeydown(event: KeyboardEvent): boolean {
@@ -77,32 +77,32 @@
 	}
 </script>
 
-<ChatFormCommandPicker
+<ChatFormPickerCommand
 	bind:this={commandPickerRef}
-	isOpen={isCommandPickerOpen ?? false}
-	query={commandQuery ?? ''}
 	{commands}
+	isOpen={isCommandPickerOpen ?? false}
 	onClose={onCommandPickerClose ?? (() => {})}
 	onSelect={onCommandSelect ?? (() => {})}
+	query={commandQuery ?? ''}
 />
 
 <ChatFormPickerMcpPrompts
 	bind:this={promptPickerRef}
 	isOpen={isPromptPickerOpen}
-	searchQuery={promptSearchQuery}
 	onClose={onPromptPickerClose}
-	{onPromptLoadStart}
 	{onPromptLoadComplete}
 	{onPromptLoadError}
+	{onPromptLoadStart}
+	searchQuery={promptSearchQuery}
 />
 
-<ChatFormMentionPicker
+<ChatFormPickerMention
 	bind:this={mentionPickerRef}
-	isOpen={isMentionPickerOpen ?? false}
-	query={mentionQuery ?? ''}
 	customAnchor={mentionAnchor}
-	scopePath={scopePath ?? null}
+	isOpen={isMentionPickerOpen ?? false}
 	onClose={onMentionPickerClose ?? (() => {})}
 	onOpened={onMentionOpened}
 	onSelect={onMentionSelect ?? (() => {})}
+	query={mentionQuery ?? ''}
+	scopePath={scopePath ?? null}
 />

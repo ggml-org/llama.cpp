@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MermaidPreviewControls from './MermaidPreviewControls.svelte';
-	import { SVG_DIALOG_SHADOW_STYLE } from '$lib/constants';
+	import { SVG } from '$lib/constants';
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 
 	interface Props {
@@ -13,7 +13,7 @@
 
 	// Re-mount on every svgHtml change so a live streaming svg keeps rendering while zoomed
 	$effect(() => {
-		if (svgHost) mountSvgShadow(svgHost, svgHtml, SVG_DIALOG_SHADOW_STYLE);
+		if (svgHost) mountSvgShadow(svgHost, svgHtml, SVG.DIALOG_SHADOW_STYLE);
 	});
 
 	// Zoom and pan state
@@ -103,22 +103,22 @@
 	<div
 		class="mermaid-preview-diagram transform-origin-center inline-block min-h-fit min-w-fit will-change-transform {isDragging &&
 			'select-none'}"
+		onpointerdown={handlePointerDown}
+		onpointerleave={handlePointerUp}
+		onpointermove={handlePointerMove}
+		onpointerup={handlePointerUp}
 		style="transform: translate({translateX}px, {translateY}px) scale({scale}); cursor: {isDragging
 			? 'grabbing'
 			: 'grab'};"
-		onpointerdown={handlePointerDown}
-		onpointermove={handlePointerMove}
-		onpointerup={handlePointerUp}
-		onpointerleave={handlePointerUp}
 	>
 		<div bind:this={svgHost}></div>
 	</div>
 
 	<MermaidPreviewControls
-		{scale}
-		{svgHtml}
+		onResetView={resetView}
 		onZoomIn={zoomIn}
 		onZoomOut={zoomOut}
-		onResetView={resetView}
+		{scale}
+		{svgHtml}
 	/>
 </div>

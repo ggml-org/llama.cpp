@@ -7,25 +7,14 @@
 
 import { lastPathSegment } from './path-display';
 import {
-	DRIVE_PREFIX_REGEX,
-	DRIVE_ROOT_REGEX,
-	GLOB_RANGE_CLOSE,
-	GLOB_RANGE_OPEN,
-	GLOB_SPECIAL_CHARS,
-	GLOB_WILDCARD,
+	GLOB,
 	HOME_TILDE,
 	LEADING_SLASHES_REGEX,
-	PATH_NAV_MAX_DEPTH,
-	UNC_ROOT_REGEX,
-	WINDOWS_SEPARATOR
+	PATH_SEPARATOR,
+	SEARCH,
+	TRAILING_SLASHES_REGEX
 } from '$lib/constants';
-import { PATH_SEPARATOR } from '$lib/constants/mcp-resource';
-import { TRAILING_SLASHES_REGEX } from '$lib/constants/url';
-
-export interface GlobEntry {
-	path: string;
-	type: string;
-}
+import type { GlobEntry, GlobSearchArgs } from '$lib/types/glob';
 
 export interface PathQuery {
 	parent: string;
@@ -37,17 +26,18 @@ export interface PathQuery {
  * backslash is left alone: it is a legal filename character on POSIX.
  */
 function toPosixSeparators(query: string): string {
-	if (!DRIVE_PREFIX_REGEX.test(query) && !query.startsWith(WINDOWS_SEPARATOR)) return query;
+	if (!GLOB.DRIVE_PREFIX_REGEX.test(query) && !query.startsWith(GLOB.WINDOWS_SEPARATOR))
+		return query;
 
-	return query.split(WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
+	return query.split(GLOB.WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
 
 export function rootPrefixLength(path: string): number {
-	const unc = path.match(UNC_ROOT_REGEX);
+	const unc = path.match(GLOB.UNC_ROOT_REGEX);
 
 	if (unc) return unc[0].length;
 
-	const drive = path.match(DRIVE_ROOT_REGEX);
+	const drive = path.match(GLOB.DRIVE_ROOT_REGEX);
 
 	if (drive) return drive[0].length;
 
@@ -83,31 +73,20 @@ export function splitPathQuery(query: string): PathQuery | null {
 }
 
 export function buildCaseInsensitiveGlob(query: string): string {
-	let out = GLOB_WILDCARD;
+	let out = GLOB.WILDCARD;
 
 	for (const c of query) {
 		const lo = c.toLowerCase();
 		const up = c.toUpperCase();
 
-		if (lo !== up) out += GLOB_RANGE_OPEN + lo + up + GLOB_RANGE_CLOSE;
+		if (lo !== up) out += GLOB.RANGE_OPEN + lo + up + GLOB.RANGE_CLOSE;
 		// glob metacharacters are escaped into a literal character class so a
 		// query like "a*b" matches a literal '*' instead of becoming "ab"
-		else if (GLOB_SPECIAL_CHARS.includes(c)) out += GLOB_RANGE_OPEN + c + GLOB_RANGE_CLOSE;
+		else if (GLOB.SPECIAL_CHARS.includes(c)) out += GLOB.RANGE_OPEN + c + GLOB.RANGE_CLOSE;
 		else out += c;
 	}
 
-	return out + GLOB_WILDCARD;
-}
-
-export interface GlobSearchArgs {
-	path: string;
-	include: string;
-	maxDepth: number;
-	rankQuery: string;
-	/** Last segment of a path-navigation query (`~/dir/sub`), undefined for
-	 * a plain home-relative glob. Lets callers act on the exact targeted
-	 * segment (e.g. the WD picker "entering" a directory). */
-	last?: string;
+	return out + GLOB.WILDCARD;
 }
 
 export function buildGlobSearchArgs(
@@ -120,9 +99,9 @@ export function buildGlobSearchArgs(
 	const include = pathQuery
 		? pathQuery.last
 			? buildCaseInsensitiveGlob(pathQuery.last)
-			: GLOB_WILDCARD
+			: GLOB.WILDCARD
 		: buildCaseInsensitiveGlob(query);
-	const maxDepth = pathQuery ? PATH_NAV_MAX_DEPTH : searchDepth;
+	const maxDepth = pathQuery ? SEARCH.PATH_NAV_MAX_DEPTH : searchDepth;
 
 	return { include, last: pathQuery?.last, maxDepth, path, rankQuery: pathQuery?.last ?? query };
 }

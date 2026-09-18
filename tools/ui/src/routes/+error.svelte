@@ -2,8 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { ServerErrorSplash } from '$lib/components/app';
-	import { APP_NAME } from '$lib/constants';
-	import { ROUTES } from '$lib/constants/routes';
+	import { APP_NAME, ROUTES } from '$lib/constants';
 
 	let error = $derived($page.error);
 	let status = $derived($page.status);
@@ -49,21 +48,24 @@
 						viewBox="0 0 24 24"
 					>
 						<path
+							d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
 							stroke-linecap="round"
 							stroke-linejoin="round"
 							stroke-width="2"
-							d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"
 						/>
 					</svg>
 				</div>
+
 				<h1 class="mb-2 text-2xl font-bold">Error {status}</h1>
+
 				<p class="text-muted-foreground">
 					{error?.message || 'Something went wrong'}
 				</p>
 			</div>
+
 			<button
-				onclick={() => goto(ROUTES.START)}
 				class="rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"
+				onclick={() => goto(ROUTES.START)}
 			>
 				Go Home
 			</button>

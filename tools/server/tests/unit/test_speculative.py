@@ -27,8 +27,8 @@ def test_with_and_without_draft():
     global server
     request = {
         "prompt": "I believe the meaning of life is",
-        "temperature": 0.8,
-        "top_k": 40,
+        "temperature": 0.2,
+        "top_k": 5,
         "seed": 4242,
         "n_predict": 16,
         "return_tokens": True,
@@ -36,7 +36,6 @@ def test_with_and_without_draft():
 
     server.model_draft = None  # disable draft model
     server.spec_type = None
-    server.backend_sampling = True
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
@@ -45,7 +44,6 @@ def test_with_and_without_draft():
 
     # create new server with draft model
     create_server()
-    server.backend_sampling = True
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
@@ -53,6 +51,18 @@ def test_with_and_without_draft():
     tokens_draft = res.body["tokens"]
 
     assert tokens_no_draft == tokens_draft
+
+    server.stop()
+    create_server()
+    assert server.spec_draft_n_max is not None
+    server.spec_synth_rates = [0.0] * server.spec_draft_n_max
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
+    assert res.body["timings"]["draft_n_accepted"] == 0
+    assert res.body["tokens"] == tokens_no_draft
 
 
 def test_different_draft_min_draft_max():
@@ -80,6 +90,66 @@ def test_different_draft_min_draft_max():
         if last_content is not None:
             assert last_content == res.body["content"]
         last_content = res.body["content"]
+
+
+def test_synth_is_deterministic():
+    global server
+    assert server.spec_draft_n_max is not None
+    server.spec_synth_rates = [0.75 ** (i + 1) for i in range(server.spec_draft_n_max)]
+    server.start()
+
+    request = {
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.2,
+        "top_k": 5,
+        "seed": 4242,
+        "n_predict": 32,
+    }
+    responses = [server.make_request("POST", "/completion", data=request) for _ in range(2)]
+
+    for res in responses:
+        assert res.status_code == 200
+        assert res.body["timings"]["draft_n"] > 0
+    assert responses[0].body["timings"]["draft_n"] == responses[1].body["timings"]["draft_n"]
+    assert responses[0].body["timings"]["draft_n_accepted"] == responses[1].body["timings"]["draft_n_accepted"]
+
+
+def test_synth_ignores_target_tokens():
+    global server
+    assert server.spec_draft_n_max is not None
+    server.spec_synth_rates = [1.0] * server.spec_draft_n_max
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "seed": 4242,
+        "n_predict": 32,
+    })
+
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
+    assert res.body["timings"]["draft_n_accepted"] == res.body["timings"]["draft_n"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "seed": 4242,
+        "n_predict": 6,
+        "grammar": 'root ::= "a"{5,5}',
+    })
+    assert res.status_code == 200, res.body
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Respond with only: OK",
+        "temperature": 0.0,
+        "seed": 4242,
+        "n_predict": 64,
+        "ignore_eos": True,
+    })
+    assert res.status_code == 200, res.body
+    assert res.body["tokens_predicted"] == 64
+    assert res.body["stop_type"] == "limit"
 
 
 def test_slot_ctx_not_exceeded():

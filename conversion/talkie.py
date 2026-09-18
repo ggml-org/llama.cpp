@@ -11,6 +11,7 @@ from .base import LazyTorchTensor, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("TalkieForCausalLM")
+@ModelBase.example("lewtun/talkie-1930-13b-it-hf")
 class TalkieModel(TextModel):
     model_arch = gguf.MODEL_ARCH.TALKIE
 

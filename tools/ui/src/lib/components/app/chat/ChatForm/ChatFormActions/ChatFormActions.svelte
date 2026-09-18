@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SkipForward, Square } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
@@ -10,18 +9,11 @@
 		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { ROUTES } from '$lib/constants/routes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import {
-		activeProcessingState,
-		isChatStreaming,
-		isLoading as chatIsLoading
-	} from '$lib/stores/chat.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -39,8 +31,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -52,8 +43,7 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpPromptClick,
-		onMcpResourcesClick,
+		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -62,19 +52,7 @@
 		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
-
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasPromptsCapability(perChatOverrides);
-	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
+	let currentConfig = $derived(settingsStore.config);
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
@@ -104,7 +82,7 @@
 	let hasProcessedTokens = $derived.by(() => {
 		if (!page.params.id) return false;
 
-		const messages = activeMessages() as DatabaseMessage[];
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 
 		let totalHistoricalTokens = 0;
 
@@ -126,9 +104,9 @@
 
 		if (totalHistoricalTokens > 0) return true;
 
-		if (!chatIsLoading() && !isChatStreaming()) return false;
+		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = activeProcessingState();
+		const processingState = chatStore.processing.activeState;
 
 		if (!processingState) return false;
 
@@ -140,6 +118,30 @@
 
 		return livePromptTokens > 0 || liveOutputTokens > 0;
 	});
+
+	setChatFormActionsContext({
+		get disabled() {
+			return disabled;
+		},
+		get hasAudioModality() {
+			return hasAudioModality;
+		},
+		get hasVideoModality() {
+			return hasVideoModality;
+		},
+		get hasVisionModality() {
+			return hasVisionModality;
+		},
+		get onFileUpload() {
+			return onFileUpload;
+		},
+		get onMcpSettingsClick() {
+			return onMcpSettingsClick;
+		},
+		get onSystemPromptClick() {
+			return onSystemPromptClick;
+		}
+	});
 </script>
 
 <div
@@ -148,19 +150,7 @@
 >
 	{#if showAddButton}
 		<div class="mr-auto flex items-center gap-2">
-			<ChatFormActionsAdd
-				{disabled}
-				{hasAudioModality}
-				{hasVideoModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
-			/>
+			<ChatFormActionsAdd />
 		</div>
 	{/if}
 
@@ -171,14 +161,14 @@
 
 		{#if showModelSelector}
 			<ChatFormActionModels
-				{disabled}
-				bind:this={selectorModelRef}
 				bind:hasAudioModality
+				bind:hasModelSelected
 				bind:hasVideoModality
 				bind:hasVisionModality
-				bind:hasModelSelected
 				bind:isSelectedModelInCache
 				bind:submitTooltip
+				bind:this={selectorModelRef}
+				{disabled}
 				forceForegroundText
 				useGlobalSelection
 			/>
@@ -187,12 +177,12 @@
 
 	{#if isReasoning}
 		<Button
-			type="button"
-			variant="secondary"
+			class="group h-8 w-8 rounded-full p-0"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
-			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
+			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
@@ -204,10 +194,10 @@
 
 	{#if isLoading && !canSubmit}
 		<Button
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
+			onclick={onStop}
 			type="button"
 			variant="secondary"
-			onclick={onStop}
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
@@ -221,8 +211,8 @@
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
-			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			tooltipLabel={submitTooltip}
 		/>
 	{/if}
 </div>

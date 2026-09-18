@@ -7,14 +7,14 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 
 export type ExecShellCommandMeta = {
 	command: string;
 };
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
-	const args = parseToolArgs(BuiltInTool.EXEC_SHELL_COMMAND, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_EXEC_SHELL_COMMAND, section);
 
 	if (!args) return null;
 

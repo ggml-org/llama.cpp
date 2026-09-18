@@ -3,7 +3,7 @@
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceAttachment } from '$lib/types';
 	import { getResourceDisplayName, getResourceIcon } from '$lib/utils';
 

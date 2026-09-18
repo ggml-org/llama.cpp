@@ -11,6 +11,8 @@
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 struct ModelParams {
@@ -19,17 +21,28 @@ struct ModelParams {
     int ctx_per_seq_swa = -1;
     int n_seq = 1;
     int n_heads_kv = -1;
+    // Per-layer KV head count. gemma-4 12B interleaves 8 x 256 sliding layers with 1 x 512
+    // full-attention layers, so no single scalar describes every layer. Keyed by layer, not by
+    // layer TYPE, because the SWA classification depends on the context size (extents tie at a
+    // small -c) while the head count does not.
+    std::map<int, int> n_heads_kv_per_layer;
     int head_size = -1;
-    int32_t rope_params[15];
+    int state_size = -1;  // for SSM molels, eg qwen35
+    int32_t rope_params[16];
     bool mixed_rope_params = false;
+    bool is_cacheless_attn = false;
     std::vector<int> swa_layers;
+    // The sliding-window mask tensor, identified in compute_llm_params() by grouping attention
+    // layers on the mask they consume. Only used to tell the two masks apart when naming OV
+    // parameters -- both carry the same tensor name. Null when the graph has a single mask.
+    const ggml_tensor * swa_mask = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
 
     bool same_rope_params(const ModelParams & other) const {
         return mixed_rope_params == other.mixed_rope_params &&
-               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 15) == 0;
+               memcmp(rope_params, other.rope_params, sizeof(int32_t) * 16) == 0;
     }
 
     bool can_reuse_dynamically(const ModelParams & other) const { return same_rope_params(other); }
@@ -44,14 +57,69 @@ struct ComputeParams {
     int seq_active_start = 0;
     int attention_size = -1;
     int attention_size_swa = -1;
+    int attention_size_static = -1;  // encoder/cross-attn KV fill level (whisper)
+    // Sliding window width, read back from the band of ggml's own SWA mask. ggml never passes
+    // n_swa down to a backend, but fill_mask() bakes it into the mask contents, so the widest
+    // unmasked row recovers it. Shorter than n_swa while the sequence is still short, which is
+    // harmless: every causal pair is inside the window then anyway.
+    int swa_window = -1;
     int input_len = -1;
     int token_len_per_seq = -1;
     int past_kv_len = -1;
     int output_len = 1;
+
+    int cache_rs_reset_idx = -1;
+    int cache_rs_reset_len = -1;
+    // SSM/DeltaNet models otionally clear cache_r and cache_s of certain slots in the cgraph
+    // 3: [ 18432,     4,     1,     1] RESHAPE              cache_r_l0 (reshaped)
+    //    [ 18432,     4,     1,     1]            0: NONE        cache_r_l0
+    // 4: [ 18432,     1,     1,     1] VIEW                 cache_r_l0 (reshaped) (view)
+    //    [ 18432,     4,     1,     1]            0: RESHAPE     cache_r_l0 (reshaped)
+    // 5: [ 18432,     1,     1,     1] SCALE                cache_r_l0 (reshaped) (view) (view)
+    //    [ 18432,     1,     1,     1]            0: VIEW        cache_r_l0 (reshaped) (view)
+
+    int s_copy_active_slot_len = -1;
+    // SSM/DeltaNet models otionally reorder slots of state cache, to make the active slots contiguous
+    // leaf_5 is the inp->s_copy in llama-graph.cpp, eg if there are 8 slots in total and slot 3 and 7
+    // are active in the current batch, leaf_5 will be [3, 7, 5, 6, 4]
+    //  6: [     2,     1,     1,     1] VIEW                  (view)
+    //      [     2,     1,     1,     1]            0: NONE        leaf_5
+    //  7: [ 18432,     2,     1,     1] GET_ROWS             conv_states-0
+    //      [ 18432,     4,     1,     1]            0: RESHAPE     cache_r_l0 (reshaped)
+    //      [     2,     1,     1,     1]            1: VIEW         (view)
+    //  8: [     0,     1,     1,     1] VIEW                  (view)
+    //      [     2,     1,     1,     1]            0: NONE        leaf_5
+    //  9: [ 18432,     0,     1,     1] GET_ROWS             node_9
+    //      [ 18432,     4,     1,     1]            0: RESHAPE     cache_r_l0 (reshaped)
+    //      [     0,     1,     1,     1]            1: VIEW         (view)
+    // 10: [ 18432,     0,     1,     1] VIEW                 cache_r_l0 (view)
+    //      [ 18432,     4,     1,     1]            0: NONE        cache_r_l0
+    // 11: [ 18432,     0,     1,     1] CPY                  cache_r_l0 (view) (copy of )
+    //      [ 18432,     0,     1,     1]            0: GET_ROWS    node_9
+    //      [ 18432,     0,     1,     1]            1: VIEW        cache_r_l0 (view)
+
+    struct RsWriteback {
+        int slot_begin = 0;  // first cache slot written by the CPY
+        int src_begin = 0;   // first source row or column copied by the CPY
+    };
+
+    std::map<std::string, RsWriteback> rs_writebacks;
+    // Destination slot offset of each state cache writeback CPY node, keyed by node name. It
+    // changes with the batch (kv head, active sequence count) and, with rollback enabled
+    // (cparams.n_rs_seq > 0), the conv state is written back once per snapshot slot. Passed to the
+    // cached model as a runtime input. Dynamic models also receive the source-side offset; static
+    // models use a fixed end-anchored offset in the translator.
 };
+
+// defined below; declared here because GgmlOvDecoder uses it inline
+std::optional<int> extract_layer_from_name(const std::string & name);
+
+// detects the MoE expert-plane-sum ADD chain (see definition); used by supports_op too
+bool is_moe_expert_sum_add(const ggml_tensor * node);
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
+    static std::string get_tensor_name(const ggml_cgraph * cgraph, const ggml_tensor * tensor);
     struct NodeInfo {
         ggml_tensor * node;
         std::string node_name;
@@ -59,8 +127,6 @@ public:
         std::map<std::string, ggml_tensor *> node_inputs;
         std::map<std::string, std::vector<std::pair<std::string, ggml_tensor *>>> node_inputs_views;
         std::vector<std::string> node_inputs_names;
-        ggml_tensor * node_output;
-        std::string node_output_name;
         int node_op_case = 0;
         void * data_addr;
     };
@@ -156,6 +222,10 @@ public:
 
     virtual std::vector<std::string> get_output_names(int node_idx) const override;
 
+    virtual std::string get_inplace_op_src(int node_idx) const override;
+
+    virtual bool is_view_like_alias_of(int node_idx, const std::string & view_src_name) const override;
+
     virtual const std::string & get_op_type() const override;
 
     virtual const std::string & get_op_type(int node_idx) const override;
@@ -173,23 +243,19 @@ public:
 
     virtual int get_op_case(int node_idx) const override { return m_node_info_list[node_idx].node_op_case; }
 
-    virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_inputs() const override {
+    virtual const std::map<std::string, ov::frontend::ggml::ModelInputInfo> & get_model_inputs() const override {
         return m_model_inputs;
     }
 
-    virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_extra_inputs() const override {
+    virtual const std::map<std::string, ov::frontend::ggml::ModelExtraInputInfo> & get_model_extra_inputs() const override {
         return m_model_extra_inputs;
-    }
-
-    virtual const std::map<std::string, std::shared_ptr<ov::Tensor>> & get_model_extra_input_values() const {
-        return m_model_extra_input_values;
     }
 
     virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_weights() const override {
         return m_model_weights;
     }
 
-    virtual std::vector<std::string> get_model_output_names() const override { return m_model_output_names; }
+    virtual std::set<std::string> get_model_output_names() const override { return m_model_output_names; }
 
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
@@ -206,6 +272,21 @@ public:
                m_model_params.swa_layers.end();
     }
 
+    // KV head count for one layer. Sliding and full layers can differ (gemma-4 12B), so callers
+    // that reinterpret a KV buffer must use this and not the model-level n_heads_kv.
+    int get_n_heads_kv_for_layer(int layer) const {
+        auto it = m_model_params.n_heads_kv_per_layer.find(layer);
+        return it != m_model_params.n_heads_kv_per_layer.end() ? it->second : m_model_params.n_heads_kv;
+    }
+
+    // Same, for a KV cache tensor: its layer comes from the leaf name (cache_k_l<N>).
+    int get_n_heads_kv_for_tensor(const ggml_tensor * kv_tensor) const {
+        if (auto layer = extract_layer_from_name(std::string(kv_tensor->name)); layer.has_value()) {
+            return get_n_heads_kv_for_layer(layer.value());
+        }
+        return m_model_params.n_heads_kv;
+    }
+
     int get_past_kv_len() const { return m_compute_params.past_kv_len; }
 
     int get_input_len() const { return m_compute_params.input_len; }
@@ -213,6 +294,8 @@ public:
     virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
 
     virtual bool has_mixed_rope_params() const override { return m_model_params.mixed_rope_params; }
+
+    virtual int get_ssm_state_size() const override { return m_model_params.state_size; }
 
     virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
@@ -234,6 +317,11 @@ public:
 
     static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(ggml_cgraph * cgraph,
                                                                                 bool naive = false);
+
+    // Collect just the set of weight-tensor names referenced by the graph, without
+    // building (or requantizing) any OV weight nodes. Used by topology checks like
+    // is_model_splitted that only need name membership.
+    static std::set<std::string> collect_weight_names(ggml_cgraph * cgraph);
 
     const ggml_tensor * get_tensor_used_op(const ggml_tensor * tensor) const;
 
@@ -266,50 +354,97 @@ public:
 
     void update_io(ggml_cgraph * cgraph);
 
-    inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
 
-    inline static bool is_inp_pos(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_pos(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[1];
     }
 
-    inline static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
+    // IMROPE packs 4 stacked position planes (t/h/w/e) into inp_pos, each of length
+    // n_tokens; other modes carry a single position per token.
+    static int get_inp_pos_n_planes(const ggml_tensor * op) {
+        return op->op_params[2] == GGML_ROPE_TYPE_IMROPE ? 4 : 1;
+    }
+
+    static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
     }
 
-    inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
                (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
     }
 
-    inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_mean(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_MUL_MAT && tensor == op->src[1] && tensor->op == GGML_OP_NONE &&
+               (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->type == GGML_TYPE_F32 &&
+               op->src[0] != nullptr && op->src[0]->op != GGML_OP_NONE;
+    }
+
+    static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }
 
-    inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY ||
+    // also returns true for cache_s and cache_r in SSM/DeltaNet models
+    static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
+        if (tensor == nullptr) {
+            return false;
+        }
+        return (tensor->buffer != nullptr && tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) ||
                (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
-    inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_conv_state_writeback(const ggml_tensor * node) {
+        return node->op == GGML_OP_CPY && node->view_src != nullptr && is_kvcache(node->view_src, nullptr) &&
+               node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
+               node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
+               node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
+    }
+
+    static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
     }
 
-    inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+    bool is_swa_mask(const ggml_tensor * tensor) const {
+        return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
+    }
+
+    static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
                op->src[1]->op == GGML_OP_NONE;
     }
 
-    std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) {
+    // the state permutation index input used in SSM/DeltaNet models (inp->s_copy in llama-graph.cpp)
+    static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] &&
+               op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
+    }
+
+    std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) const {
         if (is_inp_pos(tensor, op)) {
             return "inp_pos";
         }
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_stateful() && is_inp_mask(tensor, op)) {
-            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+        if (is_inp_mask(tensor, op)) {
+            // Give the two attention masks distinct OV parameter names.
+            //
+            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
+            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
+            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
+            // attention types then read a single parameter, and the windowed layers silently run
+            // against an unbanded mask. Disambiguate using the SWA layer set computed in
+            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
+            //
+            // When no SWA layer was found there is only one mask in play, so the plain name is
+            // correct and no _swa parameter is created.
+            if (m_model_params.swa_layers.empty()) {
+                return "self_kq_mask";
+            }
+            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
         }
         return tensor->name;
     }
@@ -321,6 +456,10 @@ private:
     void compute_model_inputs();
     void compute_model_outputs();
 
+    // True if tensor is the inp->s_copy index leaf gathered by a recurrent state cache GET_ROWS
+    // (possibly through a VIEW), so it gets a dynamic [1,1,1,-1] graph-input shape.
+    bool is_s_copy_leaf(const ggml_tensor * tensor) const;
+
     // Infer and propagate dynamic-dimension indices for all tensors in the GGML graph.
     void compute_node_dynamic_dims();
 
@@ -329,12 +468,11 @@ private:
     ggml_cgraph * m_cgraph = nullptr;
     std::map<std::string, ggml_tensor *> m_inputs;
 
-    std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
-    std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;
-    std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
+    std::map<std::string, ov::frontend::ggml::ModelInputInfo> m_model_inputs;
+    std::map<std::string, ov::frontend::ggml::ModelExtraInputInfo> m_model_extra_inputs;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
-    std::vector<std::string> m_model_output_names;
+    std::set<std::string> m_model_output_names;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
 
@@ -343,5 +481,3 @@ private:
 };
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);
-
-std::optional<int> extract_layer_from_name(const std::string & name);

@@ -11,6 +11,7 @@
 <div class="grid gap-1.5">
 	<div class="flex items-baseline justify-between">
 		<span class="text-muted-foreground">{label}</span>
+
 		<span class="font-mono text-muted-foreground">{value}</span>
 	</div>
 

@@ -5,6 +5,7 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList
@@ -14,15 +15,8 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
-		buildConversationTree,
-		conversations,
-		conversationsStore
-	} from '$lib/stores/conversations.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
+	import { buildConversationTree } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
@@ -38,30 +32,29 @@
 		toggleSidebar: () => toggleExpandedMode()
 	});
 
-	let isExpandedMode = $state(false);
 	let hoveredTooltip = $state<string | null>(null);
 	let logoHovered = $state(false);
 
-	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
-	const isOnMobile = $derived(isMobile.current);
-	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+	const isStripExpanded = $derived(uiStore.isSidebarExpanded || hoveredTooltip !== null);
+	const isOnMobile = $derived(deviceStore.isMobile);
+	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
-			isExpandedMode = true;
+			uiStore.isSidebarExpanded = true;
 		}
 	});
 
 	function toggleExpandedMode() {
-		isExpandedMode = !isExpandedMode;
+		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
 
-		if (!isExpandedMode) {
+		if (!uiStore.isSidebarExpanded) {
 			hoveredTooltip = null;
 		}
 	}
 
 	$effect(() => {
-		if (!isExpandedMode) {
+		if (!uiStore.isSidebarExpanded) {
 			isSearchModeActive = false;
 			searchQuery = '';
 
@@ -72,8 +65,8 @@
 	});
 
 	$effect(() => {
-		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
-			isExpandedMode = false;
+		if (deviceStore.isMobile && page.url.hash.includes(ROUTES.SEARCH)) {
+			uiStore.isSidebarExpanded = false;
 		}
 	});
 
@@ -84,7 +77,7 @@
 	let filteredConversations = $derived.by(() => {
 		if (isSearchModeActive) {
 			if (searchQuery.trim().length > 0) {
-				return conversations().filter((conversation: { name: string }) =>
+				return conversationsStore.conversations.filter((conversation: { name: string }) =>
 					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
 				);
 			}
@@ -92,13 +85,14 @@
 			return [];
 		}
 
-		return conversations();
+		return conversationsStore.conversations;
 	});
 
 	let isSelectionMode = $state(false);
 	let selectedIds = new SvelteSet<string>();
 
 	let renameDialogOpen = $state(false);
+	let settingsDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -110,7 +104,7 @@
 	const allSelectedArePinned = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
 
-		const convs = conversations();
+		const convs = conversationsStore.conversations;
 
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
@@ -124,7 +118,7 @@
 	const pinStateIsMixed = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
 
-		const convs = conversations();
+		const convs = conversationsStore.conversations;
 
 		let anyPinned = false;
 		let anyUnpinned = false;
@@ -234,7 +228,7 @@
 	}
 
 	async function selectConversation(id: string) {
-		if (isMobile.current) {
+		if (deviceStore.isMobile) {
 			scheduleMobileCollapse();
 		}
 
@@ -242,7 +236,7 @@
 	}
 
 	async function handleEditConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
 
 		if (!conversation) return;
 
@@ -275,7 +269,7 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
 
 		if (!conversation) return;
 
@@ -301,7 +295,7 @@
 		}
 
 		pendingCollapse = setTimeout(() => {
-			isExpandedMode = false;
+			uiStore.isSidebarExpanded = false;
 			pendingCollapse = null;
 		}, 100);
 	}
@@ -314,130 +308,133 @@
 	}
 </script>
 
-<svelte:window onkeydown={handleKeydown} bind:innerWidth />
+<svelte:window bind:innerWidth onkeydown={handleKeydown} />
 
-{#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
+{#if innerWidth > 768 || !page.url.hash.includes(ROUTES.SEARCH)}
 	<aside
 		class={[
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
-			isExpandedMode &&
-				(device.isStandalone
+			uiStore.isSidebarExpanded &&
+				(deviceStore.isStandalone
 					? 'h-[calc(100dvh-2rem)]'
-					: device.isIOSDevice
+					: deviceStore.isIOSDevice
 						? 'h-[calc(100dvh-0.5rem)]'
 						: 'h-[calc(100dvh-1rem)]'),
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl shadow-md',
 			!isStripExpanded && 'md:w-12',
-			isExpandedMode && 'is-expanded'
+			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
 	>
 		<div class="px-2 flex items-center justify-between">
 			<div
-				role="button"
-				tabindex="0"
 				class="relative"
 				onmouseenter={() => (logoHovered = true)}
 				onmouseleave={() => (logoHovered = false)}
+				role="button"
+				tabindex="0"
 			>
 				<ActionIcon
-					icon={!isExpandedMode && logoHovered && innerWidth > 768 ? PanelLeftOpen : Logo}
-					size="lg"
-					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-					class="{isExpandedMode
+					ariaLabel={uiStore.isSidebarExpanded ? 'Go to start' : 'Expand navigation'}
+					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
 						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
-					href={isExpandedMode ? ROUTES.START : undefined}
-					onclick={isExpandedMode ? undefined : toggleExpandedMode}
-					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+					href={uiStore.isSidebarExpanded ? ROUTES.START : undefined}
+					icon={!uiStore.isSidebarExpanded && logoHovered && innerWidth > 768
+						? PanelLeftOpen
+						: Logo}
+					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+					onclick={uiStore.isSidebarExpanded ? undefined : toggleExpandedMode}
+					size="lg"
+					tooltip={uiStore.isSidebarExpanded ? undefined : 'Open Sidebar'}
 					tooltipSide={TooltipSide.RIGHT}
-					ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
 				/>
 			</div>
 
-			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
+			{#if isOnMobile || (uiStore.isSidebarExpanded && !alwaysShowOnDesktop)}
 				<div
-					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
-					!isExpandedMode
-						? 'opacity-0 h-0!'
-						: ''}"
 					in:fade={{ delay: 50, duration: 150, easing: circIn }}
 					out:fade={{ duration: 100 }}
+					class="flex items-center transition-all duration-150 ease-out {deviceStore.isMobile &&
+					!uiStore.isSidebarExpanded
+						? 'opacity-0 h-0!'
+						: ''}"
 				>
 					<ActionIcon
-						icon={isMobile.current ? X : PanelLeftClose}
-						size="lg"
-						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
+						ariaLabel="Collapse navigation"
 						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
+						icon={deviceStore.isMobile ? X : PanelLeftClose}
+						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 						onclick={toggleExpandedMode}
+						size="lg"
 						tooltip="Close Sidebar"
 						tooltipSide={TooltipSide.LEFT}
-						ariaLabel="Collapse navigation"
 					/>
 				</div>
 			{/if}
 		</div>
 
 		<div
-			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {isMobile.current
-				? 'transition-[opacity,height] duration-200 ease-out'
-				: ''} {isMobile.current && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
 			in:fade={{ duration: 200 }}
 			out:fade={{ duration: 200 }}
+			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
+				? 'transition-[opacity,height] duration-200 ease-out'
+				: ''} {deviceStore.isMobile && !uiStore.isSidebarExpanded ? 'opacity-0 !h-0' : ''}"
 		>
 			<SidebarNavigationActions
-				isExpandedMode={innerWidth > 768 ? isExpandedMode : true}
-				class="px-2"
 				bind:isSearchModeActive
 				bind:searchQuery
+				class="px-2"
+				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
+				onNewChat={() => {
+					if (deviceStore.isMobile) {
+						scheduleMobileCollapse();
+					}
+				}}
+				onSearchClick={() => {
+					uiStore.isSidebarExpanded = true;
+					isSearchModeActive = true;
+				}}
 				onSearchDeactivated={() => {
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
-				onSearchClick={() => {
-					isExpandedMode = true;
-					isSearchModeActive = true;
-				}}
-				onNewChat={() => {
-					if (isMobile.current) {
-						scheduleMobileCollapse();
-					}
-				}}
+				onSettingsClick={() => (settingsDialogOpen = true)}
 			/>
 
-			{#if isExpandedMode || isOnMobile}
+			{#if uiStore.isSidebarExpanded || isOnMobile}
 				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<SidebarNavigationConversationList
-						class="px-2"
-						{filteredConversations}
-						{currentChatId}
-						{isSearchModeActive}
-						{searchQuery}
-						{isSelectionMode}
-						{selectedIds}
-						onSelect={selectConversation}
-						onEdit={handleEditConversation}
-						onDelete={handleDeleteConversation}
-						onStop={handleStopGeneration}
-						onToggleSelect={toggleSelected}
-						onEnterSelectionMode={enterSelectionMode}
-						onSelectionClick={handleSelectionClick}
-						onRowMouseDown={handleRowMouseDown}
-						visibleCount={visibleSelectionStats.visibleCount}
+						{allSelectedArePinned}
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
+						class="px-2"
+						{currentChatId}
+						{filteredConversations}
+						{isSearchModeActive}
+						{isSelectionMode}
+						onBulkDelete={handleBulkDelete}
+						onBulkExport={handleBulkExport}
+						onBulkPinToggle={handleBulkPinToggle}
+						onCloseSelection={exitSelectionMode}
+						onDelete={handleDeleteConversation}
+						onEdit={handleEditConversation}
+						onEnterSelectionMode={enterSelectionMode}
+						onRowMouseDown={handleRowMouseDown}
+						onSelect={selectConversation}
+						onSelectAllToggle={toggleSelectAllVisible}
+						onSelectionClick={handleSelectionClick}
+						onStop={handleStopGeneration}
+						onToggleSelect={toggleSelected}
+						{pinStateIsMixed}
+						{searchQuery}
+						{selectedIds}
 						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
 							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
-						{allSelectedArePinned}
-						{pinStateIsMixed}
-						onSelectAllToggle={toggleSelectAllVisible}
-						onBulkPinToggle={handleBulkPinToggle}
-						onBulkExport={handleBulkExport}
-						onBulkDelete={handleBulkDelete}
-						onCloseSelection={exitSelectionMode}
+						visibleCount={visibleSelectionStats.visibleCount}
 					/>
 				</div>
 			{/if}
@@ -447,11 +444,13 @@
 
 <DialogConversationRename
 	bind:open={renameDialogOpen}
-	currentTitle={renameOriginalTitle}
 	bind:value={renameDraft}
-	onConfirm={handleRenameConfirm}
+	currentTitle={renameOriginalTitle}
 	onCancel={handleRenameCancel}
+	onConfirm={handleRenameConfirm}
 />
+
+<DialogSettingsChat bind:open={settingsDialogOpen} />
 
 <style>
 	aside {

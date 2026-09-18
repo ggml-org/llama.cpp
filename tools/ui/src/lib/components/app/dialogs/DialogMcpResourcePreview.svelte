@@ -3,9 +3,9 @@
 	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { DEFAULT_RESOURCE_FILENAME } from '$lib/constants';
-	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
+	import { MimeTypeText } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import {
 		downloadResourceContent,
@@ -26,11 +26,13 @@
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));
 
 	function getLanguage(): string {
-		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return MimeTypeIncludes.JSON;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.JSON)) return MIME_TYPE_SUBSTRINGS.JSON;
 
-		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return MimeTypeIncludes.JAVASCRIPT;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT))
+			return MIME_TYPE_SUBSTRINGS.JAVASCRIPT;
 
-		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT))
+			return MIME_TYPE_SUBSTRINGS.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';
 
@@ -62,12 +64,12 @@
 							·
 							{#if favicon}
 								<img
-									src={favicon}
 									alt=""
 									class="h-3 w-3 shrink-0 rounded-sm"
 									onerror={(e) => {
 										(e.currentTarget as HTMLImageElement).style.display = 'none';
 									}}
+									src={favicon}
 								/>
 							{/if}
 							{serverName}
@@ -83,18 +85,18 @@
 
 		<div class="flex items-center justify-end gap-1">
 			<ActionIconCopyToClipboard
-				text={extra.content}
-				canCopy={!!extra.content}
 				ariaLabel="Copy content"
+				canCopy={!!extra.content}
+				text={extra.content}
 			/>
 
 			<Button
-				variant="ghost"
-				size="sm"
 				class="h-7 w-7 p-0"
-				onclick={handleDownload}
 				disabled={!extra.content}
+				onclick={handleDownload}
+				size="sm"
 				title="Download content"
+				variant="ghost"
 			>
 				<Download class="h-3.5 w-3.5" />
 			</Button>
@@ -104,11 +106,11 @@
 			{#if isImageResource(extra.mimeType, extra.uri) && extra.content}
 				<div class="flex items-center justify-center">
 					<img
+						alt={extra.name}
+						class="max-h-[70vh] max-w-full rounded object-contain"
 						src={extra.content.startsWith('data:')
 							? extra.content
 							: `data:${extra.mimeType || 'image/png'};base64,${extra.content}`}
-						alt={extra.name}
-						class="max-h-[70vh] max-w-full rounded object-contain"
 					/>
 				</div>
 			{:else if isCodeResource(extra.mimeType, extra.uri) && extra.content}

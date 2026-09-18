@@ -6,7 +6,7 @@
 //
 // Run: npx vitest bench --project=unit tests/unit/agentic-hotpath.bench.ts
 
-import { classifyToolResult, parseToolResultWithImages } from '$lib/utils/agentic';
+import { classifyToolResult, parseToolResultWithMedia } from '$lib/utils/agentic';
 import { detectIncompleteCodeBlock, highlightCode } from '$lib/utils/code';
 import { computeLineDiff } from '$lib/utils/compute-line-diff';
 import { preprocessLaTeX } from '$lib/utils/latex-protection';
@@ -200,17 +200,17 @@ describe('exit-code regex', () => {
 
 // --- per-line result parsers ----------------------------------------------
 
-describe('parseToolResultWithImages', () => {
+describe('parseToolResultWithMedia', () => {
 	bench('1KB', () => {
-		parseToolResultWithImages(SHELL_OUTPUT_1KB, []);
+		parseToolResultWithMedia(SHELL_OUTPUT_1KB, []);
 	});
 
 	bench('200KB', () => {
-		parseToolResultWithImages(SHELL_OUTPUT_200KB, []);
+		parseToolResultWithMedia(SHELL_OUTPUT_200KB, []);
 	});
 
 	bench('2MB', () => {
-		parseToolResultWithImages(SHELL_OUTPUT_2MB, []);
+		parseToolResultWithMedia(SHELL_OUTPUT_2MB, []);
 	});
 });
 

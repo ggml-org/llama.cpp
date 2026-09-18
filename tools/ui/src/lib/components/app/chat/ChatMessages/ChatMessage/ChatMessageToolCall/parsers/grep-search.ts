@@ -7,7 +7,8 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, splitSearchSummaryList } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { splitSearchSummaryList } from '$lib/utils';
 
 export type GrepSearchMatch = {
 	file: string;
@@ -27,7 +28,7 @@ export type GrepSearchMeta = {
 };
 
 export function parseGrepSearchMeta(section: AgenticSection): GrepSearchMeta | null {
-	const args = parseToolArgs(BuiltInTool.GREP_SEARCH, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_GREP_SEARCH, section);
 
 	if (!args) return null;
 

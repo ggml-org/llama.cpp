@@ -7,6 +7,7 @@ on:
       - master
     paths: [
       '.github/workflows/build-self-hosted.yml',
+      'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -27,6 +28,7 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-self-hosted.yml',
+      'ci/run.sh',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -58,18 +60,48 @@ env:
 
 jobs:
   gpu-cuda:
-    runs-on: [self-hosted, Linux, NVIDIA]
+    runs-on: "hf-jobs-t4-small:cuda13"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-gpu-cuda
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Test
         id: ggml-ci
         run: |
           nvidia-smi
-          GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_CUDA=1 CUDACXX=/usr/local/cuda/bin/nvcc bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-gpu-cuda
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   gpu-rocm:
     runs-on: [self-hosted, Linux, AMD]
@@ -92,6 +124,7 @@ jobs:
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   gpu-vulkan-nvidia-cm:
+    # runs-on: "hf-jobs-t4-small:ubuntu26_04"
     runs-on: [self-hosted, Linux, NVIDIA]
 
     steps:
@@ -99,13 +132,44 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt update
+      #     sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   with:
+      #     restore: false
+      #     save: false
+
+      # - name: ccache-buckets-restore
+      #   uses: ./.github/actions/ccache-buckets
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm
+      #     folder: llama.cpp
+      #     hf_bucket: ggml-org/cache
+
       - name: Test
         id: ggml-ci
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
+      # - name: ccache-buckets-save
+      #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      #   uses: ./.github/actions/ccache-buckets
+      #   env:
+      #     HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm
+      #     folder: llama.cpp
+      #     evict-old-files: 1d
+      #     hf_bucket: ggml-org/cache
+      #     save: true
+
   gpu-vulkan-nvidia-cm2:
+    # runs-on: "hf-jobs-t4-small:ubuntu26_04"
     runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
 
     steps:
@@ -113,27 +177,75 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt update
+      #     sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   with:
+      #     restore: false
+      #     save: false
+
+      # - name: ccache-buckets-restore
+      #   uses: ./.github/actions/ccache-buckets
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm2
+      #     folder: llama.cpp
+      #     hf_bucket: ggml-org/cache
+
       - name: Test
         id: ggml-ci
         run: |
           vulkaninfo --summary
           GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
+      # - name: ccache-buckets-save
+      #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      #   uses: ./.github/actions/ccache-buckets
+      #   env:
+      #     HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm2
+      #     folder: llama.cpp
+      #     evict-old-files: 1d
+      #     hf_bucket: ggml-org/cache
+      #     save: true
+
   gpu-webgpu-nvidia:
-    runs-on: [self-hosted, Linux, NVIDIA, X64]
+    runs-on: "hf-jobs-t4-small:ubuntu26_04"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan1 mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-webgpu-nvidia
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v20260317.182325"
+          DAWN_VERSION="v20260908.214631"
           DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-ubuntu-latest-Release"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-ubuntu-latest-Release"
           echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           curl -L -o artifact.tar.gz \
             "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
@@ -147,6 +259,18 @@ jobs:
           GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
           GG_BUILD_WEBGPU_DAWN_DIR="$GITHUB_WORKSPACE/dawn/lib64/cmake/Dawn" \
             bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-webgpu-nvidia
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   # TODO: provision AMX-compatible machine
   #cpu-amx:
@@ -216,10 +340,10 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          DAWN_VERSION="v20260317.182325"
+          DAWN_VERSION="v20260908.214631"
           DAWN_OWNER="google"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-18eb229ef5f707c1464cc581252e7603c73a3ef0-macos-latest-Release"
+          DAWN_ASSET_NAME="Dawn-94c3c9cc0d5fb2e85aebb370fa8d37b71aa34655-macos-latest-Release"
           echo "Fetching release asset from https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
           curl -L -o artifact.tar.gz \
             "https://github.com/google/dawn/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.tar.gz"
@@ -288,8 +412,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.4"
+      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
 
     steps:
       - name: Clone
@@ -329,7 +453,7 @@ jobs:
           LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   cpu-arm64-high-perf-graviton4:
-    runs-on: ah-ubuntu_22_04-c8g_8x
+    runs-on: ah-ubuntu_24_04-c8g_8x
 
     steps:
       - name: Clone
@@ -365,10 +489,14 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
-          LLAMA_ARG_THREADS=$(nproc) GG_BUILD_HIGH_PERF=1 GG_BUILD_NO_BF16=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          LLAMA_ARG_THREADS=$(nproc) \
+          GG_BUILD_HIGH_PERF=1 \
+          GG_BUILD_NO_BF16=1 \
+          GG_BUILD_EXTRA_TESTS_0=1 \
+          bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   cpu-arm64-graviton4-kleidiai:
-    runs-on: ah-ubuntu_22_04-c8g_8x
+    runs-on: ah-ubuntu_24_04-c8g_8x
 
     steps:
       - name: Clone
@@ -404,6 +532,8 @@ jobs:
       - name: Test
         id: ggml-ci
         run: |
+          LLAMA_ARG_THREADS=$(nproc) \
           GG_BUILD_KLEIDIAI=1 \
           GG_BUILD_EXTRA_TESTS_0=1 \
-          bash ./ci/run.sh ./tmp/results ./tmp/mnt
+          GG_BUILD_HIGH_PERF=1 \
+          bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp

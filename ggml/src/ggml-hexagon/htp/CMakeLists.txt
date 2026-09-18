@@ -43,6 +43,7 @@ add_library(${HTP_LIB} SHARED
     pad-ops.c
     argsort-ops.c
     im2col-ops.c
+    allreduce-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

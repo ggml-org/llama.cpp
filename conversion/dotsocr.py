@@ -9,6 +9,7 @@ from .base import MmprojModel, ModelBase, gguf
 
 
 @ModelBase.register("DotsOCRForCausalLM")
+@ModelBase.example("rednote-hilab/dots.ocr")
 class DotsOCRVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

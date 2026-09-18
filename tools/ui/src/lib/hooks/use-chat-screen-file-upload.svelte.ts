@@ -88,7 +88,9 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 	}
 
 	return {
-		fileErrorData,
+		get fileErrorData() {
+			return fileErrorData;
+		},
 		handleFileRemove,
 		handleFileUpload,
 		get showFileErrorDialog() {
