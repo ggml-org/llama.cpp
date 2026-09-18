@@ -2549,6 +2549,11 @@ common_speculative_init_result::common_speculative_init_result(
     // the draft context holds as many tokens per sequence as the target context
     cparams.n_ctx = llama_n_ctx(ctx_tgt);
 
+    // the draft context always reserves on the full context. Limiting its reserve too,
+    // that is, inheriting -ckv from the target, makes decode collapse by more than half:
+    // measured 11.9 t/s against 26.8, while with speculation off the same -ckv was neutral
+    cparams.n_kv_reserve = 0;
+
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
     cparams.n_rs_seq  = 0;

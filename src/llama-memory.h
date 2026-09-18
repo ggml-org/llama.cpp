@@ -93,6 +93,12 @@ struct llama_memory_i {
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_context_ptr init_full() = 0;
 
+    // limits the n_kv used to build the worst-case graph, that is, the one that sizes the
+    // compute buffer. 0 leaves the full context, which is the safe default. A smaller value
+    // reserves less VRAM and lets ggml-alloc grow the buffers only if the context really
+    // reaches that length.
+    virtual void set_reserve_limit(uint32_t /*n_kv_max*/) {}
+
     // prepare for any pending memory updates, such as shifts, copies, etc.
     // status == LLAMA_MEMORY_STATUS_NO_UPDATE if there is nothing to update
     virtual llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) = 0;

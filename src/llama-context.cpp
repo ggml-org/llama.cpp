@@ -130,6 +130,7 @@ llama_context::llama_context(
     cparams.pooling_type      = params.pooling_type;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
+    cparams.n_kv_reserve     = params.n_kv_reserve;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
     cparams.rope_freq_scale  = params.rope_freq_scale == 0.0f ? hparams.rope_freq_scale_train : params.rope_freq_scale;
 
@@ -610,6 +611,12 @@ void llama_context::sched_reserve() {
     llama_memory_context_ptr mctx;
     if (memory) {
         LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
+        if (cparams.n_kv_reserve > 0 && cparams.n_kv_reserve < cparams.n_ctx) {
+            LLAMA_LOG_INFO("%s: reserving compute buffers for n_kv = %u instead of the full %u; "
+                    "they will be grown on demand if the context gets longer\n",
+                    __func__, cparams.n_kv_reserve, cparams.n_ctx);
+        }
+        memory->set_reserve_limit(cparams.n_kv_reserve);
         mctx = memory->init_full();
         if (!mctx) {
             throw std::runtime_error("failed to initialize memory module");
@@ -3646,6 +3653,7 @@ void llama_context::opt_epoch(
 llama_context_params llama_context_default_params() {
     llama_context_params result = {
         /*.n_ctx                       =*/ 512,
+        /*.n_kv_reserve                =*/ 0,
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,

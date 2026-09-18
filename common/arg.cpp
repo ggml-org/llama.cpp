@@ -1644,6 +1644,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
+        {"-ckv", "--ctx-size-reserve"}, "N",
+        string_format("n_kv used to size the compute buffers (default: %d, 0 = the full context size).\n"
+            "the compute buffers of some architectures grow linearly with the context, so reserving them for the\n"
+            "full --ctx-size can waste several GiB of VRAM that a shorter conversation never uses. with this set,\n"
+            "they are reserved for N tokens instead and grown on demand if the context actually gets longer.\n"
+            "growing needs free VRAM at that moment, so keep the full context if you cannot afford a late failure",
+            params.n_kv_reserve),
+        [](common_params & params, int value) {
+            params.n_kv_reserve = value;
+        }
+    ).set_env("LLAMA_ARG_CTX_SIZE_RESERVE"));
+    add_opt(common_arg(
         { "--kv-unified-per-slot" }, "N",
         "context limit per parallel slot (default: unset, behavior unchanged).\n"
         "when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N",

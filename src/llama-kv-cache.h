@@ -129,6 +129,11 @@ public:
 
     llama_memory_context_ptr init_full() override;
 
+    void set_reserve_limit(uint32_t n_kv_max) override;
+
+    // n_kv to use for the graph reserve, already rounded and clamped to the real size
+    uint32_t get_reserve_n_kv() const;
+
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
@@ -266,6 +271,9 @@ private:
 
     // required padding
     const uint32_t n_pad = 1;
+
+    // 0 = reserve on the full context (the original behaviour)
+    uint32_t n_kv_reserve = 0;
 
     // SWA
     const uint32_t n_swa = 0;

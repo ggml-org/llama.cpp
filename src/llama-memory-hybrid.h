@@ -54,6 +54,8 @@ public:
 
     llama_memory_context_ptr init_full() override;
 
+    void set_reserve_limit(uint32_t n_kv_max) override;
+
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;

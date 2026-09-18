@@ -136,6 +136,16 @@ llama_memory_context_ptr llama_memory_hybrid_idx::init_full() {
     return std::make_unique<llama_memory_hybrid_idx_context>(this);
 }
 
+void llama_memory_hybrid_idx::set_reserve_limit(uint32_t n_kv_max) {
+    // the indexer cache has to follow the attention one cell by cell, so the two
+    // reserves must be kept aligned
+    llama_memory_hybrid::set_reserve_limit(n_kv_max);
+
+    if (mem_idx) {
+        mem_idx->set_reserve_limit(n_kv_max);
+    }
+}
+
 llama_memory_context_ptr llama_memory_hybrid_idx::init_update(llama_context * lctx, bool optimize) {
     return std::make_unique<llama_memory_hybrid_idx_context>(this, lctx, optimize);
 }

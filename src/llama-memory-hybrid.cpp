@@ -126,6 +126,10 @@ llama_memory_context_ptr llama_memory_hybrid::init_full() {
     return std::make_unique<llama_memory_hybrid_context>(this);
 }
 
+void llama_memory_hybrid::set_reserve_limit(uint32_t n_kv_max) {
+    mem_attn->set_reserve_limit(n_kv_max);
+}
+
 llama_memory_context_ptr llama_memory_hybrid::init_update(llama_context * lctx, bool optimize) {
     return std::make_unique<llama_memory_hybrid_context>(this, lctx, optimize);
 }
