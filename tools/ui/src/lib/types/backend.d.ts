@@ -45,7 +45,12 @@ export interface BackendCapabilities {
 	tools: boolean;
 }
 
-/** One configured API endpoint. */
+/**
+ * One configured API endpoint.
+ *
+ * TODO: a backend paired by QR code is reached over WebRTC instead of plain
+ * HTTP, so it needs a transport discriminator and its peer description here.
+ */
 export interface Backend {
 	/** Bearer token / API key used for this backend. */
 	apiKey?: string;

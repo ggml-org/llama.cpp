@@ -57,8 +57,11 @@ export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
 };
 
 /**
- * Ready-made endpoints offered when adding a backend. `custom` intentionally
- * carries no URL so the user starts from an empty form.
+ * Ready-made endpoints offered when adding a backend.
+ *
+ * TODO: pair a llama.cpp server by scanning its QR code (WebRTC transport, so a
+ * hosted PWA can reach a server on the user's network), see
+ * ggml-org/llama.cpp#24577.
  */
 export const BACKEND_PRESETS: readonly BackendPreset[] = [
 	{
