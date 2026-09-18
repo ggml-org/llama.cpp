@@ -1861,6 +1861,9 @@ class TextModel(ModelBase):
         if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
             # ref: https://huggingface.co/poolside/Laguna-XS.2
             res = "laguna"
+        if chkhsh == "653660222fb704f61cbf2b618a8ae6502b7f8b20c980f9a5de07ed78e13319cd":
+            # ref: https://huggingface.co/ufakai/ufakzeka-1
+            res = "ufakzeka"
 
         if res is None:
             logger.warning("\n")
