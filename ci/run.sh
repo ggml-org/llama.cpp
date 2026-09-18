@@ -467,12 +467,13 @@ function gg_run_qwen3_0_6b {
         line="$3"
         baseline_file="${SRC}/ci/ppl-baselines.json"
 
-        ppl=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+" | tail -n 1)
+        ppl=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+" | tail -n 1) || true
         if [ -z "$ppl" ]; then
             printf '  - %s @ MISSING (FAIL: no [1] ppl line)\n' "$qnt"
             return 20
         fi
 
+        rc=0
         py_out=$(python3 - "$baseline_file" "$model" "$qnt" "$ppl" << 'PY'
 import json, sys
 path, model, qnt, ppl_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -490,8 +491,7 @@ if drift > rel_tol:
     sys.exit(22)
 sys.exit(0)
 PY
-)
-        rc=$?
+) || rc=$?
         if [ $rc -eq 21 ]; then
             printf '  - %s @ %s (FAIL: no baseline in json)\n' "$qnt" "$ppl"
             return 21
@@ -503,7 +503,7 @@ PY
             return 22
         fi
         if [ $rc -ne 0 ]; then
-            printf '  - %s @ %s (FAIL: check error)\n' "$qnt" "$ppl"
+            printf '  - %s @ %s (FAIL: unknown error, check log)\n' "$qnt" "$ppl"
             return $rc
         fi
 
@@ -511,22 +511,22 @@ PY
         return 0
     }
 
-    check_ppl "qwen3-0.6b" "f16"  "$(grep "^\[1\]" $OUT/${ci}-tg-f16.log)"
+    check_ppl "qwen3-0.6b" "f16"  "$(grep "^\[1\]" $OUT/${ci}-tg-f16.log || true)"
     if [ -z ${GG_BUILD_NO_BF16} ]; then
-        check_ppl "qwen3-0.6b" "bf16" "$(grep "^\[1\]" $OUT/${ci}-tg-bf16.log)"
+        check_ppl "qwen3-0.6b" "bf16" "$(grep "^\[1\]" $OUT/${ci}-tg-bf16.log || true)"
     fi
-    check_ppl "qwen3-0.6b" "q8_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q8_0.log)"
-    check_ppl "qwen3-0.6b" "q4_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_0.log)"
-    check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log)"
-    check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log)"
-    check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log)"
-    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log)"
-    check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log)"
-    check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log)"
-    check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log)"
-    check_ppl "qwen3-0.6b" "q6_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q6_k.log)"
+    check_ppl "qwen3-0.6b" "q8_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q8_0.log || true)"
+    check_ppl "qwen3-0.6b" "q4_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_0.log || true)"
+    check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log || true)"
+    check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log || true)"
+    check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log || true)"
+    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log || true)"
+    check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log || true)"
+    check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log || true)"
+    check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log || true)"
+    check_ppl "qwen3-0.6b" "q6_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q6_k.log || true)"
 
-
+    set +o pipefail
     set +e
 }
 
