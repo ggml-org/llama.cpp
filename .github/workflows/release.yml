@@ -456,7 +456,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     #permissions:
     #  actions: write
