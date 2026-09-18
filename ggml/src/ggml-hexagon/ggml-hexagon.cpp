@@ -5530,24 +5530,12 @@ static bool ggml_hexagon_supported_im2col(const struct ggml_hexagon_session * se
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    const bool is_2D = ((const int32_t *) op->op_params)[6] == 1;
-    if (!is_2D) {
-        return false;
-    }
-
     // For now support F32->F32 and F32->F16 only.
     if (src1->type != GGML_TYPE_F32 || (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_F32)) {
         return false;
     }
 
     if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
-        return false;
-    }
-
-    // For now keep padded OPs on CPU. Will revisit once we expand coverage past patch-embed OPs.
-    const int32_t p0 = ((const int32_t *) op->op_params)[2];
-    const int32_t p1 = ((const int32_t *) op->op_params)[3];
-    if (p0 != 0 || p1 != 0) {
         return false;
     }
 
