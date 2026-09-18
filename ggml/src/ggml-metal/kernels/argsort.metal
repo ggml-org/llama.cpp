@@ -363,7 +363,7 @@ kernel void kernel_topk_moe_f32(
 
     float wt[32];
     float output_weights[32];
-    for (int i = 0; i < 32; ++i) {
+    FOR_UNROLL (int i = 0; i < 32; ++i) {
         wt[i]            = -INFINITY;
         output_weights[i] = 0.0f;
     }
@@ -406,7 +406,7 @@ kernel void kernel_topk_moe_f32(
             }
         }
 
-        for (int mask = 16; mask > 0; mask >>= 1) {
+        FOR_UNROLL (int mask = 16; mask > 0; mask >>= 1) {
             const float val    = simd_shuffle_xor(best_val, mask);
             const int   expert = simd_shuffle_xor(best_expert, mask);
             if (val > best_val || (val == best_val && expert < best_expert)) {
