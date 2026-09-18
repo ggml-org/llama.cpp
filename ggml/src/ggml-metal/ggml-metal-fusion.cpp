@@ -955,16 +955,7 @@ static bool ggml_metal_fusion_check_memory_ranges(
         return false;
     };
 
-    std::vector<const ggml_tensor *> dsts;
-    dsts.reserve(1 + fusion->outs.size());
-    dsts.push_back(nodes[node_count - 1]);
-
-    for (int offset : fusion->outs) {
-        GGML_ASSERT(offset >= 0 && offset < node_count);
-        dsts.push_back(nodes[offset]);
-    }
-
-    for (const ggml_tensor * dst : dsts) {
+    auto check_dst = [&](const ggml_tensor * dst) {
         for (int j = 0; j < node_count; ++j) {
             for (int s = 0; s < GGML_MAX_SRC; ++s) {
                 const ggml_tensor * src = nodes[j]->src[s];
@@ -976,6 +967,18 @@ static bool ggml_metal_fusion_check_memory_ranges(
                     return false;
                 }
             }
+        }
+        return true;
+    };
+
+    if (!check_dst(nodes[node_count - 1])) {
+        return false;
+    }
+
+    for (int offset : fusion->outs) {
+        GGML_ASSERT(offset >= 0 && offset < node_count);
+        if (!check_dst(nodes[offset])) {
+            return false;
         }
     }
 
