@@ -83,7 +83,13 @@
 			Loading models…
 		</div>
 	{:else if ms.options.length === 0 && ms.isMultiModel}
-		<p class="text-xs text-muted-foreground">No models available.</p>
+		<button
+			class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+			onclick={handleAddBackend}
+			type="button"
+		>
+			No models yet. Add a backend to get started.
+		</button>
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}

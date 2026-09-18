@@ -51,7 +51,7 @@
 	// Discover models is opt-in (General settings) and needs the router's
 	// download endpoints; hide it when either gate is closed
 	const actionsItems = $derived(
-		serverStore.isRouterMode && settingsStore.config.enableDiscoverModels
+		serverStore.localIsRouter && settingsStore.config.enableDiscoverModels
 			? SIDEBAR_ACTIONS_ITEMS
 			: SIDEBAR_ACTIONS_ITEMS.filter((item) => item.action !== SidebarAction.DISCOVER_MODELS)
 	);

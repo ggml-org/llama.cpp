@@ -25,7 +25,7 @@
 	let currentModelParams = $derived.by(() => {
 		void modelsStore.props.cacheVersion;
 
-		if (serverStore.isRouterMode) {
+		if (serverStore.localIsRouter) {
 			const currentModelName = modelsStore.selectedModelName;
 
 			if (currentModelName) {

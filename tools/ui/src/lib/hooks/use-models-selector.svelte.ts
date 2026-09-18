@@ -117,11 +117,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
-	// Router mode and external backends both expose a selectable model list, and
-	// configured backends always need the tabs; only a lone llama.cpp server
-	// without a router has nothing to list.
+	// Router mode and external backends both expose a selectable model list; only
+	// a lone llama.cpp server without a router has nothing to choose from.
 	const isMultiModel = $derived(
-		serverStore.isRouterMode || !serverStore.capabilities.props || backendsStore.enabled.length > 1
+		serverStore.isRouterMode ||
+			backendsStore.enabled.some((backend) => backend.id !== LOCAL_BACKEND_ID)
 	);
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);

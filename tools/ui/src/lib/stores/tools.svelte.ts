@@ -233,8 +233,8 @@ class ToolsStore {
 	}
 
 	async fetchServerTools(): Promise<void> {
-		// the /tools endpoint only exists on llama.cpp servers
-		if (!serverStore.capabilities.tools) {
+		// the /tools endpoint only exists on the local llama.cpp server
+		if (!serverStore.hasLocalServer) {
 			this._serverTools = [];
 			this.cwdAwareTools = new SvelteSet();
 

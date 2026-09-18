@@ -241,7 +241,7 @@
 	$effect(() => {
 		if (!browser) return;
 
-		if (!serverStore.isRouterMode) return;
+		if (!serverStore.localIsRouter) return;
 
 		untrack(() => {
 			modelsStore.status.subscribe();
