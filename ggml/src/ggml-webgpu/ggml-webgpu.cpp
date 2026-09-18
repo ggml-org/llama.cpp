@@ -1518,15 +1518,24 @@ static webgpu_encoded_op ggml_webgpu_get_rows(webgpu_context & ctx,
     shader_lib_ctx.dst                            = dst;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
-    webgpu_pipeline pipeline  = ctx->shader_lib->get_get_rows_pipeline(shader_lib_ctx);
-    auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+    const uint32_t offset_src  = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type));
+    const uint32_t offset_dst  = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type));
+    const uint32_t stride_src1 = (uint32_t) (src->nb[1] / ggml_type_size(src->type));
+    const uint32_t stride_src2 = (uint32_t) (src->nb[2] / ggml_type_size(src->type));
+    const uint32_t stride_src3 = (uint32_t) (src->nb[3] / ggml_type_size(src->type));
 
-    std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+    const bool vec4_aligned = offset_src % 4 == 0 && offset_dst % 4 == 0 && stride_src1 % 4 == 0 &&
+                              stride_src2 % 4 == 0 && stride_src3 % 4 == 0;
+
+    webgpu_pipeline pipeline  = ctx->shader_lib->get_get_rows_pipeline(shader_lib_ctx, vec4_aligned);
+    auto *          decisions = static_cast<ggml_webgpu_get_rows_shader_decisions *>(pipeline.context.get());
+
+    std::vector<uint32_t> params = { offset_src,
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, idx) / ggml_type_size(idx->type)),
-                                     (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
-                                     (uint32_t) (src->nb[1] / ggml_type_size(src->type)),
-                                     (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
-                                     (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
+                                     offset_dst,
+                                     stride_src1,
+                                     stride_src2,
+                                     stride_src3,
                                      (uint32_t) (idx->nb[0] / ggml_type_size(idx->type)),
                                      (uint32_t) (idx->nb[1] / ggml_type_size(idx->type)),
                                      (uint32_t) (idx->nb[2] / ggml_type_size(idx->type)),
@@ -1544,7 +1553,7 @@ static webgpu_encoded_op ggml_webgpu_get_rows(webgpu_context & ctx,
                                                   ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, idx),
                                                   ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst) };
 
-    uint32_t blocks_per_row = (uint32_t) (dst->ne[0] / (src->type == GGML_TYPE_F32 && dst->ne[0] % 4 == 0 ? 4 : 1));
+    uint32_t blocks_per_row = (uint32_t) (dst->ne[0] / (decisions->vectorized ? 4 : 1));
     uint32_t total_rows     = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
     uint32_t total_threads  = float_parallel ? blocks_per_row * total_rows : total_rows;
     uint32_t wg_x           = CEIL_DIV(total_threads, decisions->wg_size);
@@ -4333,22 +4342,12 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                            src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32));
             break;
         case GGML_OP_GET_ROWS:
-            {
-                const size_t storage_alignment =
-                    ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
-                const size_t src_address_unit =
-                    src0->type == GGML_TYPE_F32 && op->ne[0] % 4 == 0 ? 4 * sizeof(float) : ggml_type_size(src0->type);
-                if (ggml_webgpu_tensor_misalignment(src0, storage_alignment) % src_address_unit != 0) {
-                    break;
-                }
-                if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 ||
-                    ggml_webgpu_supported_qtype(src0->type)) {
-                    supports_op = (op->type == GGML_TYPE_F32);
-                } else if (src0->type == GGML_TYPE_I32) {
-                    supports_op = op->type == GGML_TYPE_I32;
-                }
-                break;
+            if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_webgpu_supported_qtype(src0->type)) {
+                supports_op = (op->type == GGML_TYPE_F32);
+            } else if (src0->type == GGML_TYPE_I32) {
+                supports_op = op->type == GGML_TYPE_I32;
             }
+            break;
         case GGML_OP_MUL_MAT:
             {
                 switch (src1->type) {
