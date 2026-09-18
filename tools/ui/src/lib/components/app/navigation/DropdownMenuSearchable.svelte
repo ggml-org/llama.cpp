@@ -21,8 +21,6 @@
 		 * overflow-y-auto and a max-height) and must not be `overflow-hidden`.
 		 */
 		footer?: Snippet;
-		/** Extra sticky content under the search input, e.g. the view tabs. */
-		subheader?: Snippet;
 	}
 
 	let {
@@ -35,11 +33,10 @@
 		onSearchKeyDown,
 		placeholder = 'Search...',
 		searchClass = '',
-		searchValue = $bindable(''),
-		subheader
+		searchValue = $bindable('')
 	}: Props = $props();
 
-	// the search and the subheader stick as one block; its height is published so
+	// the search sticks to the top; its height is published so
 	// list section headers can stick right below it
 	let stickyHeaderHeight = $state(0);
 </script>
@@ -52,10 +49,6 @@
 		onKeyDown={onSearchKeyDown}
 		{placeholder}
 	/>
-
-	{#if subheader}
-		{@render subheader()}
-	{/if}
 </div>
 
 <div class={contentClass}>

@@ -54,9 +54,6 @@ export const MODEL_SELECTOR_ICON = Package;
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 
 /** Model selector views: the favorites of every backend, the local server, the remote backends. */
-export const MODELS_VIEW_FAVORITES = 'favorites';
-export const MODELS_VIEW_LOCAL = 'local';
-export const MODELS_VIEW_REMOTE = 'remote';
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;

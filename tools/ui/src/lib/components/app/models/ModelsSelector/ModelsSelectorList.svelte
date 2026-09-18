@@ -1,9 +1,10 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
+	import { ChevronLeft, CircleAlert, Heart, Loader2 } from '@lucide/svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
 	import { BackendPresetIcon } from '$lib/components/app/backends';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import Logo from '$lib/components/app/misc/Logo.svelte';
 	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
@@ -80,10 +81,17 @@
 	/>
 {/snippet}
 
-<!-- Favorites tab: rows only, the tab already names the view. -->
-{#each favorites as item (`fav-${item.option.id}`)}
-	{@render render(item, !showOrgName)}
-{/each}
+{#if favorites.length > 0}
+	<p class="{headerClass} flex items-center gap-1.5" style={headerStyle}>
+		<Heart class="h-3.5 w-3.5 shrink-0" />
+
+		Favorites
+	</p>
+
+	{#each favorites as item (`fav-${item.option.id}`)}
+		{@render render(item, !showOrgName)}
+	{/each}
+{/if}
 
 {#if getDownloadEntries.length > 0}
 	<p class={headerClass} style={headerStyle}>Download in progress</p>
@@ -93,7 +101,15 @@
 	{/each}
 {/if}
 
-<!-- Local view: one list, the loaded models first, no section headers. -->
+{#if groups.loaded.length > 0 || groups.available.length > 0}
+	<p class="{headerClass} flex items-center gap-1.5" style={headerStyle}>
+		<Logo class="shrink-0" style="--size: 0.875rem" />
+
+		Local models
+	</p>
+{/if}
+
+<!-- Local models: one list, the loaded ones first. -->
 {#each groups.loaded as item (`loaded-${item.option.id}`)}
 	{@render render(item, !showOrgName)}
 {/each}
@@ -104,7 +120,7 @@
 	{/each}
 {/each}
 
-<!-- Remote view: one section per backend. -->
+<!-- One section per remote provider. -->
 {#each groups.providers as provider (provider.backendId)}
 	<p class="{headerClass} flex items-center gap-1.5" style={headerStyle}>
 		{#if onProviderBack}

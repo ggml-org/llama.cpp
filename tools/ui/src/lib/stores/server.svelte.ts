@@ -70,7 +70,11 @@ class ServerStore {
 	 * instead of following the selected model.
 	 */
 	private get localFacts(): { props: ApiLlamaCppServerProps | null; role: ServerRole | null } {
-		if (getBackend()?.id === LOCAL_BACKEND_ID) return { props: this.props, role: this.role };
+		// no resolvable backend (early startup, non-browser call): props belong to
+		// the origin serving this UI, which is the local server
+		const backendId = getBackend()?.id ?? LOCAL_BACKEND_ID;
+
+		if (backendId === LOCAL_BACKEND_ID) return { props: this.props, role: this.role };
 
 		return this.localState ?? { props: null, role: null };
 	}

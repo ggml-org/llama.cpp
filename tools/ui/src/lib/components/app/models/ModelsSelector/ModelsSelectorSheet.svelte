@@ -6,7 +6,6 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorReasoningPanel,
-		ModelsSelectorTabs,
 		SearchInput
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
@@ -170,13 +169,6 @@
 							/>
 						</div>
 
-						<!-- View tabs (favorites first), above the option list. -->
-						<ModelsSelectorTabs
-							activeId={ms.viewId}
-							onAdd={handleAddBackend}
-							onSelect={ms.setView}
-						/>
-
 						<div class="max-h-[60vh] overflow-y-auto px-2">
 							{#if !ms.isCurrentModelInCache && currentModel}
 								<button
@@ -201,7 +193,7 @@
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
-								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
+								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
