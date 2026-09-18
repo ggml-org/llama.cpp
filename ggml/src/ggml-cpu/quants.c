@@ -30,6 +30,14 @@ void quantize_row_q2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q2_0_ref(x, y, k);
 }
 
+void quantize_row_pq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_pq2_0_ref(x, y, k);
+}
+
+void quantize_row_ptq1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_ptq1_0_ref(x, y, k);
+}
+
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4_0_ref(x, y, k);
 }
@@ -169,6 +177,80 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
         }
 
         sumf += d0 * sumi;
+    }
+
+    *s = sumf;
+}
+
+// PQ2_0 and PTQ1_0 are group-128 types, so one of their blocks pairs with four
+// Q8_0 blocks. These are reference kernels: the block is dequantized and the dot
+// accumulated in F32, which is correct but leaves the SIMD/repack paths for a
+// follow-up. Both are wired as `vec_dot` in the CPU type traits.
+void ggml_vec_dot_pq2_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_PQ2_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_pq2_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i++) {
+        float xd[QK_PQ2_0];
+        dequantize_row_pq2_0(&x[i], xd, qk);
+
+        for (int k = 0; k < qk / QK8_0; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * (qk / QK8_0) + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+
+            float sumi = 0.0f;
+            for (int j = 0; j < QK8_0; ++j) {
+                sumi += xd[k * QK8_0 + j] * (float) yb->qs[j];
+            }
+            sumf += d1 * sumi;
+        }
+    }
+
+    *s = sumf;
+}
+
+void ggml_vec_dot_ptq1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK_PTQ1_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_ptq1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    float sumf = 0.0f;
+
+    for (int i = 0; i < nb; i++) {
+        float xd[QK_PTQ1_0];
+        dequantize_row_ptq1_0(&x[i], xd, qk);
+
+        for (int k = 0; k < qk / QK8_0; ++k) {
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * (qk / QK8_0) + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+
+            float sumi = 0.0f;
+            for (int j = 0; j < QK8_0; ++j) {
+                sumi += xd[k * QK8_0 + j] * (float) yb->qs[j];
+            }
+            sumf += d1 * sumi;
+        }
     }
 
     *s = sumf;

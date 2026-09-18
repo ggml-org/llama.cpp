@@ -191,6 +191,28 @@ typedef struct {
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
+// PQ2_0: ternary weights at group size 128, one fp16 scale per group, each weight
+// stored in a 2-bit slot. Same codec as Q2_0 (which is group 64) but a wider group,
+// so it is a distinct type rather than a re-interpretation of Q2_0 blocks.
+#define QK_PQ2_0 128
+typedef struct {
+    ggml_half d;                 // scale for the 128 weights in this block
+    uint8_t   qs[QK_PQ2_0 / 4];  // 2 bits per weight
+} block_pq2_0;
+static_assert(sizeof(block_pq2_0) == sizeof(ggml_half) + QK_PQ2_0 / 4, "wrong pq2_0 block size/padding");
+
+// PTQ1_0: the same ternary weights at group size 128, packed as dense base-3 trits
+// (5 trits per byte, plus the remainder at 4 trits per byte) with one fp16 scale per
+// group. Upstream TQ1_0 packs the same trits but carries one scale per 256 weights,
+// which cannot represent a checkpoint that is ternary at group 128.
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t   qs[(QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5]; // 24 B: 5 trits per byte, 120 values
+    uint8_t   qh[QK_PTQ1_0/64];                    //  2 B: 4 trits per byte,   8 values
+    ggml_half d;                                   // scale for this block
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == sizeof(ggml_half) + QK_PTQ1_0/64 + (QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5, "wrong ptq1_0 block size/padding");
+
 #define QK4_0 32
 typedef struct {
     ggml_half d;           // delta
