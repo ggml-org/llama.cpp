@@ -44,7 +44,6 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     std::vector<context_cache> caches;
     std::vector<llama_compute_arena_binding> arenas;
     std::vector<ggml_backend_memory_lease_t> bindings;
-    std::vector<std::unique_ptr<ggml_backend_memory_lease, decltype(&ggml_backend_memory_lease_free)>> leases;
     llama_memory_executor executor;
     llama_memory_execution pending;
     std::unique_ptr<llama_memory_workspace> workspace;
@@ -53,6 +52,11 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     llama_kv_stream_model * shared_stream = nullptr;
     ggml_backend_buffer_t kv_parent = nullptr;
     size_t kv_parent_capacity = 0;
+    size_t kv_arena = std::numeric_limits<size_t>::max();
+    llama_memory_transition_target phase_target;
+    std::vector<llama_memory_transition_arena> supplied;
+    llama_memory_stage_id active_stage = 0, prefill_stage = 0, decode_stage = 0;
+    uint64_t transition_count = 0, executor_revision = 0;
 
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
@@ -74,6 +78,47 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     bool invalidate() {
         const auto result = executor.retire(*this);
         return result.status == llama_memory_executor_status::retired || result.status == llama_memory_executor_status::unchanged;
+    }
+
+    bool capture_execution() {
+        if (!workspace || !workspace->ready() ||
+                executor_revision == UINT64_MAX) return false;
+        bindings = workspace->leases();
+        std::unique_ptr<llama_memory_executable> native =
+            std::make_unique<context_executable>(caches);
+        const uint64_t next = executor_revision+1;
+        if (!executor.capture(native,bindings,next)) return false;
+        executor_revision = next;
+        return true;
+    }
+
+    bool activate_stage(llama_memory_stage_id stage) {
+        if (!transition || !stage) return false;
+        if (stage == active_stage) return true;
+        auto target = phase_target;
+        target.stage = stage;
+        try {
+            const auto prepared = transition->prepare(target);
+            if (prepared.status == llama_memory_transition_status::no_change) {
+                active_stage = stage;
+                return true;
+            }
+            if (prepared.status != llama_memory_transition_status::prepared) return false;
+            const auto activated = transition->activate(supplied);
+            if (activated.status != llama_memory_transition_status::activated) {
+                const auto recovered = transition->recover();
+                if (recovered.status == llama_memory_transition_status::recovered) {
+                    capture_execution();
+                }
+                return false;
+            }
+            if (!capture_execution()) return false;
+            active_stage = stage;
+            ++transition_count;
+            return true;
+        } catch (...) {
+            return false;
+        }
     }
 };
 
@@ -265,8 +310,10 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 const size_t attention = i == 0 ? kv_attention :
                     (i == 1 ? kv.attention_prefill_bytes : kv.attention_decode_bytes);
                 auto & requirements = target.plan.stages[i].requirements;
+                const size_t pool_preferred = i == 2 ?
+                    target.budgets[kv_arena].capacity : kv.pool_bytes;
                 requirements.push_back({
-                    pool_id,kv.pool_bytes,kv.pool_bytes,
+                    pool_id,kv.pool_bytes,pool_preferred,
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
@@ -312,14 +359,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
         } else if (prepared.status != llama_memory_transition_status::no_change) {
             return {};
         }
-        for (size_t i = 0; i < selected.size(); ++i) {
-            if (selected[i].stages.front().size == 0) continue;
-            state->leases.emplace_back(ggml_backend_memory_arena_acquire(
-                state->arenas[i].arena.get(),selected[i].resource.id),
-                ggml_backend_memory_lease_free);
-            if (!state->leases.back()) return {};
-            state->bindings.push_back(state->leases.back().get());
-        }
+        state->bindings = state->workspace->leases();
 
         if (stream) {
             std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> pool(
@@ -340,11 +380,14 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (!consumer) return {};
             state->transition = std::make_unique<llama_memory_transition>(
                 std::vector<llama_memory_consumer *>{state->workspace.get(),consumer});
+            state->phase_target = target;
+            state->supplied = supplied;
+            state->active_stage = stages.front();
+            state->prefill_stage = stages[1];
+            state->decode_stage = stages[2];
+            state->kv_arena = kv_arena;
         }
-
-        std::unique_ptr<llama_memory_executable> native =
-            std::make_unique<context_executable>(state->caches);
-        if (!state->executor.capture(native,state->bindings,1)) return {};
+        if (!state->capture_execution()) return {};
         std::unique_ptr<llama_context_memory> result(
             new llama_context_memory(std::move(state)));
         handoff.complete = true;
@@ -363,7 +406,10 @@ ggml_status llama_context_memory::compute_async(ggml_cgraph * graph) {
     if (!graph || !impl->executor.ready()) return GGML_STATUS_FAILED;
     const auto admission = impl->transition->admit();
     if (!admission) return GGML_STATUS_FAILED;
-    if (!impl->pending) impl->pending = impl->executor.acquire(impl->bindings, 1);
+    if (!impl->pending) {
+        impl->pending = impl->executor.acquire(
+            impl->bindings,impl->executor_revision);
+    }
     if (!impl->pending) {
         impl->transition->finish(admission);
         return GGML_STATUS_FAILED;
@@ -386,15 +432,41 @@ void llama_context_memory::synchronize() { ggml_backend_sched_synchronize(impl->
 // Fallback-only schedulers need no physical arena while retaining the same teardown protocol.
 bool llama_context_memory::uses_arenas() const noexcept { return !impl->arenas.empty(); }
 
-const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept { return impl->bindings; }
+const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept {
+    return impl->workspace->leases();
+}
 
 bool llama_context_memory::shares_kv_memory() const noexcept { return impl->shared_stream != nullptr; }
 ggml_backend_buffer_t llama_context_memory::shared_parent() const noexcept { return impl->kv_parent; }
 size_t llama_context_memory::shared_parent_capacity() const noexcept { return impl->kv_parent_capacity; }
+uint64_t llama_context_memory::shared_arena_generation() const noexcept {
+    return impl->kv_arena < impl->arenas.size() ?
+        ggml_backend_memory_arena_generation(impl->arenas[impl->kv_arena].arena.get()) : 0;
+}
+uint64_t llama_context_memory::phase_transition_count() const noexcept {
+    return impl->transition_count;
+}
 
 llama_memory_text_phase_result llama_context_memory::signal_text_phase(
         const llama_memory_text_phase_signal & signal) noexcept {
-    return impl->text_phase.notify(signal);
+    const auto previous = impl->text_phase;
+    auto result = impl->text_phase.notify(signal);
+    if (result.status != llama_memory_text_phase_status::changed ||
+            !impl->shared_stream) return result;
+    llama_memory_stage_id stage = 0;
+    if (signal.phase == llama_memory_text_phase::decode) {
+        stage = impl->decode_stage;
+    } else if (impl->active_stage == impl->decode_stage) {
+        stage = impl->prefill_stage;
+    } else {
+        return result;
+    }
+    if (impl->activate_stage(stage)) return result;
+    impl->text_phase = previous;
+    result.status = llama_memory_text_phase_status::transition_failed;
+    result.after = result.before;
+    result.revision = previous.snapshot().revision;
+    return result;
 }
 
 llama_memory_text_phase_snapshot llama_context_memory::text_phase() const noexcept {

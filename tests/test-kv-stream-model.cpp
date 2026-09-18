@@ -78,13 +78,67 @@ int main(int argc,char ** argv) {
         }
         t.assert_equal(expected_parent,owner->shared_parent_capacity());
         auto * base = ggml_backend_buffer_get_base(owner->shared_parent());
+        const auto initial_generation = owner->shared_arena_generation();
+        const auto initial_pool = model->pool_grant_bytes();
+        const auto initial_writer = model->writer_grant_bytes();
+        const auto initial_attention = model->attention_grant_bytes();
+        t.assert_equal(requirements.pool_bytes,initial_pool);
+        t.assert_equal(requirements.writer_bytes,initial_writer);
+        t.assert_equal(requirements.attention_prefill_bytes,initial_attention);
+        t.assert_equal(uint64_t(0),owner->phase_transition_count());
+
         t.assert_true(owner->signal_text_phase({
             llama_memory_text_phase::prefill,513,true,true,false}).status ==
             llama_memory_text_phase_status::changed);
+        t.assert_equal(uint64_t(0),owner->phase_transition_count());
+        t.assert_equal(initial_generation,owner->shared_arena_generation());
+
         t.assert_true(owner->signal_text_phase({
             llama_memory_text_phase::decode,1,true,true,false}).status ==
             llama_memory_text_phase_status::changed);
+        t.assert_equal(uint64_t(1),owner->phase_transition_count());
+        t.assert_true(owner->shared_arena_generation() > initial_generation);
+        t.assert_equal(plan.phase_sizes[1][0],
+            ggml_backend_sched_get_buffer_size(sched.get(),backend.get()));
+        t.assert_true(model->pool_grant_bytes() > initial_pool);
+        t.assert_equal(initial_writer,model->writer_grant_bytes());
+        t.assert_equal(requirements.attention_decode_bytes,model->attention_grant_bytes());
+        t.assert_equal(model->pool_grant_bytes()+model->writer_grant_bytes()+
+            model->attention_grant_bytes(),model->device_grant_bytes());
+        const auto decode_generation = owner->shared_arena_generation();
+        const auto decode_pool = model->pool_grant_bytes();
+        t.out << "shared pool bytes: prefill=" << initial_pool << " decode=" << decode_pool
+              << " reclaimed=" << decode_pool-initial_pool << '\n';
+
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::decode,1,true,true,false}).status ==
+            llama_memory_text_phase_status::unchanged);
+        t.assert_equal(uint64_t(1),owner->phase_transition_count());
+        t.assert_equal(decode_generation,owner->shared_arena_generation());
+        t.assert_equal(decode_pool,model->pool_grant_bytes());
+
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::prefill,128,true,true,false}).status ==
+            llama_memory_text_phase_status::changed);
+        t.assert_equal(uint64_t(2),owner->phase_transition_count());
+        t.assert_equal(plan.phase_sizes[0][0],
+            ggml_backend_sched_get_buffer_size(sched.get(),backend.get()));
+        t.assert_equal(initial_pool,model->pool_grant_bytes());
+        t.assert_equal(initial_attention,model->attention_grant_bytes());
         t.assert_true(base == ggml_backend_buffer_get_base(owner->shared_parent()));
+
+        auto * consumer = model->memory_consumer();
+        t.assert_true(consumer != nullptr);
+        t.assert_true(model->reset(false));
+        t.assert_true(consumer == model->memory_consumer());
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::decode,1,true,true,false}).status ==
+            llama_memory_text_phase_status::changed);
+        t.assert_equal(uint64_t(3),owner->phase_transition_count());
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::prefill,128,true,true,false}).status ==
+            llama_memory_text_phase_status::changed);
+        t.assert_equal(uint64_t(4),owner->phase_transition_count());
         t.assert_equal(size_t(0),model->tokens());
         t.assert_true(model->complete());
 

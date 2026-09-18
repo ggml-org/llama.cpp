@@ -44,6 +44,8 @@ public:
     // Drain, invalidate, and detach only owned leases. Failure retains remaining ownership and keeps this consumer closed.
     bool close();
     bool ready() const noexcept;
+    // Borrowed active attachments; invalidated by release, rebind, or close.
+    const std::vector<ggml_backend_memory_lease_t> & leases() const noexcept;
 
 private:
     struct implementation;

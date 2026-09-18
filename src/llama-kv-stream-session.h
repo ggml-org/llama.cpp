@@ -9,7 +9,10 @@ struct llama_kv_stream_session_config {
     bool measure = false;
     bool native_graph_attention = false;
     bool resume_decode = false;
+    bool initial_decode = false;
     llama_memory_resource_id pool_resource = 0;
+    llama_memory_resource_id writer_resource = 0;
+    llama_memory_resource_id attention_resource = 0;
     llama_memory_stage_id prefill_stage = 0;
     llama_memory_stage_id decode_stage = 0;
 };
@@ -25,6 +28,8 @@ public:
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
     // Adopt an externally restored contiguous host-cache prefix while idle.
     bool restore(size_t tokens);
+    // Reopen this consumer after authoritative host replacement without changing its registered identity.
+    bool reconstruct(size_t tokens);
     bool produce(uint32_t layer, const ggml_tensor * k, const ggml_tensor * v);
     bool attention(uint32_t layer, ggml_tensor * q, ggml_tensor * mask, ggml_tensor * output, float scale);
     // Cancellation may follow model-state mutation; this session cannot be resumed without reconstruction.
@@ -47,6 +52,8 @@ public:
     bool set_attention_workspace(ggml_backend_memory_lease_t lease, bool decode);
     void release_graphs();
     size_t captured_layers() const;
+    size_t writer_workspace_bytes() const noexcept;
+    size_t attention_workspace_bytes() const noexcept;
 
     // Prepare a release-before-commit pool resize for the common memory-transition coordinator.
     bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,

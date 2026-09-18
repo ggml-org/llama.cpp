@@ -8,7 +8,7 @@ Last source review: 2026-09-17, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`; **6.3b** is implemented and qualified for user review.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`; **6.3c** is implemented and qualified for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -416,8 +416,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.2b | Committed | 18dfa8f4d | Shrink/rebind to the minimum feasible pool, with old-work drain, concentrated layout/ring remap, dirty replacement mirrors, and preserved logical cache state. |
 | 6.2c | Committed | 51444315c | Common transition-consumer lifecycle releases the old pool before same-parent commit, reconstructs from host KV, restores prior policy metadata after failures, and poisons terminal recovery failures. |
 | 6.3a | Committed | 4b576eec7 | Explicit logical-batch text phase, repeated-notification no-op, serial return to prefill, speculative rejection, and one immutable phase across all ubatches. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
-| 6.3b | Ready for review | - | One physical device-local parent holds fixed compute, KV pool, writer, and maximum attention grants; private-to-shared handoff preserves host KV and scheduler rebuilds. |
-| 6.3c-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
+| 6.3b | Committed | 4bf33a5e3 | One physical device-local parent holds fixed compute, KV pool, writer, and maximum attention grants; private-to-shared handoff preserves host KV and scheduler rebuilds. |
+| 6.3c | Ready for review | - | Prefill-to-decode transition shrinks compute and attention grants into a larger decode KV pool under the same parent; execution is retired and recaptured once per real phase change. |
+| 6.4a-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3368,5 +3369,35 @@ A matched Release IQ4_XS point used context 8192, prompt 8064, decode 128, Q8_0/
 The throughput differences are below ordinary measurement noise. The 6 MiB process-level VRAM difference is below 0.05% and includes backend/driver rounding outside exact region accounting. Evidence is in /tmp/kv-63b-base-v2 and /tmp/kv-63b-current-v2.
 
 This stage intentionally keeps maximum compute and attention grants live and does not reclaim bytes on a phase signal. Writer and attention regions are fixed attachments in 6.3b; stage **6.3c** adds their transition-consumer lifecycle, phase-specific layouts, actual compute-to-KV reclamation, and affected-executable rebuilds.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+### Stage 6.3c implementation and validation
+
+Stage 6.3c activates the phase-specific layouts established by 6.3b. The first decode signal prepares one coordinated transition, closes admission, drains pending scheduler and KV work, invalidates captured execution and resident-attention graphs, releases only the changed compute, pool, writer, and attention bindings, commits the same physical arena, and then rebinds a larger decode KV pool plus the smaller TG1 compute and resumed-attention workspaces. The parent allocation and base address never change.
+
+Workspace ownership is now singular: `llama_memory_workspace` retains its active attachments and exposes borrowed lease handles to the context executor. This avoids duplicate leases blocking same-parent commits. The KV session similarly owns the shared pool, writer, and attention grants as one candidate and publishes them atomically only after all resource IDs, sizes, alignments, allocation classes, containment, and non-overlap checks pass.
+
+The context executor receives a new monotonic revision after each physical transition. `compute_async()` pins that current revision rather than a fixed initial identity. Because scheduler reset discards graph-allocation reservations, a successful phase change reserves exactly one phase-appropriate graph before the next execution: TG1 for decode or the configured ubatch for prefill. Repeated decode notifications perform no layout transaction, reserve, or recapture.
+
+Authoritative host KV remains the recovery source. Shared cache reset, restore, and truncation reconstruct the existing session object in place, preserving the coordinator consumer identity while clearing device publications and lazily rebuilding the resident mirror. A basic decode-to-prefill return is included so this commit remains usable for serial requests; stage 6.4a retains comprehensive qualification of varied prompt lengths, repeated alternation, and reload cost.
+
+TDD and validation evidence:
+
+- The focused CUDA model suite passes 5 cases / 109 assertions. Its synthetic shared arena grows the KV pool from 851,968 to 2,465,664 bytes, reclaiming exactly 1,613,696 bytes in decode, while the parent base remains unchanged. Returning to prefill restores the original pool, compute, and attention grants.
+- The same test proves the initial prefill notification performs no physical transaction, repeated decode is a no-op, the arena generation advances only on actual transitions, and the registered KV consumer identity survives cache reconstruction.
+- A broader CUDA matrix passes all 18 memory, transition, context-owner, and KV-stream suites. The complete CUDA `llama-server` target builds successfully.
+- Focused ASan with leak detection and UBSan each pass the transition, session, and model suites. Compute Sanitizer passes the final CUDA model suite with 109/109 assertions, zero errors, and zero leaked bytes.
+- The full IQ4_XS Qwen3.8-27B UVM-enabled test passes 4 cases / 483 assertions at ubatch 256 and 512: maximum logit error 0, recurrent relative L2 error 0, and 32/32 matching continuation tokens. Cache restore, malformed-state retry, cancellation recovery, adapter reconstruction, and return to prefill all remain valid.
+
+A matched Release IQ4_XS point used context 8192, prompt 8064, decode 128, Q8_0/Q4_0 KV, a 64 MiB configured pool, batch 512, ubatch 256, and UVM disabled:
+
+| Revision | Prefill tok/s | Decode tok/s | Steady VRAM |
+| --- | ---: | ---: | ---: |
+| 6.3b 4bf33a5e3 | 1679.92 | 42.034 | 13318 MiB |
+| 6.3c | 1679.19 | 44.127 | 13316 MiB |
+| Change | -0.044% | +4.98% | -2 MiB |
+
+The prefill difference is within ordinary run-to-run noise. Decode improves because the phase transition converts otherwise idle prefill workspace into resident/ring KV capacity instead of adding another allocation. Process-level VRAM remains effectively unchanged because both phases reuse one fixed parent. Evidence is in `/tmp/kv-63b-current-v2` and `/tmp/kv-63c-current`.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.

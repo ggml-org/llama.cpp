@@ -55,6 +55,9 @@ public:
     bool uses_shared_memory() const noexcept;
     ggml_backend_buffer_t shared_parent() const noexcept;
     size_t device_grant_bytes() const noexcept;
+    size_t pool_grant_bytes() const noexcept;
+    size_t writer_grant_bytes() const noexcept;
+    size_t attention_grant_bytes() const noexcept;
 private:
     llama_kv_stream_model() = default;
     struct implementation;

@@ -32,7 +32,7 @@ public:
     // Observe completion without rebuilding the immutable lease-validation state on the next token.
     void synchronize();
 
-    // Record logical text intent without changing grants or invoking the transition coordinator.
+    // Record text intent and activate the matching shared-parent layout only when the phase changes.
     llama_memory_text_phase_result signal_text_phase(const llama_memory_text_phase_signal & signal) noexcept;
     llama_memory_text_phase_snapshot text_phase() const noexcept;
     bool uses_arenas() const noexcept;
@@ -41,6 +41,8 @@ public:
     bool shares_kv_memory() const noexcept;
     ggml_backend_buffer_t shared_parent() const noexcept;
     size_t shared_parent_capacity() const noexcept;
+    uint64_t shared_arena_generation() const noexcept;
+    uint64_t phase_transition_count() const noexcept;
 
 private:
     struct implementation;

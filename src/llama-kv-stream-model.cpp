@@ -38,14 +38,25 @@ struct llama_kv_stream_model::implementation {
     std::unique_ptr<llama_kv_stream_session> create_session(
             const std::array<model_lease_ptr,3> & grants,
             llama_memory_resource_id pool_id,
+            llama_memory_resource_id writer_id,
+            llama_memory_resource_id attention_id,
             llama_memory_stage_id prefill_id,
             llama_memory_stage_id decode_id) {
         llama_kv_stream_policy_config policy;
         policy.shape = config.host.shape; policy.capabilities = config.host.capabilities;
-        policy.layers = config.host.layers; policy.pool_bytes = config.pool_bytes;
+        policy.layers = config.host.layers;
+        auto * pool_buffer = ggml_backend_memory_lease_buffer(grants[0].get());
+        auto * attention_buffer = ggml_backend_memory_lease_buffer(grants[2].get());
+        if (!pool_buffer || !attention_buffer) return {};
+        policy.pool_bytes = ggml_backend_buffer_get_size(pool_buffer);
         llama_kv_stream_session_config session_config{
             policy,config.max_batch_rows,config.query_heads,config.measure,true,config.resume_decode};
+        session_config.initial_decode = config.resume_decode &&
+            (policy.pool_bytes > config.pool_bytes ||
+             ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
         session_config.pool_resource = pool_id;
+        session_config.writer_resource = writer_id;
+        session_config.attention_resource = attention_id;
         session_config.prefill_stage = prefill_id;
         session_config.decode_stage = decode_id;
         auto next = llama_kv_stream_session::create(
@@ -55,7 +66,7 @@ struct llama_kv_stream_model::implementation {
     }
 
     bool make_session() {
-        auto next = create_session(leases,pool_resource,prefill_stage,decode_stage);
+        auto next = create_session(leases,pool_resource,writer_resource,attention_resource,prefill_stage,decode_stage);
         if (!next) return false;
         session = std::move(next);
         suspended = false;
@@ -64,9 +75,8 @@ struct llama_kv_stream_model::implementation {
     // Scratch has no live conversation data. Release its backing before allocating the replacement.
     bool resize_attention(size_t bytes, bool decode) {
         if (shared) {
-            auto * buffer = ggml_backend_memory_lease_buffer(leases[2].get());
-            if (!buffer || ggml_backend_buffer_get_size(buffer) < bytes) return false;
-            return !session || session->set_attention_workspace(leases[2].get(),decode);
+            GGML_UNUSED(decode);
+            return session && session->attention_workspace_bytes() >= bytes;
         }
         if (attention_arena && ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(attention_arena.get())) == bytes) return true;
         const size_t previous = attention_arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(attention_arena.get())) : 0;
@@ -218,25 +228,35 @@ struct llama_kv_stream_model::implementation {
         external_mutation = content->invalidate();
     }
     bool reset(bool clear) {
-        abort(); session.reset();
-        suspended_tokens = 0;
+        abort();
         if (clear) ggml_backend_buffer_clear(host->buffer(),0);
         if (!content->invalidate()) return false;
         external_mutation = false;
+        suspended_tokens = 0;
+        if (shared) return session && session->reconstruct(0);
+        session.reset();
         return resize_attention(host->layout().bytes,false) && make_session();
     }
+
     bool restore(size_t tokens) {
         if (!external_mutation || tokens > host->config().context_tokens) return false;
-        session.reset();
         suspended_tokens = tokens;
-        if (!resize_attention(host->layout().bytes,false) || !make_session()) return false;
+        bool restored = false;
+        if (shared) {
+            restored = session && session->reconstruct(tokens);
+        } else {
+            session.reset();
+            restored = resize_attention(host->layout().bytes,false) && make_session();
+        }
+        if (!restored) return false;
         external_mutation = false;
         return true;
     }
+
     bool truncate(size_t tokens) {
         if (external_mutation || !session || session->active() || tokens > session->tokens()) return false;
         if (tokens == session->tokens()) return true;
-        abort(); session.reset();
+        abort();
         if (!content->invalidate()) return false;
         external_mutation = true;
         return restore(tokens);
@@ -412,10 +432,10 @@ bool llama_kv_stream_model::attach_shared_memory(
         if (!retained[i]) return false;
     }
     auto candidate = s.create_session(
-        retained,binding.pool_resource,binding.prefill_stage,binding.decode_stage);
+        retained,binding.pool_resource,binding.writer_resource,binding.attention_resource,
+        binding.prefill_stage,binding.decode_stage);
     if (!candidate) return false;
 
-    s.leases = std::move(retained);
     s.session = std::move(candidate);
     s.pool_resource = binding.pool_resource;
     s.writer_resource = binding.writer_resource;
@@ -455,6 +475,7 @@ ggml_backend_buffer_t llama_kv_stream_model::shared_parent() const noexcept {
 }
 
 size_t llama_kv_stream_model::device_grant_bytes() const noexcept {
+    if (impl->shared) return impl->session ? impl->session->granted_bytes() : 0;
     size_t total = 0;
     for (const auto & lease : impl->leases) {
         auto * buffer = ggml_backend_memory_lease_buffer(lease.get());
@@ -464,4 +485,16 @@ size_t llama_kv_stream_model::device_grant_bytes() const noexcept {
         total += bytes;
     }
     return total;
+}
+
+size_t llama_kv_stream_model::pool_grant_bytes() const noexcept {
+    return impl->session ? impl->session->binding_view().capacity : 0;
+}
+
+size_t llama_kv_stream_model::writer_grant_bytes() const noexcept {
+    return impl->session ? impl->session->writer_workspace_bytes() : 0;
+}
+
+size_t llama_kv_stream_model::attention_grant_bytes() const noexcept {
+    return impl->session ? impl->session->attention_workspace_bytes() : 0;
 }

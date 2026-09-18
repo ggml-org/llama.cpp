@@ -21,6 +21,7 @@ enum class llama_memory_text_phase_status {
     unchanged,
     invalid_signal,
     unsupported_execution,
+    transition_failed,
     exhausted,
 };
 

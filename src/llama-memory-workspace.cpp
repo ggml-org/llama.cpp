@@ -25,6 +25,7 @@ struct llama_memory_workspace::implementation {
     std::vector<llama_memory_workspace_group> groups;
     llama_memory_workspace_hooks hooks;
     std::vector<attachment> active;
+    std::vector<ggml_backend_memory_lease_t> borrowed;
     bool accepting = false;
     bool pending = false;
     bool closing = false;
@@ -89,6 +90,7 @@ struct llama_memory_workspace::implementation {
         while (!active.empty()) {
             if (!ggml_backend_sched_detach_memory_lease(sched, backend(active.back().where.group))) return false;
             active.pop_back();
+            borrowed.pop_back();
         }
         return true;
     }
@@ -158,7 +160,9 @@ struct llama_memory_workspace::implementation {
         // Validate all staged bindings before attachment; roll back partial new attachments on failure.
         bool bind(const std::vector<llama_memory_region_binding> & bindings) override {
             std::vector<attachment> next;
+            std::vector<ggml_backend_memory_lease_t> next_borrowed;
             next.reserve(desired.size());
+            next_borrowed.reserve(desired.size());
             for (const auto & place : desired) {
                 const llama_memory_region_binding * found = nullptr;
                 for (const auto & binding : bindings) {
@@ -174,6 +178,7 @@ struct llama_memory_workspace::implementation {
                 auto * buffer = ggml_backend_memory_lease_buffer(found->lease);
                 if (ggml_backend_buffer_get_type(buffer) != owner.groups[place.group].workspace.buft) return false;
                 next.push_back({place, workspace_lease_ptr(ggml_backend_memory_lease_retain(found->lease), ggml_backend_memory_lease_free)});
+                next_borrowed.push_back(next.back().lease.get());
             }
             if (!affected) {
                 if (next.size() != owner.active.size()) return false;
@@ -193,6 +198,7 @@ struct llama_memory_workspace::implementation {
                 }
                 owner.active.push_back(std::move(binding));
             }
+            owner.borrowed = std::move(next_borrowed);
             return true;
         }
 
@@ -213,7 +219,7 @@ struct llama_memory_workspace::implementation {
 // Retain immutable group metadata and borrow the scheduler/lifecycle hooks.
 llama_memory_workspace::llama_memory_workspace(ggml_backend_sched_t sched,
         std::vector<llama_memory_workspace_group> groups, llama_memory_workspace_hooks hooks) :
-    impl(new implementation{sched, std::move(groups), std::move(hooks), {}}) {}
+    impl(new implementation{sched, std::move(groups), std::move(hooks), {}, {}}) {}
 
 // Keep the scheduler and callback dependencies alive until all owned leases are detached.
 llama_memory_workspace::~llama_memory_workspace() {
@@ -327,4 +333,8 @@ bool llama_memory_workspace::close() {
 // This is logical attachment readiness, not proof that a new tensor graph has been rebuilt or submitted.
 bool llama_memory_workspace::ready() const noexcept {
     return impl->accepting;
+}
+
+const std::vector<ggml_backend_memory_lease_t> & llama_memory_workspace::leases() const noexcept {
+    return impl->borrowed;
 }
