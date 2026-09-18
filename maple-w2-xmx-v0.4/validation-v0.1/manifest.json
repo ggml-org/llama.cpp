@@ -1,0 +1,37 @@
+{
+  "version": "0.1-experimental-source",
+  "purpose": "TQ2_0 -> FP16 DPAS / FP32 accumulation for Arc A750/A770 small-Q MoE",
+  "validation": {
+    "cpu_reference": "PASS",
+    "cpu_address_undefined_sanitizers": "PASS",
+    "gguf_extractor_tests": "6 PASS",
+    "sycl_compilation": "NOT RUN: compiler absent",
+    "gpu_correctness": "NOT RUN: GPU absent",
+    "gpu_performance": "NOT MEASURED",
+    "windows_scripts": "NOT EXECUTED",
+    "llama_dispatcher_and_external_memory_integration": "ADAPTER ONLY; NOT INSTALLED OR VALIDATED"
+  },
+  "basis_commit": "fed6590fd2e64da55baa4a31788dfb12454b1844",
+  "local_build_not_verified": "a810870e6",
+  "files": {
+    ".gitignore": "8e24bf8b37a1c15fe5a10022902eb536616e6cad3f437f590d7103c9f7c867c1",
+    "CMakeLists.txt": "123d196fd70953c40c2aa99b5c8556b7844f1fb5090cc9f5ae3afa81bcaf6697",
+    "LICENSE": "4a1fc484466428ebbd6c8621e0bfff7cfbca74719313f2ab096435b3bb3d2aa2",
+    "README.ko.md": "d3587b88b64b47eb67107124439122e1b5a4df09c846f2f6b5cfe7e808ea4c61",
+    "include/maple_w2a16.hpp": "359b280ddf04053070f572273190de5ae397c93cf8e5ec4c09870a5e9a3a1e2a",
+    "include/tq2_reference.hpp": "10da29588c589a0da52179a5d9f273b40aca4da920615956e607947c0aa9c77b",
+    "integration/ggml_decode_adapter.hpp": "095f850fd465df0a3de590844654f104c66905bfe04304c27fabb5f9b02936ce",
+    "scripts/build_windows.ps1": "8f7e73711e531c09b4595080d9f4c1321b5865cd59f08e43ea62d96670394201",
+    "scripts/run_smoke.ps1": "bda84c968b3c472f5d7e672e11ff94a27aaf23a60b05adc7deca09b36d6f3435",
+    "scripts/run_sweep.ps1": "1a3c222d99495129b961e425c981b397a74afd5e682fa756623eacf363acbfd7",
+    "src/maple_w2a16.cpp": "d4e0f0150394d39c568fbbfed48c203abd485c2388265dbe31f1ca9bf937f564",
+    "tests/reference_tests.cpp": "61b314fcd1e943d0229f321519fc4aa40a2f90cb02afc86762eec46c8c40fc08",
+    "tests/test_extract.py": "639b82b8a5866d23b18310e7ac6bde6686f49f4ba9c417e4b1244b6c0b14aebb",
+    "tools/bench.cpp": "68226cb5ad1f338a136e4710cee7225ce52a8f950429800efcc1a5e26cf27374",
+    "tools/extract_tq2.py": "f7813788c1916d14109fde8d4c1d15191a85039707d75921082651e2fa1731bf",
+    "validation/cmake-cpu.log": "8c35b1682f73592d30612d7b0fabdb384fcfff35cb5a076cb48b85b1368aa794",
+    "validation/cpu-sanitizers.log": "86f7a993d85df556f6bde3d94e7ffc3adf7735c99a1c8ef9d5e55ad3bb86a6dc",
+    "validation/cpu-tests.log": "771d0b03727414db0f8eecf108337d7151b40becbccf7ecabf9d69d7ad4a4ad1",
+    "validation/extractor-tests.log": "1e43b905e11ca028139fe5078016515111aaf7cebf8d6a3e224b7d03b9cb6ac9"
+  }
+}

@@ -1,0 +1,3099 @@
+diff --git a/.gitignore b/.gitignore
+index 41e307c..969d6f8 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -5,3 +5,5 @@ __pycache__/
+ *.obj
+ *.o
+ *.exe
++
++_w2_port_backups/
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index f68d6db..d35eabd 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,3 +1,16 @@
++# v0.4 Vulkan architecture port v1 (lab extension)
++
++- Preserve v0.4 static expert grouping and existing T1/DPAS/quant/SwiGLU math.
++- Add explicit legacy/direct/grouped/calibrated-auto dispatch selection.
++- Add opt-in expert token descriptors and T2/T4 register B-load reuse, with independent gate/down sizes. DPAS remains RepeatCount=1.
++- Expose the original A8 quantizer as an asynchronous producer; add optional grouping/quant fork-join and fresh prequantized input.
++- Add producer masks and overlap-aware interval-union profiling.
++- Add RNE contract auditing, stage-isolated same-q/scales comparison, raw dumps, freeze-input diagnostics and same-binary AB/BA workload suite.
++- Add hash-checked, backup-preserving module overlay and unified diff.
++- Local validation is CPU/reference/scalar-emulation/host-mock only. Intel SYCL compilation and GPU results are not claimed.
++
++---
++
+ # v0.4 — one optimization: stable per-expert job grouping
+ 
+ - GPU count/prefix/stable-scatter builds a fresh job permutation every invocation.
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index fd45fda..e20b8e7 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -16,6 +16,16 @@ add_test(NAME maple-moe-reference-tests COMMAND maple-moe-reference-tests)
+ add_executable(maple-grouping-reference-tests tests/grouping_reference_tests.cpp)
+ target_include_directories(maple-grouping-reference-tests PRIVATE include)
+ add_test(NAME maple-grouping-reference-tests COMMAND maple-grouping-reference-tests)
++add_executable(maple-architecture-reference-tests tests/architecture_reference_tests.cpp)
++target_include_directories(maple-architecture-reference-tests PRIVATE include)
++add_test(NAME maple-architecture-reference-tests COMMAND maple-architecture-reference-tests)
++# This target uses a NON-EXECUTING SYCL double; tests host DAG wiring only.
++add_executable(maple-submission-mock-tests tests/moe_submission_tests.cpp src/maple_moe.cpp src/expert_grouping.cpp)
++target_include_directories(maple-submission-mock-tests PRIVATE tests/mock_sycl include)
++add_test(NAME maple-submission-mock-tests COMMAND maple-submission-mock-tests)
++add_executable(maple-token-reuse-emulation-tests tests/token_reuse_emulation_tests.cpp src/maple_w2a8_grouped.cpp)
++target_include_directories(maple-token-reuse-emulation-tests PRIVATE tests/mock_sycl include)
++add_test(NAME maple-token-reuse-emulation-tests COMMAND maple-token-reuse-emulation-tests)
+ find_package(Python3 COMPONENTS Interpreter QUIET)
+ if(Python3_FOUND)
+   add_test(NAME python-tests COMMAND ${Python3_EXECUTABLE} -m unittest discover -s tests -p test_*.py)
+@@ -25,7 +35,7 @@ if(MAPLE_BUILD_SYCL)
+   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM|Clang")
+     message(FATAL_ERROR "Use oneAPI DPC++ icx/icpx. Ordinary MSVC/g++ cannot compile these SYCL sources.")
+   endif()
+-  add_library(maple-w2-xmx STATIC src/maple_w2a16.cpp src/maple_w2a8.cpp src/maple_moe.cpp src/expert_grouping.cpp)
++  add_library(maple-w2-xmx STATIC src/maple_w2a16.cpp src/maple_w2a8.cpp src/maple_moe.cpp src/expert_grouping.cpp src/maple_w2a8_grouped.cpp)
+   target_include_directories(maple-w2-xmx PUBLIC include)
+   target_compile_options(maple-w2-xmx PUBLIC -fsycl PRIVATE -O3 -fno-fast-math -fsycl-device-code-split=per_kernel)
+   target_link_options(maple-w2-xmx PUBLIC -fsycl -fsycl-device-code-split=per_kernel)
+@@ -38,6 +48,15 @@ if(MAPLE_BUILD_SYCL)
+   add_executable(maple-grouping-compare tools/grouping_compare.cpp)
+   target_link_libraries(maple-grouping-compare PRIVATE maple-w2-xmx)
+   target_compile_options(maple-grouping-compare PRIVATE -O3 -fno-fast-math)
++  add_executable(maple-architecture-compare tools/architecture_compare.cpp)
++  target_link_libraries(maple-architecture-compare PRIVATE maple-w2-xmx)
++  target_compile_options(maple-architecture-compare PRIVATE -O3 -fno-fast-math)
++  if(Python3_FOUND)
++    add_custom_command(TARGET maple-architecture-compare POST_BUILD
++      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/stamp_architecture_build.py
++        --exe $<TARGET_FILE:maple-architecture-compare>
++      COMMENT "Record architecture executable/source identities (not GPU validation)")
++  endif()
+   # Preserve v0.1 CLI for old test scripts; both executables share one compiled library.
+   add_executable(maple-w2-bench tools/bench.cpp)
+   target_link_libraries(maple-w2-bench PRIVATE maple-w2-xmx)
+diff --git a/PORT_PATCH_FILES.json b/PORT_PATCH_FILES.json
+new file mode 100644
+index 0000000..7b33314
+--- /dev/null
++++ b/PORT_PATCH_FILES.json
+@@ -0,0 +1,196 @@
++{
++  "version": "0.4-vulkan-port-v1",
++  "scope": "module source/tests/docs only; validation-port evidence remains in distribution ZIP",
++  "files": [
++    {
++      "path": ".gitignore",
++      "old_sha256": "4f91b2306aa1d951c4a0a3390dc5ce6c6d0270840b9052838df2f807e33f53f9",
++      "new_sha256": "38e1e07ab306a7af0bcbdfac0d30583ba9bfcd8dc623495178a14d87f6f000c6"
++    },
++    {
++      "path": "CHANGELOG.md",
++      "old_sha256": "7c2e8e89f0913454e8060240191c3f3dc8ee540baa106f37e0abf164d1432547",
++      "new_sha256": "f9fea17c101b152f2a4485b067e1e95f67617c7c77768cd18c81ce1b74fb2b57"
++    },
++    {
++      "path": "CMakeLists.txt",
++      "old_sha256": "4cf18b2307daddb5876bb7fd5ce3d790bc6cf4c05886a21bcc1ae722b27063c3",
++      "new_sha256": "0c7155bfe20324a9ddc2119818e7bd3e15df0bcba958e96681931734f7ede31b"
++    },
++    {
++      "path": "PORT_PROVENANCE.json",
++      "old_sha256": null,
++      "new_sha256": "decc4b974d31e869afe1173a403a95a702c52f5b05b3a11bf7362503e37d025c"
++    },
++    {
++      "path": "README.ko.md",
++      "old_sha256": "19100e7e8d0789ad363123bede7604beea5b733b959bad3f67d22e978ff61b51",
++      "new_sha256": "ae89d5c32d64d3d43b8224d1e799cbd297566d4d032efd5c1a9cb28d02636b54"
++    },
++    {
++      "path": "README.v0.4.ko.md",
++      "old_sha256": null,
++      "new_sha256": "19100e7e8d0789ad363123bede7604beea5b733b959bad3f67d22e978ff61b51"
++    },
++    {
++      "path": "build_architecture_and_test.cmd",
++      "old_sha256": null,
++      "new_sha256": "b3a0040ece10d6bc78b0ed5653051081007963deac01cb18c27305c29bfac350"
++    },
++    {
++      "path": "docs/INTEGRATION_PORT.ko.md",
++      "old_sha256": null,
++      "new_sha256": "47791c05704d43bd543362be3b36d624cfb2ff89fa8899b5c358ce37b9c52688"
++    },
++    {
++      "path": "docs/TRANSFER_MAP.ko.md",
++      "old_sha256": null,
++      "new_sha256": "29d136b5b1e5c7970235aa42558ab1456960789ed2c1c2c537641e2d35a3e5cc"
++    },
++    {
++      "path": "include/a8_contract_audit.hpp",
++      "old_sha256": null,
++      "new_sha256": "14acc051e8c25d77fb6cd7217edef1f8e4b9df68c27f5684695269faabb4fbba"
++    },
++    {
++      "path": "include/expert_grouping.hpp",
++      "old_sha256": "044856523e2bb115c5092e1bffb6f94d400b22705818717006b6c117535c9619",
++      "new_sha256": "67c690d8e7525ca180be13aa8dfe10a11b1364518c8bb4adcbe84c9c610db1ee"
++    },
++    {
++      "path": "include/expert_token_tiles.hpp",
++      "old_sha256": null,
++      "new_sha256": "fe0ceb001f91399e51c9d80ceaaf0046874cd46d8a42255f95965c96c243e283"
++    },
++    {
++      "path": "include/maple_moe.hpp",
++      "old_sha256": "5bff7795cb95c144e16548755ab09a033a0c7052b9b9e6b18917c489e64640ee",
++      "new_sha256": "2d47e84b0cc62a6dddab4b04e639fb6de31fa926fbe9838af3c55afd1325a751"
++    },
++    {
++      "path": "include/maple_w2a8.hpp",
++      "old_sha256": "6d0b2ec0ae91da188084b63ba033d12ffa988f20160205a363abdd8990781be2",
++      "new_sha256": "57c774792c9a48dab9e451c5f22593bdc45f2dffd0538d57f2b72ad68ec8b3a1"
++    },
++    {
++      "path": "include/moe_dispatch_policy.hpp",
++      "old_sha256": null,
++      "new_sha256": "fc6949ac3eae172853c6a6c59dbfb304d6e6b92fd7abffddfdc0eec07190c731"
++    },
++    {
++      "path": "include/moe_profiling.hpp",
++      "old_sha256": null,
++      "new_sha256": "3f376be1acc0987d5712c80b82fe6b9927c6dd3006d7e915528322dfc8090d6a"
++    },
++    {
++      "path": "scripts/build_architecture_and_test.ps1",
++      "old_sha256": null,
++      "new_sha256": "8ccabef0afbf05be553946a0e52316dfee4db237085282f543beba19ff13e42f"
++    },
++    {
++      "path": "scripts/build_windows.ps1",
++      "old_sha256": "8504a3690a37bc1f2235f530caa8f3fb452021072c9d528c58c8962536fc9566",
++      "new_sha256": "aa8789fa4f8d61838e80be991e418231048a737b049aff27a76aa874cf63e1f8"
++    },
++    {
++      "path": "src/expert_grouping.cpp",
++      "old_sha256": "82546063176a6ccddb398652654989d8d33a04b6e06b2b8cd6ca305c107dbb69",
++      "new_sha256": "d3dfd64f3ca11d2c824eb31bee91de7d654b9928cea5c3e3ee6ed5e49135f265"
++    },
++    {
++      "path": "src/maple_moe.cpp",
++      "old_sha256": "3a6fa3c9d3f16185bcb8ae83d2f01d6a0050b252e1b5b147a0b4ce2d3cdfc21d",
++      "new_sha256": "8578b5a38d9cfb66a0706abfeca9be651f5843cc0d9c7f45e5e9185b0b5b7858"
++    },
++    {
++      "path": "src/maple_w2a8.cpp",
++      "old_sha256": "f54a28a72052416119aea74673a80a8290e9850eeee1fb43098f2c4e666dd2f8",
++      "new_sha256": "089299fac64d8cbea7c04814f3c82822e4daa1910bdc99a903908149c34430f5"
++    },
++    {
++      "path": "src/maple_w2a8_grouped.cpp",
++      "old_sha256": null,
++      "new_sha256": "b2716d53c31819e4dc933583d15414a47d910b2925359e27c3b279b62cf8e468"
++    },
++    {
++      "path": "tests/architecture_reference_tests.cpp",
++      "old_sha256": null,
++      "new_sha256": "b939fa03c055c7d6b5e23603e5c7f38a86d6d52d67726124de09634938286507"
++    },
++    {
++      "path": "tests/mock_sycl/README.md",
++      "old_sha256": null,
++      "new_sha256": "5c8656187e2b8fea2399a3fedb9f891123a9a4aa7872443810943af81026c757"
++    },
++    {
++      "path": "tests/mock_sycl/sycl/ext/intel/esimd/xmx/dpas.hpp",
++      "old_sha256": null,
++      "new_sha256": "62502991a0022c59097a33a65cf417a12528ddb9f6fca6f42741ecad68e2692d"
++    },
++    {
++      "path": "tests/mock_sycl/sycl/ext/intel/esimd.hpp",
++      "old_sha256": null,
++      "new_sha256": "ff2cb2af5d85bf03a40a36bdfaa600cc41dfa84379f55a9600942d39d08eb922"
++    },
++    {
++      "path": "tests/mock_sycl/sycl/sycl.hpp",
++      "old_sha256": null,
++      "new_sha256": "6ced7f533bb93d48327219f11bf39f162a09c6a94552cc78dfb83e62b9576fb1"
++    },
++    {
++      "path": "tests/moe_submission_tests.cpp",
++      "old_sha256": null,
++      "new_sha256": "0af0adc9d203c9f58e64844517deb272d0de5a6a559fb4ad2aade7411433fc3b"
++    },
++    {
++      "path": "tests/test_architecture.py",
++      "old_sha256": null,
++      "new_sha256": "df86b82bf9ce9737907fd617decd105829813d04e50dd8be87aa56cbd81afc48"
++    },
++    {
++      "path": "tests/test_port_apply.py",
++      "old_sha256": null,
++      "new_sha256": "ffcc81641727451902bb85c44b00235b64623955c9835005fabded828644c70b"
++    },
++    {
++      "path": "tests/token_reuse_emulation_tests.cpp",
++      "old_sha256": null,
++      "new_sha256": "f67453b5a8162a6a732d2306ac2596c04c4ad0839efd95a4fd4990c76027feb5"
++    },
++    {
++      "path": "tools/analyze_architecture_results.py",
++      "old_sha256": null,
++      "new_sha256": "d439b9983737417fdeeaa94dc5f7d63605de2a6efbf170d7e5b9bf99fd2c48d7"
++    },
++    {
++      "path": "tools/apply_architecture_port.py",
++      "old_sha256": null,
++      "new_sha256": "f211e5db8521c2b33129d231ab0d5af0e46702a1b4e865bc28c7a37ab83f2a93"
++    },
++    {
++      "path": "tools/architecture_common.py",
++      "old_sha256": null,
++      "new_sha256": "6d8691daa221da65aa0e5074e8a77969284f03aab974d6cde719bd392d216d84"
++    },
++    {
++      "path": "tools/architecture_compare.cpp",
++      "old_sha256": null,
++      "new_sha256": "cedab836b4d1548c0e9cb4d621eb79f804993ff18401e3a0d6eb74bb6577d6f6"
++    },
++    {
++      "path": "tools/audit_quant_dump.py",
++      "old_sha256": null,
++      "new_sha256": "69ab2a603b0b3b199569d2351d9dcdd57cb22278d805f46bb562a7a4280fd242"
++    },
++    {
++      "path": "tools/run_architecture_suite.py",
++      "old_sha256": null,
++      "new_sha256": "57e614f19aa1838c9002091962586441fd57adbed3f7e4cf84b68e766a2c9219"
++    },
++    {
++      "path": "tools/stamp_architecture_build.py",
++      "old_sha256": null,
++      "new_sha256": "1d85fbde5803240cc551e7ac636c0662e1c1c0dccb7a101b0947f14b45232a1f"
++    }
++  ]
++}
+diff --git a/PORT_PROVENANCE.json b/PORT_PROVENANCE.json
+new file mode 100644
+index 0000000..33ef774
+--- /dev/null
++++ b/PORT_PROVENANCE.json
+@@ -0,0 +1,33 @@
++{
++  "version": "0.4-vulkan-port-v1",
++  "base_archive": "maple-w2-xmx-v0.4-source.zip",
++  "base_archive_sha256": "606d2937ff6cf267050112650913561a74532a7e990f55736eea06a2341eb008",
++  "base_definition": "exact user-uploaded v0.4 module; no clean/reset of user llama.cpp tree required",
++  "preserved": [
++    "v0.4 native/s2tile8 T1 DPAS math",
++    "RNE quantizer math",
++    "SwiGLU + hidden quant math",
++    "original static grouping count/prefix/scatter"
++  ],
++  "added": [
++    "dispatch policy",
++    "T2/T4 repeated-1 DPAS weight reuse",
++    "quant/group fork-join",
++    "DAG interval profiling",
++    "RNE audit and raw dumps",
++    "safe overlay"
++  ],
++  "local_validation": {
++    "gcc_cpu": "PASS",
++    "clang_cpu": "PASS",
++    "ASan_UBSan": "PASS",
++    "python_tests": 48,
++    "host_DAG_test_double": "PASS",
++    "actual_new_kernel_body_scalar_DPAS_emulation": "PASS",
++    "oneAPI_SYCL_compilation": "NOT_RUN_SDK_UNAVAILABLE",
++    "A750_execution": "NOT_RUN_NO_GPU",
++    "performance_speedup": "NOT_MEASURED",
++    "full_model_quality": "NOT_MEASURED"
++  },
++  "binary_compatibility": "rebuild all consumers; appended source-level fields do not promise ABI compatibility"
++}
+diff --git a/README.ko.md b/README.ko.md
+index 57e9f0a..bf73af3 100644
+--- a/README.ko.md
++++ b/README.ko.md
+@@ -1,230 +1,144 @@
+-# Maple W2 XMX optimize v0.4 — per-expert token grouping 한 가지 변경
++# Maple W2 XMX v0.4 — Vulkan architecture port v1
+ 
+-## 상태
++업로드한 `maple-w2-xmx-v0.4-source.zip`에 대한 **증분 소스 이식본**이다. 별도 로컬 수정본 복원이나 llama.cpp 기준선 재구성을 요구하지 않는다. 기존 v0.4의 static grouping·s2×s8 DPAS·G32/H32·SwiGLU·split-K를 보존하고, Vulkan 실험에서 필요성이 확인된 workload/검증 구조를 추가한다.
+ 
+-이 패키지는 **소스와 Windows 빌드/자동 비교 도구**다. 작성 환경에서 CPU reference,
+-회귀 검사와 sanitizer를 실행했다. **신규 SYCL 컴파일, A750 GPU 실행, 성능 결과는 아직 없다.**
+-GPU PASS나 속도 향상을 미리 주장하지 않는다. 기존 llama DLL, 서버 설정, GGUF를 수정하지 않는다.
++**실제 SYCL/ESIMD 컴파일, Windows 빌드, A750 실행·속도·전체 모델 품질은 아직 검증하지 않았다.** 이 환경에는 oneAPI SDK/GPU가 없다. CPU reference, 실제 신규 커널 본문의 scalar-DPAS 에뮬레이션, 실제 host enqueue DAG의 test-double 검사는 실행했다. `validation-port/`의 결과를 GPU 검증으로 해석하지 않는다.
+ 
+-제공된 `maple-w2-xmx-v0.3-source.zip`을 기반으로 했다. 사용자의 Q-sweep v2 ZIP에는
+-측정 자료만 있고 Q 확장 소스 diff/바이너리가 없었다. 따라서 v0.3의 Q<=8 guard를 양쪽에
+-동일하게 Q<=2048로 넓혔다. **과거 수치와의 차이보다 같은 v0.4 바이너리의 두 경로를 비교한다.**
+-기존 명령의 상세 변경은 `v0.3-to-v0.4.patch`, 파일 출처는 `SOURCE_PROVENANCE.json`에 있다.
++## 무엇을 옮겼나
+ 
+-## 이번 빌드에서 바꾼 것 / 바꾸지 않은 것
++| 항목 | 구현 | 기본 동작 |
++|---|---|---|
++| Static grouping / 원래 slot 복원 | v0.4 구현 유지 | 기존 `expert_grouping` 설정 유지 |
++| Workload dispatcher | `inherit_v04 / direct / grouped / auto_select` | `inherit_v04`; auto 미보정은 direct |
++| Weight 재사용 | 같은 expert의 2·4 assignment가 B tile을 공유하는 새 ESIMD 커널 | gate/down 각각 T1, 신규 경로 OFF |
++| Projection별 선택 | `gate_tokens_per_tile`, `down_tokens_per_tile` 독립 | 1 / 1 |
++| Grouping–quant fork/join | quant는 입력 deps, grouping도 입력 deps, gate는 양쪽을 join | OFF; OOO에서만 overlap 가능 |
++| A8 producer 공유 | 기존 quantizer를 `enqueue_a8_quant()`로 노출; fresh prequantized input 지원 | 기존 staged input |
++| 수치 검증 | RNE contract 감사 + 실제 GPU q/scale로 stage-local oracle + raw dump/freeze-input | 원래 quantizer 수학 보존 |
++| 계측 | producer DAG 검증, 전체 GPU span, interval union, overlap·idle 분리 | 새 비교기에서 사용 |
+ 
+-기준선은 다음으로 고정한다.
++**T2/T4는 DPAS RepeatCount=2/4 구현이 아니다.** 기존 `dpas<8,1,...s2,s8>`를 각 token row에 대해 수행하고 B load와 scale load를 공유한다. DG2 출력 채널 8개와 token 8개를 혼동하지 않는다. T2/T4를 자동 최적값으로 간주하지 않는다.
+ 
+-```text
+-W2A8 / native signed INT2 x INT8 DPAS
+-s2tile8 / G32 / H32 / gluquant / async
+-Gate split=1 / down split=1 / local=4
+-DPAS RepeatCount=1 / 출력 채널 8개 tile
+-```
++## 가장 빠른 시작 — Windows
++
++압축을 별도 디렉터리에 푼 뒤:
+ 
+-비교 경로는 정확히 두 가지다.
+-
+-1. **baseline**: 기존 token-major `(token, selected-expert-slot)` job 순서.
+-2. **expert-grouped**: `(expert ID, original job index)`로 안정 정렬한 실행 순서.
+-
+-이번에는 **multi-token DPAS / grouped GEMM, 출력 tile 확대, split 최적화,
+-H128, queue graph replay, Vulkan interop를 넣지 않았다.** 정렬과 GEMM을 동시에 바꿔
+-원인을 다시 분리하는 상황을 피한다. v0.4가 측정하는 것은 **expert-major job 배치로
+-얻는 지역성의 효과 - 매 호출 grouping 비용**이다. GPU가 workgroup을 반드시 순번대로
+-실행한다고 보장하는 설계는 아니다.
+-
+-A8의 unpack/DPAS/scale 누산 본체와 clipped SwiGLU 함수는 v0.3과 동일하다.
+-`evidence/v03_*_excerpt.txt`와 Python 회귀 검사가 해당 구간을 문자 단위로 비교한다.
+-A16은 라이브러리에 보존했지만 기본 v0.4 성능 스윕에는 넣지 않았다.
+-
+-## 데이터 흐름
+-
+-```text
+-매 호출의 ids [Q,topk]
+-   ↓ GPU group_count
+-   ↓ GPU group_prefix
+-   ↓ GPU group_scatter       ← stable sorted_to_job, 매번 재계산
+-input_quant                  ← 기존 G32
+-   ↓
+-gate/up: grouped index → original job → 기존 DPAS
+-   ↓ 원래 token/selection 위치에 저장
+-SwiGLU + hidden quant        ← 기존 H32, 기존 순서
+-   ↓
+-down: 같은 sorted_to_job 공유 → 기존 DPAS
+-   ↓ 원래 token/selection 위치에 저장
+-weighted_sum                ← 원래 slot 순서대로 합산
++```powershell
++.\build_architecture_and_test.cmd -Device A750 -Suite smoke
+ ```
+ 
+-**가중치, activation, hidden 전체를 정렬 복사하지 않는다.** 인덱스만 재배열하고
+-원래 주소를 읽고 쓴다. 따라서 추가 gather/scatter 데이터 커널이나 route 재정규화가 없다.
+-여기서 `group_scatter`는 작은 job-index 배열을 쓰는 단계다.
++기존 oneAPI/MSVC 초기화 경로를 사용한다. 새 라이브러리·비교기를 빌드하고 작은 synthetic 2-case 검사부터 수행한다. 기존 llama-server DLL, 모델, 환경변수 설정은 바꾸지 않는다. oneAPI가 이미 초기화되어 있으면:
+ 
+-Grouping은 순수 SYCL GPU 3개 커널이고 event dependency로 직렬 연결한다.
+-입력 ID의 host readback, 매 enqueue 할당, 이전 토큰의 plan 캐시, 명시적 host wait는 없다.
+-입력 quant와 grouping을 겹치는 별도 스케줄링 최적화도 이번에는 하지 않았다.
++```powershell
++.\scripts\build_architecture_and_test.ps1 -Device A750 -Suite smoke
++```
+ 
+-Grouping workspace:
++GPU 검사를 실행하지 않고 빌드만:
+ 
+-```text
+-counts        : int32 [experts+1]
+-offsets       : int32 [experts+2]
+-sorted_to_job : int32 [Q*topk]
++```powershell
++.\build_architecture_and_test.cmd -BuildOnly
+ ```
+ 
+-마지막 bucket은 잘못된 expert ID를 위한 것이다. 잘못된 ID를 정상 expert에 섞지 않고,
+-기존 matvec status 검사가 실패하게 한다. Q2048/top8/experts256에서는 추가 workspace가
+-**67,596bytes (약 66.01KiB)**다. 새 weight 사본은 만들지 않는다.
++빌드 결과는 `build/maple-architecture-compare.exe`이다. 그 후 재컴파일 없이:
+ 
+-구현은 per-expert workgroup의 scan 기반 안정 counting sort다.
+-128개 lane을 사용하며 ID 비교 작업은 대략 O(experts * jobs)다. sorting 자체가 공짜이거나
+-최적인 구현이라고 가정하지 않는다. 세 커널의 비용을 항상 측정한다. scan 사용 시 동일
+-workgroup의 모든 lane이 같은 collective 호출을 수행하도록 했다.
+-참조 API: https://github.khronos.org/SYCL_Reference/iface/group-algorithms-library.html
++```powershell
++python tools/run_architecture_suite.py `
++  --exe build/maple-architecture-compare.exe `
++  --device A750 --suite quick --out build/arch-quick --dump-contract
+ 
+-## 한 번에 빌드하고 Q 스윕
++python tools/analyze_architecture_results.py build/arch-quick
++```
++
++`quick`: Q={1,13,184,512} × 6개 recipe = 24 cases. `full`: Q={1,2,4,8,16,32,64,128,184,256,512,1024,2048} × 6 = 78 cases. 각 case 안에서 같은 binary·입력·ID frame으로 baseline/candidate AB/BA를 비교한다. 모든 측정에 그 call의 grouping/descriptor 비용이 들어간다.
+ 
+-별도 `maple-w2-xmx-v0.4` 폴더에 풀고, 그 폴더에서 실행한다.
++기본 weight/activation은 synthetic이다. 기존 추출기를 통해 얻은 **동일 layer의** real capsule 세 개를 넣으면 weight만 실물이 된다:
+ 
+ ```powershell
+-.\build_and_test.cmd -Suite full -Device A750 -Model "C:\AI\models\maple-preview-TQ2_0-head-Q4_K.gguf"
++python tools/run_architecture_suite.py `
++  --exe build/maple-architecture-compare.exe --device A750 `
++  --suite quick --out build/arch-real `
++  --gate C:\AI\capsules\gate.mw2 `
++  --up C:\AI\capsules\up.mw2 `
++  --down C:\AI\capsules\down.mw2
+ ```
+ 
+-기존에 추출한 동일 layer의 capsule을 사용하면 재추출하지 않는다.
++실제 activation/router를 쓰려면 개별 비교기의 `--x-file`, `--ids-file`, `--routes-file`을 사용한다. real weights + synthetic activation을 전체 모델 검증이라고 부르지 않는다.
++
++## 개별 A/B
+ 
+ ```powershell
+-.\build_and_test.cmd -Suite full -Device A750 -CapsuleDir "C:\AI\llama-src\maple-w2-xmx-v0.3\build\results\YOUR-RUN\moe\weights"
++.\build\maple-architecture-compare.exe `
++  --device A750 --tokens 184 --k 2048 --hidden 512 --experts 256 --topk 8 `
++  --candidate grouped --gate-tile 2 --down-tile 1 --overlap 1 --in-order 0 `
++  --gate-split 1 --down-split 1 --local 4 `
++  --warmup 3 --repeats 28 --dump-contract 1 --out build/q184-t2-1
+ ```
+ 
+-`CapsuleDir`에는 `gate.mw2 / up.mw2 / down.mw2`가 필요하다. 서로 같은 layer에서 추출한
+-파일이어야 한다. `-Model`과 함께 사용하지 않는다. `-Python`으로 기존 Python venv를
+-지정할 수 있고, 기본 `-Layer`는 0이다. Python 3.10+와 oneAPI/MSVC 환경이 필요하다.
+-`.cmd`의 환경 초기화는 자식 프로세스에 한정한다. 전역 설치나 영구 환경 설정을 바꾸지 않는다.
+-
+-| Suite | 실행 |
++| 스위치 | 의미 |
+ |---|---|
+-| smoke | Q1 작은 chain + Q13 out-of-order chain, 합성 가중치 |
+-| quick | smoke + 실제 모델 shape Q1/4/64/256/2048 |
+-| full | smoke + Q1/2/4/8/16/32/64/128/256/512/1024/2048 |
++| `--candidate direct/grouped/auto` | 후보 schedule; baseline은 direct 고정 |
++| `--gate-tile 1/2/4` | gate/up의 token tile |
++| `--down-tile 1/2/4` | down의 token tile |
++| `--overlap 0/1` | grouping/quant dependency를 분리 |
++| `--in-order 0/1` | 1이면 queue가 직렬화; overlap 설정만으로 병렬화되지 않음 |
++| `--auto-min-tokens N` | N=0은 미보정/direct, N>0은 명시적 임계점 |
++| `--auto-min-mean M` | `tokens*topk / experts`의 평균 assignment 하한; 실제 skew 통계 아님 |
++| `--dump-contract 1` | 두 snapshot의 raw q/scale·중간값 보존 |
++| `--freeze-input 1` | CPU RNE q/scale을 두 arm에 공급하는 원인분리 검사; 성능 선정에서 제외 |
+ 
+-Full은 **14 cases, 28 variant summary**다. Model shape는 28 repeats, smoke는 최대 4 repeats다.
+-각 case에서 baseline과 grouped만 AB/BA 순서를 번갈아 측정한다. 그룹 크기와 split을
+-추가로 스윕하지 않는다. Q1에서도 자동으로 grouping을 끄지 않으므로 overhead도 드러난다.
+-기존 `-MoeOnly`를 붙여도 되지만 v0.4는 원래 grouping 비교만 수행한다.
++Auto는 N=1을 direct로 둔다. forced grouped는 N=1 비용 비교를 허용한다. 미보정 auto에 Vulkan의 N=184 결과를 XMX 임계점으로 몰래 적용하지 않는다. 입력·hidden group은 여기서 G32/H32 고정이다. tile 1/2/4와 양자화 group 32/128은 별개의 변수다.
+ 
+-다시 측정할 때:
++## Q8 계약: Vulkan 값을 복사하지 않은 이유
+ 
+-```powershell
+-.\build_and_test.cmd -NoBuild -Suite full -Device A750 -CapsuleDir "C:\path\to\weights"
+-```
++Vulkan 실험의 첫 code `111 ↔ 110`은 half-away 반올림 앞의 division/reciprocal 차이였다. **XMX v0.4는 RNE(ties-to-even)**이므로 같은 110.5는 원래부터 110이다. 생산 quantizer를 half-away로 바꾸거나 strict division을 강제하지 않았다.
+ 
+-`-NoBuild`는 source와 exe hash를 확인한다. 소스가 변경됐거나 다른 바이너리면 재빌드를 요구한다.
+-이전 v0.3의 많은 variant를 다시 돌리고 싶을 때만 `build_and_test_v0.3.cmd`를 사용한다.
+-
+-## 측정 범위와 결과 파일
+-
+-```text
+-build/results/<timestamp>-v04-grouping-full/
+-  run.log
+-  grouping/
+-    probe.log
+-    grouping-build 정보는 suite_status.json의 build 항목
+-    all_grouping_summary.csv
+-    q_speedup.csv             ← 먼저 볼 파일
+-    suite_status.json         ← 소스·바이너리·가중치 hash, 실패 보존
+-    q0001 ... q2048/
+-      summary.csv
+-      samples.csv
+-      stages.csv
+-      routing_histogram.csv
+-      mapping_validation.csv
+-      pair_correctness.csv
+-      numerical.csv
+-      manifest.txt
+-```
++`audit_a8()`는 다음을 별도로 기록한다.
+ 
+-| 지표 | 정의 |
+-|---|---|
+-| `wall_median_us`, `wall_p95_us` | enqueue 시작부터 최종 MoE completion까지. grouping 포함 |
+-| `group_kernel_median_us` | count+prefix+scatter의 GPU 실행시간 합. inter-kernel gap은 별도 |
+-| `core_gpu_span_median_us` | input quant 시작부터 expert 합산 완료까지 |
+-| `gate_up_median_us`, `down_median_us` | 가중치 행렬 연산 구간 |
+-| `gpu_span_median_us` | grouped이면 count부터, baseline이면 input_quant부터 최종 출력까지 |
+-| `gpu_gap_median_us` | 같은 반복의 GPU span - kernel sum |
+-| `speedup_vs_ungrouped_same_build` | 같은 바이너리 baseline wall 중앙값 / 해당 경로 wall 중앙값 |
+-| `paired_saved_median_us` | 같은 ID frame을 처리한 반복별 baseline-grouped 시간차의 중앙값 |
+-| `grouped_wins` | paired repeat에서 grouped가 빠른 횟수 |
+-
+-**grouping을 미리 해 놓고 dot만 재는 경로는 없다.** 매 호출 새로 plan을 만든다.
+-Warmup/first는 repeat 통계에서 제외한다. first도 CPU/GPU 수치 검사 뒤라 cold JIT가 아니다.
+-같은 round에는 같은 입력과 같은 ID frame을 사용한다. 다음 round의 expert ID는 보통 달라진다.
+-고정 ID 파일을 줘도 grouping을 생략하지 않는다.
+-
+-weight upload/repack, workspace allocation, 기준값 계산, 검사용 readback은 steady-state 시간 밖이다.
+-FA, norm, router 계산, residual, sampler, Vulkan handoff도 없다. **전체 모델 TG가 아니다.**
+-`-ScrubMiB` 기본값은 이전 테스트와 같은 0이다. 한 layer 반복에 따른 cache 영향을 없앤 결과라고
+-주장하지 않는다. 실제 weight를 지정해도 activation·IDs·routing weight는 기본 합성이다.
+-
+-각 지표의 중앙값은 독립적으로 집계한다. median(kernel)+median(gap)이 median(span)과
+-정확히 같을 필요는 없다. 원인 분석은 samples/stages의 같은 반복 단위로 한다.
+-순이익을 판정할 때는 `core_gpu_span`의 개선만 보지 말고 **wall time**을 사용한다.
+-
+-## 정확성 검사
+-
+-GPU 실행 시:
+-
+-1. 기존 signed INT2/INT8 DPAS probe.
+-2. 신규 grouping probe: invalid ID, 빈 expert, 모두 같은 expert, 128 경계 tail, 16384 jobs,
+-   같은 workspace에서 변경된 IDs, out-of-order dependency, 뒤쪽 canary.
+-3. 본 비교의 두 ID snapshot에서 **전체 counts/offsets/permutation**을 CPU reference와 비교.
+-4. 전체 Q의 gate/up/hidden/down/y를 baseline-grouped 간 비교. 출력은 검사 전 NaN으로 poison.
+-5. Input/hidden A8 code와 scale 배열은 baseline/grouped가 **bitwise 같아야** 통과.
+-6. CPU 산술 기준은 snapshot별 **최대 3개 token의 모든 selected expert/output**을 검사.
+-   큰 Q에서도 검증 시간이 폭증하지 않게 표본 CPU 검사와 전체 GPU A/B 검사를 구분했다.
+-7. 마지막 timed call의 grouping도 CPU reference와 비교하여 untimed plan 재사용을 배제.
+-
+-출력의 full GPU A/B 허용치는 NMSE<=1e-10, max_abs/reference_RMS<=1e-4이며,
+-bitwise 일치 여부도 별도 기록한다. CPU stage 허용치는 기존 NMSE<=1e-6,
+-max_abs/reference_RMS<=0.005다. 실패하면 timing/집계를 중단하고 로그를 보존한다.
+-
+-`chain_sample_nmse_vs_f32`는 최대 3개 token 표본의 기존 F32 체인 대비 보고값이다.
+-**전체 Q의 CPU gold 결과나 전체 모델 품질 인증으로 취급하지 않는다.**
+-그룹화 자체는 모델 연산·양자화 규칙을 바꾸지 않는다.
+-
+-## 실제 activation/ID로 한 번 비교
++* CPU division oracle 대비 code·scale 차이, scale ULP.
++* 실제 GPU scale로 설명되는 code 차이와 normalized half-boundary 근처 차이.
++* 진짜 잘못된 code/scale, -128, nonfinite.
++
++기본 scale relative bound=5e-6, normalized error window=2e-4는 명시적 **검증 정책**이다. 모든 ±1 code를 통과시키지 않는다. 실제 DPAS projection은 **GPU가 만든 q·scale을 동일하게 사용한 CPU reference**와 비교하며, 양자화기 자체의 독립 검사도 남긴다. 전체 모델의 양자화 손실을 허용했다고 해석하지 않는다.
+ 
+ ```powershell
+-.\build\maple-grouping-compare.exe --device A750 --gate .\gate.mw2 --up .\up.mw2 --down .\down.mw2 --tokens 64 --topk 8 --x-file .\x.f32 --ids-file .\ids.i32 --routes-file .\routes.f32 --gate-split 1 --down-split 1 --local 4 --out .\build\results\captured-q64
++python tools/audit_quant_dump.py build/q184-t2-1/snapshot-0-candidate
+ ```
+ 
+-Little-endian raw: x=[Q,K] F32, ids=[Q,topk] I32, routes=[Q,topk] F32.
+-입력과 모든 capsule은 같은 layer에서 캡처해야 한다. Routes는 이미 정규화되어 있어야 한다.
+-이 명령도 두 경로를 자동 비교한다. 새로운 Q마다 따로 코드를 수정할 필요는 없다.
++Raw binary는 little-endian이다. `numerical.csv`는 최대 4개 token(0,12,중간,마지막)의 모든 expert 출력에 대한 stage oracle이고, baseline/candidate 전체 tensor·quant plane 비교는 전 token이다. 샘플 CPU 검사와 full GPU pair 비교를 구분한다.
+ 
+-## API / 수명 계약
++## 지연시간 해석
+ 
+-`MoeOptions::expert_grouping=true`, `MoeWorkspace::grouping`을 설정한다.
+-모든 USM 포인터는 같은 context에서 접근 가능해야 한다. 동일 workspace를 동시에
+-in-flight인 두 호출에 쓰지 않는다. Producer dependencies를 정확히 넘긴다.
+-예외 후 queue를 drain하기 전에 버퍼를 해제하거나 같은 출력에 fallback을 쓰면 안 된다.
++`wall_us`는 enqueue 진입부터 최종 wait 반환까지이며 upload/readback은 밖이다. `gpu_span_us`는 모든 기록 stage의 min(start)~max(end)이다. fork/join에서는 kernel 시간 합이 span보다 클 수 있으므로 다음을 분리했다:
+ 
+-Grouping은 현재 **s2tile8/G32/H32/gluquant**에만 열려 있다. 다른 조합에 조용히 적용하지 않고
+-명시적으로 거절한다. 기존 baseline은 `expert_grouping=false`로 그대로 사용할 수 있다.
++```
++kernel_sum = 각 stage duration 합
++union_busy = stage 실행구간들의 합집합 길이
++overlap    = kernel_sum - union_busy
++gpu_gap    = gpu_span - union_busy
++```
+ 
+-## Linux / CMake
++`union_busy`는 profiler interval의 합집합이지 GPU의 모든 EU가 바빴다는 뜻은 아니다. `core_gpu_span`도 순수 matmul 시간이 아니라 최초 non-group stage~최종 stage이다. DAG 부모 이벤트가 끝난 뒤 자식이 시작했는지 검사한다. submission order로 직렬 실행을 강요하지 않는다.
+ 
+-CPU 검사만:
++성능 분석기는 같은 case의 paired wall만 비교하고, freeze-input 결과와 단일 sample 결과를 production 권고에서 제외한다. universal auto threshold나 전체 LLM t/s를 추정하지 않는다.
+ 
+-```bash
+-cmake -S . -B build-cpu -DMAPLE_BUILD_SYCL=OFF -DCMAKE_BUILD_TYPE=Release
+-cmake --build build-cpu -j
+-ctest --test-dir build-cpu --output-on-failure
+-```
++## 기존 llama.cpp에 반영
+ 
+-oneAPI가 있는 환경의 SYCL 빌드 (여기서는 미실행):
++`docs/INTEGRATION_PORT.ko.md`를 따른다. 제공한 module 기준 patch와 hash-checked overlay를 포함한다. 현재 llama.cpp 전체를 reset/clean/rebase할 필요 없다.
+ 
+-```bash
+-cmake -S . -B build -DMAPLE_BUILD_SYCL=ON -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=Release
+-cmake --build build --target maple-grouping-compare -j
+-python tools/stamp_grouping_build.py --exe build/maple-grouping-compare
+-python tools/run_grouping_suite.py --exe build/maple-grouping-compare --out build/results/grouping-full --suite full --capsule-dir /path/to/capsules
++```powershell
++# 기본: 변경하지 않고 정확한 v0.4 파일과 맞는지만 확인
++python tools/apply_architecture_port.py --target C:\AI\llama-src\YOUR_W2_MODULE
++
++# 전체 preflight 통과 후 파일별 backup을 남기고 적용
++python tools/apply_architecture_port.py --target C:\AI\llama-src\YOUR_W2_MODULE --apply
+ ```
++
++`YOUR_W2_MODULE`은 실제 `include/maple_moe.hpp`와 `src/maple_moe.cpp`가 있는 module root다. 파일을 ggml 소스에 직접 합쳐 구조가 달라졌다면 overlay를 강제로 쓰지 말고 unified diff의 대응 부분을 적용한다. 알려지지 않은 llama.cpp source path를 추정해 덮어쓰지 않는다.
++
++헤더/구조체가 확장됐으므로 관련 object/library를 모두 재빌드한다. 구버전 객체와 신버전 헤더를 혼합하지 않는다. 프로파일링과 raw dump는 비교기에서만 수행하며 생산 enqueue에는 강제 host wait/readback이 없다.
++
++## 범위 밖
++
++이 port는 기존 XMX 모듈의 MoE 범위를 개선한다. full-router/QKV의 ggml graph replacement, Vulkan↔SYCL memory import·queue handoff, persistent work-stealing scheduler, DPAS RepeatCount>1 GEMM, 실제 모델 perplexity/code-task 평가까지 구현했다고 주장하지 않는다. 특히 다른 runtime의 VkBuffer나 raw device 주소를 USM으로 직접 넘기지 않는다.
++
++기존 README는 `README.v0.4.ko.md`에 보존했다. 원본 `FILE_SHA256SUMS.txt`/`SOURCE_PROVENANCE.json`는 v0.4의 과거 기록이다. 이 port의 현재 identity는 `PORT_SHA256SUMS.txt`, `PORT_PROVENANCE.json`이다.
+diff --git a/README.v0.4.ko.md b/README.v0.4.ko.md
+new file mode 100644
+index 0000000..57e9f0a
+--- /dev/null
++++ b/README.v0.4.ko.md
+@@ -0,0 +1,230 @@
++# Maple W2 XMX optimize v0.4 — per-expert token grouping 한 가지 변경
++
++## 상태
++
++이 패키지는 **소스와 Windows 빌드/자동 비교 도구**다. 작성 환경에서 CPU reference,
++회귀 검사와 sanitizer를 실행했다. **신규 SYCL 컴파일, A750 GPU 실행, 성능 결과는 아직 없다.**
++GPU PASS나 속도 향상을 미리 주장하지 않는다. 기존 llama DLL, 서버 설정, GGUF를 수정하지 않는다.
++
++제공된 `maple-w2-xmx-v0.3-source.zip`을 기반으로 했다. 사용자의 Q-sweep v2 ZIP에는
++측정 자료만 있고 Q 확장 소스 diff/바이너리가 없었다. 따라서 v0.3의 Q<=8 guard를 양쪽에
++동일하게 Q<=2048로 넓혔다. **과거 수치와의 차이보다 같은 v0.4 바이너리의 두 경로를 비교한다.**
++기존 명령의 상세 변경은 `v0.3-to-v0.4.patch`, 파일 출처는 `SOURCE_PROVENANCE.json`에 있다.
++
++## 이번 빌드에서 바꾼 것 / 바꾸지 않은 것
++
++기준선은 다음으로 고정한다.
++
++```text
++W2A8 / native signed INT2 x INT8 DPAS
++s2tile8 / G32 / H32 / gluquant / async
++Gate split=1 / down split=1 / local=4
++DPAS RepeatCount=1 / 출력 채널 8개 tile
++```
++
++비교 경로는 정확히 두 가지다.
++
++1. **baseline**: 기존 token-major `(token, selected-expert-slot)` job 순서.
++2. **expert-grouped**: `(expert ID, original job index)`로 안정 정렬한 실행 순서.
++
++이번에는 **multi-token DPAS / grouped GEMM, 출력 tile 확대, split 최적화,
++H128, queue graph replay, Vulkan interop를 넣지 않았다.** 정렬과 GEMM을 동시에 바꿔
++원인을 다시 분리하는 상황을 피한다. v0.4가 측정하는 것은 **expert-major job 배치로
++얻는 지역성의 효과 - 매 호출 grouping 비용**이다. GPU가 workgroup을 반드시 순번대로
++실행한다고 보장하는 설계는 아니다.
++
++A8의 unpack/DPAS/scale 누산 본체와 clipped SwiGLU 함수는 v0.3과 동일하다.
++`evidence/v03_*_excerpt.txt`와 Python 회귀 검사가 해당 구간을 문자 단위로 비교한다.
++A16은 라이브러리에 보존했지만 기본 v0.4 성능 스윕에는 넣지 않았다.
++
++## 데이터 흐름
++
++```text
++매 호출의 ids [Q,topk]
++   ↓ GPU group_count
++   ↓ GPU group_prefix
++   ↓ GPU group_scatter       ← stable sorted_to_job, 매번 재계산
++input_quant                  ← 기존 G32
++   ↓
++gate/up: grouped index → original job → 기존 DPAS
++   ↓ 원래 token/selection 위치에 저장
++SwiGLU + hidden quant        ← 기존 H32, 기존 순서
++   ↓
++down: 같은 sorted_to_job 공유 → 기존 DPAS
++   ↓ 원래 token/selection 위치에 저장
++weighted_sum                ← 원래 slot 순서대로 합산
++```
++
++**가중치, activation, hidden 전체를 정렬 복사하지 않는다.** 인덱스만 재배열하고
++원래 주소를 읽고 쓴다. 따라서 추가 gather/scatter 데이터 커널이나 route 재정규화가 없다.
++여기서 `group_scatter`는 작은 job-index 배열을 쓰는 단계다.
++
++Grouping은 순수 SYCL GPU 3개 커널이고 event dependency로 직렬 연결한다.
++입력 ID의 host readback, 매 enqueue 할당, 이전 토큰의 plan 캐시, 명시적 host wait는 없다.
++입력 quant와 grouping을 겹치는 별도 스케줄링 최적화도 이번에는 하지 않았다.
++
++Grouping workspace:
++
++```text
++counts        : int32 [experts+1]
++offsets       : int32 [experts+2]
++sorted_to_job : int32 [Q*topk]
++```
++
++마지막 bucket은 잘못된 expert ID를 위한 것이다. 잘못된 ID를 정상 expert에 섞지 않고,
++기존 matvec status 검사가 실패하게 한다. Q2048/top8/experts256에서는 추가 workspace가
++**67,596bytes (약 66.01KiB)**다. 새 weight 사본은 만들지 않는다.
++
++구현은 per-expert workgroup의 scan 기반 안정 counting sort다.
++128개 lane을 사용하며 ID 비교 작업은 대략 O(experts * jobs)다. sorting 자체가 공짜이거나
++최적인 구현이라고 가정하지 않는다. 세 커널의 비용을 항상 측정한다. scan 사용 시 동일
++workgroup의 모든 lane이 같은 collective 호출을 수행하도록 했다.
++참조 API: https://github.khronos.org/SYCL_Reference/iface/group-algorithms-library.html
++
++## 한 번에 빌드하고 Q 스윕
++
++별도 `maple-w2-xmx-v0.4` 폴더에 풀고, 그 폴더에서 실행한다.
++
++```powershell
++.\build_and_test.cmd -Suite full -Device A750 -Model "C:\AI\models\maple-preview-TQ2_0-head-Q4_K.gguf"
++```
++
++기존에 추출한 동일 layer의 capsule을 사용하면 재추출하지 않는다.
++
++```powershell
++.\build_and_test.cmd -Suite full -Device A750 -CapsuleDir "C:\AI\llama-src\maple-w2-xmx-v0.3\build\results\YOUR-RUN\moe\weights"
++```
++
++`CapsuleDir`에는 `gate.mw2 / up.mw2 / down.mw2`가 필요하다. 서로 같은 layer에서 추출한
++파일이어야 한다. `-Model`과 함께 사용하지 않는다. `-Python`으로 기존 Python venv를
++지정할 수 있고, 기본 `-Layer`는 0이다. Python 3.10+와 oneAPI/MSVC 환경이 필요하다.
++`.cmd`의 환경 초기화는 자식 프로세스에 한정한다. 전역 설치나 영구 환경 설정을 바꾸지 않는다.
++
++| Suite | 실행 |
++|---|---|
++| smoke | Q1 작은 chain + Q13 out-of-order chain, 합성 가중치 |
++| quick | smoke + 실제 모델 shape Q1/4/64/256/2048 |
++| full | smoke + Q1/2/4/8/16/32/64/128/256/512/1024/2048 |
++
++Full은 **14 cases, 28 variant summary**다. Model shape는 28 repeats, smoke는 최대 4 repeats다.
++각 case에서 baseline과 grouped만 AB/BA 순서를 번갈아 측정한다. 그룹 크기와 split을
++추가로 스윕하지 않는다. Q1에서도 자동으로 grouping을 끄지 않으므로 overhead도 드러난다.
++기존 `-MoeOnly`를 붙여도 되지만 v0.4는 원래 grouping 비교만 수행한다.
++
++다시 측정할 때:
++
++```powershell
++.\build_and_test.cmd -NoBuild -Suite full -Device A750 -CapsuleDir "C:\path\to\weights"
++```
++
++`-NoBuild`는 source와 exe hash를 확인한다. 소스가 변경됐거나 다른 바이너리면 재빌드를 요구한다.
++이전 v0.3의 많은 variant를 다시 돌리고 싶을 때만 `build_and_test_v0.3.cmd`를 사용한다.
++
++## 측정 범위와 결과 파일
++
++```text
++build/results/<timestamp>-v04-grouping-full/
++  run.log
++  grouping/
++    probe.log
++    grouping-build 정보는 suite_status.json의 build 항목
++    all_grouping_summary.csv
++    q_speedup.csv             ← 먼저 볼 파일
++    suite_status.json         ← 소스·바이너리·가중치 hash, 실패 보존
++    q0001 ... q2048/
++      summary.csv
++      samples.csv
++      stages.csv
++      routing_histogram.csv
++      mapping_validation.csv
++      pair_correctness.csv
++      numerical.csv
++      manifest.txt
++```
++
++| 지표 | 정의 |
++|---|---|
++| `wall_median_us`, `wall_p95_us` | enqueue 시작부터 최종 MoE completion까지. grouping 포함 |
++| `group_kernel_median_us` | count+prefix+scatter의 GPU 실행시간 합. inter-kernel gap은 별도 |
++| `core_gpu_span_median_us` | input quant 시작부터 expert 합산 완료까지 |
++| `gate_up_median_us`, `down_median_us` | 가중치 행렬 연산 구간 |
++| `gpu_span_median_us` | grouped이면 count부터, baseline이면 input_quant부터 최종 출력까지 |
++| `gpu_gap_median_us` | 같은 반복의 GPU span - kernel sum |
++| `speedup_vs_ungrouped_same_build` | 같은 바이너리 baseline wall 중앙값 / 해당 경로 wall 중앙값 |
++| `paired_saved_median_us` | 같은 ID frame을 처리한 반복별 baseline-grouped 시간차의 중앙값 |
++| `grouped_wins` | paired repeat에서 grouped가 빠른 횟수 |
++
++**grouping을 미리 해 놓고 dot만 재는 경로는 없다.** 매 호출 새로 plan을 만든다.
++Warmup/first는 repeat 통계에서 제외한다. first도 CPU/GPU 수치 검사 뒤라 cold JIT가 아니다.
++같은 round에는 같은 입력과 같은 ID frame을 사용한다. 다음 round의 expert ID는 보통 달라진다.
++고정 ID 파일을 줘도 grouping을 생략하지 않는다.
++
++weight upload/repack, workspace allocation, 기준값 계산, 검사용 readback은 steady-state 시간 밖이다.
++FA, norm, router 계산, residual, sampler, Vulkan handoff도 없다. **전체 모델 TG가 아니다.**
++`-ScrubMiB` 기본값은 이전 테스트와 같은 0이다. 한 layer 반복에 따른 cache 영향을 없앤 결과라고
++주장하지 않는다. 실제 weight를 지정해도 activation·IDs·routing weight는 기본 합성이다.
++
++각 지표의 중앙값은 독립적으로 집계한다. median(kernel)+median(gap)이 median(span)과
++정확히 같을 필요는 없다. 원인 분석은 samples/stages의 같은 반복 단위로 한다.
++순이익을 판정할 때는 `core_gpu_span`의 개선만 보지 말고 **wall time**을 사용한다.
++
++## 정확성 검사
++
++GPU 실행 시:
++
++1. 기존 signed INT2/INT8 DPAS probe.
++2. 신규 grouping probe: invalid ID, 빈 expert, 모두 같은 expert, 128 경계 tail, 16384 jobs,
++   같은 workspace에서 변경된 IDs, out-of-order dependency, 뒤쪽 canary.
++3. 본 비교의 두 ID snapshot에서 **전체 counts/offsets/permutation**을 CPU reference와 비교.
++4. 전체 Q의 gate/up/hidden/down/y를 baseline-grouped 간 비교. 출력은 검사 전 NaN으로 poison.
++5. Input/hidden A8 code와 scale 배열은 baseline/grouped가 **bitwise 같아야** 통과.
++6. CPU 산술 기준은 snapshot별 **최대 3개 token의 모든 selected expert/output**을 검사.
++   큰 Q에서도 검증 시간이 폭증하지 않게 표본 CPU 검사와 전체 GPU A/B 검사를 구분했다.
++7. 마지막 timed call의 grouping도 CPU reference와 비교하여 untimed plan 재사용을 배제.
++
++출력의 full GPU A/B 허용치는 NMSE<=1e-10, max_abs/reference_RMS<=1e-4이며,
++bitwise 일치 여부도 별도 기록한다. CPU stage 허용치는 기존 NMSE<=1e-6,
++max_abs/reference_RMS<=0.005다. 실패하면 timing/집계를 중단하고 로그를 보존한다.
++
++`chain_sample_nmse_vs_f32`는 최대 3개 token 표본의 기존 F32 체인 대비 보고값이다.
++**전체 Q의 CPU gold 결과나 전체 모델 품질 인증으로 취급하지 않는다.**
++그룹화 자체는 모델 연산·양자화 규칙을 바꾸지 않는다.
++
++## 실제 activation/ID로 한 번 비교
++
++```powershell
++.\build\maple-grouping-compare.exe --device A750 --gate .\gate.mw2 --up .\up.mw2 --down .\down.mw2 --tokens 64 --topk 8 --x-file .\x.f32 --ids-file .\ids.i32 --routes-file .\routes.f32 --gate-split 1 --down-split 1 --local 4 --out .\build\results\captured-q64
++```
++
++Little-endian raw: x=[Q,K] F32, ids=[Q,topk] I32, routes=[Q,topk] F32.
++입력과 모든 capsule은 같은 layer에서 캡처해야 한다. Routes는 이미 정규화되어 있어야 한다.
++이 명령도 두 경로를 자동 비교한다. 새로운 Q마다 따로 코드를 수정할 필요는 없다.
++
++## API / 수명 계약
++
++`MoeOptions::expert_grouping=true`, `MoeWorkspace::grouping`을 설정한다.
++모든 USM 포인터는 같은 context에서 접근 가능해야 한다. 동일 workspace를 동시에
++in-flight인 두 호출에 쓰지 않는다. Producer dependencies를 정확히 넘긴다.
++예외 후 queue를 drain하기 전에 버퍼를 해제하거나 같은 출력에 fallback을 쓰면 안 된다.
++
++Grouping은 현재 **s2tile8/G32/H32/gluquant**에만 열려 있다. 다른 조합에 조용히 적용하지 않고
++명시적으로 거절한다. 기존 baseline은 `expert_grouping=false`로 그대로 사용할 수 있다.
++
++## Linux / CMake
++
++CPU 검사만:
++
++```bash
++cmake -S . -B build-cpu -DMAPLE_BUILD_SYCL=OFF -DCMAKE_BUILD_TYPE=Release
++cmake --build build-cpu -j
++ctest --test-dir build-cpu --output-on-failure
++```
++
++oneAPI가 있는 환경의 SYCL 빌드 (여기서는 미실행):
++
++```bash
++cmake -S . -B build -DMAPLE_BUILD_SYCL=ON -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=Release
++cmake --build build --target maple-grouping-compare -j
++python tools/stamp_grouping_build.py --exe build/maple-grouping-compare
++python tools/run_grouping_suite.py --exe build/maple-grouping-compare --out build/results/grouping-full --suite full --capsule-dir /path/to/capsules
++```
+diff --git a/build_architecture_and_test.cmd b/build_architecture_and_test.cmd
+new file mode 100644
+index 0000000..7f107ee
+--- /dev/null
++++ b/build_architecture_and_test.cmd
+@@ -0,0 +1,22 @@
++@echo off
++setlocal
++where cl.exe >nul 2>nul
++if errorlevel 1 goto setup
++where icpx.exe >nul 2>nul
++if not errorlevel 1 goto run
++where icx.exe >nul 2>nul
++if not errorlevel 1 goto run
++:setup
++if defined ONEAPI_ROOT if exist "%ONEAPI_ROOT%\setvars.bat" (
++    call "%ONEAPI_ROOT%\setvars.bat"
++    goto run
++)
++if exist "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" (
++    call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat"
++    goto run
++)
++echo ERROR: use an initialized oneAPI + MSVC developer shell.
++exit /b 1
++:run
++powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\build_architecture_and_test.ps1" %*
++exit /b %errorlevel%
+diff --git a/docs/INTEGRATION_PORT.ko.md b/docs/INTEGRATION_PORT.ko.md
+new file mode 100644
+index 0000000..d135370
+--- /dev/null
++++ b/docs/INTEGRATION_PORT.ko.md
+@@ -0,0 +1,99 @@
++# 기존 llama.cpp XMX v0.4 module에 적용하는 계약
++
++## 1. 변경 경계
++
++현재 llama.cpp에 들어 있는 XMX tree를 기준으로 삼는다. standalone 실험기를 새 production tree로 만들거나 기존 hybrid/SWA를 버리지 않는다. 이 패키지는 업로드한 v0.4 module의 증분 변경이며, 사용자의 전체 llama.cpp checkout을 열어 수정한 결과는 아니다.
++
++* 기존 `maple_w2a8.cpp`의 s2 packing·DPAS·scale accumulation·quantizer 수학은 그대로.
++* 기존 `maple_moe.cpp`의 SwiGLU/hidden quant kernel 수학은 그대로.
++* `expert_grouping.cpp`의 count/prefix/stable scatter는 그대로이며 token descriptor builder만 추가.
++* 새 `src/maple_w2a8_grouped.cpp`를 기존 XMX library source 목록에 추가.
++* 헤더가 늘어나므로 해당 라이브러리와 모든 caller를 함께 재빌드.
++
++`v0.4-to-vulkan-port-v1.patch`는 module root 기준 unified diff다. `git apply --check` 뒤 적용할 수 있다. 원본 payload와 대상 파일의 SHA를 검사하는 `tools/apply_architecture_port.py`는 unrelated llama.cpp 파일을 건드리지 않는다. 파일 구조가 변경된 통합본에는 강제 적용하지 않는다.
++
++## 2. 기본 경로는 v0.4와 호환
++
++```cpp
++MoeOptions o;                // schedule = inherit_v04
++// 기존 코드의 o.expert_grouping=false/true가 계속 적용된다.
++auto run = enqueue_moe(q, problem, o, workspace, upstream_events);
++// 생산 경로에서는 여기서 wait하지 말고 downstream에 run.done 전달.
++```
++
++기존 struct 멤버 뒤에 옵션/workspace를 추가했다. source-level aggregate initialization은 유지하지만 binary ABI 보장은 없다. 기존 `grouping_compare`는 그대로 남아 serialized grouping baseline을 비교한다.
++
++## 3. 실험용 후보
++
++```cpp
++MoeOptions o;
++o.path = MoePath::a8_gluquant;
++o.input_group = o.hidden_group = 32;
++o.schedule = MoeSchedule::grouped;
++o.overlap_grouping_quant = true;
++o.gate_tokens_per_tile = 2;
++o.down_tokens_per_tile = 1;
++```
++
++Group reuse는 G32/H32, s2tile8, fresh prequantized q/scale에 한정된다. native TQ2는 기존 model-load의 s2tile8 변환을 이용하고, 전체 INT8/FP16 weight shadow를 추가하지 않는다. 양자화된 weight code 3을 +2로 처리하는 일반 Vulkan semantics를 복사하면 안 된다. v0.4의 strict ternary 검증을 유지한다.
++
++## 4. Persistent workspace
++
++기존 grouping buffer 외에 T>1일 때만 다음 descriptor planes를 확보한다.
++
++```cpp
++const size_t jobs = size_t(problem.tokens) * problem.topk;
++const size_t capacity = expert_token_tile_capacity(jobs, problem.gate_shape.experts, T);
++// 각각 capacity개의 int32: first, length, expert
++// 한 개 int32: total
++ExpertTokenTileView tv{first, length, expert, total, capacity, T};
++```
++
++capacity 상한은 `min(jobs, floor((jobs+(E+1)*(T-1))/T))`이며 invalid-ID bucket까지 포함한다. 실제 tile 수는 GPU가 `total`에 기록하고 kernel이 읽는다. host readback/indirect launch가 필요 없다. 상한보다 적은 tile은 early return한다.
++
++Gate와 down의 T가 같으면 gate descriptor를 공유한다. 다르면 별도 descriptor buffer가 필요하다. 같은 workspace를 동시에 실행하는 request들이 덮어쓰면 안 된다. grow/reuse는 기존 allocator에서 완료 event를 존중한다.
++
++여기서 tile은 (expert, sorted assignment 시작, 유효 길이)다. `first`는 원래 token 번호가 아니다. 실행 중에는 `sorted_to_job`을 거쳐 원래 job을 찾는다. input row는 `job/topk`, hidden row는 `job`, output은 원래 `job*M+channel`이다. 최종 route weighted sum은 기존 top-k slot 순서를 유지한다.
++
++## 5. Fork/join과 외부 producer
++
++```
++upstream_events ── grouping count/prefix/scatter ── token descriptors ─┐
++          └─────── input quant ──────────────────────────────────────┤
++                                                                    gate/up
++                                                                       ↓
++                                                               SwiGLU + hidden quant
++                                                                       ↓
++                                                                      down
++                                                                       ↓
++                                                               weighted sum → done
++```
++
++Grouping과 quant는 서로 쓰는 buffer가 다르다. `overlap_grouping_quant=true`일 때 input quant는 grouping 완료를 기다리지 않지만 gate는 두 producer 모두 기다린다. in-order queue는 여전히 직렬화한다. out-of-order queue도 실제 overlap을 보장하지 않으므로 stage timestamp로 확인한다.
++
++공통 입력 quant를 다른 projection과 공유할 때:
++
++```cpp
++auto input_ready = enqueue_a8_quant(q, problem.x, ActivationType::f32,
++    problem.tokens, problem.gate_shape.k, 32, workspace.input_a8, upstream_events);
++o.input_prequantized = true;
++auto run = enqueue_moe(q, problem, o, workspace, {input_ready});
++```
++
++입력 q/scale/invalid가 **이번 call**의 데이터여야 한다. stale activation cache 기능이 아니다. external memory import 및 cross-runtime dependency는 기존 bridge가 보장해야 한다. 이 API는 raw Vulkan 주소를 자동 변환하지 않는다.
++
++## 6. Auto와 per-projection tuning
++
++Auto는 `min_tokens=0`이면 direct만 사용한다. XMX 실측을 확보한 뒤 해당 device/build/shape에 적용할 하한을 명시한다. 평균 assignment는 Q*topk/E 추정이며 skew를 알지 못한다. forced grouped를 남겨 crossover 근처의 direct와 항상 A/B할 수 있게 했다.
++
++T2/T4에서는 B tile을 여러 token에 재사용하지만 각 token의 연산은 RepeatCount=1이다. 기존 N8은 출력 채널 8개다. 향후 multi-row DPAS는 operand/accumulator layout과 별도의 ISA probe가 필요한 다른 패치다.
++
++Gate와 down의 T를 독립적으로 선택한다. QKV reuse와 MoE reuse의 Vulkan 결과를 하나의 전역 스위치로 묶지 않는다. 이 module에는 QKV/router graph ownership이 없으므로 둘을 임의로 추가하지 않았다.
++
++## 7. 오류 및 회귀 처리
++
++* invalid capacity/configuration은 첫 제출 전 거부한다.
++* invalid expert는 기존 status error를 남기며 정상 expert로 바꾸지 않는다.
++* submission 중 예외가 나면 queue를 drain한 뒤 workspace를 재사용한다. 실패 도중 fallback이 같은 출력에 쓰게 하지 않는다.
++* CPU/GPU 산술 차이는 quant contract와 projection 검사를 분리해 본다. checker tolerance를 전체적으로 늘리지 않는다.
++* 공개 run.done으로 모든 내부 producer가 transitive하게 연결된다. mocked host DAG 검사는 이를 검증하지만 실제 GPU runtime 검증의 대체물은 아니다.
+diff --git a/docs/TRANSFER_MAP.ko.md b/docs/TRANSFER_MAP.ko.md
+new file mode 100644
+index 0000000..c15e826
+--- /dev/null
++++ b/docs/TRANSFER_MAP.ko.md
+@@ -0,0 +1,33 @@
++# Vulkan 연구 결과 → XMX v0.4 변경 대응
++
++1. 작은 direct 작업에서 전역 reuse가 손해였음 → gate/down 별도 T1/T2/T4, 기본 T1. Vulkan 시간이나 WG crossover를 XMX의 자동값으로 옮기지 않음.
++2. static bucket이 persistent보다 나았음 → 이미 존재하는 v0.4 static grouping 유지. persistent scheduler는 추가하지 않음.
++3. 여러 assignment가 같은 expert를 사용해야 weight 재사용이 생김 → expert boundary를 넘지 않는 token descriptor + T2/T4 B-load reuse. old mapped job order만 바꾸던 구현과 구분.
++4. group/quant가 독립 작업임 → explicit fork/join DAG, input quant producer 분리, producer 공유 API.
++5. Q8 한 code 차이가 downstream을 크게 바꿀 수 있음 → 실제 GPU q/scale 기반 projection oracle + 별도 quantizer audit, raw dump와 freeze-input.
++6. CPU/GPU rounding contract를 구분해야 함 → XMX의 RNE 유지. Vulkan half-away의 111을 XMX expected value로 복사하지 않음.
++7. stage 합과 GPU elapsed가 다름 → min/max span + interval union + overlap/idle. 부모 의존성만 검사하고 독립 stage의 timestamp overlap은 허용.
++
++## 변하지 않은 기본 연산
++
++`tests/test_grouping_suite.py::test_glu_and_a8_math_unchanged`가 v0.3에서 보존된 v0.4 연산 구간과 원문 일치를 검사한다. 이 검사는 문자열/소스 수준의 불변성이지 새 binary ISA 동일성 보증은 아니다.
++
++- signed s2 packing, original 66-byte block scale semantics
++- 원래 `dpas<8,1>` direct/grouped T1 경로
++- Pair gate/up 및 K-block별 scaling 순서
++- RNE input/hidden quantization
++- gate upper-only clamp와 up ±clamp
++- split reduction 순서와 final original top-k slot sum
++
++신규 T2/T4 파일은 이 연산을 token별로 반복하되 B/scale load를 공유한다. CPU 테스트는 actual file body를 scalar ESIMD/DPAS model로 실행한다. Intel compiler lowering과 A750 register pressure/latency는 별도 검증해야 한다.
++
++## 외부 API 근거
++
++Khronos SYCL reference의 event, queue, handler 설명을 확인했다. 같은 backend의 profiling timebase 및 explicit depends_on을 사용한다. in-order queue는 앞선 command에 암묵적 의존성을 부여하므로 fork/join 옵션만 켜서는 실제 overlap이 생기지 않는다.
++
++- https://github.khronos.org/SYCL_Reference/iface/event.html
++- https://github.khronos.org/SYCL_Reference/iface/queue.html
++- https://github.khronos.org/SYCL_Reference/iface/command-group-handler.html
++- https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/supported/sycl_ext_intel_esimd/examples/README.md
++
++인터넷 문서는 API 의미를 확인한 근거다. 이 패키지의 실제 컴파일·속도 결과를 대신하지 않는다.
+diff --git a/include/a8_contract_audit.hpp b/include/a8_contract_audit.hpp
+new file mode 100644
+index 0000000..40707b8
+--- /dev/null
++++ b/include/a8_contract_audit.hpp
+@@ -0,0 +1,60 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include "w2a8_reference.hpp"
++#include <cstring>
++namespace maple_w2 {
++// XMX v0.4 uses RNE (ties-to-even), NOT the Vulkan lab's half-away rule.
++// Keep the production quantizer unchanged; classify a boundary mismatch rather
++// than calling the whole projection wrong or admitting arbitrary +/-1 codes.
++struct A8AuditPolicy {double max_scale_relative=5e-6,max_normalized_error=2e-4;};
++struct A8Audit {
++    bool pass=true;
++    size_t codes=0,groups=0,cpu_code_differences=0,cpu_scale_differences=0;
++    size_t actual_scale_code_differences=0,boundary_codes=0,bad_codes=0,bad_scales=0,nonfinite_inputs=0;
++    uint32_t max_scale_ulp=0;
++    double max_scale_relative=0;
++};
++inline uint32_t f32_bits(float x) {uint32_t u;std::memcpy(&u,&x,4);return u;}
++inline int rne_normalized(double z) {
++    z=std::max(-127.,std::min(127.,z));double a=std::abs(z);auto k=uint32_t(a);double f=a-k;
++    k+=uint32_t(f>.5||(f==.5&&(k&1u)));return z<0?-int(k):int(k);
++}
++inline A8Audit audit_a8(const QuantizedHost& got,const std::vector<float>& x,A8AuditPolicy policy={}) {
++    check_a8_group(got.group);
++    if(!got.rows||!got.k||got.k%got.group||x.size()!=checked_mul(got.rows,got.k)||
++       got.q.size()!=x.size()||got.scale.size()!=x.size()/got.group||
++       !std::isfinite(policy.max_scale_relative)||!std::isfinite(policy.max_normalized_error)||
++       policy.max_scale_relative<0||policy.max_normalized_error<0||policy.max_normalized_error>=.5)
++        throw std::invalid_argument("invalid A8 audit contract/shape");
++    A8Audit a;a.codes=x.size();a.groups=got.scale.size();
++    for(size_t g=0;g<got.scale.size();++g) {
++        float mx=0;
++        for(uint32_t j=0;j<got.group;++j) {
++            float v=x[g*got.group+j];
++            if(!std::isfinite(v)){++a.nonfinite_inputs;continue;}
++            mx=std::max(mx,std::abs(v));
++        }
++        const float ref=mx==0?1.f:std::max(mx/127.f,std::numeric_limits<float>::min());
++        const float d=got.scale[g];
++        if(f32_bits(d)!=f32_bits(ref))++a.cpu_scale_differences;
++        if(!std::isfinite(d)||d<=0) {++a.bad_scales;continue;}
++        const auto db=f32_bits(d),rb=f32_bits(ref);a.max_scale_ulp=std::max(a.max_scale_ulp,db>rb?db-rb:rb-db);
++        const double relative=std::abs(double(d)-ref)/ref;a.max_scale_relative=std::max(a.max_scale_relative,relative);
++        if((mx==0&&d!=1.f)||relative>policy.max_scale_relative)++a.bad_scales;
++        for(uint32_t j=0;j<got.group;++j) {
++            size_t i=g*got.group+j;float v=x[i];if(!std::isfinite(v))continue;
++            const int q=got.q[i];a.cpu_code_differences+=q!=int(quant_rne(v,ref));
++            const int strict_actual=int(quant_rne(v,d));
++            if(q!=strict_actual)++a.actual_scale_code_differences;
++            if(q==-128){++a.bad_codes;continue;}
++            // A code must be an RNE result within an explicit normalized error
++            // interval around the ACTUAL scale, not simply 'within one int'.
++            const double z=double(v)/d;
++            const int lo=rne_normalized(z-policy.max_normalized_error),hi=rne_normalized(z+policy.max_normalized_error);
++            if(q<lo||q>hi)++a.bad_codes;
++            else if(q!=strict_actual)++a.boundary_codes;
++        }
++    }
++    a.pass=!a.bad_codes&&!a.bad_scales&&!a.nonfinite_inputs;return a;
++}
++} // namespace maple_w2
+diff --git a/include/expert_grouping.hpp b/include/expert_grouping.hpp
+index 0a4bdb8..c5dc59e 100644
+--- a/include/expert_grouping.hpp
++++ b/include/expert_grouping.hpp
+@@ -1,6 +1,7 @@
+ // SPDX-License-Identifier: MIT
+ #pragma once
+ #include "expert_grouping_reference.hpp"
++#include "expert_token_tiles.hpp"
+ #include <sycl/sycl.hpp>
+ namespace maple_w2 {
+ struct ExpertGroupingWorkspace {
+@@ -16,4 +17,7 @@ struct ExpertGroupingRun {sycl::event count,prefix,scatter;};
+ // Scratch must be in the queue's context and exclusively owned until completion.
+ ExpertGroupingRun enqueue_expert_grouping(sycl::queue&,const int32_t* ids,size_t jobs,uint32_t experts,
+     ExpertGroupingWorkspace,const std::vector<sycl::event>& dependencies={});
++// Build bounded descriptors from fresh count/offset/order data. No host readback.
++sycl::event enqueue_expert_token_tiles(sycl::queue&,size_t jobs,uint32_t experts,
++    ExpertGroupingWorkspace,ExpertTokenTileView,const std::vector<sycl::event>& dependencies={});
+ } // namespace maple_w2
+diff --git a/include/expert_token_tiles.hpp b/include/expert_token_tiles.hpp
+new file mode 100644
+index 0000000..48c2e7b
+--- /dev/null
++++ b/include/expert_token_tiles.hpp
+@@ -0,0 +1,36 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include "expert_grouping_reference.hpp"
++#include "moe_dispatch_policy.hpp"
++namespace maple_w2 {
++// First/length index the stable sorted_to_job array, not token IDs. Each tile
++// belongs to a single expert. The extra invalid-ID bucket is retained.
++struct ExpertTokenTileView {
++    int32_t *first=nullptr,*length=nullptr,*expert=nullptr,*total=nullptr;
++    size_t capacity=0;
++    uint32_t tokens_per_tile=1;
++};
++inline size_t expert_token_tile_capacity(size_t jobs,uint32_t experts,uint32_t width) {
++    validate_grouping_size(jobs,experts);check_tokens_per_tile(width);
++    // sum ceil(c_e/width) <= floor((jobs+(E+1)*(width-1))/width).
++    return std::min(jobs,(jobs+(size_t(experts)+1)*(width-1))/width);
++}
++struct ExpertTokenTilesHost {std::vector<int32_t> first,length,expert;};
++inline ExpertTokenTilesHost token_tiles_reference(const ExpertGroupingHost& g,uint32_t width) {
++    check_tokens_per_tile(width);
++    if(g.counts.size()<2||g.counts.size()>257||g.offsets.size()!=g.counts.size()+1||g.offsets[0]!=0)
++        throw std::invalid_argument("invalid grouping metadata");
++    ExpertTokenTilesHost r;
++    int64_t count=0;
++    for(size_t e=0;e<g.counts.size();++e) {
++        if(g.counts[e]<0||g.offsets[e]!=count)throw std::invalid_argument("invalid grouping offsets");
++        count+=g.counts[e];
++        if(count>INT32_MAX||g.offsets[e+1]!=count)throw std::invalid_argument("invalid grouping count");
++        for(int64_t i=0;i<g.counts[e];i+=width) {
++            r.first.push_back(int32_t(g.offsets[e]+i));r.length.push_back(int32_t(std::min(int64_t(width),int64_t(g.counts[e])-i)));r.expert.push_back(int32_t(e));
++        }
++    }
++    if(count!=int64_t(g.sorted_to_job.size()))throw std::invalid_argument("invalid grouping total");
++    return r;
++}
++} // namespace maple_w2
+diff --git a/include/maple_moe.hpp b/include/maple_moe.hpp
+index e1d24dc..5ab4c9b 100644
+--- a/include/maple_moe.hpp
++++ b/include/maple_moe.hpp
+@@ -3,6 +3,7 @@
+ #include "maple_w2a8.hpp"
+ #include <array>
+ #include "expert_grouping.hpp"
++#include "moe_dispatch_policy.hpp"
+ namespace maple_w2 {
+ enum class MoePath { a16, a8_separate, a8_gluquant };
+ struct MoeOptions {
+@@ -16,6 +17,13 @@ struct MoeOptions {
+     // v0.4 sole optimization: stable expert-major job order, built every call.
+     // No multi-token DPAS tile or GEMM; original dot arithmetic is retained.
+     bool expert_grouping=false;
++    // Appended fields preserve source-level aggregate initialization of v0.4.
++    MoeSchedule schedule=MoeSchedule::inherit_v04;
++    MoeAutoPolicy auto_policy{};
++    bool overlap_grouping_quant=false; // fork/join; no overlap guarantee
++    uint32_t gate_tokens_per_tile=1,down_tokens_per_tile=1;
++    // Caller supplies fresh input_a8 AND completion dependencies. Not a cache.
++    bool input_prequantized=false;
+ };
+ struct MoeProblem {
+     Shape gate_shape; // {input width, expert hidden width, experts}; down={hidden,input,experts}
+@@ -34,11 +42,15 @@ struct MoeWorkspace {
+     int32_t *hidden_invalid=nullptr; // Q*topk*H, overwritten by epilogue
+     int32_t *output_invalid=nullptr; // Q*K, overwritten by weighted sum
+     ExpertGroupingWorkspace grouping{};
++    ExpertTokenTileView gate_tiles{},down_tiles{};
+ };
+-struct MoeStage {const char* label="";sycl::event event;};
++struct MoeStage {const char* label="";sycl::event event;uint32_t parents=0;};
+ struct MoeRun {
+-    std::array<MoeStage,12> stages{};size_t count=0;sycl::event done;
+-    void add(const char* label,const sycl::event& e){if(count==stages.size())throw std::logic_error("event list full");stages[count++]={label,e};done=e;}
++    std::array<MoeStage,20> stages{};size_t count=0;sycl::event done;
++    MoeScheduleDecision dispatch{};
++    bool fork_join_requested=false,queue_in_order=false;
++    uint32_t gate_tile=1,down_tile=1;
++    void add(const char* label,const sycl::event& e,uint32_t parents=0){if(count==stages.size())throw std::logic_error("event list full");stages[count++]={label,e,parents};done=e;}
+ };
+ // USM allocations must share this queue's context. No explicit device allocations or readback inside.
+ // Same workspace cannot be shared by concurrent in-flight runs without dependencies.
+diff --git a/include/maple_w2a8.hpp b/include/maple_w2a8.hpp
+index ae96bbd..be5967e 100644
+--- a/include/maple_w2a8.hpp
++++ b/include/maple_w2a8.hpp
+@@ -2,6 +2,7 @@
+ #pragma once
+ #include "maple_w2a16.hpp"
+ #include "w2a8_reference.hpp"
++#include "expert_token_tiles.hpp"
+ namespace maple_w2 {
+ // prequantized: a producer has already written q/scales/invalid for this call.
+ // The producer completion event MUST be in dependencies on an out-of-order queue.
+@@ -12,6 +13,9 @@ struct A8Options {
+     // Optional GPU-generated permutation. Only execution order changes: all
+     // activation/output/status addressing still uses ORIGINAL token/selection.
+     const int32_t* job_order=nullptr;
++    // Optional grouped multi-assignment register reuse. G32/s2tile8/prequantized.
++    // Each token still uses the original RepeatCount=1 DPAS arithmetic.
++    ExpertTokenTileView token_tiles{};
+ };
+ // Persistent scratch, context-compatible USM. No allocations in enqueue_a8.
+ // q/scales are required for staged/prequantized; fused writes them only with capture=true.
+@@ -33,6 +37,13 @@ struct A8Run {
+ };
+ A8Run enqueue_a8(sycl::queue&,const DeviceProblem&,A8Options,A8Workspace,float* split_scratch,
+                 const std::vector<sycl::event>& dependencies={});
++// Expose the UNCHANGED v0.4 staged quantizer as a producer. Useful for fork/join
++// and stage isolation. Does not inspect IDs or weights; dependencies own x lifetime.
++sycl::event enqueue_a8_quant(sycl::queue&,const void* x,ActivationType,uint32_t rows,
++    uint32_t k,uint32_t group,A8Workspace,const std::vector<sycl::event>& dependencies={});
++// Internal opt-in grouped reuse dispatch. Public enqueue_a8 validates its views.
++A8Run enqueue_a8_token_tiles(sycl::queue&,const DeviceProblem&,A8Options,A8Workspace,
++    float* split_scratch,const std::vector<sycl::event>& dependencies);
+ // Exact signed-INT2/INT8 ISA probe. Throws on wrong results; no emulated fallback.
+ void run_s2s8_probe(sycl::queue&);
+ } // namespace maple_w2
+diff --git a/include/moe_dispatch_policy.hpp b/include/moe_dispatch_policy.hpp
+new file mode 100644
+index 0000000..7daf8f6
+--- /dev/null
++++ b/include/moe_dispatch_policy.hpp
+@@ -0,0 +1,40 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include <cstdint>
++#include <stdexcept>
++namespace maple_w2 {
++enum class MoeSchedule { inherit_v04, direct, grouped, auto_select };
++// No Vulkan crossover is silently installed on XMX. min_tokens==0 means
++// uncalibrated: auto stays direct. Thresholds belong to a device/build/shape
++// calibration, not the kernel format. jobs/experts is a load estimate, NOT a
++// measurement of routing skew. No ID readback or hidden host synchronization.
++struct MoeAutoPolicy {
++    uint32_t min_tokens=0;
++    uint32_t min_mean_assignments=0;
++};
++struct MoeScheduleDecision { bool grouped=false; const char* reason="legacy_direct"; };
++inline MoeScheduleDecision choose_moe_schedule(MoeSchedule requested,bool legacy,
++    uint32_t tokens,uint32_t topk,uint32_t experts,bool supported,MoeAutoPolicy policy={}) {
++    if(!tokens||!topk||!experts||topk>experts)throw std::invalid_argument("invalid dispatch shape");
++    if(requested==MoeSchedule::inherit_v04) {
++        if(legacy&&!supported)throw std::invalid_argument("unsupported forced legacy grouping");
++        return {legacy,legacy?"legacy_grouped":"legacy_direct"};
++    }
++    if(requested==MoeSchedule::direct)return {false,"forced_direct"};
++    if(requested==MoeSchedule::grouped) {
++        if(!supported)throw std::invalid_argument("unsupported forced grouping");
++        return {true,"forced_grouped"};
++    }
++    if(requested!=MoeSchedule::auto_select)throw std::invalid_argument("invalid schedule enum");
++    if(!supported)return {false,"auto_unsupported"};
++    if(tokens==1)return {false,"auto_single_token"};
++    if(!policy.min_tokens)return {false,"auto_uncalibrated"};
++    if(tokens<policy.min_tokens)return {false,"auto_below_token_threshold"};
++    if(uint64_t(tokens)*topk<uint64_t(policy.min_mean_assignments)*experts)
++        return {false,"auto_below_mean_assignment_threshold"};
++    return {true,"auto_threshold_grouped"};
++}
++inline void check_tokens_per_tile(uint32_t n) {
++    if(n!=1&&n!=2&&n!=4)throw std::invalid_argument("tokens per tile must be 1, 2 or 4");
++}
++} // namespace maple_w2
+diff --git a/include/moe_profiling.hpp b/include/moe_profiling.hpp
+new file mode 100644
+index 0000000..c71e2e2
+--- /dev/null
++++ b/include/moe_profiling.hpp
+@@ -0,0 +1,35 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include <algorithm>
++#include <cstdint>
++#include <stdexcept>
++#include <vector>
++namespace maple_w2 {
++struct StageInterval {uint64_t begin=0,end=0;uint32_t parents=0;};
++struct IntervalProfile {
++    uint64_t begin=0,end=0,kernel_sum=0,union_busy=0,idle=0,overlap=0;
++};
++// Event durations may overlap. kernel_sum is additive work, not elapsed time.
++// Validate DAG edges, not submission order. Only same-backend timestamps.
++inline IntervalProfile profile_intervals(const std::vector<StageInterval>& v) {
++    if(v.empty()||v.size()>31)throw std::invalid_argument("invalid stage count");
++    IntervalProfile p;std::vector<StageInterval> sorted=v;
++    p.begin=v[0].begin;p.end=v[0].end;
++    for(size_t i=0;i<v.size();++i) {
++        const auto& a=v[i];
++        if(a.end<a.begin || (a.parents & ~((uint32_t(1)<<i)-1)))
++            throw std::invalid_argument("invalid interval or forward DAG edge");
++        for(size_t j=0;j<i;++j)if((a.parents>>j)&1u)
++            if(a.begin<v[j].end)throw std::invalid_argument("event violates producer dependency");
++        p.begin=std::min(p.begin,a.begin);p.end=std::max(p.end,a.end);p.kernel_sum+=a.end-a.begin;
++    }
++    std::sort(sorted.begin(),sorted.end(),[](const auto&a,const auto&b){return a.begin<b.begin;});
++    auto lo=sorted[0].begin,hi=sorted[0].end;
++    for(size_t i=1;i<sorted.size();++i) {
++        if(sorted[i].begin>hi){p.union_busy+=hi-lo;lo=sorted[i].begin;hi=sorted[i].end;}
++        else hi=std::max(hi,sorted[i].end);
++    }
++    p.union_busy+=hi-lo;p.idle=(p.end-p.begin)-p.union_busy;p.overlap=p.kernel_sum-p.union_busy;
++    return p;
++}
++} // namespace maple_w2
+diff --git a/scripts/build_architecture_and_test.ps1 b/scripts/build_architecture_and_test.ps1
+new file mode 100644
+index 0000000..5ffa200
+--- /dev/null
++++ b/scripts/build_architecture_and_test.ps1
+@@ -0,0 +1,23 @@
++[CmdletBinding()]
++param(
++    [string]$Compiler='', [string]$Builtins='', [string]$Device='A750',
++    [ValidateSet('smoke','quick','full')][string]$Suite='smoke',
++    [string]$Out='', [string]$Gate='', [string]$Up='', [string]$Down='',
++    [int]$Repeats=28, [switch]$DumpContract, [switch]$BuildOnly
++)
++$ErrorActionPreference='Stop'
++$Root=Split-Path -Parent $PSScriptRoot
++& (Join-Path $PSScriptRoot 'build_windows.ps1') -Compiler $Compiler -Builtins $Builtins -GroupingOnly
++if($BuildOnly){return}
++if(-not $Out){$Out=Join-Path $Root ('build/architecture-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))}
++$PythonArgs=@((Join-Path $Root 'tools/run_architecture_suite.py'),'--exe',(Join-Path $Root 'build/maple-architecture-compare.exe'),
++    '--device',$Device,'--suite',$Suite,'--out',$Out,'--repeats',"$Repeats")
++if($Gate -or $Up -or $Down){
++    if(-not($Gate -and $Up -and $Down)){throw 'Supply Gate, Up and Down together.'}
++    $PythonArgs+=@('--gate',$Gate,'--up',$Up,'--down',$Down)
++}
++if($DumpContract){$PythonArgs+=@('--dump-contract')}
++& python @PythonArgs
++if($LASTEXITCODE -ne 0){throw "Architecture test failed. Preserve $Out; no fallback or model-level pass implied."}
++& python (Join-Path $Root 'tools/analyze_architecture_results.py') $Out
++if($LASTEXITCODE -ne 0){throw 'Analysis failed; raw evidence has been preserved.'}
+diff --git a/scripts/build_windows.ps1 b/scripts/build_windows.ps1
+index 429f83f..cb3b259 100644
+--- a/scripts/build_windows.ps1
++++ b/scripts/build_windows.ps1
+@@ -38,19 +38,19 @@ Push-Location $Root
+ try{
+     Invoke-Logged $CC.Source @('--version') (Join-Path $Build 'compiler-version.txt')
+     $CPUFlags=@('-fexceptions','-fcxx-exceptions','-std=c++17','-O2','-Iinclude')
+-    foreach($Test in @(@('reference_tests','maple-reference-tests'),@('w2a8_reference_tests','maple-a8-reference-tests'),@('moe_reference_tests','maple-moe-reference-tests'),@('grouping_reference_tests','maple-grouping-reference-tests'))){
++    foreach($Test in @(@('reference_tests','maple-reference-tests'),@('w2a8_reference_tests','maple-a8-reference-tests'),@('moe_reference_tests','maple-moe-reference-tests'),@('grouping_reference_tests','maple-grouping-reference-tests'),@('architecture_reference_tests','maple-architecture-reference-tests'))){
+         Invoke-Logged $CC.Source ($CPUFlags+@("tests/$($Test[0]).cpp",'-o',"build/$($Test[1]).exe")+$LinkExtra) (Join-Path $Build "$($Test[1])-build.log")
+         Invoke-Logged (Join-Path $Build "$($Test[1]).exe") @() (Join-Path $Build "$($Test[1])-tests.log")
+     }
+     $Flags=@('-fexceptions','-fcxx-exceptions','-std=c++17','-fsycl','-O3','-fno-fast-math','-fsycl-device-code-split=per_kernel','-Iinclude')
+     $Objects=@()
+-    foreach($Source in @('maple_w2a16','maple_w2a8','maple_moe','expert_grouping')){
++    foreach($Source in @('maple_w2a16','maple_w2a8','maple_moe','expert_grouping','maple_w2a8_grouped')){
+         $Object="build/$Source.obj"
+         Invoke-Logged $CC.Source ($Flags+@('-c',"src/$Source.cpp",'-o',$Object)) (Join-Path $Build "$Source-build.log")
+         $Objects+=@($Object)
+     }
+     $Tools=New-Object 'System.Collections.Generic.List[object]'
+-    $Tools.Add(@('grouping_compare','maple-grouping-compare'))
++    $Tools.Add(@('grouping_compare','maple-grouping-compare'));$Tools.Add(@('architecture_compare','maple-architecture-compare'))
+     if(-not $GroupingOnly){
+         $Tools.Add(@('compare','maple-w2-compare'));$Tools.Add(@('bench','maple-w2-bench'));$Tools.Add(@('moe_compare','maple-moe-compare'))
+     }
+@@ -66,5 +66,6 @@ try{
+     $Manifest=[ordered]@{version='0.4';compiler=$CC.Source;flags=$Flags;source_sha256=$Hashes;
+         executable_sha256=(Get-FileHash -LiteralPath (Join-Path $Build 'maple-grouping-compare.exe') -Algorithm SHA256).Hash.ToLowerInvariant()}
+     $Manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Build 'grouping-build.json') -Encoding UTF8
++    Invoke-Logged 'python' @('tools/stamp_architecture_build.py','--exe','build/maple-architecture-compare.exe') (Join-Path $Build 'architecture-stamp.log')
+     Write-Host 'Build complete. GPU kernels compiled once for all comparators. No ggml DLL or launch settings changed.'
+ }finally{Pop-Location}
+diff --git a/src/expert_grouping.cpp b/src/expert_grouping.cpp
+index 2dfa3c2..58a3f27 100644
+--- a/src/expert_grouping.cpp
++++ b/src/expert_grouping.cpp
+@@ -59,3 +59,29 @@ ExpertGroupingRun enqueue_expert_grouping(sycl::queue&q,const int32_t* ids,size_
+     return r;
+ }
+ } // namespace maple_w2
++
++namespace maple_w2 {
++class ExpertTokenTiles;
++sycl::event enqueue_expert_token_tiles(sycl::queue& q,size_t jobs,uint32_t experts,
++    ExpertGroupingWorkspace g,ExpertTokenTileView w,const std::vector<sycl::event>& deps) {
++    const size_t bound=expert_token_tile_capacity(jobs,experts,w.tokens_per_tile);
++    if(!g.counts||!g.offsets||g.expert_capacity<experts||g.job_capacity<jobs||
++       !w.first||!w.length||!w.expert||!w.total||w.capacity<bound)
++        throw std::invalid_argument("missing/undersized expert token-tile workspace");
++    const uint32_t width=w.tokens_per_tile;
++    return q.submit([&](sycl::handler& h) {
++        h.depends_on(deps);
++        h.parallel_for<ExpertTokenTiles>(sycl::range<1>(size_t(experts)+1),[=](sycl::id<1> i) {
++            const uint32_t e=uint32_t(i[0]);int32_t first=0;
++            for(uint32_t b=0;b<e;++b)first+=g.counts[b]/int32_t(width)+int32_t(g.counts[b]%int32_t(width)!=0);
++            const int32_t count=g.counts[e],n=count/int32_t(width)+int32_t(count%int32_t(width)!=0);
++            for(int32_t t=0;t<n;++t) {
++                const size_t j=size_t(first+t);
++                w.first[j]=g.offsets[e]+t*int32_t(width);
++                w.length[j]=sycl::min(int32_t(width),count-t*int32_t(width));w.expert[j]=int32_t(e);
++            }
++            if(e==experts)*w.total=first+n;
++        });
++    });
++}
++} // namespace maple_w2
+diff --git a/src/maple_moe.cpp b/src/maple_moe.cpp
+index 3e87f75..599bdce 100644
+--- a/src/maple_moe.cpp
++++ b/src/maple_moe.cpp
+@@ -22,6 +22,24 @@ static void check(const MoeProblem&p,const MoeOptions&o,const MoeWorkspace&w){
+            w.grouping.job_capacity<size_t(p.tokens)*p.topk||w.grouping.expert_capacity<p.gate_shape.experts)
+             throw std::invalid_argument("missing/undersized expert-grouping workspace");
+     }
++    if(o.input_prequantized&&o.path==MoePath::a16)
++        throw std::invalid_argument("prequantized input is an A8 option");
++    for(auto item:std::array<std::pair<uint32_t,ExpertTokenTileView>,2>{{
++            {o.gate_tokens_per_tile,w.gate_tiles},
++            {o.down_tokens_per_tile,o.gate_tokens_per_tile==o.down_tokens_per_tile?w.gate_tiles:w.down_tiles}}}) {
++        check_tokens_per_tile(item.first);
++        if(item.first>1) {
++            const auto& t=item.second;
++            if(!o.expert_grouping||!t.first||!t.length||!t.expert||!t.total||
++               t.capacity<expert_token_tile_capacity(size_t(p.tokens)*p.topk,p.gate_shape.experts,item.first))
++                throw std::invalid_argument("missing/undersized grouped-reuse descriptors");
++        }
++    }
++    if(o.gate_tokens_per_tile>1&&o.down_tokens_per_tile>1&&o.gate_tokens_per_tile!=o.down_tokens_per_tile) {
++        if(w.gate_tiles.first==w.down_tiles.first||w.gate_tiles.length==w.down_tiles.length||
++           w.gate_tiles.expert==w.down_tiles.expert||w.gate_tiles.total==w.down_tiles.total)
++            throw std::invalid_argument("different token tiles require nonaliasing descriptor buffers");
++    }
+     if(!std::isfinite(o.clamp)||o.clamp<=0)throw std::invalid_argument("invalid SwiGLU clamp");
+     if(o.path!=MoePath::a16&&o.path!=MoePath::a8_separate&&o.path!=MoePath::a8_gluquant)throw std::invalid_argument("invalid MoE path");
+     // Validate BOTH projections before submitting gate/up. A bad down configuration
+@@ -65,34 +83,89 @@ static sycl::event epilogue_quant(sycl::queue&q,const MoeProblem&p,const MoeOpti
+                 w.hidden_a8.q[group*G+j*32+lane]=int8_t(z<0?-int(k):int(k));}
+         });});
+ }
+-MoeRun enqueue_moe(sycl::queue&q,const MoeProblem&p,const MoeOptions&o,const MoeWorkspace&w,const std::vector<sycl::event>&deps){
+-    validate_dg2_device(q.get_device());check(p,o,w);MoeRun run;
++MoeRun enqueue_moe(sycl::queue&q,const MoeProblem&p,const MoeOptions&requested,const MoeWorkspace&w,const std::vector<sycl::event>&deps){
++    validate_dg2_device(q.get_device());
++    const bool compatible=requested.path==MoePath::a8_gluquant && requested.input_group==32 &&
++        requested.hidden_group==32 && p.layout==Layout::s2tile8;
++    const auto decision=choose_moe_schedule(requested.schedule,requested.expert_grouping,
++        p.tokens,p.topk,p.gate_shape.experts,compatible,requested.auto_policy);
++    MoeOptions o=requested;o.expert_grouping=decision.grouped;
++    check_tokens_per_tile(o.gate_tokens_per_tile);check_tokens_per_tile(o.down_tokens_per_tile);
++    if(!o.expert_grouping)o.gate_tokens_per_tile=o.down_tokens_per_tile=1;
++    check(p,o,w); // all views validated before first submission
++    MoeRun run;run.dispatch=decision;run.fork_join_requested=o.expert_grouping&&o.overlap_grouping_quant&&!o.input_prequantized;
++    run.queue_in_order=q.has_property<sycl::property::queue::in_order>();
++    run.gate_tile=o.gate_tokens_per_tile;run.down_tile=o.down_tokens_per_tile;
++    auto add=[&](const char*label,const sycl::event&e,uint32_t parents=0){
++        const uint32_t bit=uint32_t(1)<<run.count;run.add(label,e,parents);return bit;};
++    auto events=[&](uint32_t mask){std::vector<sycl::event> e;
++        if(!mask)return deps;
++        for(size_t i=0;i<run.count;++i)if((mask>>i)&1u)e.push_back(run.stages[i].event);
++        return e;};
+     DeviceProblem gate{p.gate_shape,p.tokens,p.topk,false,p.layout,p.gate,p.up,p.x,p.ids,w.gate,w.up,w.gate_status};
+     DeviceProblem down{{p.gate_shape.m,p.gate_shape.k,p.gate_shape.experts},p.tokens,p.topk,true,p.layout,p.down,nullptr,w.hidden,p.ids,w.down,nullptr,w.down_status};
+-    std::vector<sycl::event> gate_deps=deps;
+-    const int32_t* job_order=nullptr;
++    uint32_t group_ready=0,gate_tiles_ready=0,down_tiles_ready=0;
++    const int32_t* job_order=nullptr;ExpertTokenTileView gate_tiles{},down_tiles{};
+     if(o.expert_grouping) {
+         auto gr=enqueue_expert_grouping(q,p.ids,size_t(p.tokens)*p.topk,p.gate_shape.experts,w.grouping,deps);
+-        run.add("group_count",gr.count);run.add("group_prefix",gr.prefix);run.add("group_scatter",gr.scatter);
+-        gate_deps={gr.scatter};job_order=w.grouping.sorted_to_job;
++        auto c=add("group_count",gr.count),pr=add("group_prefix",gr.prefix,c);
++        group_ready=add("group_scatter",gr.scatter,pr);job_order=w.grouping.sorted_to_job;
++        if(o.gate_tokens_per_tile>1) {
++            gate_tiles=w.gate_tiles;gate_tiles.tokens_per_tile=o.gate_tokens_per_tile;
++            // Serial after scatter unless fork/join was explicitly requested.
++            auto e=enqueue_expert_token_tiles(q,size_t(p.tokens)*p.topk,p.gate_shape.experts,w.grouping,gate_tiles,{gr.scatter});
++            gate_tiles_ready=add("group_gate_tiles",e,group_ready);
++        }
++        if(o.down_tokens_per_tile>1) {
++            if(o.gate_tokens_per_tile==o.down_tokens_per_tile) {
++                down_tiles=gate_tiles;down_tiles_ready=gate_tiles_ready;
++            } else {
++                down_tiles=w.down_tiles;down_tiles.tokens_per_tile=o.down_tokens_per_tile;
++                const auto wait=group_ready|gate_tiles_ready;
++                auto e=enqueue_expert_token_tiles(q,size_t(p.tokens)*p.topk,p.gate_shape.experts,w.grouping,down_tiles,events(wait));
++                down_tiles_ready=add("group_down_tiles",e,wait);
++            }
++        }
+     }
+-    sycl::event gd;
+-    if(o.path==MoePath::a16){auto r=enqueue(q,gate,o.gate_kernel,w.gate_split,gate_deps);run.add("gate_up",r.main);if(r.has_reduce)run.add("gate_reduce",r.done);gd=r.done;}
+-    else{auto r=enqueue_a8(q,gate,{o.input_group,A8Mode::staged,o.gate_kernel,job_order},w.input_a8,w.gate_split,gate_deps);
+-        run.add("input_quant",r.quant);run.add("gate_up",r.main);if(r.has_reduce)run.add("gate_reduce",r.done);gd=r.done;}
+-    if(o.diagnostic_host_waits)gd.wait_and_throw();
+-    sycl::event hd;
+-    if(o.path==MoePath::a8_gluquant){switch(o.hidden_group){case 32:hd=epilogue_quant<32>(q,p,o,w,gd);break;
+-        case 128:hd=epilogue_quant<128>(q,p,o,w,gd);break;default:hd=epilogue_quant<256>(q,p,o,w,gd);}
+-        run.add("swiglu_quant",hd);}
+-    else{hd=epilogue(q,p,o,w,gd);run.add("swiglu",hd);}
++    const uint32_t all_group=group_ready|gate_tiles_ready|down_tiles_ready;
++    uint32_t gdmask=0;
++    if(o.path==MoePath::a16) {
++        auto r=enqueue(q,gate,o.gate_kernel,w.gate_split,deps);gdmask=add("gate_up",r.main);
++        if(r.has_reduce)gdmask=add("gate_reduce",r.done,gdmask);
++    } else {
++        uint32_t quant_ready=0;
++        if(!o.input_prequantized) {
++            const auto wait=o.overlap_grouping_quant?0u:all_group;
++            auto e=enqueue_a8_quant(q,p.x,ActivationType::f32,p.tokens,p.gate_shape.k,o.input_group,w.input_a8,events(wait));
++            quant_ready=add("input_quant",e,wait);
++        }
++        const uint32_t wait=group_ready|gate_tiles_ready|quant_ready;
++        // A prequantized input belongs to caller deps. They are already inherited
++        // through grouping when present, and passed directly for an empty mask.
++        A8Options a{o.input_group,A8Mode::prequantized,o.gate_kernel,job_order,gate_tiles};
++        auto r=enqueue_a8(q,gate,a,w.input_a8,w.gate_split,events(wait));gdmask=add("gate_up",r.main,wait);
++        if(r.has_reduce)gdmask=add("gate_reduce",r.done,gdmask);
++    }
++    auto gd=run.done;if(o.diagnostic_host_waits)gd.wait_and_throw();
++    sycl::event hd;uint32_t hdmask;
++    if(o.path==MoePath::a8_gluquant) {
++        switch(o.hidden_group){case 32:hd=epilogue_quant<32>(q,p,o,w,gd);break;
++            case 128:hd=epilogue_quant<128>(q,p,o,w,gd);break;default:hd=epilogue_quant<256>(q,p,o,w,gd);}
++        hdmask=add("swiglu_quant",hd,gdmask);
++    } else {hd=epilogue(q,p,o,w,gd);hdmask=add("swiglu",hd,gdmask);}
+     if(o.diagnostic_host_waits)hd.wait_and_throw();
+-    sycl::event dd;
+-    if(o.path==MoePath::a16){auto r=enqueue(q,down,o.down_kernel,w.down_split,{hd});run.add("down",r.main);if(r.has_reduce)run.add("down_reduce",r.done);dd=r.done;}
+-    else{auto mode=o.path==MoePath::a8_gluquant?A8Mode::prequantized:A8Mode::staged;
+-        auto r=enqueue_a8(q,down,{o.hidden_group,mode,o.down_kernel,job_order},w.hidden_a8,w.down_split,{hd});
+-        if(r.has_quant)run.add("hidden_quant",r.quant);run.add("down",r.main);if(r.has_reduce)run.add("down_reduce",r.done);dd=r.done;}
+-    if(o.diagnostic_host_waits)dd.wait_and_throw();
++    uint32_t ddmask;
++    if(o.path==MoePath::a16) {
++        auto r=enqueue(q,down,o.down_kernel,w.down_split,{hd});ddmask=add("down",r.main,hdmask);
++        if(r.has_reduce)ddmask=add("down_reduce",r.done,ddmask);
++    } else {
++        auto mode=o.path==MoePath::a8_gluquant?A8Mode::prequantized:A8Mode::staged;
++        const uint32_t wait=hdmask|down_tiles_ready;
++        auto r=enqueue_a8(q,down,{o.hidden_group,mode,o.down_kernel,job_order,down_tiles},w.hidden_a8,w.down_split,events(wait));
++        uint32_t main_wait=wait;if(r.has_quant)main_wait=add("hidden_quant",r.quant,wait);
++        ddmask=add("down",r.main,main_wait);if(r.has_reduce)ddmask=add("down_reduce",r.done,ddmask);
++    }
++    const auto dd=run.done;if(o.diagnostic_host_waits)dd.wait_and_throw();
+     const size_t n=size_t(p.tokens)*p.gate_shape.k;const uint32_t width=p.gate_shape.k;
+     auto last=q.submit([&](sycl::handler&h){h.depends_on(dd);h.parallel_for<MoeWeightedSum>(sycl::range<1>(n),[=](sycl::id<1>ii){
+         const size_t i=ii[0],t=i/width,k=i%width;float sum=0;int bad=0;
+@@ -100,6 +173,6 @@ MoeRun enqueue_moe(sycl::queue&q,const MoeProblem&p,const MoeOptions&o,const Moe
+             if(!sycl::isfinite(a)||!sycl::isfinite(r)||r<0)bad=1;sum+=a*r;}
+         p.y[i]=sum;w.output_invalid[i]=bad||!sycl::isfinite(sum);
+     });});
+-    run.add("weighted_sum",last);return run;
++    add("weighted_sum",last,ddmask);return run;
+ }
+ } // namespace maple_w2
+diff --git a/src/maple_w2a8.cpp b/src/maple_w2a8.cpp
+index 5e9b199..74d80cf 100644
+--- a/src/maple_w2a8.cpp
++++ b/src/maple_w2a8.cpp
+@@ -270,12 +270,35 @@ A8Run enqueue_a8(sycl::queue& q,const DeviceProblem& p,A8Options o,A8Workspace w
+     const uint32_t sp=o.kernel.split_k;
+     if((sp!=1&&sp!=2&&sp!=4&&sp!=8)||(p.shape.k/256)%sp||!o.kernel.local_size||o.kernel.local_size>32||
+        (sp>1&&!scratch))throw std::invalid_argument("invalid split/local/scratch");
++    check_tokens_per_tile(o.token_tiles.tokens_per_tile);
++    if(o.token_tiles.tokens_per_tile>1) {
++        const auto& t=o.token_tiles;
++        if(o.group!=32||p.layout!=Layout::s2tile8||o.mode!=A8Mode::prequantized||!o.job_order||
++           !t.first||!t.length||!t.expert||!t.total||
++           t.capacity<expert_token_tile_capacity(size_t(p.tokens)*p.topk,p.shape.experts,t.tokens_per_tile))
++            throw std::invalid_argument("grouped reuse needs fresh G32/s2tile8/prequantized tiles");
++        return enqueue_a8_token_tiles(q,p,o,w,scratch,deps);
++    }
+     switch(o.group) {
+         case 32:return dispatch_layout<32>(q,p,o,w,scratch,deps);
+         case 128:return dispatch_layout<128>(q,p,o,w,scratch,deps);
+         default:return dispatch_layout<256>(q,p,o,w,scratch,deps);
+     }
+ }
++sycl::event enqueue_a8_quant(sycl::queue& q,const void* x,ActivationType type,uint32_t rows,
++    uint32_t k,uint32_t group,A8Workspace w,const std::vector<sycl::event>& deps) {
++    check_device(q.get_device());check_a8_group(group);
++    if(!x||!rows||!k||k%group||!w.q||!w.scales||!w.invalid||
++       (type!=ActivationType::f32&&type!=ActivationType::f16))
++        throw std::invalid_argument("invalid standalone A8 quantizer view");
++    (void)checked_mul(rows,k);
++    DeviceProblem p{};p.shape={k,8,1};p.tokens=rows;p.topk=1;p.x=x;p.activation_type=type;
++    switch(group) {
++        case 32:return quantize<32>(q,p,w,deps);
++        case 128:return quantize<128>(q,p,w,deps);
++        default:return quantize<256>(q,p,w,deps);
++    }
++}
+ void run_s2s8_probe(sycl::queue& q) {
+     check_device(q.get_device());
+     constexpr int cases=36;
+diff --git a/src/maple_w2a8_grouped.cpp b/src/maple_w2a8_grouped.cpp
+new file mode 100644
+index 0000000..d850c8d
+--- /dev/null
++++ b/src/maple_w2a8_grouped.cpp
+@@ -0,0 +1,127 @@
++// SPDX-License-Identifier: MIT
++// Opt-in port of Vulkan's weight-tile reuse, NOT a copy of its dot instruction.
++// s2tile8/G32 only. B is loaded once per K32 and reused for 2/4 token rows;
++// every row still executes the proven DG2 s2*s8 RepeatCount=1 DPAS primitive.
++#include "maple_w2a8.hpp"
++#include <sycl/ext/intel/esimd.hpp>
++#include <sycl/ext/intel/esimd/xmx/dpas.hpp>
++namespace maple_w2 {
++namespace es=sycl::ext::intel::esimd;
++namespace xmx=sycl::ext::intel::esimd::xmx;
++template<int T,bool Pair>class W2TokenReuse;
++template<int T,bool Pair>class W2TokenReuseReduce;
++template<int T,bool Pair>
++static A8Run launch_tiles(sycl::queue& q,DeviceProblem p,A8Options o,A8Workspace a,float* scratch,
++                         const std::vector<sycl::event>& deps) {
++    const size_t jobs=size_t(p.tokens)*p.topk,outn=jobs*p.shape.m;
++    const size_t tiles=expert_token_tile_capacity(jobs,p.shape.experts,T);
++    const uint32_t rtiles=p.shape.m/8,split=o.kernel.split_k;
++    const size_t logical=tiles*rtiles*split;
++    const size_t global=((logical+o.kernel.local_size-1)/o.kernel.local_size)*o.kernel.local_size;
++    A8Run run;
++    run.main=q.submit([&](sycl::handler& h) {
++        h.depends_on(deps);
++        h.parallel_for<W2TokenReuse<T,Pair>>(
++          sycl::nd_range<1>{sycl::range<1>(global),sycl::range<1>(o.kernel.local_size)},
++          [=](sycl::nd_item<1> it) SYCL_ESIMD_KERNEL {
++            size_t idx=it.get_global_linear_id();if(idx>=logical)return;
++            const uint32_t sp=uint32_t(idx%split);idx/=split;
++            const uint32_t rt=uint32_t(idx%rtiles);const size_t tile=idx/rtiles;
++            const int32_t total=*o.token_tiles.total;
++            // Descriptors are produced on GPU; no dynamic-count host readback.
++            if(total<0||size_t(total)>tiles){if(idx==0&&sp==0)p.status[0]=2;return;}
++            if(tile>=size_t(total))return;
++            const int32_t start=o.token_tiles.first[tile],len=o.token_tiles.length[tile];
++            const int32_t expert=o.token_tiles.expert[tile];
++            if(start<0||len<1||len>T||size_t(start)+size_t(len)>jobs||expert<0||uint32_t(expert)>p.shape.experts) {
++                // Unique first work item avoids flag races. Host must reject status.
++                if(rt==0&&sp==0)p.status[tile]=2;return;
++            }
++            size_t job[T];bool valid[T];es::simd<float,8> acc0[T],acc1[T];
++            #pragma unroll
++            for(int t=0;t<T;++t) {
++                job[t]=0;valid[t]=false;acc0[t]=0.f;acc1[t]=0.f;
++                if(t<len) {
++                    const int32_t j=o.job_order[size_t(start)+t];
++                    if(j<0||size_t(j)>=jobs) {if(rt==0&&sp==0)p.status[tile]=2;return;}
++                    job[t]=size_t(j);const int32_t id=p.ids[job[t]];
++                    valid[t]=id>=0&&uint32_t(id)<p.shape.experts&&id==expert;
++                    if(!valid[t]&&rt==0&&sp==0)p.status[job[t]]=1;
++                }
++            }
++            if(uint32_t(expert)<p.shape.experts) {
++                const uint32_t nk=p.shape.k/256,nsp=nk/split;
++                const size_t tb=(size_t(expert)*rtiles+rt)*nk*528;
++                es::simd<uint32_t,8> so(0,2);es::simd<uint32_t,16> bo(0,4);es::simd<uint32_t,32> ao(0,1);
++                for(uint32_t kb=sp*nsp;kb<(sp+1)*nsp;++kb) {
++                    es::simd<uint16_t,8> ds0=es::gather<uint16_t,8>(reinterpret_cast<const uint16_t*>(p.w0+tb+size_t(kb)*528+512),so);
++                    es::simd<sycl::half,8> hd0=ds0.template bit_cast_view<sycl::half>();
++                    es::simd<float,8> dw0=es::convert<float>(hd0),dw1;
++                    if constexpr(Pair) {
++                        es::simd<uint16_t,8> ds1=es::gather<uint16_t,8>(reinterpret_cast<const uint16_t*>(p.w1+tb+size_t(kb)*528+512),so);
++                        es::simd<sycl::half,8> hd1=ds1.template bit_cast_view<sycl::half>();dw1=es::convert<float>(hd1);
++                    }
++                    for(uint32_t kg=0;kg<256;kg+=32) {
++                        const size_t wb=tb+size_t(kb)*528+size_t(kg/32)*64;
++                        es::simd<uint32_t,16> b0=es::gather<uint32_t,16>(reinterpret_cast<const uint32_t*>(p.w0+wb),bo),b1;
++                        if constexpr(Pair)b1=es::gather<uint32_t,16>(reinterpret_cast<const uint32_t*>(p.w1+wb),bo);
++                        #pragma unroll
++                        for(int t=0;t<T;++t)if(t<len&&valid[t]) {
++                            const size_t xr=p.per_selection?job[t]:job[t]/p.topk;
++                            const size_t ax=xr*p.shape.k+kb*256+kg;
++                            const float da=a.scales[ax/32];
++                            es::simd<int8_t,32> av=es::gather<int8_t,32>(a.q+ax,ao);
++                            es::simd<int32_t,8> ia0=0,ia1=0;
++                            ia0=xmx::dpas<8,1,int32_t,int32_t,uint32_t,int8_t,
++                                xmx::dpas_argument_type::s2,xmx::dpas_argument_type::s8>(ia0,b0,av);
++                            acc0[t]+=es::convert<float>(ia0)*(dw0*da);
++                            if constexpr(Pair) {
++                                ia1=xmx::dpas<8,1,int32_t,int32_t,uint32_t,int8_t,
++                                    xmx::dpas_argument_type::s2,xmx::dpas_argument_type::s8>(ia1,b1,av);
++                                acc1[t]+=es::convert<float>(ia1)*(dw1*da);
++                            }
++                        }
++                    }
++                }
++            }
++            es::simd<uint32_t,8> oo(0,4);
++            #pragma unroll
++            for(int t=0;t<T;++t)if(t<len) {
++                const size_t oi=job[t]*p.shape.m+rt*8;
++                if(split==1) {
++                    es::scatter<float,8>(p.y0+oi,oo,acc0[t]);
++                    if constexpr(Pair)es::scatter<float,8>(p.y1+oi,oo,acc1[t]);
++                } else {
++                    es::scatter<float,8>(scratch+size_t(sp)*outn+oi,oo,acc0[t]);
++                    if constexpr(Pair)es::scatter<float,8>(scratch+(size_t(split)+sp)*outn+oi,oo,acc1[t]);
++                }
++            }
++        });
++    });
++    run.done=run.main;
++    if(split>1) {
++        const size_t n=outn*(Pair?2:1),global_reduce=((n+127)/128)*128;
++        run.done=q.submit([&](sycl::handler& h) {
++            h.depends_on(run.main);
++            h.parallel_for<W2TokenReuseReduce<T,Pair>>(
++              sycl::nd_range<1>{sycl::range<1>(global_reduce),sycl::range<1>(128)},[=](sycl::nd_item<1> it) {
++                const size_t i=it.get_global_linear_id();if(i>=n)return;
++                const size_t proj=i/outn,j=i%outn;float sum=0;
++                for(uint32_t sp=0;sp<split;++sp)sum+=scratch[(proj*split+sp)*outn+j];
++                (proj?p.y1:p.y0)[j]=sum;
++            });
++        });
++        run.has_reduce=true;
++    }
++    return run;
++}
++A8Run enqueue_a8_token_tiles(sycl::queue& q,const DeviceProblem& p,A8Options o,A8Workspace a,
++    float* scratch,const std::vector<sycl::event>& deps) {
++    // Exported only for translation-unit dispatch; callers must use enqueue_a8.
++    if(o.token_tiles.tokens_per_tile==2)
++        return p.w1?launch_tiles<2,true>(q,p,o,a,scratch,deps):launch_tiles<2,false>(q,p,o,a,scratch,deps);
++    if(o.token_tiles.tokens_per_tile==4)
++        return p.w1?launch_tiles<4,true>(q,p,o,a,scratch,deps):launch_tiles<4,false>(q,p,o,a,scratch,deps);
++    throw std::invalid_argument("token-tile dispatch requires T2/T4");
++}
++} // namespace maple_w2
+diff --git a/tests/architecture_reference_tests.cpp b/tests/architecture_reference_tests.cpp
+new file mode 100644
+index 0000000..0cbcb6d
+--- /dev/null
++++ b/tests/architecture_reference_tests.cpp
+@@ -0,0 +1,97 @@
++// SPDX-License-Identifier: MIT
++#include "expert_token_tiles.hpp"
++#include "a8_contract_audit.hpp"
++#include "moe_profiling.hpp"
++#include <iostream>
++#include <random>
++#include <numeric>
++#include <functional>
++using namespace maple_w2;
++static size_t checks=0;
++static void test(bool yes){++checks;if(!yes)throw std::runtime_error("architecture reference assertion "+std::to_string(checks));}
++static void throws(const std::function<void()>& fn){bool ok=false;try{fn();}catch(const std::exception&){ok=true;}test(ok);}
++int main()try {
++    using S=MoeSchedule;
++    test(!choose_moe_schedule(S::auto_select,false,2048,8,256,true).grouped);
++    test(!choose_moe_schedule(S::auto_select,false,1,8,256,true,{1,0}).grouped);
++    test(choose_moe_schedule(S::grouped,false,1,8,256,true).grouped);
++    test(!choose_moe_schedule(S::direct,true,2048,8,256,true).grouped);
++    test(choose_moe_schedule(S::inherit_v04,true,184,8,256,true).grouped);
++    test(!choose_moe_schedule(S::auto_select,false,64,8,256,false,{32,1}).grouped);
++    test(!choose_moe_schedule(S::auto_select,false,32,8,256,true,{64,1}).grouped);
++    test(!choose_moe_schedule(S::auto_select,false,32,8,256,true,{32,2}).grouped);
++    test(choose_moe_schedule(S::auto_select,false,64,8,256,true,{32,2}).grouped);
++    throws([]{choose_moe_schedule(S::grouped,false,32,8,256,false);});
++    throws([]{choose_moe_schedule(S::direct,false,0,8,256,true);});
++    throws([]{check_tokens_per_tile(8);});
++    std::mt19937 rng(8123);
++    for(uint32_t e:{1u,3u,8u,256u})for(size_t jobs:{1u,8u,13u,127u,128u,129u,1472u,16384u})for(uint32_t width:{1u,2u,4u}) {
++        std::vector<int32_t> ids(jobs);
++        for(size_t i=0;i<jobs;++i)ids[i]=i%19==0?-1:(i%23==0?int32_t(e):int32_t(rng()%e));
++        for(int mode=0;mode<2;++mode) {
++            if(mode)std::fill(ids.begin(),ids.end(),int32_t(e-1));
++            auto g=group_jobs_reference(ids,e);auto t=token_tiles_reference(g,width);
++            test(t.first.size()<=expert_token_tile_capacity(jobs,e,width));std::vector<int>visits(jobs,0);
++            for(size_t i=0;i<t.first.size();++i) {
++                test(t.length[i]>0&&t.length[i]<=int32_t(width));test(t.expert[i]>=0&&uint32_t(t.expert[i])<=e);
++                for(int j=0;j<t.length[i];++j) {
++                    size_t orig=size_t(g.sorted_to_job[size_t(t.first[i])+j]);++visits[orig];
++                    test(grouping_key(ids[orig],e)==uint32_t(t.expert[i]));
++                }
++            }
++            for(auto v:visits)test(v==1);
++        }
++    }
++    // Numeric reference vs a tile loop: preserve original job addressing, K32
++    // scale placement, split reduction order, broadcast and per-selection rows.
++    for(bool per:{false,true})for(uint32_t width:{2u,4u})for(uint32_t split:{1u,2u,4u}) {
++        const uint32_t Q=13,K=1024,topk=3,E=7,M=16;const size_t J=Q*topk;
++        std::vector<int32_t>ids(J);for(auto&v:ids)v=int32_t(rng()%E);
++        auto g=group_jobs_reference(ids,E);auto tiles=token_tiles_reference(g,width);
++        std::vector<int8_t> weights(E*M*K),aq((per?J:Q)*K);
++        std::vector<float>dw(E*M*(K/256)),da(aq.size()/32);
++        for(auto&v:weights)v=int8_t(int(rng()%3)-1);for(auto&v:aq)v=int8_t(int(rng()%255)-127);
++        for(auto&v:dw)v=(1+rng()%31)/512.f;for(auto&v:da)v=(1+rng()%13)/127.f;
++        auto calc=[&](bool tiled) {
++            std::vector<float> out(J*M,0.f);
++            auto one=[&](size_t job,uint32_t row) {
++                float sum=0;
++                for(uint32_t sp=0;sp<split;++sp){float part=0;
++                    for(uint32_t k=sp*(K/split);k<(sp+1)*(K/split);k+=32){int dot=0;size_t xr=per?job:job/topk;
++                        for(uint32_t j=0;j<32;++j)dot+=int(weights[(size_t(ids[job])*M+row)*K+k+j])*int(aq[xr*K+k+j]);
++                        part+=float(dot)*(dw[(size_t(ids[job])*M+row)*(K/256)+k/256]*da[xr*(K/32)+k/32]);}
++                    sum+=part;}out[job*M+row]=sum;
++            };
++            if(tiled)for(size_t t=0;t<tiles.first.size();++t)for(uint32_t row=0;row<M;row+=8)
++                for(int ti=0;ti<tiles.length[t];++ti)for(uint32_t r=0;r<8;++r)one(size_t(g.sorted_to_job[size_t(tiles.first[t])+ti]),row+r);
++            else for(size_t j=0;j<J;++j)for(uint32_t r=0;r<M;++r)one(j,r);
++            return out;
++        };
++        auto a=calc(false),b=calc(true);for(size_t i=0;i<a.size();++i)test(a[i]==b[i]);
++    }
++    std::vector<float>x(128,0);x[0]=127;x[1]=110.5f;x[2]=111.5f;x[3]=-110.5f;x[4]=-111.5f;
++    x[32]=1e-40f;x[64]=1.f;x[65]=0.345f;
++    auto q=quantize_a8(x,1,128,32);test(audit_a8(q,x).pass);
++    test(q.q[1]==110&&q.q[2]==112&&q.q[3]==-110&&q.q[4]==-112);
++    auto bad=q;bad.q[65]++;test(!audit_a8(bad,x).pass); // +/-1 away from a tie is a real bug
++    bad=q;bad.q[1]=111;auto a=audit_a8(bad,x);test(a.pass&&a.boundary_codes==1);
++    bad=q;bad.q[1]=112;test(!audit_a8(bad,x).pass);
++    bad=q;bad.q[0]=-128;test(!audit_a8(bad,x).pass);
++    bad=q;bad.scale[3]=2.f;test(!audit_a8(bad,x).pass); // zero group d=1 invariant
++    bad=q;bad.scale[2]*=1.01f;test(!audit_a8(bad,x).pass);
++    bad=q;bad.scale[0]=std::numeric_limits<float>::quiet_NaN();test(!audit_a8(bad,x).pass);
++    auto nanx=x;nanx[0]=std::numeric_limits<float>::infinity();test(!audit_a8(q,nanx).pass);
++    // Vulkan legacy half-away diagnostic vector: do NOT copy its expected 111
++    // into XMX's ties-even reference (110).
++    test(quant_rne(0.7057453393936157f,0.006386835593730211f)==110);
++    auto p=profile_intervals({{0,10,0},{5,15,0},{17,27,3}});
++    test(p.kernel_sum==30&&p.union_busy==25&&p.overlap==5&&p.idle==2&&p.end-p.begin==27);
++    // Submit-order != device start order for independent branches.
++    p=profile_intervals({{10,20,0},{0,15,0},{22,30,3}});
++    test(p.kernel_sum==33&&p.union_busy==28&&p.overlap==5&&p.idle==2);
++    throws([]{profile_intervals({{0,10,0},{9,20,1}});});
++    throws([]{profile_intervals({{10,9,0}});});
++    throws([]{profile_intervals({{0,1,1}});});
++    test(profile_intervals({{0,1,0},{1,2,1}}).idle==0);
++    std::cout<<"architecture CPU reference PASS checks="<<checks<<" (not GPU validation)\n";return 0;
++}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}
+diff --git a/tests/mock_sycl/README.md b/tests/mock_sycl/README.md
+new file mode 100644
+index 0000000..c0f8bd2
+--- /dev/null
++++ b/tests/mock_sycl/README.md
+@@ -0,0 +1,9 @@
++# Host-only test support
++
++This is not a SYCL implementation or an ESIMD compiler.
++
++- `maple-submission-mock-tests`: executes the real host enqueue code; does not execute device lambdas.
++- `maple-token-reuse-emulation-tests`: executes the new grouped-reuse source with scalar array, gather and s2/s8 dot models. No actual DPAS instructions, GPU scheduling, subgroup semantics or driver validation.
++- `-fsyntax-only` on `architecture_compare.cpp`: ordinary C++ host syntax coverage only.
++
++Do not put this directory in a production include path. Production targets never include it. Collective placeholders must not be used as a correctness oracle for real workgroup kernels.
+diff --git a/tests/mock_sycl/sycl/ext/intel/esimd.hpp b/tests/mock_sycl/sycl/ext/intel/esimd.hpp
+new file mode 100644
+index 0000000..eb82903
+--- /dev/null
++++ b/tests/mock_sycl/sycl/ext/intel/esimd.hpp
+@@ -0,0 +1,25 @@
++// SPDX-License-Identifier: MIT
++// CPU scalar model for the NEW T2/T4 kernel only. Not Intel ESIMD compilation.
++#pragma once
++#include <array>
++#include <cstring>
++#include <sycl/sycl.hpp>
++namespace sycl::ext::intel::esimd {
++template<class T,int N>struct simd {
++    std::array<T,N> v{};
++    simd()=default;simd(T x){v.fill(x);}simd(T x,T step){for(int i=0;i<N;++i)v[i]=T(x+i*step);}
++    T& operator[](int i){return v[i];}const T& operator[](int i)const{return v[i];}
++    simd& operator=(T x){v.fill(x);return *this;}
++    simd& operator+=(const simd& x){for(int i=0;i<N;++i)v[i]+=x.v[i];return *this;}
++    template<class U>simd<U,N*sizeof(T)/sizeof(U)> bit_cast_view()const {
++        simd<U,N*sizeof(T)/sizeof(U)> x;std::memcpy(x.v.data(),v.data(),N*sizeof(T));return x;
++    }
++};
++template<class T,int N>simd<T,N>operator*(const simd<T,N>&a,T b){simd<T,N>r;for(int i=0;i<N;++i)r[i]=a[i]*b;return r;}
++template<class T,int N>simd<T,N>operator*(const simd<T,N>&a,const simd<T,N>&b){simd<T,N>r;for(int i=0;i<N;++i)r[i]=a[i]*b[i];return r;}
++template<class To,class T,int N>simd<To,N>convert(const simd<T,N>&a){simd<To,N>r;for(int i=0;i<N;++i)r[i]=To(a[i]);return r;}
++template<class T,int N>simd<T,N>gather(const T*p,const simd<uint32_t,N>&o){
++    simd<T,N>r;for(int i=0;i<N;++i)std::memcpy(&r[i],reinterpret_cast<const uint8_t*>(p)+o[i],sizeof(T));return r;}
++template<class T,int N>void scatter(T*p,const simd<uint32_t,N>&o,const simd<T,N>&a){
++    for(int i=0;i<N;++i)std::memcpy(reinterpret_cast<uint8_t*>(p)+o[i],&a[i],sizeof(T));}
++} // namespace
+diff --git a/tests/mock_sycl/sycl/ext/intel/esimd/xmx/dpas.hpp b/tests/mock_sycl/sycl/ext/intel/esimd/xmx/dpas.hpp
+new file mode 100644
+index 0000000..f4ae9f1
+--- /dev/null
++++ b/tests/mock_sycl/sycl/ext/intel/esimd/xmx/dpas.hpp
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: MIT
++#pragma once
++#include <sycl/ext/intel/esimd.hpp>
++namespace sycl::ext::intel::esimd::xmx {
++enum class dpas_argument_type{s2,s8};
++template<int SD,int RC,class RT,class CT,class BT,class AT,dpas_argument_type BP,dpas_argument_type AP>
++simd<RT,8>dpas(const simd<CT,8>&c,const simd<BT,16>&b,const simd<AT,32>&a){
++    static_assert(SD==8&&RC==1&&BP==dpas_argument_type::s2&&AP==dpas_argument_type::s8);
++    simd<RT,8>r;
++    for(int n=0;n<8;++n){int32_t sum=c[n];for(int k=0;k<32;++k){
++        int bits=int((b[(k/16)*8+n]>>(2*(k%16)))&3u);int v=bits<2?bits:bits-4;
++        sum+=v*int(a[k]);}r[n]=RT(sum);}
++    return r;
++}
++} // namespace
+diff --git a/tests/mock_sycl/sycl/sycl.hpp b/tests/mock_sycl/sycl/sycl.hpp
+new file mode 100644
+index 0000000..64283d4
+--- /dev/null
++++ b/tests/mock_sycl/sycl/sycl.hpp
+@@ -0,0 +1,82 @@
++// SPDX-License-Identifier: MIT
++// HOST-ONLY TEST DOUBLE. Never on a production include path.
++// Default: record submissions without executing lambdas. mock_execute enables
++// serial scalar execution ONLY for the new token-reuse kernel tests. Collective
++// placeholders do NOT emulate real subgroup/workgroup execution. No GPU claim.
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <functional>
++#include <memory>
++#include <string>
++#include <type_traits>
++#include <vector>
++#include "tq2_reference.hpp"
++#define SYCL_ESIMD_KERNEL
++#define SYCL_ESIMD_FUNCTION
++namespace sycl {
++namespace info {namespace device {struct name{};struct vendor_id{};struct driver_version{};}enum class device_type{gpu};namespace event_profiling{struct command_start{};struct command_end{};}}
++namespace property {namespace queue {struct in_order{};struct enable_profiling{};}}
++enum class backend{ext_oneapi_level_zero};
++struct context{};
++using exception_list=std::vector<std::exception_ptr>;
++struct property_list {bool ordered=false;template<class... P>property_list(P...){ordered=(std::is_same_v<P,property::queue::in_order>||...);}};
++enum class aspect {fp16};
++struct device {
++    template<class T> auto get_info()const {
++        if constexpr(std::is_same_v<T,info::device::vendor_id>)return uint32_t(0x8086);else return std::string("MOCK A750");
++    }
++    backend get_backend()const{return backend::ext_oneapi_level_zero;}
++    bool is_gpu()const{return true;}bool has(aspect)const{return true;}
++    bool operator==(const device&)const{return true;}
++};
++struct platform {static std::vector<platform>get_platforms(){return {platform{}};}std::vector<device>get_devices(info::device_type)const{return {device{}};}};
++inline int mock_waits=0;
++inline bool mock_execute=false;
++struct half {uint16_t bits=0;operator float()const{return maple_w2::half_to_float(bits);}};
++struct event {
++    int number=0;
++    void wait_and_throw()const{++mock_waits;}
++    template<class T>uint64_t get_profiling_info()const{return 0;}
++};
++template<int D>struct range {size_t n;explicit range(size_t x):n(x){}};
++template<int D>struct id {size_t n=0;size_t operator[](size_t)const{return n;}};
++template<int D>struct nd_range {range<D>global,local;nd_range(range<D>g,range<D>l):global(g),local(l){}};
++struct group{};
++template<int D>struct nd_item {
++    size_t index=0,local=1;
++    size_t get_group_linear_id()const{return index/local;}size_t get_local_linear_id()const{return index%local;}
++    size_t get_global_linear_id()const{return index;}group get_group()const{return {};}
++};
++template<class T>using plus=std::plus<T>;
++template<class T>struct maximum {T operator()(T a,T b)const{return std::max(a,b);}};
++template<class T,class F>T reduce_over_group(group,T x,F){return x;}
++template<class T,class F>T exclusive_scan_over_group(group,T,F){return T{};}
++using std::fmin;using std::fmax;using std::fabs;using std::isfinite;using std::exp;using std::min;
++struct handler {
++    std::vector<event>deps;
++    void depends_on(event e){deps.push_back(e);}
++    void depends_on(const std::vector<event>&e){deps.insert(deps.end(),e.begin(),e.end());}
++    template<class K,int D,class F>void parallel_for(range<D> r,F fn){if(mock_execute)for(size_t i=0;i<r.n;++i)fn(id<D>{i});}
++    template<class K,int D,class F>void parallel_for(nd_range<D> r,F fn){if(mock_execute)for(size_t i=0;i<r.global.n;++i)fn(nd_item<D>{i,r.local.n});}
++};
++class queue {
++public:
++    bool ordered=false;std::vector<std::vector<event>> graph;
++    explicit queue(bool b=false):ordered(b){}
++    template<class F>queue(device,F,property_list p):ordered(p.ordered){}
++    template<class F>queue(context,device,F,property_list p):ordered(p.ordered){}
++    context get_context()const{return {};}
++    void wait()const{++mock_waits;}void wait_and_throw()const{++mock_waits;}
++    event memcpy(void*,const void*,size_t){return submit([](handler&){});}
++    event memset(void*,int,size_t){return submit([](handler&){});}
++    template<class T>event fill(T*,T,size_t){return submit([](handler&){});}
++    template<class R,class F>event parallel_for(R r,F f){return submit([&](handler&h){h.parallel_for<void>(r,f);});}
++    device get_device()const{return {};}
++    template<class P>bool has_property()const{return ordered;}
++    template<class F>event submit(F f){handler h;f(h);if(ordered&&!graph.empty())h.deps.push_back({int(graph.size())});graph.push_back(h.deps);return {int(graph.size())};}
++};
++template<class T>T*malloc_device(size_t n,queue&){return new T[n];}
++inline void free(void*,queue&){} // parsing aid, NEVER a real allocator/free API
++} // namespace sycl
+diff --git a/tests/moe_submission_tests.cpp b/tests/moe_submission_tests.cpp
+new file mode 100644
+index 0000000..cce41e8
+--- /dev/null
++++ b/tests/moe_submission_tests.cpp
+@@ -0,0 +1,59 @@
++// SPDX-License-Identifier: MIT
++// Tests actual src/maple_moe.cpp and src/expert_grouping.cpp HOST enqueue logic
++// against a non-executing SYCL test double. Not device compilation/execution.
++#include "maple_moe.hpp"
++#include <iostream>
++#include <set>
++#include <map>
++using namespace maple_w2;
++namespace maple_w2 {
++static sycl::event stub(sycl::queue&q,const std::vector<sycl::event>&d) {return q.submit([&](sycl::handler&h){h.depends_on(d);});}
++Run enqueue(sycl::queue&q,const DeviceProblem&,Options o,float*,const std::vector<sycl::event>&d){
++    Run r;r.main=stub(q,d);r.done=r.main;if(o.split_k>1){r.has_reduce=true;r.done=stub(q,{r.main});}return r;}
++A8Run enqueue_a8(sycl::queue&q,const DeviceProblem&,A8Options o,A8Workspace,float*,const std::vector<sycl::event>&d){
++    A8Run r;auto deps=d;if(o.mode==A8Mode::staged){r.has_quant=true;r.quant=stub(q,d);deps={r.quant};}
++    if(o.token_tiles.tokens_per_tile>1&&(!o.job_order||o.mode!=A8Mode::prequantized))throw std::runtime_error("bad reuse wiring");
++    r.main=stub(q,deps);r.done=r.main;if(o.kernel.split_k>1){r.has_reduce=true;r.done=stub(q,{r.main});}return r;}
++sycl::event enqueue_a8_quant(sycl::queue&q,const void*,ActivationType,uint32_t,uint32_t,uint32_t,A8Workspace,const std::vector<sycl::event>&d){return stub(q,d);}
++} // namespace maple_w2
++static int checks=0;
++static void test(bool yes){++checks;if(!yes)throw std::runtime_error("enqueue test "+std::to_string(checks));}
++static bool before(const sycl::queue&q,int src,int dst) {
++    if(src==dst)return true;if(dst==0)return false;
++    for(auto e:q.graph.at(size_t(dst-1)))if(before(q,src,e.number))return true;return false;
++}
++int main()try {
++    uint8_t weights[8]{};float data[32]{};int32_t ints[32]{};int8_t codes[8]{};
++    MoeProblem p{{2048,512,256},184,8,Layout::s2tile8,weights,weights,weights,data,data,ints,data};
++    MoeWorkspace w{data,data,data,data,data,data,{codes,data,ints,false},{codes,data,ints,false},ints,ints,ints,ints,
++        {ints,ints+1,ints+2,1472,256}, {ints+3,ints+4,ints+5,ints+6,1472,2},{ints+7,ints+8,ints+9,ints+10,1472,4}};
++    for(bool ordered:{false,true})for(bool overlap:{false,true})for(bool pre:{false,true})for(uint32_t gt:{1u,2u,4u})for(uint32_t dt:{1u,2u,4u}) {
++        sycl::queue q(ordered);MoeOptions o;o.schedule=MoeSchedule::grouped;o.overlap_grouping_quant=overlap;o.input_prequantized=pre;
++        o.gate_tokens_per_tile=gt;o.down_tokens_per_tile=dt;o.gate_kernel.split_k=4;o.down_kernel.split_k=2;
++        auto root=q.submit([](sycl::handler&){});sycl::mock_waits=0;
++        auto r=enqueue_moe(q,p,o,w,{root});test(sycl::mock_waits==0);test(r.dispatch.grouped);test(r.queue_in_order==ordered);
++        std::map<std::string,int> ev;
++        for(size_t i=0;i<r.count;++i){ev[r.stages[i].label]=r.stages[i].event.number;
++            test(before(q,root.number,r.stages[i].event.number));test(before(q,r.stages[i].event.number,r.done.number));
++            for(size_t j=0;j<i;++j)if((r.stages[i].parents>>j)&1u)test(before(q,r.stages[j].event.number,r.stages[i].event.number));}
++        test(before(q,ev["group_scatter"],ev["gate_up"]));
++        if(!pre) {
++            test(before(q,ev["input_quant"],ev["gate_up"]));
++            test(before(q,ev["group_scatter"],ev["input_quant"])==(!overlap||ordered));
++        }else test(ev.count("input_quant")==0);
++        if(gt>1)test(before(q,ev["group_gate_tiles"],ev["gate_up"]));
++        if(dt>1)test(before(q,ev[gt==dt?"group_gate_tiles":"group_down_tiles"],ev["down"]));
++    }
++    {sycl::queue q;auto bad=w;bad.gate_tiles.first=nullptr;MoeOptions o;o.schedule=MoeSchedule::grouped;o.gate_tokens_per_tile=2;
++        bool threw=false;try{enqueue_moe(q,p,o,bad);}catch(const std::exception&){threw=true;}test(threw&&q.graph.empty());}
++    {sycl::queue q;auto bad=w;bad.down_tiles=bad.gate_tiles;MoeOptions o;o.schedule=MoeSchedule::grouped;o.gate_tokens_per_tile=2;o.down_tokens_per_tile=4;
++        bool threw=false;try{enqueue_moe(q,p,o,bad);}catch(const std::exception&){threw=true;}test(threw&&q.graph.empty());}
++    {sycl::queue q;MoeOptions o;o.schedule=MoeSchedule::auto_select;o.gate_tokens_per_tile=4;o.down_tokens_per_tile=4;
++        auto r=enqueue_moe(q,p,o,w);test(!r.dispatch.grouped&&r.gate_tile==1&&r.down_tile==1);}
++    {sycl::queue q;MoeOptions o;o.schedule=MoeSchedule::auto_select;o.auto_policy={32,2};
++        auto r=enqueue_moe(q,p,o,w);test(r.dispatch.grouped);}
++    {sycl::queue q;MoeOptions o;o.schedule=MoeSchedule::auto_select;o.auto_policy={1,0};auto one=p;one.tokens=1;
++        auto r=enqueue_moe(q,one,o,w);test(!r.dispatch.grouped);}
++    {sycl::queue q;MoeOptions o;o.diagnostic_host_waits=true;sycl::mock_waits=0;enqueue_moe(q,p,o,w);test(sycl::mock_waits==3);}
++    std::cout<<"MOCK HOST submission/DAG tests PASS checks="<<checks<<"; kernel lambdas NOT executed\n";return 0;
++}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}
+diff --git a/tests/test_architecture.py b/tests/test_architecture.py
+new file mode 100644
+index 0000000..1963236
+--- /dev/null
++++ b/tests/test_architecture.py
+@@ -0,0 +1,68 @@
++# SPDX-License-Identifier: MIT
++import argparse
++import array
++import importlib
++import json
++from pathlib import Path
++import sys
++import tempfile
++import unittest
++ROOT=Path(__file__).resolve().parents[1]
++sys.path.insert(0,str(ROOT/'tools'))
++import run_architecture_suite as suite
++import analyze_architecture_results as analysis
++import architecture_common as common
++import audit_quant_dump as audit
++class ArchitectureTests(unittest.TestCase):
++    def test_scope_counts(self):
++        self.assertEqual(len(suite.cases_for('smoke')),2)
++        self.assertEqual(len(suite.cases_for('quick')),24)
++        self.assertEqual(len(suite.cases_for('full')),len(suite.QS)*6)
++    def test_cmd_shape(self):
++        a=argparse.Namespace(exe=Path('a.exe'),out=Path('out'),device='A750',repeats=28,dump_contract=True,gate=None,up=None,down=None)
++        for c in suite.cases_for('quick'):
++            args=suite.command_for(c,a);v=dict(zip(args[1::2],args[2::2]))
++            self.assertEqual(v['--tokens'],str(c['q']));self.assertEqual(v['--in-order'],'0')
++            self.assertEqual(v['--candidate'],'grouped');self.assertEqual(v['--gate-tile'],str(c['gt']))
++            self.assertEqual(v['--dump-contract'],str(int(c['q']==184)))
++            self.assertNotIn('--freeze-input',v)
++    def test_capsules_not_on_small_smoke(self):
++        a=argparse.Namespace(exe=Path('a'),out=Path('o'),device='A750',repeats=2,dump_contract=False,
++                            gate=Path('g'),up=Path('u'),down=Path('d'))
++        self.assertNotIn('--gate',suite.command_for(suite.cases_for('smoke')[0],a))
++        self.assertIn('--gate',suite.command_for(suite.cases_for('quick')[0],a))
++    def test_pair_stats(self):
++        with tempfile.TemporaryDirectory() as td:
++            p=Path(td)/'samples.csv';p.write_text('round,phase,variant,wall_us\n1,repeat,baseline,100\n1,repeat,candidate,80\n2,repeat,baseline,120\n2,repeat,candidate,100\n')
++            s=analysis.paired_stats(p);self.assertEqual(s['pairs'],2);self.assertEqual(s['candidate_win_rate'],1)
++            self.assertAlmostEqual(s['paired_gain_lower_median'],1-100/120)
++    def test_missing_or_duplicate_or_nonfinite(self):
++        for content in ('1,repeat,baseline,100\n','1,repeat,baseline,100\n1,repeat,baseline,90\n',
++                        '1,repeat,baseline,nan\n1,repeat,candidate,2\n'):
++            with tempfile.TemporaryDirectory() as td:
++                p=Path(td)/'s';p.write_text('round,phase,variant,wall_us\n'+content)
++                with self.assertRaises(ValueError):analysis.paired_stats(p)
++    def test_stale_stamp(self):
++        with tempfile.TemporaryDirectory() as td:
++            p=Path(td)/'a.exe';p.write_bytes(b'test-only-not-executable')
++            with self.assertRaises(ValueError):common.verify_build(p)
++            (p.parent/'architecture-build.json').write_text(json.dumps({'version':common.VERSION,'source_sha256':{},'executable_sha256':common.sha256(p)}))
++            with self.assertRaises(ValueError):common.verify_build(p)
++    def test_source_map(self):
++        hashes=common.sources();self.assertIn('src/maple_w2a8_grouped.cpp',hashes);self.assertIn('tools/architecture_compare.cpp',hashes)
++    def test_scalar_dump(self):
++        with tempfile.TemporaryDirectory() as td:
++            p=Path(td);x=[127.,110.5,111.5,-110.5,-111.5]+[0.]*27
++            (p/'input.f32').write_bytes(array.array('f',x).tobytes())
++            (p/'input.scales.f32').write_bytes(array.array('f',[1.]).tobytes())
++            q=[int(round(v)) for v in x];(p/'input.q8').write_bytes(array.array('b',q).tobytes())
++            r=audit.inspect(p,'input');self.assertTrue(r['pass']);self.assertEqual(r['cpu_code_differences'],0)
++            q[6]=1;(p/'input.q8').write_bytes(array.array('b',q).tobytes());self.assertFalse(audit.inspect(p,'input')['pass'])
++    def test_no_arbitrary_global_reuse_on(self):
++        s=(ROOT/'include/maple_moe.hpp').read_text();self.assertIn('gate_tokens_per_tile=1,down_tokens_per_tile=1',s)
++        self.assertIn('overlap_grouping_quant=false',s)
++    def test_new_backend_preserves_dpas_repeat(self):
++        s=(ROOT/'src/maple_w2a8_grouped.cpp').read_text();self.assertIn('dpas<8,1,',s)
++        self.assertNotIn('dpas<8,2,',s);self.assertNotIn('malloc_',s)
++        self.assertNotIn('.wait_and_throw(',s)
++if __name__=='__main__':unittest.main()
+diff --git a/tests/test_port_apply.py b/tests/test_port_apply.py
+new file mode 100644
+index 0000000..61de93c
+--- /dev/null
++++ b/tests/test_port_apply.py
+@@ -0,0 +1,37 @@
++# SPDX-License-Identifier: MIT
++from pathlib import Path
++import hashlib
++import json
++import sys
++import tempfile
++import unittest
++sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
++import apply_architecture_port as port
++class PortApplyTests(unittest.TestCase):
++    def fixture(self,root):
++        p=root/'payload';t=root/'module';p.mkdir();t.mkdir()
++        (p/'a.txt').write_text('new');(t/'a.txt').write_text('old')
++        (p/'added.txt').write_text('added')
++        (p/'PORT_PATCH_FILES.json').write_text(json.dumps({'files':[
++            {'path':'a.txt','old_sha256':port.digest(t/'a.txt'),'new_sha256':port.digest(p/'a.txt')},
++            {'path':'added.txt','old_sha256':None,'new_sha256':port.digest(p/'added.txt')}]}))
++        return p,t
++    def test_preflight_apply_idempotence(self):
++        with tempfile.TemporaryDirectory() as td:
++            p,t=self.fixture(Path(td));r=port.apply(t,p);self.assertFalse(r['applied']);self.assertEqual((t/'a.txt').read_text(),'old')
++            r=port.apply(t,p,True);self.assertTrue(r['applied']);self.assertEqual((t/'a.txt').read_text(),'new')
++            self.assertEqual((Path(r['backup'])/'a.txt').read_text(),'old');self.assertEqual(port.apply(t,p)['already_applied'],2)
++    def test_conflict_fails_without_write(self):
++        with tempfile.TemporaryDirectory() as td:
++            p,t=self.fixture(Path(td));(t/'added.txt').write_text('user data')
++            with self.assertRaises(ValueError):port.apply(t,p,True)
++            self.assertEqual((t/'a.txt').read_text(),'old')
++    def test_payload_corruption(self):
++        with tempfile.TemporaryDirectory() as td:
++            p,t=self.fixture(Path(td));(p/'a.txt').write_text('wrong')
++            with self.assertRaises(ValueError):port.apply(t,p,True)
++    def test_traversal(self):
++        with tempfile.TemporaryDirectory() as td:
++            with self.assertRaises(ValueError):port.safe_path(Path(td),'../x')
++            with self.assertRaises(ValueError):port.safe_path(Path(td),'.git/config')
++if __name__=='__main__':unittest.main()
+diff --git a/tests/token_reuse_emulation_tests.cpp b/tests/token_reuse_emulation_tests.cpp
+new file mode 100644
+index 0000000..a6e4d6f
+--- /dev/null
++++ b/tests/token_reuse_emulation_tests.cpp
+@@ -0,0 +1,50 @@
++// SPDX-License-Identifier: MIT
++// Executes src/maple_w2a8_grouped.cpp with scalar gather/DPAS test doubles.
++// Tests real indexing/control code; NOT real SYCL/DPAS compiler or GPU execution.
++#include "maple_w2a8.hpp"
++#include <iostream>
++#include <random>
++using namespace maple_w2;
++static size_t checks=0;
++static void test(bool ok){++checks;if(!ok)throw std::runtime_error("reuse emulation assertion "+std::to_string(checks));}
++static std::vector<uint8_t> weights(Shape s,unsigned seed) {
++    std::mt19937 gen(seed);std::vector<uint8_t>w(nbytes(s),0);
++    for(size_t i=0;i<w.size();i+=66){for(unsigned j=0;j<256;++j)set_native_code(w.data()+i,j,gen()%3);
++        const float scale=(int(gen()%17)-8)/512.f;put16(w.data()+i+64,float_to_half(scale));}return w;
++}
++int main()try {
++    sycl::mock_execute=true;sycl::queue q;std::mt19937 gen(7);
++    for(Shape s:{Shape{512,24,7},Shape{2048,24,7},Shape{512,2048,3}}) {
++    const uint32_t Q=s.m>24?2:13,topk=s.m>24?2:3;const size_t jobs=Q*topk;
++    const auto w0=weights(s,1),w1=weights(s,2),pw0=repack_s2tile8(w0,s),pw1=repack_s2tile8(w1,s);
++    std::vector<int32_t>ids(jobs);for(size_t i=0;i<jobs;++i)ids[i]=int32_t((i*i+3)%s.experts);
++    auto g=group_jobs_reference(ids,s.experts);
++    for(bool per:{false,true})for(bool pair:{false,true})for(uint32_t width:{2u,4u})for(uint32_t split:{1u,2u,4u,8u}) {
++        if((s.k/256)%split)continue;
++        std::vector<float>x((per?jobs:Q)*s.k);for(auto&v:x)v=float(int(gen()%255)-127)*.013f;
++        auto a=quantize_a8(x,per?uint32_t(jobs):Q,s.k,32);auto t=token_tiles_reference(g,width);int32_t total=int32_t(t.first.size());
++        std::vector<int32_t>status(jobs,0),invalid(a.scale.size(),0);
++        constexpr float poison=123456.f;std::vector<float>y0(jobs*s.m+16,poison),y1(jobs*s.m+16,poison),scratch(jobs*s.m*split*(pair?2:1),poison);
++        DeviceProblem p{s,Q,topk,per,Layout::s2tile8,pw0.data(),pair?pw1.data():nullptr,x.data(),ids.data(),y0.data()+8,pair?y1.data()+8:nullptr,status.data()};
++        A8Options o{32,A8Mode::prequantized,{split,4},g.sorted_to_job.data(),
++            {t.first.data(),t.length.data(),t.expert.data(),&total,expert_token_tile_capacity(jobs,s.experts,width),width}};
++        enqueue_a8_token_tiles(q,p,o,{a.q.data(),a.scale.data(),invalid.data(),false},scratch.data(),{});
++        auto r0=reference_a8(w0,s,a,ids,Q,topk,per),r1=reference_a8(w1,s,a,ids,Q,topk,per);
++        auto check=[&](const auto&y,const auto&ref){for(size_t i=0;i<ref.size();++i)test(std::abs(y[i+8]-ref[i])<=2e-5f);
++            for(int i=0;i<8;++i)test(y[i]==poison&&y[y.size()-1-i]==poison);};
++        check(y0,r0);if(pair)check(y1,r1);for(auto z:status)test(z==0);
++    }
++    // Invalid-ID final bucket: valid rows remain produced, bad row zero/status1.
++    ids[3]=-1;g=group_jobs_reference(ids,s.experts);auto t=token_tiles_reference(g,4);int32_t total=int32_t(t.first.size());
++    std::vector<float>x(Q*s.k,.5f);auto a=quantize_a8(x,Q,s.k,32);std::vector<float>y(jobs*s.m,123.f);
++    std::vector<int32_t>st(jobs,0),iv(a.scale.size(),0);
++    DeviceProblem p{s,Q,topk,false,Layout::s2tile8,pw0.data(),nullptr,x.data(),ids.data(),y.data(),nullptr,st.data()};
++    A8Options o{32,A8Mode::prequantized,{1,4},g.sorted_to_job.data(),{t.first.data(),t.length.data(),t.expert.data(),&total,expert_token_tile_capacity(jobs,s.experts,4),4}};
++    enqueue_a8_token_tiles(q,p,o,{a.q.data(),a.scale.data(),iv.data(),false},nullptr,{});
++    test(st[3]==1);for(uint32_t r=0;r<s.m;++r)test(y[3*s.m+r]==0.f);
++    // Descriptor corruption is rejected via device status instead of OOB reads.
++    std::fill(st.begin(),st.end(),0);total=int32_t(o.token_tiles.capacity+1);
++    enqueue_a8_token_tiles(q,p,o,{a.q.data(),a.scale.data(),iv.data(),false},nullptr,{});test(st[0]==2);
++    }
++    std::cout<<"ACTUAL new kernel body, CPU scalar DPAS emulation PASS checks="<<checks<<"; NOT Intel/GPU validation\n";return 0;
++}catch(const std::exception&e){std::cerr<<e.what()<<'\n';return 1;}
+diff --git a/tools/analyze_architecture_results.py b/tools/analyze_architecture_results.py
+new file mode 100644
+index 0000000..53b6bd7
+--- /dev/null
++++ b/tools/analyze_architecture_results.py
+@@ -0,0 +1,65 @@
++# SPDX-License-Identifier: MIT
++"""Paired wall-time selection. No cross-backend speedup inferred."""
++import argparse
++import csv
++import json
++import math
++from pathlib import Path
++
++def lower_median(values):
++    if not values:
++        raise ValueError("no paired observations")
++    v = sorted(values)
++    return v[(len(v)-1)//2]
++
++def paired_stats(path):
++    rounds = {}
++    with path.open(newline="", encoding="utf-8-sig") as f:
++        for r in csv.DictReader(f):
++            if r["phase"] != "repeat":
++                continue
++            value = float(r["wall_us"])
++            if not math.isfinite(value) or value <= 0:
++                raise ValueError("invalid wall time")
++            by_arm = rounds.setdefault(r["round"], {})
++            if r["variant"] in by_arm:
++                raise ValueError("duplicate arm in paired round")
++            by_arm[r["variant"]] = value
++    if not rounds or any(set(v) != {"baseline", "candidate"} for v in rounds.values()):
++        raise ValueError("unpaired/missing repeat samples")
++    gains = [1-r["candidate"]/r["baseline"] for r in rounds.values()]
++    return {"pairs": len(gains), "paired_gain_lower_median": lower_median(gains),
++            "candidate_win_rate": sum(x > 0 for x in gains)/len(gains)}
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("root", type=Path)
++    ap.add_argument("--min-gain", type=float, default=.05)
++    ap.add_argument("--min-win-rate", type=float, default=.75)
++    ap.add_argument("--min-repeats", type=int, default=8)
++    a = ap.parse_args()
++    if not 0 <= a.min_gain < 1 or not 0 <= a.min_win_rate <= 1 or a.min_repeats < 2:
++        ap.error("invalid selection thresholds")
++    rows = []
++    for path in sorted(a.root.glob("*/summary.csv")):
++        with path.open(newline="", encoding="utf-8-sig") as f:
++            r = next((r for r in csv.DictReader(f) if r["variant"] == "candidate"), None)
++        if r is None:
++            raise ValueError("missing candidate: " + str(path))
++        if r["kernel_pass"] != "1" or r["pair_pass"] != "1":
++            continue
++        stats = paired_stats(path.parent / "samples.csv")
++        eligible = r.get("freeze_input") == "0" and int(r["tokens"]) > 1 and stats["pairs"] >= a.min_repeats
++        recommend = eligible and stats["paired_gain_lower_median"] >= a.min_gain and stats["candidate_win_rate"] >= a.min_win_rate
++        rows.append({"case": path.parent.name, **{k:r[k] for k in ("tokens","k","hidden","experts","topk","gate_tile","down_tile","fork_join","wall_median_us","expert_grouping")},
++                     **stats, "candidate_recommended_at_this_measured_shape_only": recommend})
++    if not rows:
++        raise ValueError("No completed case summaries. A dry-run plan is not a result")
++    out = a.root / "architecture-selection.json"
++    out.write_text(json.dumps({"scope":"within-case paired measurements; no fitted universal crossover",
++                              "auto_policy":"uncalibrated/direct remains default; measured-shape recommendations only",
++                              "selection_thresholds":{"min_gain":a.min_gain,"min_win_rate":a.min_win_rate,"min_repeats":a.min_repeats},
++                              "cases":rows}, indent=2) + "\n", encoding="utf-8")
++    print(out)
++if __name__ == "__main__":
++    main()
+diff --git a/tools/apply_architecture_port.py b/tools/apply_architecture_port.py
+new file mode 100644
+index 0000000..b9094db
+--- /dev/null
++++ b/tools/apply_architecture_port.py
+@@ -0,0 +1,77 @@
++# SPDX-License-Identifier: MIT
++"""Apply only verified v0.4 module files. Default is a no-write preflight.
++No clean-tree/reset/rebase requirement; unrelated llama.cpp changes are ignored.
++"""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path, PurePosixPath
++import shutil
++import tempfile
++import time
++import uuid
++ROOT=Path(__file__).resolve().parents[1]
++def digest(path):
++    h=hashlib.sha256()
++    with path.open('rb') as f:
++        for chunk in iter(lambda:f.read(1<<20),b''):h.update(chunk)
++    return h.hexdigest()
++def safe_path(root, name):
++    p=PurePosixPath(name)
++    if p.is_absolute() or not p.parts or any(s in ('..','.git') for s in p.parts) or '\\' in name:
++        raise ValueError('unsafe relative path in patch metadata')
++    dest=root.joinpath(*p.parts)
++    for item in [dest,*dest.parents]:
++        if item==root:break
++        if item.is_symlink():raise ValueError('symlink in patch target: '+name)
++    if root not in dest.resolve().parents:raise ValueError('path escapes module root')
++    return dest
++
++def apply(target, payload=ROOT, commit=False):
++    target=target.resolve();payload=payload.resolve()
++    if target==payload or not target.is_dir():raise ValueError('target must be an existing separate v0.4 module root')
++    manifest=json.loads((payload/'PORT_PATCH_FILES.json').read_text(encoding='utf-8'))
++    changes=[];skipped=0
++    for item in manifest['files']:
++        name=item['path'];src=safe_path(payload,name);dst=safe_path(target,name)
++        if not src.is_file() or digest(src)!=item['new_sha256']:raise ValueError('payload identity mismatch: '+name)
++        current=digest(dst) if dst.is_file() else None
++        if current==item['new_sha256']:skipped+=1;continue
++        if dst.exists() and not dst.is_file():raise ValueError('target is not a file: '+name)
++        if current!=item['old_sha256']:raise ValueError('not the uploaded v0.4 content: '+name+'; inspect diff, do not force overwrite')
++        changes.append((name,src,dst,current))
++    report={'checked':len(manifest['files']),'changes':len(changes),'already_applied':skipped,'applied':False}
++    if not commit or not changes:return report
++    backup=target/'_w2_port_backups'/(time.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8])
++    backup.mkdir(parents=True)
++    written=[]
++    try:
++        for name,src,dst,old in changes:
++            current=digest(dst) if dst.is_file() else None
++            if current!=old:raise ValueError('target changed during apply: '+name)
++            if old is not None:
++                bp=safe_path(backup,name);bp.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(dst,bp)
++            dst.parent.mkdir(parents=True,exist_ok=True)
++            fd,tmp=tempfile.mkstemp(prefix='.w2-port-',dir=dst.parent);os.close(fd)
++            try:
++                shutil.copy2(src,tmp);os.replace(tmp,dst)
++            finally:
++                if os.path.exists(tmp):os.unlink(tmp)
++            written.append((name,dst,old))
++    except BaseException:
++        for name,dst,old in reversed(written):
++            if old is None:dst.unlink(missing_ok=True)
++            else:shutil.copy2(safe_path(backup,name),dst)
++        raise
++    report.update(applied=True,backup=str(backup))
++    (backup/'apply-receipt.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8')
++    return report
++
++def main():
++    ap=argparse.ArgumentParser(description=__doc__)
++    ap.add_argument('--target',required=True,type=Path)
++    ap.add_argument('--apply',action='store_true',help='write after all hashes pass; backups and rollback on failure')
++    a=ap.parse_args()
++    print(json.dumps(apply(a.target,commit=a.apply),indent=2))
++if __name__=='__main__':main()
+diff --git a/tools/architecture_common.py b/tools/architecture_common.py
+new file mode 100644
+index 0000000..eabffd5
+--- /dev/null
++++ b/tools/architecture_common.py
+@@ -0,0 +1,25 @@
++# SPDX-License-Identifier: MIT
++"""Build identity for the v0.4 Vulkan-architecture port (not a compiler attestation)."""
++import hashlib
++import json
++from pathlib import Path
++ROOT = Path(__file__).resolve().parents[1]
++VERSION = "0.4-vulkan-port-v1"
++def sha256(path: Path) -> str:
++    h = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1 << 20), b""):
++            h.update(chunk)
++    return h.hexdigest()
++def sources() -> dict:
++    files = list((ROOT / "src").glob("*.cpp")) + list((ROOT / "include").glob("*.hpp"))
++    files += [ROOT / "tools/architecture_compare.cpp", ROOT / "CMakeLists.txt"]
++    return {str(p.relative_to(ROOT)).replace("\\", "/"): sha256(p) for p in sorted(files)}
++def verify_build(exe: Path) -> dict:
++    stamp = exe.parent / "architecture-build.json"
++    if not exe.is_file() or not stamp.is_file():
++        raise ValueError("Missing executable/build identity; build and stamp the architecture target first")
++    data = json.loads(stamp.read_text(encoding="utf-8-sig"))
++    if data.get("version") != VERSION or data.get("executable_sha256") != sha256(exe) or data.get("source_sha256") != sources():
++        raise ValueError("Executable/source identity mismatch; rebuild rather than mixing old results")
++    return data
+diff --git a/tools/architecture_compare.cpp b/tools/architecture_compare.cpp
+new file mode 100644
+index 0000000..b27e145
+--- /dev/null
++++ b/tools/architecture_compare.cpp
+@@ -0,0 +1,411 @@
++// SPDX-License-Identifier: MIT
++#include "maple_moe.hpp"
++#include "moe_reference.hpp"
++#include "a8_contract_audit.hpp"
++#include "moe_profiling.hpp"
++#include <filesystem>
++#include <sstream>
++#include <set>
++#include <chrono>
++#include <iomanip>
++#include <iostream>
++#include <map>
++#include <memory>
++#include <numeric>
++#include <random>
++#include <cstring>
++#include <array>
++
++using Clock=std::chrono::steady_clock;
++using namespace maple_w2;
++static double micros(Clock::time_point a,Clock::time_point b) {
++    return std::chrono::duration<double,std::micro>(b-a).count();
++}
++static double percentile(std::vector<double> v,double p) {
++    std::sort(v.begin(),v.end()); return v[std::min(v.size()-1,size_t(p*(v.size()-1)))];
++}
++template<class T> struct DeviceMem {
++    sycl::queue *q; T *p=nullptr; size_t count;
++    DeviceMem(sycl::queue& queue,size_t n):q(&queue),count(n) {
++        if(n) p=sycl::malloc_device<T>(n,queue);
++        if(n && !p) throw std::bad_alloc();
++    }
++    ~DeviceMem(){if(p){try {q->wait(); sycl::free(p,*q);} catch(...) { /* process-level diagnostic harness teardown */ }}}
++    DeviceMem(const DeviceMem&)=delete;
++};
++template<class T> static std::vector<T> read_raw(const std::string& path,size_t n) {
++    std::ifstream f(path,std::ios::binary|std::ios::ate);
++    if(!f || f.tellg()!=std::streamoff(n*sizeof(T))) throw std::runtime_error("raw file length mismatch: "+path);
++    std::vector<T> r(n);f.seekg(0);f.read(reinterpret_cast<char*>(r.data()),r.size()*sizeof(T));
++    if(!f) throw std::runtime_error("raw file read failed: "+path); return r;
++}
++static std::vector<uint8_t> synth(Shape s,uint32_t seed) {
++    std::mt19937 gen(seed); std::uniform_int_distribution<int> code(0,2);
++    std::vector<uint8_t> w(nbytes(s),0);
++    for(size_t i=0;i<w.size();i+=66) {
++        for(unsigned j=0;j<64;++j) {
++            unsigned v=0; for(int sh=0;sh<8;sh+=2) v|=unsigned(code(gen))<<sh;
++            w[i+j]=uint8_t(v);
++        }
++        // Per-block scales deliberately differ: no row-scale assumption.
++        float d=(1+int(gen()%31))/512.f;
++        put16(w.data()+i+64,float_to_half(d));
++    }
++    return w;
++}
++static sycl::device choose_device(const std::string& match) {
++    for(const auto& plat:sycl::platform::get_platforms()) for(const auto& d:plat.get_devices(sycl::info::device_type::gpu)) {
++        if(d.get_backend()==sycl::backend::ext_oneapi_level_zero &&
++           d.get_info<sycl::info::device::vendor_id>()==0x8086 &&
++           d.get_info<sycl::info::device::name>().find(match)!=std::string::npos) return d;
++    }
++    throw std::runtime_error("no Intel Level Zero GPU matching '"+match+"'; run sycl-ls and check driver");
++}
++static void print_error(const char* label,const Error& e) {
++    std::cout<<label<<" finite="<<e.finite<<" nmse="<<e.nmse
++      <<" max_abs_over_rms="<<e.max_abs_over_rms<<" max_abs="<<e.max_abs<<"\n";
++}
++struct ChainSample {double wall=0,enqueue_return=0,tail_wait=0,gpu_span=0,kernel_sum=0,gpu_gap=0,group_us=0,core_span=0,gate_us=0,down_us=0,union_busy=0,overlap=0;};
++struct ChainVariant {std::string name;MoeOptions opt;std::vector<ChainSample> samples;bool pass=true;double total_nmse=0;};
++static bool good(const Error&e){return e.finite&&e.nmse<=1e-6&&e.max_abs_over_rms<=.005;}
++static double value(const ChainVariant&v,double ChainSample::*field,double p=.5){std::vector<double>a;for(auto&s:v.samples)a.push_back(s.*field);return percentile(a,p);}
++template<class T>static std::vector<T> copy_back(sycl::queue&q,const T*p,size_t n){std::vector<T>v(n);q.memcpy(v.data(),p,n*sizeof(T)).wait_and_throw();return v;}
++static QuantizedHost capture_quant(sycl::queue&q,const A8Workspace&w,uint32_t rows,uint32_t k,uint32_t group){
++    return {rows,k,group,copy_back(q,w.q,size_t(rows)*k),copy_back(q,w.scales,size_t(rows)*k/group)};}
++static bool quant_ok(const QuantizedHost&got,const std::vector<float>&x){return audit_a8(got,x).pass;}
++template<class T>static void dump_raw(const std::filesystem::path&p,const std::vector<T>&v) {
++    std::ofstream f(p,std::ios::binary);if(!f)throw std::runtime_error("cannot create dump "+p.string());
++    f.write(reinterpret_cast<const char*>(v.data()),std::streamsize(v.size()*sizeof(T)));
++    if(!f)throw std::runtime_error("short dump write "+p.string());
++}
++static bool all_zero(const std::vector<int32_t>&v){return std::all_of(v.begin(),v.end(),[](int32_t x){return x==0;});}
++// A scheduling-only experiment. The two arms use identical tensor layout,
++// quantizers, DPAS repeat=1, split, epilogue, output indexing and route sum order.
++static void require(bool yes,const std::string& message) {if(!yes)throw std::runtime_error(message);}
++template<class T>static bool bits_equal(const std::vector<T>&a,const std::vector<T>&b) {
++    return a.size()==b.size() && std::memcmp(a.data(),b.data(),a.size()*sizeof(T))==0;
++}
++template<class T>static std::vector<T> pick_tokens(const std::vector<T>&a,const std::vector<uint32_t>&ts,size_t stride) {
++    std::vector<T> out;out.reserve(ts.size()*stride);
++    for(auto t:ts){require((size_t(t)+1)*stride<=a.size(),"sample outside captured tensor");
++        out.insert(out.end(),a.begin()+size_t(t)*stride,a.begin()+(size_t(t)+1)*stride);}
++    return out;
++}
++static QuantizedHost pick_quant(const QuantizedHost&a,const std::vector<uint32_t>&ts,uint32_t rows_per_token) {
++    return {uint32_t(ts.size())*rows_per_token,a.k,a.group,
++        pick_tokens(a.q,ts,size_t(rows_per_token)*a.k),pick_tokens(a.scale,ts,size_t(rows_per_token)*a.k/a.group)};
++}
++static ExpertGroupingHost capture_mapping(sycl::queue&q,const ExpertGroupingWorkspace&w,size_t jobs,uint32_t e) {
++    return {copy_back(q,w.counts,e+1),copy_back(q,w.offsets,e+2),copy_back(q,w.sorted_to_job,jobs)};
++}
++static void grouping_probe(sycl::queue&q) {
++    // Test on an out-of-order queue as well: every stage must depend on its producer.
++    sycl::queue ooo(q.get_context(),q.get_device(),[](sycl::exception_list es){for(auto e:es)std::rethrow_exception(e);},
++                    sycl::property_list{sycl::property::queue::enable_profiling{}});
++    const std::array<size_t,8> sizes={1,8,127,128,129,257,104,16384};
++    size_t cases=0,checked=0;
++    for(uint32_t e:{1u,3u,256u})for(size_t n:sizes) {
++        std::vector<int32_t>ids(n);
++        for(size_t j=0;j<n;++j)ids[j]=j%11==0?-1:(j%17==0?int32_t(e):int32_t((j*37+5)%e));
++        DeviceMem<int32_t>di(ooo,n),c(ooo,e+2),off(ooo,e+3),order(ooo,n+1);
++        ExpertGroupingWorkspace w{c.p,off.p,order.p,n,e};
++        // Poison trailing canaries to detect off-by-one writes. Enqueue depends on all writes.
++        std::vector<sycl::event>deps={ooo.memcpy(di.p,ids.data(),n*4),ooo.fill(c.p,int32_t(-999),e+2),
++            ooo.fill(off.p,int32_t(-999),e+3),ooo.fill(order.p,int32_t(-999),n+1)};
++        auto run=enqueue_expert_grouping(ooo,di.p,n,e,w,deps);run.scatter.wait_and_throw();
++        require(same_grouping(capture_mapping(ooo,w,n,e),group_jobs_reference(ids,e)),"GPU grouping probe: mapping mismatch");
++        require(copy_back(ooo,c.p+e+1,1)[0]==-999&&copy_back(ooo,off.p+e+2,1)[0]==-999&&copy_back(ooo,order.p+n,1)[0]==-999,"GPU grouping probe: canary overwritten");
++        for(uint32_t width:{2u,4u}) {
++            const size_t cap=expert_token_tile_capacity(n,e,width);
++            DeviceMem<int32_t> first(ooo,cap+1),len(ooo,cap+1),expert(ooo,cap+1),total(ooo,1);
++            auto z0=ooo.fill(first.p,int32_t(-999),cap+1),z1=ooo.fill(len.p,int32_t(-999),cap+1),z2=ooo.fill(expert.p,int32_t(-999),cap+1);
++            ExpertTokenTileView tv{first.p,len.p,expert.p,total.p,cap,width};
++            auto event=enqueue_expert_token_tiles(ooo,n,e,w,tv,{run.scatter,z0,z1,z2});event.wait_and_throw();
++            auto expected=token_tiles_reference(group_jobs_reference(ids,e),width);auto size=expected.first.size();
++            require(copy_back(ooo,total.p,1)[0]==int32_t(size)&&copy_back(ooo,first.p,size)==expected.first&&
++                copy_back(ooo,len.p,size)==expected.length&&copy_back(ooo,expert.p,size)==expected.expert,"GPU tile probe mismatch");
++            require(copy_back(ooo,first.p+cap,1)[0]==-999&&copy_back(ooo,len.p+cap,1)[0]==-999&&
++                copy_back(ooo,expert.p+cap,1)[0]==-999,"GPU tile descriptor canary overwritten");
++        }
++        // Reuse SAME workspace with entirely different IDs: stale routing cannot pass.
++        std::fill(ids.begin(),ids.end(),int32_t(e-1));
++        auto upload=ooo.memcpy(di.p,ids.data(),n*4);
++        auto again=enqueue_expert_grouping(ooo,di.p,n,e,w,{upload});again.scatter.wait_and_throw();
++        require(same_grouping(capture_mapping(ooo,w,n,e),group_jobs_reference(ids,e)),"GPU grouping probe: stale mapping");
++        checked+=2*n;cases+=2;
++    }
++    std::cout<<"GROUPING_PROBE PASS cases="<<cases<<" job_entries="<<checked<<" invalid bucket + canaries + changed IDs + OOO\n";
++}
++static void quantizer_probe(sycl::queue& q) {
++    std::vector<float> x(4*256,0.f);
++    x[0]=127.f;x[1]=110.5f;x[2]=111.5f;x[3]=-110.5f;x[4]=-111.5f;
++    x[32]=.8111281f;x[33]=.7057453393936157f;
++    x[64]=1e-40f;x[65]=-1e-40f;
++    x[96]=1e30f;x[97]=-1e29f;
++    for(size_t i=128;i<x.size();++i)x[i]=float(int(i%113)-56)*.0111f;
++    DeviceMem<float>dx(q,x.size()),ds(q,x.size()/32);DeviceMem<int8_t>dq(q,x.size());DeviceMem<int32_t>invalid(q,x.size()/32);
++    A8Workspace w{dq.p,ds.p,invalid.p,false};auto upload=q.memcpy(dx.p,x.data(),x.size()*4);
++    auto e=enqueue_a8_quant(q,dx.p,ActivationType::f32,4,256,32,w,{upload});e.wait_and_throw();
++    auto got=capture_quant(q,w,4,256,32);auto audit=audit_a8(got,x);
++    require(audit.pass&&all_zero(copy_back(q,invalid.p,x.size()/32)),"standalone A8 boundary probe failed");
++    require(got.q[1]==110&&got.q[2]==112&&got.q[3]==-110&&got.q[4]==-112,"A8 RNE tie contract changed");
++    x[128]=std::numeric_limits<float>::quiet_NaN();upload=q.memcpy(dx.p,x.data(),x.size()*4);
++    e=enqueue_a8_quant(q,dx.p,ActivationType::f32,4,256,32,w,{upload});e.wait_and_throw();
++    auto bad=copy_back(q,invalid.p,x.size()/32);require(bad[4]!=0,"nonfinite input was silently accepted");
++    std::cout<<"A8_CONTRACT_PROBE PASS RNE/tiny/large/nonfinite; cpu_code_diff="<<audit.cpu_code_differences<<" max_scale_ulp="<<audit.max_scale_ulp<<'\n';
++}
++struct Snapshot {
++    std::vector<float> gate,up,hidden,down,y;
++    QuantizedHost input_q,hidden_q;
++};
++static Snapshot capture_snapshot(sycl::queue&q,const MoeProblem&p,const MoeWorkspace&w) {
++    size_t jobs=size_t(p.tokens)*p.topk,hn=jobs*p.gate_shape.m,dn=jobs*p.gate_shape.k,xn=size_t(p.tokens)*p.gate_shape.k;
++    Snapshot s{copy_back(q,w.gate,hn),copy_back(q,w.up,hn),copy_back(q,w.hidden,hn),copy_back(q,w.down,dn),copy_back(q,p.y,xn),
++        capture_quant(q,w.input_a8,p.tokens,p.gate_shape.k,32),capture_quant(q,w.hidden_a8,uint32_t(jobs),p.gate_shape.m,32)};
++    require(all_zero(copy_back(q,w.gate_status,jobs))&&all_zero(copy_back(q,w.down_status,jobs))&&
++        all_zero(copy_back(q,w.hidden_invalid,hn))&&all_zero(copy_back(q,w.output_invalid,xn))&&
++        all_zero(copy_back(q,w.input_a8.invalid,xn/32))&&all_zero(copy_back(q,w.hidden_a8.invalid,hn/32)),"nonzero device status");
++    return s;
++}
++static bool near_scheduling_equal(const Error&e) {return e.finite&&e.nmse<=1e-10&&e.max_abs_over_rms<=1e-4;}
++int main(int argc,char**argv)try {
++    std::map<std::string,std::string>a;
++    for(int i=1;i<argc;++i) {
++        std::string k=argv[i];
++        if(k=="--help") {std::cout<<"Maple W2 XMX v0.4 Vulkan architecture port: policy, fork/join, grouped reuse\n"
++            <<"--gate gate.mw2 --up up.mw2 --down down.mw2 OR --k 2048 --hidden 512 --experts 256\n"
++            <<"--tokens 1..2048 --topk 8 --device A750 --out NEW_DIR --repeats 28 --warmup 3\n"
++            <<"--gate-split 1 --down-split 1 --local 4 --in-order 1 --scrub-mib 0\n"
++            <<"--x-file x.f32 --ids-file ids.i32 --routes-file routes.f32\n"
++            <<"--id-mode rotate|fixed --pattern normal|zeros|outliers --probe-only 1 --skip-probe 1\n"
++            <<"--candidate grouped|auto|direct --overlap 0|1 --gate-tile 1|2|4 --down-tile 1|2|4\n"
++            <<"--auto-min-tokens 0 (uncalibrated) --auto-min-mean 0 --dump-contract 0|1 --freeze-input 0|1\n"
++            <<"T2/T4 reuse B but keep RepeatCount=1; not multi-row DPAS. Baseline/candidate AB/BA.\n";return 0;}
++        if(k.rfind("--",0)!=0||i+1==argc||a.count(k))throw std::invalid_argument("expected unique --key value");a[k]=argv[++i];
++    }
++    const std::set<std::string>allowed={"--gate","--up","--down","--k","--hidden","--experts","--tokens","--topk","--gate-split","--down-split","--local","--x-file","--ids-file","--routes-file","--pattern","--repeats","--warmup","--device","--out","--skip-probe","--probe-only","--in-order","--id-mode","--scrub-mib","--candidate","--overlap","--gate-tile","--down-tile","--auto-min-tokens","--auto-min-mean","--dump-contract","--freeze-input"};
++    for(auto&kv:a)require(allowed.count(kv.first)!=0,"unknown argument "+kv.first);
++    auto get=[&](const char*k,const char*d){return a.count(k)?a.at(k):std::string(d);};
++    auto num=[&](const char*k,const char*d){auto s=get(k,d);size_t end=0;auto n=std::stoull(s,&end);
++        if(s.empty()||s[0]=='-'||end!=s.size()||n>UINT32_MAX)throw std::invalid_argument("bad unsigned value for "+std::string(k));return uint32_t(n);};
++    auto bit=[&](const char*k,const char*d){auto n=num(k,d);require(n<=1,"boolean must be 0/1");return n!=0;};
++    uint32_t tokens=num("--tokens","1"),topk=num("--topk","8"),repeats=num("--repeats","28"),warmup=num("--warmup","3"),scrub_mib=num("--scrub-mib","0");
++    require(tokens>=1&&tokens<=2048&&topk>=1&&topk<=256&&repeats>=2&&repeats<=10000&&warmup<=1000&&scrub_mib<=128,"benchmark limit exceeded");
++
++    const uint32_t gate_tile=num("--gate-tile","1"),down_tile=num("--down-tile","1");
++    check_tokens_per_tile(gate_tile);check_tokens_per_tile(down_tile);
++    const std::string candidate=get("--candidate","grouped");
++    require(candidate=="grouped"||candidate=="auto"||candidate=="direct","invalid candidate schedule");
++    const bool overlap=bit("--overlap","0"),dump=bit("--dump-contract","0"),freeze=bit("--freeze-input","0");
++    MoeAutoPolicy policy{num("--auto-min-tokens","0"),num("--auto-min-mean","0")};
++    auto device=choose_device(get("--device","A750"));bool in_order=bit("--in-order","0");
++    sycl::property_list props=in_order?sycl::property_list{sycl::property::queue::in_order{},sycl::property::queue::enable_profiling{}}:sycl::property_list{sycl::property::queue::enable_profiling{}};
++    sycl::queue q(device,[](sycl::exception_list es){for(auto e:es)std::rethrow_exception(e);},props);
++    std::cout<<std::setprecision(12)<<"device="<<device.get_info<sycl::info::device::name>()<<"\ndriver="<<device.get_info<sycl::info::device::driver_version>()<<'\n';
++    if(bit("--probe-only","0")){run_s2s8_probe(q);grouping_probe(q);quantizer_probe(q);return 0;}
++    if(!bit("--skip-probe","0")){run_s2s8_probe(q);grouping_probe(q);quantizer_probe(q);}
++    bool real=a.count("--gate")!=0;require(real==bool(a.count("--up"))&&real==bool(a.count("--down")),"gate/up/down must be supplied together");
++    Shape s{num("--k","2048"),num("--hidden","512"),num("--experts","256")};std::vector<uint8_t>wg,wu,wd;
++    if(real){auto c=load_capsule(a.at("--gate"));s=c.shape;wg=std::move(c.bytes);auto u=load_capsule(a.at("--up")),d=load_capsule(a.at("--down"));
++        require(u.shape.k==s.k&&u.shape.m==s.m&&u.shape.experts==s.experts&&d.shape.k==s.m&&d.shape.m==s.k&&d.shape.experts==s.experts,"capsule dimensions mismatch");wu=std::move(u.bytes);wd=std::move(d.bytes);}
++    else{wg=synth(s,1234);wu=synth(s,1235);wd=synth({s.m,s.k,s.experts},1236);}
++    require(topk<=s.experts&&s.experts<=256,"invalid expert count");Shape ds{s.m,s.k,s.experts};
++    size_t jobs=checked_mul(tokens,topk),xn=checked_mul(tokens,s.k),hn=checked_mul(jobs,s.m),dn=checked_mul(jobs,s.k);
++    validate_grouping_size(jobs,s.experts);
++    Options go{num("--gate-split","1"),num("--local","4")},dopt{num("--down-split","1"),go.local_size};
++    for(auto pair:std::array<std::pair<uint32_t,Options>,2>{{{s.k,go},{s.m,dopt}}})
++        require((pair.second.split_k==1||pair.second.split_k==2||pair.second.split_k==4||pair.second.split_k==8)&&
++            (pair.first/256)%pair.second.split_k==0&&go.local_size>=1&&go.local_size<=32,"invalid split/local");
++    const std::string pattern=get("--pattern","normal"),idmode=get("--id-mode","rotate");
++    require(pattern=="normal"||pattern=="zeros"||pattern=="outliers","bad pattern");require(idmode=="rotate"||idmode=="fixed","bad id mode");
++    std::mt19937 rng(98765);std::normal_distribution<float> normal(0,.5f);std::vector<float>x(xn),routes(jobs);
++    if(a.count("--x-file"))x=read_raw<float>(a.at("--x-file"),xn);else for(auto&v:x)v=pattern=="zeros"?0.f:normal(rng);
++    if(!a.count("--x-file")&&pattern=="outliers")for(size_t i=0;i<xn;i+=257)x[i]=16.f;
++    for(auto v:x)require(std::isfinite(v)&&std::abs(v)<=65504.f,"nonfinite/out-of-range activation");
++    if(a.count("--routes-file"))routes=read_raw<float>(a.at("--routes-file"),jobs);
++    else for(uint32_t t=0;t<tokens;++t){float sum=0;for(uint32_t j=0;j<topk;++j){float v=float(j+1);routes[size_t(t)*topk+j]=v;sum+=v;}
++        for(uint32_t j=0;j<topk;++j)routes[size_t(t)*topk+j]/=sum;}
++    validate_routes(routes,tokens,topk);
++    uint32_t rounds=1+warmup+repeats;std::vector<int32_t>ids(checked_mul(rounds,jobs)),fixed;
++    if(a.count("--ids-file"))fixed=read_raw<int32_t>(a.at("--ids-file"),jobs);
++    for(uint32_t r=0;r<rounds;++r){if(!fixed.empty())std::copy(fixed.begin(),fixed.end(),ids.begin()+size_t(r)*jobs);
++        else if(idmode=="fixed"&&r)std::copy(ids.begin(),ids.begin()+jobs,ids.begin()+size_t(r)*jobs);
++        else for(uint32_t t=0;t<tokens;++t){std::vector<int32_t>pool(s.experts);std::iota(pool.begin(),pool.end(),0);
++            if(r==0)std::rotate(pool.begin(),pool.end()-1,pool.end());else std::shuffle(pool.begin(),pool.end(),rng);
++            std::copy(pool.begin(),pool.begin()+topk,ids.begin()+size_t(r)*jobs+size_t(t)*topk);}}
++    for(auto id:ids)require(id>=0&&uint32_t(id)<s.experts,"invalid expert ID in benchmark input");
++    const std::filesystem::path out=get("--out","build/results/architecture-manual");
++    require(!std::filesystem::exists(out/"manifest.txt"),"evidence exists; use a new output directory");std::filesystem::create_directories(out);
++    std::ofstream manifest(out/"manifest.txt"),numerical(out/"numerical.csv"),mapping(out/"mapping_validation.csv"),pairout(out/"pair_correctness.csv"),hist(out/"routing_histogram.csv"),samples(out/"samples.csv"),stages(out/"stages.csv");
++    require(manifest&&numerical&&mapping&&pairout&&hist&&samples&&stages,"cannot create evidence files");
++    manifest<<"version=0.4-vulkan-port-v1\nDPAS_repeat=1\nbase_contract=RNE_G32_original_v04\n";
++    manifest<<"candidate="<<candidate<<"\noverlap_requested="<<overlap<<"\ngate_tile_requested="<<gate_tile
++        <<"\ndown_tile_requested="<<down_tile<<"\nauto_min_tokens="<<policy.min_tokens
++        <<"\nauto_min_mean="<<policy.min_mean_assignments<<"\nfreeze_input="<<freeze
++        <<"\nfreeze_warning=diagnostic_only_not_comparable_production_timing\n";
++    manifest<<"device="<<device.get_info<sycl::info::device::name>()<<"\ndriver="<<device.get_info<sycl::info::device::driver_version>()<<'\n';
++    for(auto&kv:a)manifest<<kv.first<<'='<<kv.second<<'\n';
++    manifest<<"weight_source="<<(real?"real_capsules":"synthetic")<<"\nactivation_source="<<(a.count("--x-file")?"captured":"synthetic")
++        <<"\nids_source="<<(fixed.empty()?idmode:"captured_fixed")<<"\nroute_source="<<(a.count("--routes-file")?"captured":"synthetic_normalized")<<'\n';
++    manifest<<"Q="<<tokens<<"\nk="<<s.k<<"\nhidden="<<s.m<<"\nexperts="<<s.experts<<"\ntopk="<<topk
++        <<"\nlayout=s2tile8\ninput_group=32\nhidden_group=32\ngluquant=1\nasync=1\nin_order="<<in_order
++        <<"\ngate_split="<<go.split_k<<"\ndown_split="<<dopt.split_k<<"\nlocal="<<go.local_size
++        <<"\ngroup_workgroup=128\nseed=98765\nrepeats="<<repeats<<"\nwarmup="<<warmup<<"\n";
++    manifest<<"scope=one_MoE_layer_no_FA_router_norm_residual_sampling_Vulkan_handoff\n"
++        <<"order=alternate_AB_BA_with_identical_ID_frame_for_both_arms\n"
++        <<"group_plan_rebuilt_every_call=1\nCPU_reference=up_to_4_tokens_including_token12_per_snapshot_all_topk_outputs\n"
++        <<"full_GPU_AB_comparison=all_tokens_all_intermediates_all_quant_planes_two_snapshots\n"
++        <<"first_timed=post_numerical_validation_NOT_cold_JIT\n";
++    hist<<"round,phase,expert,selected_jobs\n";
++    for(uint32_t r=0;r<rounds;++r){std::vector<int32_t>frame(ids.begin()+size_t(r)*jobs,ids.begin()+size_t(r+1)*jobs);
++        auto plan=group_jobs_reference(frame,s.experts);for(uint32_t e=0;e<=s.experts;++e)
++            hist<<r<<','<<(r==0?"first":r<=warmup?"warmup":"repeat")<<','<<e<<','<<plan.counts[e]<<'\n';}
++    hist.flush();
++    auto sg=repack_s2tile8(wg,s),su=repack_s2tile8(wu,s),sd=repack_s2tile8(wd,ds);
++    DeviceMem<uint8_t>dg(q,wg.size()),du(q,wu.size()),dd(q,wd.size()),scrub(q,size_t(scrub_mib)*1024*1024);
++    DeviceMem<float>dx(q,xn),dr(q,jobs),dy(q,xn),yg(q,hn),yu(q,hn),hidden(q,hn),yd(q,dn),
++        gs(q,go.split_k>1?size_t(go.split_k)*hn*2:0),dscratch(q,dopt.split_k>1?size_t(dopt.split_k)*dn:0);
++    DeviceMem<int32_t>di(q,ids.size()),gst(q,jobs),dst(q,jobs),hi(q,hn),oi(q,xn),ai0(q,xn/32),ai1(q,hn/32),
++        gc(q,s.experts+1),gof(q,s.experts+2),order(q,jobs);
++    DeviceMem<int8_t>aq0(q,xn),aq1(q,hn);DeviceMem<float>as0(q,xn/32),as1(q,hn/32);
++    const size_t gtcap=expert_token_tile_capacity(jobs,s.experts,gate_tile),dtcap=expert_token_tile_capacity(jobs,s.experts,down_tile);
++    DeviceMem<int32_t>gtfirst(q,gtcap),gtlen(q,gtcap),gtexpert(q,gtcap),gttotal(q,1),
++        dtfirst(q,dtcap),dtlen(q,dtcap),dtexpert(q,dtcap),dttotal(q,1);
++    MoeProblem p{s,tokens,topk,Layout::s2tile8,dg.p,du.p,dd.p,dx.p,dr.p,di.p,dy.p};
++    MoeWorkspace w{yg.p,yu.p,hidden.p,yd.p,gs.p,dscratch.p,{aq0.p,as0.p,ai0.p,false},{aq1.p,as1.p,ai1.p,false},gst.p,dst.p,hi.p,oi.p,
++        {gc.p,gof.p,order.p,jobs,s.experts},
++        {gtfirst.p,gtlen.p,gtexpert.p,gttotal.p,gtcap,gate_tile},
++        {dtfirst.p,dtlen.p,dtexpert.p,dttotal.p,dtcap,down_tile}};
++    q.memcpy(dg.p,sg.data(),wg.size());q.memcpy(du.p,su.data(),wu.size());q.memcpy(dd.p,sd.data(),wd.size());
++    q.memcpy(dx.p,x.data(),xn*4);q.memcpy(dr.p,routes.data(),jobs*4);q.memcpy(di.p,ids.data(),ids.size()*4);
++    q.memset(gst.p,0,jobs*4);q.memset(dst.p,0,jobs*4);q.wait_and_throw();
++    manifest<<"weight_resident_bytes="<<wg.size()+wu.size()+wd.size()<<"\ngrouping_extra_bytes="<<(jobs+2*s.experts+3)*4
++        <<"\nextra_tile_descriptor_bytes="<<(gtcap+dtcap)*12+8<<"\nexplicit_resident_bytes="<<wg.size()+wu.size()+wd.size()+scrub.count+
++        (xn*2+jobs+hn*3+dn+gs.count+dscratch.count+as0.count+as1.count)*4+
++        (ids.size()+jobs*2+hn+xn+ai0.count+ai1.count+gc.count+gof.count+order.count)*4+xn+hn+(gtcap+dtcap)*12+8<<'\n';
++    manifest.flush();
++    std::vector<ChainVariant>vars;
++    MoeOptions base;base.path=MoePath::a8_gluquant;base.gate_kernel=go;base.down_kernel=dopt;
++    base.schedule=MoeSchedule::direct;base.input_prequantized=freeze;
++    vars.push_back({"baseline",base});
++    MoeOptions opt=base;opt.schedule=candidate=="grouped"?MoeSchedule::grouped:candidate=="direct"?MoeSchedule::direct:MoeSchedule::auto_select;
++    opt.auto_policy=policy;opt.overlap_grouping_quant=overlap;opt.gate_tokens_per_tile=gate_tile;opt.down_tokens_per_tile=down_tile;
++    vars.push_back({"candidate",opt});
++    const auto selected=choose_moe_schedule(opt.schedule,false,tokens,topk,s.experts,true,policy);
++    manifest<<"actual_grouped="<<selected.grouped<<"\ndispatch_reason="<<selected.reason<<"\n";
++    manifest.flush();
++    if(overlap&&in_order)std::cout<<"NOTE: in-order queue serializes fork/join; overlap is not promised.\n";
++    if(freeze){const auto fq=quantize_a8(x,tokens,s.k,32);
++        q.memcpy(aq0.p,fq.q.data(),fq.q.size());q.memcpy(as0.p,fq.scale.data(),fq.scale.size()*4);
++        q.memset(ai0.p,0,ai0.count*4);q.wait_and_throw();}
++    std::vector<uint32_t>ts={0,std::min(12u,tokens-1),tokens/2,tokens-1};std::sort(ts.begin(),ts.end());ts.erase(std::unique(ts.begin(),ts.end()),ts.end());
++    numerical<<std::setprecision(12)<<"snapshot,variant,cpu_sample_tokens,gate_nmse,up_nmse,swiglu_nmse,down_nmse,weighted_sum_nmse,chain_sample_nmse_vs_f32,quant_pass,kernel_pass\n";
++    mapping<<"snapshot,counts_equal,offsets_equal,permutation_equal,invalid_jobs,pass\n";
++    pairout<<std::setprecision(12)<<"snapshot,stage,nmse,max_abs_over_rms,bitwise_equal,pass\n";
++    for(uint32_t snap:{0u,rounds-1}) {
++        std::cout<<"Numerical snapshot "<<snap<<" Q="<<tokens<<" (full GPU A/B, CPU tokens="<<ts.size()<<")\n";
++        p.ids=di.p+size_t(snap)*jobs;
++        std::vector<int32_t>frame(ids.begin()+size_t(snap)*jobs,ids.begin()+size_t(snap+1)*jobs);
++        auto sid=pick_tokens(frame,ts,topk);auto sx=pick_tokens(x,ts,s.k),sr=pick_tokens(routes,ts,topk);
++        const uint32_t nq=uint32_t(ts.size());
++        auto fg=reference(wg,s,sx,sid,nq,topk,false,false),fu=reference(wu,s,sx,sid,nq,topk,false,false);
++        auto fh=swiglu_reference(fg,fu),fd=reference(wd,ds,fh,sid,nq,topk,true,false),fy=weighted_sum_reference(fd,sr,nq,topk,s.k);
++        Snapshot baseline;
++        for(size_t vi=0;vi<vars.size();++vi){auto&v=vars[vi];
++            // Poison outputs outside timing: missing/duplicate remaps must not reuse old values.
++            q.memset(yg.p,255,hn*4);q.memset(yu.p,255,hn*4);q.memset(hidden.p,255,hn*4);q.memset(yd.p,255,dn*4);q.memset(dy.p,255,xn*4);q.wait_and_throw();
++            auto run=enqueue_moe(q,p,v.opt,w);run.done.wait_and_throw();auto got=capture_snapshot(q,p,w);
++            auto qi_audit=audit_a8(got.input_q,x),qh_audit=audit_a8(got.hidden_q,got.hidden);
++            std::cout<<"QUANT_CONTRACT "<<v.name<<" input_code_diff="<<qi_audit.cpu_code_differences
++                <<" scale_diff="<<qi_audit.cpu_scale_differences<<" scale_max_ulp="<<qi_audit.max_scale_ulp
++                <<" boundary="<<qi_audit.boundary_codes<<" bad_codes="<<qi_audit.bad_codes
++                <<" hidden_bad_codes="<<qh_audit.bad_codes<<"\n";
++            {
++                const auto dest=out/("snapshot-"+std::to_string(snap)+"-"+v.name);
++                std::filesystem::create_directories(dest);
++                std::ofstream audit(dest/"quant_audit.csv");
++                audit<<"plane,codes,groups,cpu_code_diff,cpu_scale_diff,max_scale_ulp,max_scale_relative,boundary_codes,bad_codes,bad_scales,pass\n";
++                for(auto item:std::array<std::pair<const char*,A8Audit>,2>{{{"input",qi_audit},{"hidden",qh_audit}}}) {
++                    const auto& a=item.second;audit<<item.first<<','<<a.codes<<','<<a.groups<<','<<a.cpu_code_differences<<','<<a.cpu_scale_differences
++                        <<','<<a.max_scale_ulp<<','<<a.max_scale_relative<<','<<a.boundary_codes<<','<<a.bad_codes<<','<<a.bad_scales<<','<<a.pass<<'\n';}
++                if(dump) {
++                    dump_raw(dest/"input.f32",x);dump_raw(dest/"hidden.f32",got.hidden);
++                    dump_raw(dest/"input.q8",got.input_q.q);dump_raw(dest/"input.scales.f32",got.input_q.scale);
++                    dump_raw(dest/"hidden.q8",got.hidden_q.q);dump_raw(dest/"hidden.scales.f32",got.hidden_q.scale);
++                    dump_raw(dest/"gate.f32",got.gate);dump_raw(dest/"up.f32",got.up);dump_raw(dest/"down.f32",got.down);dump_raw(dest/"output.f32",got.y);
++                    dump_raw(dest/"ids.i32",frame);dump_raw(dest/"routes.f32",routes);
++                    const auto cq=quantize_a8(x,tokens,s.k,32);
++                    dump_raw(dest/"input.cpu.q8",cq.q);dump_raw(dest/"input.cpu.scales.f32",cq.scale);
++                    std::ofstream meta(dest/"shape.txt");meta<<"tokens="<<tokens<<"\nk="<<s.k<<"\nhidden="<<s.m<<"\ntopk="<<topk<<"\ngroup=32\nrounding=RNE\n";
++                }
++            }
++            if(run.dispatch.grouped){auto actual=capture_mapping(q,w.grouping,jobs,s.experts),ref=group_jobs_reference(frame,s.experts);
++                bool ok=same_grouping(actual,ref);mapping<<snap<<','<<(actual.counts==ref.counts)<<','<<(actual.offsets==ref.offsets)<<','<<(actual.sorted_to_job==ref.sorted_to_job)<<','<<actual.counts.back()<<','<<ok<<'\n';mapping.flush();require(ok,"group mapping mismatch");}
++            if(run.dispatch.grouped) {
++                for(auto tv:std::array<ExpertTokenTileView,2>{{w.gate_tiles,gate_tile==down_tile?w.gate_tiles:w.down_tiles}}) {
++                    if(tv.tokens_per_tile==1)continue;
++                    auto tr=token_tiles_reference(group_jobs_reference(frame,s.experts),tv.tokens_per_tile);
++                    const auto total=copy_back(q,tv.total,1)[0];require(total==int32_t(tr.first.size()),"tile count mismatch");
++                    require(copy_back(q,tv.first,tr.first.size())==tr.first&&copy_back(q,tv.length,tr.length.size())==tr.length&&
++                        copy_back(q,tv.expert,tr.expert.size())==tr.expert,"tile descriptor mismatch");
++                }
++            }
++            auto g=pick_tokens(got.gate,ts,size_t(topk)*s.m),u=pick_tokens(got.up,ts,size_t(topk)*s.m),h=pick_tokens(got.hidden,ts,size_t(topk)*s.m),
++                d=pick_tokens(got.down,ts,size_t(topk)*s.k),y=pick_tokens(got.y,ts,s.k);
++            auto qi=pick_quant(got.input_q,ts,1),qh=pick_quant(got.hidden_q,ts,topk);
++            bool qp=quant_ok(got.input_q,x)&&quant_ok(got.hidden_q,got.hidden);
++            auto gg=reference_a8(wg,s,qi,sid,nq,topk,false),gu=reference_a8(wu,s,qi,sid,nq,topk,false),
++                gh=swiglu_reference(g,u),gd=reference_a8(wd,ds,qh,sid,nq,topk,true),gy=weighted_sum_reference(d,sr,nq,topk,s.k);
++            auto eg=errors(g,gg),eu=errors(u,gu),eh=errors(h,gh),ed=errors(d,gd),ey=errors(y,gy),et=errors(y,fy);
++            bool ok=qp&&good(eg)&&good(eu)&&good(eh)&&good(ed)&&good(ey)&&et.finite;
++            v.pass&=ok;v.total_nmse=std::max(v.total_nmse,et.nmse);
++            numerical<<snap<<','<<v.name<<','<<nq<<','<<eg.nmse<<','<<eu.nmse<<','<<eh.nmse<<','<<ed.nmse<<','<<ey.nmse<<','<<et.nmse<<','<<qp<<','<<ok<<'\n';numerical.flush();require(ok,"CPU arithmetic/quantizer check failed");
++            if(vi==0)baseline=std::move(got);
++            else {
++                for(auto item:std::array<std::pair<const char*,std::pair<const std::vector<float>*,const std::vector<float>*>>,5>{{
++                    {"gate",{&got.gate,&baseline.gate}},{"up",{&got.up,&baseline.up}},{"hidden",{&got.hidden,&baseline.hidden}},
++                    {"down",{&got.down,&baseline.down}},{"weighted_sum",{&got.y,&baseline.y}}}}) {
++                    auto e=errors(*item.second.first,*item.second.second);bool pass=near_scheduling_equal(e);
++                    pairout<<snap<<','<<item.first<<','<<e.nmse<<','<<e.max_abs_over_rms<<','<<bits_equal(*item.second.first,*item.second.second)<<','<<pass<<'\n';pairout.flush();require(pass,"full GPU A/B output mismatch");}
++                bool exact=bits_equal(got.input_q.q,baseline.input_q.q)&&bits_equal(got.input_q.scale,baseline.input_q.scale)&&
++                    bits_equal(got.hidden_q.q,baseline.hidden_q.q)&&bits_equal(got.hidden_q.scale,baseline.hidden_q.scale);
++                pairout<<snap<<",all_quant_planes,0,0,"<<exact<<','<<exact<<'\n';pairout.flush();require(exact,"grouping altered quantized q/scale planes");
++            }
++        }
++    }
++    samples<<std::setprecision(12)<<"round,phase,order,variant,enqueue_return_us,tail_wait_us,wall_us,gpu_span_us,kernel_sum_us,gpu_gap_us,group_kernel_us,core_gpu_span_us,gate_up_us,down_us,union_busy_us,overlap_us,actual_grouped,dispatch_reason\n";
++    stages<<std::setprecision(12)<<"round,phase,variant,stage,start_ns,end_ns,duration_us,parent_mask\n";
++    // Ring contains different ID frames; identical frame per paired round. Grouping is not amortized.
++    for(uint32_t r=0;r<rounds;++r){const char*phase=r==0?"first_timed_post_validation":r<=warmup?"warmup":"repeat";
++        p.ids=di.p+size_t(r)*jobs;
++        for(size_t j=0;j<2;++j){auto&v=vars[(r+j)%2];
++            if(scrub.p){const size_t n=scrub.count/4;auto*b=reinterpret_cast<uint32_t*>(scrub.p);q.parallel_for(sycl::range<1>(n),[=](sycl::id<1>i){b[i[0]]=uint32_t(i[0])+r;}).wait_and_throw();}
++            auto t0=Clock::now();auto run=enqueue_moe(q,p,v.opt,w);auto tr=Clock::now();run.done.wait_and_throw();auto t1=Clock::now();
++            ChainSample sm;sm.enqueue_return=micros(t0,tr);sm.tail_wait=micros(tr,t1);sm.wall=micros(t0,t1);
++            uint64_t core_begin=UINT64_MAX;std::vector<StageInterval> intervals;
++            for(size_t si=0;si<run.count;++si){auto&st=run.stages[si];auto b=st.event.get_profiling_info<sycl::info::event_profiling::command_start>(),e=st.event.get_profiling_info<sycl::info::event_profiling::command_end>();
++                intervals.push_back({b,e,st.parents});double us=double(e-b)/1000.;
++                const std::string label=st.label;if(label.rfind("group_",0)==0)sm.group_us+=us;else core_begin=std::min(core_begin,b);
++                if(label=="gate_up")sm.gate_us=us;if(label=="down")sm.down_us=us;
++                stages<<r<<','<<phase<<','<<v.name<<','<<label<<','<<b<<','<<e<<','<<us<<','<<st.parents<<'\n';}
++            const auto profile=profile_intervals(intervals);
++            sm.gpu_span=double(profile.end-profile.begin)/1000.;sm.kernel_sum=double(profile.kernel_sum)/1000.;
++            sm.gpu_gap=double(profile.idle)/1000.;sm.core_span=double(profile.end-core_begin)/1000.;
++            sm.union_busy=double(profile.union_busy)/1000.;sm.overlap=double(profile.overlap)/1000.;
++            samples<<r<<','<<phase<<','<<j<<','<<v.name<<','<<sm.enqueue_return<<','<<sm.tail_wait<<','<<sm.wall<<','<<sm.gpu_span<<','<<sm.kernel_sum<<','<<sm.gpu_gap<<','<<sm.group_us<<','<<sm.core_span<<','<<sm.gate_us<<','<<sm.down_us<<','<<sm.union_busy<<','<<sm.overlap<<','<<run.dispatch.grouped<<','<<run.dispatch.reason<<'\n';
++            if(r>warmup)v.samples.push_back(sm);
++        }
++    }
++    // Final routing was rebuilt inside the LAST grouped call, not in an untimed prepass.
++    std::vector<int32_t>last(ids.end()-jobs,ids.end());if(selected.grouped)require(same_grouping(capture_mapping(q,w.grouping,jobs,s.experts),group_jobs_reference(last,s.experts)),"final timed mapping mismatch");
++    require(all_zero(copy_back(q,gst.p,jobs))&&all_zero(copy_back(q,dst.p,jobs))&&all_zero(copy_back(q,oi.p,xn)),"timed run device status failure");
++    std::ofstream summary(out/"summary.csv");require(bool(summary),"cannot create summary");
++    summary<<std::setprecision(12)<<"variant,layout,input_group,hidden_group,host_waits,gate_split,down_split,local_size,expert_grouping,group_kernel_median_us,core_gpu_span_median_us,gate_up_median_us,down_median_us,kernel_sum_median_us,gpu_span_median_us,gpu_gap_median_us,enqueue_return_median_us,tail_wait_median_us,wall_median_us,wall_p95_us,speedup_vs_ungrouped_same_build,kernel_pass,pair_pass,chain_sample_nmse_vs_f32,tokens,k,hidden,experts,topk,source,union_busy_median_us,overlap_median_us,candidate,gate_tile,down_tile,fork_join,freeze_input,in_order\n";
++    for(auto&v:vars){const double wall=value(v,&ChainSample::wall),speed=value(vars[0],&ChainSample::wall)/wall;
++        summary<<v.name<<",s2tile8,32,32,0,"<<go.split_k<<','<<dopt.split_k<<','<<go.local_size<<','<<(v.name=="candidate"&&selected.grouped)<<','
++            <<value(v,&ChainSample::group_us)<<','<<value(v,&ChainSample::core_span)<<','<<value(v,&ChainSample::gate_us)<<','<<value(v,&ChainSample::down_us)<<','
++            <<value(v,&ChainSample::kernel_sum)<<','<<value(v,&ChainSample::gpu_span)<<','<<value(v,&ChainSample::gpu_gap)<<','<<value(v,&ChainSample::enqueue_return)<<','
++            <<value(v,&ChainSample::tail_wait)<<','<<wall<<','<<value(v,&ChainSample::wall,.95)<<','<<speed<<','<<v.pass<<",1,"<<v.total_nmse<<','<<tokens<<','<<s.k<<','<<s.m<<','<<s.experts<<','<<topk<<','<<(real?"real_weights":"synthetic")<<','<<value(v,&ChainSample::union_busy)<<','<<value(v,&ChainSample::overlap)<<','<<candidate<<','<<(v.name=="candidate"?gate_tile:1)<<','<<(v.name=="candidate"?down_tile:1)<<','<<v.opt.overlap_grouping_quant<<','<<freeze<<','<<in_order<<'\n';
++        std::cout<<v.name<<" wall_median_us="<<wall<<" p95="<<value(v,&ChainSample::wall,.95)<<" group_kernel_us="<<value(v,&ChainSample::group_us)<<" speedup="<<speed<<" PASS\n";}
++    std::cout<<"RESULT=PASS output="<<out.string()<<"\nGrouping INCLUDED each enabled call. Reuse keeps DPAS RepeatCount=1. No Vulkan handoff or server TG. Freeze-input timings are diagnostic only.\n";return 0;
++}catch(const std::exception&e){std::cerr<<"ERROR: "<<e.what()<<'\n';return 1;}
+diff --git a/tools/audit_quant_dump.py b/tools/audit_quant_dump.py
+new file mode 100644
+index 0000000..57fc7af
+--- /dev/null
++++ b/tools/audit_quant_dump.py
+@@ -0,0 +1,82 @@
++# SPDX-License-Identifier: MIT
++"""Independent stdlib-only audit of architecture_compare raw quantization dumps.
++RNE, NOT the old Vulkan half-away reference. Never mutates raw evidence.
++"""
++import argparse
++import array
++import json
++import math
++import struct
++import sys
++from pathlib import Path
++
++def f32(x):
++    return struct.unpack("<f", struct.pack("<f", x))[0]
++def bits(x):
++    return struct.unpack("<I", struct.pack("<f", x))[0]
++def load(path, code):
++    out = array.array(code)
++    out.frombytes(path.read_bytes())
++    if sys.byteorder != "little" and out.itemsize > 1:
++        out.byteswap()
++    return out
++
++def inspect(folder, plane, limit=32):
++    x = load(folder / (plane + ".f32"), "f")
++    q = load(folder / (plane + ".q8"), "b")
++    scales = load(folder / (plane + ".scales.f32"), "f")
++    if not x or len(x) != len(q) or len(x) % 32 or len(scales) != len(x)//32:
++        raise ValueError("raw dump size mismatch")
++    if not all(math.isfinite(v) for v in x):
++        raise ValueError("nonfinite input needs invalid-mask investigation")
++    detail = []
++    code_diff = scale_diff = bad_codes = bad_scales = max_ulp = boundary = 0
++    normal_min = f32(2**-126)
++    for g, d in enumerate(scales):
++        m = max(abs(v) for v in x[g*32:(g+1)*32])
++        ref = 1. if m == 0 else max(f32(m/127), normal_min)
++        scale_diff += bits(d) != bits(ref)
++        if not math.isfinite(d) or d <= 0:
++            bad_scales += 1
++            continue
++        max_ulp = max(max_ulp, abs(bits(d)-bits(ref)))
++        if (m == 0 and d != 1.) or abs(d-ref)/ref > 5e-6:
++            bad_scales += 1
++        for j in range(32):
++            i = 32*g+j
++            zr = max(-127., min(127., f32(x[i]/ref)))
++            qr = round(zr)
++            z = x[i]/d
++            lo = round(max(-127., min(127., z-2e-4)))
++            hi = round(max(-127., min(127., z+2e-4)))
++            if q[i] == -128 or not lo <= q[i] <= hi:
++                bad_codes += 1
++            elif q[i] != round(max(-127., min(127., f32(z)))):
++                boundary += 1
++            if q[i] != qr:
++                code_diff += 1
++                if len(detail) < limit:
++                    detail.append({"index": i, "x": x[i], "cpu_scale":ref, "actual_scale":d,
++                                   "cpu_rne":qr, "actual_code":q[i], "actual_normalized_double":z,
++                                   "cpu_division_f32":zr,
++                                   "reciprocal_multiply_f32":f32(x[i]*f32(1/d))})
++    return {"codes":len(q),"groups":len(scales),"cpu_code_differences":code_diff,
++            "cpu_scale_differences":scale_diff,"max_scale_ulp":max_ulp,"boundary_codes":boundary,
++            "bad_codes":bad_codes,"bad_scales":bad_scales,"pass":bad_codes == bad_scales == 0,
++            "difference_examples":detail}
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("snapshot", type=Path)
++    ap.add_argument("--out", type=Path)
++    a = ap.parse_args()
++    result = {"contract":"XMX-v0.4 RNE; explicit scale and normalized-error audit, not bit-exact division",
++              "input":inspect(a.snapshot,"input"),"hidden":inspect(a.snapshot,"hidden")}
++    output = a.out or a.snapshot / "independent-quant-audit.json"
++    if output.exists():
++        ap.error("audit already exists; choose a new --out instead of overwriting evidence")
++    output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
++    print(output)
++    return 0 if result["input"]["pass"] and result["hidden"]["pass"] else 1
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tools/run_architecture_suite.py b/tools/run_architecture_suite.py
+new file mode 100644
+index 0000000..eaeff92
+--- /dev/null
++++ b/tools/run_architecture_suite.py
+@@ -0,0 +1,106 @@
++# SPDX-License-Identifier: MIT
++"""Same-binary baseline/candidate sweep. No benchmark values fabricated in dry-run."""
++import argparse
++import csv
++import json
++import subprocess
++import sys
++from pathlib import Path
++from architecture_common import VERSION, verify_build
++QS = (1, 2, 4, 8, 16, 32, 64, 128, 184, 256, 512, 1024, 2048)
++RECIPES = ((1, 1, 0), (1, 1, 1), (2, 1, 1), (1, 2, 1), (2, 2, 1), (4, 4, 1))
++
++def cases_for(suite):
++    if suite == "smoke":
++        return [dict(name="smoke-q13-t2-4", q=13, k=512, hidden=256, experts=8, topk=2,
++                     gt=2, dt=4, overlap=1, split_gate=2, split_down=1, model_shape=False),
++                dict(name="smoke-q1-t4-1", q=1, k=512, hidden=256, experts=3, topk=1,
++                     gt=4, dt=1, overlap=1, split_gate=1, split_down=1, model_shape=False)]
++    qs = (1, 13, 184, 512) if suite == "quick" else QS
++    return [dict(name=f"q{q:04d}-t{gt}-{dt}-fork{overlap}", q=q, k=2048, hidden=512, experts=256,
++                 topk=8, gt=gt, dt=dt, overlap=overlap, split_gate=1, split_down=1, model_shape=True)
++            for q in qs for gt, dt, overlap in RECIPES]
++
++def command_for(case, a):
++    args = [str(a.exe), "--device", a.device, "--out", str(a.out / case["name"]),
++            "--tokens", str(case["q"]), "--topk", str(case["topk"]), "--k", str(case["k"]),
++            "--hidden", str(case["hidden"]), "--experts", str(case["experts"]),
++            "--candidate", "grouped", "--gate-tile", str(case["gt"]), "--down-tile", str(case["dt"]),
++            "--overlap", str(case["overlap"]), "--in-order", "0", "--gate-split", str(case["split_gate"]),
++            "--down-split", str(case["split_down"]), "--local", "4", "--repeats", str(a.repeats),
++            "--warmup", "3", "--skip-probe", "1", "--dump-contract", str(int(a.dump_contract and case["q"] == 184))]
++    if case["model_shape"] and a.gate:
++        for key in ("gate", "up", "down"):
++            args += ["--" + key, str(getattr(a, key))]
++    return args
++
++def main():
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--exe", type=Path, default=Path("build/maple-architecture-compare.exe"))
++    ap.add_argument("--out", required=True, type=Path)
++    ap.add_argument("--suite", choices=("smoke", "quick", "full"), default="smoke")
++    ap.add_argument("--device", default="A750")
++    ap.add_argument("--repeats", type=int, default=28)
++    ap.add_argument("--timeout", type=float, default=1800)
++    ap.add_argument("--dump-contract", action="store_true")
++    ap.add_argument("--dry-run", action="store_true")
++    for key in ("gate", "up", "down"):
++        ap.add_argument("--" + key, type=Path)
++    a = ap.parse_args()
++    if not (2 <= a.repeats <= 10000) or a.timeout <= 0:
++        ap.error("invalid repeats/timeout")
++    if any((a.gate, a.up, a.down)) and not all((a.gate, a.up, a.down)):
++        ap.error("gate/up/down capsules must be supplied together")
++    if a.out.exists() and any(a.out.iterdir()):
++        ap.error("output directory is not empty; never overwrite evidence")
++    a.out.mkdir(parents=True, exist_ok=True)
++    a.exe = a.exe.resolve()
++    cases = cases_for(a.suite)
++    plan = {"version": VERSION, "dry_run": a.dry_run, "case_count": len(cases),
++            "scope": "one MoE layer, baseline/candidate AB/BA; NOT server t/s",
++            "cases": [{**c, "argv": command_for(c, a)} for c in cases]}
++    if not a.dry_run:
++        plan["build"] = verify_build(a.exe)
++    (a.out / "plan.json").write_text(json.dumps(plan, indent=2) + "\n", encoding="utf-8")
++    if a.dry_run:
++        print(f"Dry-run only: {len(cases)} cases, no GPU invocation, no performance results")
++        return 0
++    def run(argv, log):
++        with log.open("w", encoding="utf-8") as stream:
++            try:
++                rc = subprocess.run(argv, stdout=stream, stderr=subprocess.STDOUT, timeout=a.timeout, check=False).returncode
++            except subprocess.TimeoutExpired:
++                stream.write("\nTIMEOUT; kernel acceptance not established\n")
++                return 124
++        return rc
++    rc = run([str(a.exe), "--device", a.device, "--probe-only", "1"], a.out / "probe.log")
++    if rc:
++        print("Probe failed; preserve probe.log. No fallback/performance pass claimed", file=sys.stderr)
++        return rc
++    status = []
++    for item in plan["cases"]:
++        print(item["name"], flush=True)
++        rc = run(item["argv"], a.out / (item["name"] + ".log"))
++        ok = rc == 0
++        if ok:
++            path = a.out / item["name"] / "summary.csv"
++            if not path.is_file():
++                ok = False
++            else:
++                with path.open(newline="", encoding="utf-8-sig") as stream:
++                    rows = list(csv.DictReader(stream))
++                ok = len(rows) == 2 and {r["variant"] for r in rows} == {"baseline", "candidate"} and all(
++                    r["kernel_pass"] == "1" and r["pair_pass"] == "1" for r in rows)
++        status.append({"case": item["name"], "exit": rc, "pass": ok})
++        (a.out / "status.json").write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
++        if not ok:
++            print("FAILED: inspect quant_audit, numerical, pair_correctness, raw dumps; do not widen tolerances", file=sys.stderr)
++            return rc or 1
++    print("All case checks passed; performance and model quality remain separate judgments")
++    return 0
++if __name__ == "__main__":
++    try:
++        sys.exit(main())
++    except (OSError, ValueError, KeyError) as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        sys.exit(1)
+diff --git a/tools/stamp_architecture_build.py b/tools/stamp_architecture_build.py
+new file mode 100644
+index 0000000..eac2633
+--- /dev/null
++++ b/tools/stamp_architecture_build.py
+@@ -0,0 +1,19 @@
++# SPDX-License-Identifier: MIT
++import argparse
++import json
++from pathlib import Path
++from architecture_common import VERSION, sha256, sources
++
++def main():
++    ap = argparse.ArgumentParser(description="Record an already built executable; does not build or prove GPU execution")
++    ap.add_argument("--exe", required=True, type=Path)
++    a = ap.parse_args()
++    if not a.exe.is_file() or not a.exe.stat().st_size:
++        ap.error("executable not found/empty")
++    record = {"version": VERSION, "source_sha256": sources(), "executable_sha256": sha256(a.exe),
++              "scope": "post-build identity, NOT GPU correctness or hardware-codegen attestation"}
++    target = a.exe.parent / "architecture-build.json"
++    target.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
++    print(target)
++if __name__ == "__main__":
++    main()

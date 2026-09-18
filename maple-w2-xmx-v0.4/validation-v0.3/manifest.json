@@ -1,0 +1,22 @@
+{
+  "version": "0.3",
+  "environment": {
+    "platform": "Linux-6.18.44-x86_64-with-glibc2.41",
+    "icpx": false,
+    "A750": false,
+    "PowerShell": false
+  },
+  "cpu_reference_checks": {
+    "a16": 2096458,
+    "a8": 1888002,
+    "new_moe": 97428
+  },
+  "python_tests": 19,
+  "ctest_targets_passed": 4,
+  "asan_ubsan_cpu": "PASS",
+  "clang_moe_cpu": "PASS",
+  "new_sycl_compilation": "NOT_RUN",
+  "new_gpu_execution": "NOT_RUN",
+  "windows_scripts": "NOT_RUN",
+  "mocked_runner_tests": "unit tests only, no GPU executable invoked"
+}

@@ -1,0 +1,64 @@
+{
+  "date": "2026-09-17",
+  "version": "0.2",
+  "environment": "Linux container; no /dev/dri",
+  "tests": [
+    {
+      "name": "A16 CPU reference",
+      "result": "PASS",
+      "checks": 2096458,
+      "compilers": [
+        "GCC14.2",
+        "Clang17"
+      ]
+    },
+    {
+      "name": "A8 CPU reference",
+      "result": "PASS",
+      "checks": 1888002,
+      "compilers": [
+        "GCC14.2",
+        "Clang17"
+      ]
+    },
+    {
+      "name": "Python unit tests",
+      "result": "PASS",
+      "tests": 11
+    },
+    {
+      "name": "GCC AddressSanitizer + UndefinedBehaviorSanitizer + leak check",
+      "result": "PASS",
+      "targets": [
+        "A16 reference",
+        "A8 reference"
+      ]
+    },
+    {
+      "name": "CTest CPU suite",
+      "result": "PASS",
+      "targets": 3
+    },
+    {
+      "name": "Python AST/dry-run plans",
+      "result": "PASS",
+      "quick_cases": 6,
+      "full_cases": 17
+    }
+  ],
+  "not_run": [
+    "SYCL compilation/linking",
+    "GPU signed INT2 probe",
+    "GPU numerical comparison",
+    "GPU timing/ISA disassembly",
+    "Windows PowerShell execution",
+    "Vulkan/Level Zero interop",
+    "full-model generation or quality evaluation"
+  ],
+  "missing_tools": [
+    "icx",
+    "icpx",
+    "dpcpp",
+    "pwsh"
+  ]
+}

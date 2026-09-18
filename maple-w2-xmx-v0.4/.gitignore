@@ -1,0 +1,9 @@
+build*/
+__pycache__/
+*.pyc
+*.mw2
+*.obj
+*.o
+*.exe
+
+_w2_port_backups/

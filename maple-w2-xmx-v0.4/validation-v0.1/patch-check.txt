@@ -1,0 +1,2 @@
+PASS: git apply --check against empty repository; adds only tools/maple-w2a16-xmx/.
+Does not install a dispatcher hook or modify ggml-vulkan.dll.

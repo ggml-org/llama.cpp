@@ -1,0 +1,57 @@
+{
+  "package": "Maple W2A16 + native W2A8 XMX",
+  "version": "0.2",
+  "date": "2026-09-17",
+  "input_archive": {
+    "filename": "maple-w2a16-xmx-v0.1-source.zip",
+    "sha256": "904ed60c0498bf0396bbabe37316441641d8d1a923ce67df4158b05ce3f0fbf4"
+  },
+  "source_status": "standalone SYCL/ESIMD kernel draft and shared-input benchmark; no server integration",
+  "modified_from_v01": [
+    ".gitignore",
+    "CMakeLists.txt",
+    "README.ko.md",
+    "include/maple_w2a16.hpp",
+    "scripts/build_windows.ps1",
+    "src/maple_w2a16.cpp"
+  ],
+  "added_files": [
+    "CHANGELOG.md",
+    "README.v0.1.ko.md",
+    "include/maple_w2a8.hpp",
+    "include/w2a8_reference.hpp",
+    "scripts/build_and_test.ps1",
+    "src/maple_w2a8.cpp",
+    "tests/test_suite.py",
+    "tests/w2a8_reference_tests.cpp",
+    "tools/compare.cpp",
+    "tools/run_suite.py"
+  ],
+  "preserved_v01_notes": "README.v0.1.ko.md and validation-v0.1/ are historical, not GPU validation of v0.2",
+  "technical_references": [
+    {
+      "name": "Intel DPAS ISA",
+      "url": "https://github.com/intel/intel-graphics-compiler/blob/master/documentation/visa/instructions/DPAS.md",
+      "reviewed": "2026-09-17",
+      "use": "mixed s2/s8 depth8 K32 ExecSize8 operand layout and INT32 accumulation"
+    },
+    {
+      "name": "Intel ESIMD xmx::dpas header",
+      "url": "https://github.com/intel/llvm/blob/sycl/sycl/include/sycl/ext/intel/esimd/xmx/dpas.hpp",
+      "reviewed": "2026-09-17",
+      "use": "explicit BPrecision=s2, APrecision=s8 template signature; not vendored"
+    }
+  ],
+  "validation": {
+    "cpu_reference": true,
+    "python_tests": true,
+    "asan_ubsan": true,
+    "sycl_compiled": false,
+    "gpu_executed": false,
+    "windows_powershell_executed": false,
+    "server_tg_measured": false
+  },
+  "weights": "standard TQ2_0 block256/66 bytes; per-block FP16 scale preserved; no weight values retrained/requantized",
+  "activation": "symmetric INT8, FP32 scale, groups32/128/256 independent of weight scale; not GGML Q8_1",
+  "distribution": "source only, no compiled binaries or model weights"
+}

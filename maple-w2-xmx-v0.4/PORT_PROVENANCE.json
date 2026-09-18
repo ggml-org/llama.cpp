@@ -1,0 +1,41 @@
+{
+  "version": "0.4-vulkan-port-v1",
+  "base_archive": "maple-w2-xmx-v0.4-source.zip",
+  "base_archive_sha256": "606d2937ff6cf267050112650913561a74532a7e990f55736eea06a2341eb008",
+  "base_definition": "exact user-uploaded v0.4 module; no clean/reset of user llama.cpp tree required",
+  "preserved": [
+    "v0.4 native/s2tile8 T1 DPAS math",
+    "RNE quantizer math",
+    "SwiGLU + hidden quant math",
+    "original static grouping count/prefix/scatter"
+  ],
+  "added": [
+    "dispatch policy",
+    "T2/T4 repeated-1 DPAS weight reuse",
+    "quant/group fork-join",
+    "DAG interval profiling",
+    "RNE audit and raw dumps",
+    "safe overlay"
+  ],
+  "local_validation": {
+    "gcc_cpu": "PASS",
+    "clang_cpu": "PASS",
+    "ASan_UBSan": "PASS",
+    "python_tests": 48,
+    "host_DAG_test_double": "PASS",
+    "actual_new_kernel_body_scalar_DPAS_emulation": "PASS",
+    "oneAPI_SYCL_compilation": "PASS (oneAPI DPC++ 2026.1.1)",
+    "A750_execution": "PASS (DPAS 36/36; grouping 48 cases; full 14 cases/28 variants)",
+    "performance_speedup": "MEASURED (grouped wins Q>=64; Q2048 wall 1.2668x including grouping)",
+    "full_model_quality": "NOT_MEASURED"
+  },
+  "binary_compatibility": "rebuild all consumers; appended source-level fields do not promise ABI compatibility",
+  "source_distribution": {
+    "file": "maple-w2-xmx-v0.4-vulkan-port-v1.zip",
+    "sha256": "96FAE936031BF3E30B95886281378C58EC1FBA36F8FA6317365DA47BA60B96CA"
+  },
+  "post_merge_fixes": [
+    "src/maple_moe.cpp: make diagnostic sycl::event copy non-const for oneAPI 2026.1.1 wait_and_throw()",
+    "tools/grouping_compare.cpp: validate declared parent event edges instead of unrelated submission-order timestamps"
+  ]
+}

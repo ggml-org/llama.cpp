@@ -1,0 +1,84 @@
+const size_t xr=p.per_selection?job:job/p.topk;
+                const uint32_t nk=p.shape.k/256, nsp=nk/opt.kernel.split_k;
+                const size_t row_stride=size_t(nk)*66;
+                const size_t eb=size_t(eid)*p.shape.m*row_stride;
+                const size_t tb=(size_t(eid)*rt_count+rt)*nk*528;
+                const bool writer=rt==0 && (p.per_selection || job%p.topk==0);
+                es::simd<uint32_t,32> off16(0,2),off32(0,4),off8(0,1);
+                for(uint32_t kb=sp*nsp;kb<(sp+1)*nsp;++kb) {
+                    es::simd<uint16_t,256> raw0,raw1;
+                    es::simd<uint16_t,8> ds0,ds1;
+                    if constexpr(L==Layout::native_tq2) {
+                        #pragma unroll
+                        for(int r=0;r<8;++r) {
+                            const size_t wb=eb+size_t(rt*8+r)*row_stride+size_t(kb)*66;
+                            raw0.template select<32,1>(r*32)=es::gather<uint16_t,32>(reinterpret_cast<const uint16_t*>(p.w0+wb),off16);
+                            ds0[r]=*reinterpret_cast<const uint16_t*>(p.w0+wb+64);
+                            if constexpr(Pair) {
+                                raw1.template select<32,1>(r*32)=es::gather<uint16_t,32>(reinterpret_cast<const uint16_t*>(p.w1+wb),off16);
+                                ds1[r]=*reinterpret_cast<const uint16_t*>(p.w1+wb+64);
+                            }
+                        }
+                    } else {
+                        es::simd<uint32_t,8> so(0,2);
+                        ds0=es::gather<uint16_t,8>(reinterpret_cast<const uint16_t*>(p.w0+tb+size_t(kb)*528+512),so);
+                        if constexpr(Pair) ds1=es::gather<uint16_t,8>(reinterpret_cast<const uint16_t*>(p.w1+tb+size_t(kb)*528+512),so);
+                    }
+                    es::simd<sycl::half,8> hd0=ds0.template bit_cast_view<sycl::half>();
+                    es::simd<float,8> dw0=es::convert<float>(hd0),dw1;
+                    if constexpr(Pair) {es::simd<sycl::half,8> hd1=ds1.template bit_cast_view<sycl::half>();dw1=es::convert<float>(hd1);}
+                    for(uint32_t kg=0;kg<256;kg+=G) {
+                        const size_t group_index=xr*(p.shape.k/G)+(kb*256+kg)/G;
+                        const size_t ax=xr*p.shape.k+kb*256+kg;
+                        es::simd<int8_t,G> aq; float da;
+                        if constexpr(Fused) {
+                            es::simd<float,G> av;
+                            #pragma unroll
+                            for(int j=0;j<G;j+=32) {
+                                if(p.activation_type==ActivationType::f16) {
+                                    es::simd<uint16_t,32> hv=es::gather<uint16_t,32>(static_cast<const uint16_t*>(p.x)+ax+j,off16);
+                                    es::simd<sycl::half,32> hh=hv.template bit_cast_view<sycl::half>();
+                                    av.template select<32,1>(j)=es::convert<float>(hh);
+                                } else av.template select<32,1>(j)=es::gather<float,32>(static_cast<const float*>(p.x)+ax+j,off32);
+                            }
+                            const auto bad=(av!=av)|(av>3.402823466e38f)|(av< -3.402823466e38f);
+                            if(writer) {es::simd<float,G> f=0.f;f.merge(1.f,bad); w.invalid[group_index]=int32_t(max_tree<G>(f));}
+                            av.merge(0.f,bad); // invalid flag above requires caller rejection; no silent success
+                            aq=quant_registers<G>(av,da);
+                            if(writer && w.capture) {
+                                w.scales[group_index]=da;
+                                #pragma unroll
+                                for(int j=0;j<G;j+=32) {
+                                    es::simd<int8_t,32> part=aq.template select<32,1>(j);
+                                    es::scatter<int8_t,32>(w.q+ax+j,off8,part);
+                                }
+                            }
+                        } else {
+                            da=w.scales[group_index];
+                            #pragma unroll
+                            for(int j=0;j<G;j+=32) aq.template select<32,1>(j)=es::gather<int8_t,32>(w.q+ax+j,off8);
+                        }
+                        es::simd<int32_t,8> ia0=0,ia1=0;
+                        for(uint32_t sub=0;sub<G;sub+=32) {
+                            es::simd<uint32_t,16> b0,b1;
+                            if constexpr(L==Layout::native_tq2) {
+                                b0=pack_native_s2(raw0,kg+sub);
+                                if constexpr(Pair) b1=pack_native_s2(raw1,kg+sub);
+                            } else {
+                                es::simd<uint32_t,16> bo(0,4);
+                                const size_t wb=tb+size_t(kb)*528+size_t((kg+sub)/32)*64;
+                                b0=es::gather<uint32_t,16>(reinterpret_cast<const uint32_t*>(p.w0+wb),bo);
+                                if constexpr(Pair) b1=es::gather<uint32_t,16>(reinterpret_cast<const uint32_t*>(p.w1+wb),bo);
+                            }
+                            es::simd<int8_t,32> a32=aq.template select<32,1>(sub);
+                            // B=INT2, A=INT8; DG2 K32 x N8, RepeatCount1, INT32 accumulate.
+                            ia0=xmx::dpas<8,1,int32_t,int32_t,uint32_t,int8_t,
+                                xmx::dpas_argument_type::s2,xmx::dpas_argument_type::s8>(ia0,b0,a32);
+                            if constexpr(Pair) ia1=xmx::dpas<8,1,int32_t,int32_t,uint32_t,int8_t,
+                                xmx::dpas_argument_type::s2,xmx::dpas_argument_type::s8>(ia1,b1,a32);
+                        }
+                        acc0+=es::convert<float>(ia0)*(dw0*da);
+                        if constexpr(Pair) acc1+=es::convert<float>(ia1)*(dw1*da);
+                    }
+                }
+            

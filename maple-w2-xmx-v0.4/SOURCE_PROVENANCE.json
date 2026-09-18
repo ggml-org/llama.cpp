@@ -1,0 +1,48 @@
+{
+  "version": "0.4",
+  "primary_base": {
+    "file": "maple-w2-xmx-v0.3-source.zip",
+    "sha256": "80c4ea3a5983bc983fc16ea9490b8ee8c45c7558cb5a0658853dfd1fddc5cf05"
+  },
+  "measurement_context": {
+    "file": "maple-baseline-w2a8-g32-h32-gluquant-async-q-sweep-20260918-v2.zip",
+    "sha256": "0dca4410ba65480708bfae2dd8802aa1d610dc4caa3b5c48f3c2219ca60051aa",
+    "contains_local_source_diff": false
+  },
+  "one_optimization": "GPU stable expert-major job permutation used by unchanged repeat-1 A8 gate/up and down",
+  "control": "G32/H32 gluquant async s2tile8 split1/1 local4; Q guard extended equally to 2048",
+  "unchanged_arithmetic": [
+    {
+      "path": "src/maple_w2a8.cpp",
+      "base_sha256": "d5f80ff864b8dcb0b63c7bffc6fbdb825d4d07ed0b15c8b4905704117ee3c5c9"
+    },
+    {
+      "path": "src/maple_moe.cpp",
+      "base_sha256": "7dabe35b5534fa12a858bee9001f71183ccb7c36da14cec6cf962cb2162a219e"
+    },
+    {
+      "path": "include/tq2_reference.hpp",
+      "base_sha256": "10da29588c589a0da52179a5d9f273b40aca4da920615956e607947c0aa9c77b"
+    },
+    {
+      "path": "include/w2a8_reference.hpp",
+      "base_sha256": "05e0e065a6c8cb9e73bf6f5e6546317e7ae185df057527f823117d5c382c3479"
+    },
+    {
+      "path": "include/moe_reference.hpp",
+      "base_sha256": "118f3ce8e1a4321b4770fe6f31f1a341ed62d02feae99f609130ddde0e232c0a"
+    }
+  ],
+  "not_implemented": [
+    "multi-token DPAS/GEMM",
+    "grouping/input-quant overlap",
+    "new split/precision/queue policy",
+    "Vulkan import/semaphores",
+    "llama dispatcher integration"
+  ],
+  "external_reference": {
+    "url": "https://github.khronos.org/SYCL_Reference/iface/group-algorithms-library.html",
+    "use": "group reduce and exclusive scan API semantics"
+  },
+  "verification": "See validation/manifest.json; no SYCL compiler or target GPU in authoring environment."
+}

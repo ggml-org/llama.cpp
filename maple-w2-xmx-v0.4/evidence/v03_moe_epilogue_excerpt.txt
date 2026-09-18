@@ -1,0 +1,27 @@
+static sycl::event epilogue(sycl::queue&q,const MoeProblem&p,const MoeOptions&o,const MoeWorkspace&w,const sycl::event&dep){
+    const size_t n=size_t(p.tokens)*p.topk*p.gate_shape.m;
+    return q.submit([&](sycl::handler&h){h.depends_on(dep);h.parallel_for<MoeSwiGlu>(sycl::range<1>(n),[=](sycl::id<1>ii){
+        size_t i=ii[0];float g=w.gate[i],u=w.up[i];int bad=!sycl::isfinite(g)||!sycl::isfinite(u);
+        if(bad){g=0;u=0;}g=sycl::fmin(g,o.clamp);u=sycl::fmax(-o.clamp,sycl::fmin(u,o.clamp));
+        float z=sycl::exp(-sycl::fabs(g));float si=g>=0?g/(1.f+z):(g*z)/(1.f+z);
+        w.hidden[i]=si*u;w.hidden_invalid[i]=bad;});});
+}
+template<int G>
+static sycl::event epilogue_quant(sycl::queue&q,const MoeProblem&p,const MoeOptions&o,const MoeWorkspace&w,const sycl::event&dep){
+    const size_t ng=size_t(p.tokens)*p.topk*p.gate_shape.m/G;
+    return q.submit([&](sycl::handler&h){h.depends_on(dep);
+        h.parallel_for<MoeSwiGluQuant<G>>(sycl::nd_range<1>{sycl::range<1>(ng*32),sycl::range<1>(32)},[=](sycl::nd_item<1>it){
+            const size_t group=it.get_group_linear_id();const unsigned lane=it.get_local_linear_id();float v[G/32],mx=0;int bad=0;
+            for(unsigned j=0;j<G/32;++j){const size_t i=group*G+j*32+lane;float g=w.gate[i],u=w.up[i];
+                const int b=!sycl::isfinite(g)||!sycl::isfinite(u);bad|=b;w.hidden_invalid[i]=b;if(b){g=0;u=0;}
+                g=sycl::fmin(g,o.clamp);u=sycl::fmax(-o.clamp,sycl::fmin(u,o.clamp));float z=sycl::exp(-sycl::fabs(g));
+                float si=g>=0?g/(1.f+z):(g*z)/(1.f+z);v[j]=si*u;w.hidden[i]=v[j];mx=sycl::fmax(mx,sycl::fabs(v[j]));}
+            mx=sycl::reduce_over_group(it.get_group(),mx,sycl::maximum<float>());
+            bad=sycl::reduce_over_group(it.get_group(),bad,sycl::maximum<int>());
+            const float d=mx==0?1.f:sycl::fmax(mx/127.f,1.1754943508222875e-38f);
+            if(lane==0){w.hidden_a8.scales[group]=d;w.hidden_a8.invalid[group]=bad;}
+            for(unsigned j=0;j<G/32;++j){float z=sycl::fmax(-127.f,sycl::fmin(127.f,v[j]/d));float az=sycl::fabs(z);
+                uint32_t k=uint32_t(az);float f=az-float(k);k+=uint32_t(f>.5f||(f==.5f&&(k&1u)));
+                w.hidden_a8.q[group*G+j*32+lane]=int8_t(z<0?-int(k):int(k));}
+        });});
+}

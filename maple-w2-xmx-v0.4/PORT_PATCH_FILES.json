@@ -1,0 +1,196 @@
+{
+  "version": "0.4-vulkan-port-v1",
+  "scope": "module source/tests/docs only; validation-port evidence remains in distribution ZIP",
+  "files": [
+    {
+      "path": ".gitignore",
+      "old_sha256": "4f91b2306aa1d951c4a0a3390dc5ce6c6d0270840b9052838df2f807e33f53f9",
+      "new_sha256": "38e1e07ab306a7af0bcbdfac0d30583ba9bfcd8dc623495178a14d87f6f000c6"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "old_sha256": "7c2e8e89f0913454e8060240191c3f3dc8ee540baa106f37e0abf164d1432547",
+      "new_sha256": "f9fea17c101b152f2a4485b067e1e95f67617c7c77768cd18c81ce1b74fb2b57"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "old_sha256": "4cf18b2307daddb5876bb7fd5ce3d790bc6cf4c05886a21bcc1ae722b27063c3",
+      "new_sha256": "0c7155bfe20324a9ddc2119818e7bd3e15df0bcba958e96681931734f7ede31b"
+    },
+    {
+      "path": "PORT_PROVENANCE.json",
+      "old_sha256": null,
+      "new_sha256": "decc4b974d31e869afe1173a403a95a702c52f5b05b3a11bf7362503e37d025c"
+    },
+    {
+      "path": "README.ko.md",
+      "old_sha256": "19100e7e8d0789ad363123bede7604beea5b733b959bad3f67d22e978ff61b51",
+      "new_sha256": "ae89d5c32d64d3d43b8224d1e799cbd297566d4d032efd5c1a9cb28d02636b54"
+    },
+    {
+      "path": "README.v0.4.ko.md",
+      "old_sha256": null,
+      "new_sha256": "19100e7e8d0789ad363123bede7604beea5b733b959bad3f67d22e978ff61b51"
+    },
+    {
+      "path": "build_architecture_and_test.cmd",
+      "old_sha256": null,
+      "new_sha256": "b3a0040ece10d6bc78b0ed5653051081007963deac01cb18c27305c29bfac350"
+    },
+    {
+      "path": "docs/INTEGRATION_PORT.ko.md",
+      "old_sha256": null,
+      "new_sha256": "47791c05704d43bd543362be3b36d624cfb2ff89fa8899b5c358ce37b9c52688"
+    },
+    {
+      "path": "docs/TRANSFER_MAP.ko.md",
+      "old_sha256": null,
+      "new_sha256": "29d136b5b1e5c7970235aa42558ab1456960789ed2c1c2c537641e2d35a3e5cc"
+    },
+    {
+      "path": "include/a8_contract_audit.hpp",
+      "old_sha256": null,
+      "new_sha256": "14acc051e8c25d77fb6cd7217edef1f8e4b9df68c27f5684695269faabb4fbba"
+    },
+    {
+      "path": "include/expert_grouping.hpp",
+      "old_sha256": "044856523e2bb115c5092e1bffb6f94d400b22705818717006b6c117535c9619",
+      "new_sha256": "67c690d8e7525ca180be13aa8dfe10a11b1364518c8bb4adcbe84c9c610db1ee"
+    },
+    {
+      "path": "include/expert_token_tiles.hpp",
+      "old_sha256": null,
+      "new_sha256": "fe0ceb001f91399e51c9d80ceaaf0046874cd46d8a42255f95965c96c243e283"
+    },
+    {
+      "path": "include/maple_moe.hpp",
+      "old_sha256": "5bff7795cb95c144e16548755ab09a033a0c7052b9b9e6b18917c489e64640ee",
+      "new_sha256": "2d47e84b0cc62a6dddab4b04e639fb6de31fa926fbe9838af3c55afd1325a751"
+    },
+    {
+      "path": "include/maple_w2a8.hpp",
+      "old_sha256": "6d0b2ec0ae91da188084b63ba033d12ffa988f20160205a363abdd8990781be2",
+      "new_sha256": "57c774792c9a48dab9e451c5f22593bdc45f2dffd0538d57f2b72ad68ec8b3a1"
+    },
+    {
+      "path": "include/moe_dispatch_policy.hpp",
+      "old_sha256": null,
+      "new_sha256": "fc6949ac3eae172853c6a6c59dbfb304d6e6b92fd7abffddfdc0eec07190c731"
+    },
+    {
+      "path": "include/moe_profiling.hpp",
+      "old_sha256": null,
+      "new_sha256": "3f376be1acc0987d5712c80b82fe6b9927c6dd3006d7e915528322dfc8090d6a"
+    },
+    {
+      "path": "scripts/build_architecture_and_test.ps1",
+      "old_sha256": null,
+      "new_sha256": "8ccabef0afbf05be553946a0e52316dfee4db237085282f543beba19ff13e42f"
+    },
+    {
+      "path": "scripts/build_windows.ps1",
+      "old_sha256": "8504a3690a37bc1f2235f530caa8f3fb452021072c9d528c58c8962536fc9566",
+      "new_sha256": "aa8789fa4f8d61838e80be991e418231048a737b049aff27a76aa874cf63e1f8"
+    },
+    {
+      "path": "src/expert_grouping.cpp",
+      "old_sha256": "82546063176a6ccddb398652654989d8d33a04b6e06b2b8cd6ca305c107dbb69",
+      "new_sha256": "d3dfd64f3ca11d2c824eb31bee91de7d654b9928cea5c3e3ee6ed5e49135f265"
+    },
+    {
+      "path": "src/maple_moe.cpp",
+      "old_sha256": "3a6fa3c9d3f16185bcb8ae83d2f01d6a0050b252e1b5b147a0b4ce2d3cdfc21d",
+      "new_sha256": "8578b5a38d9cfb66a0706abfeca9be651f5843cc0d9c7f45e5e9185b0b5b7858"
+    },
+    {
+      "path": "src/maple_w2a8.cpp",
+      "old_sha256": "f54a28a72052416119aea74673a80a8290e9850eeee1fb43098f2c4e666dd2f8",
+      "new_sha256": "089299fac64d8cbea7c04814f3c82822e4daa1910bdc99a903908149c34430f5"
+    },
+    {
+      "path": "src/maple_w2a8_grouped.cpp",
+      "old_sha256": null,
+      "new_sha256": "b2716d53c31819e4dc933583d15414a47d910b2925359e27c3b279b62cf8e468"
+    },
+    {
+      "path": "tests/architecture_reference_tests.cpp",
+      "old_sha256": null,
+      "new_sha256": "b939fa03c055c7d6b5e23603e5c7f38a86d6d52d67726124de09634938286507"
+    },
+    {
+      "path": "tests/mock_sycl/README.md",
+      "old_sha256": null,
+      "new_sha256": "5c8656187e2b8fea2399a3fedb9f891123a9a4aa7872443810943af81026c757"
+    },
+    {
+      "path": "tests/mock_sycl/sycl/ext/intel/esimd/xmx/dpas.hpp",
+      "old_sha256": null,
+      "new_sha256": "62502991a0022c59097a33a65cf417a12528ddb9f6fca6f42741ecad68e2692d"
+    },
+    {
+      "path": "tests/mock_sycl/sycl/ext/intel/esimd.hpp",
+      "old_sha256": null,
+      "new_sha256": "ff2cb2af5d85bf03a40a36bdfaa600cc41dfa84379f55a9600942d39d08eb922"
+    },
+    {
+      "path": "tests/mock_sycl/sycl/sycl.hpp",
+      "old_sha256": null,
+      "new_sha256": "6ced7f533bb93d48327219f11bf39f162a09c6a94552cc78dfb83e62b9576fb1"
+    },
+    {
+      "path": "tests/moe_submission_tests.cpp",
+      "old_sha256": null,
+      "new_sha256": "0af0adc9d203c9f58e64844517deb272d0de5a6a559fb4ad2aade7411433fc3b"
+    },
+    {
+      "path": "tests/test_architecture.py",
+      "old_sha256": null,
+      "new_sha256": "df86b82bf9ce9737907fd617decd105829813d04e50dd8be87aa56cbd81afc48"
+    },
+    {
+      "path": "tests/test_port_apply.py",
+      "old_sha256": null,
+      "new_sha256": "ffcc81641727451902bb85c44b00235b64623955c9835005fabded828644c70b"
+    },
+    {
+      "path": "tests/token_reuse_emulation_tests.cpp",
+      "old_sha256": null,
+      "new_sha256": "f67453b5a8162a6a732d2306ac2596c04c4ad0839efd95a4fd4990c76027feb5"
+    },
+    {
+      "path": "tools/analyze_architecture_results.py",
+      "old_sha256": null,
+      "new_sha256": "d439b9983737417fdeeaa94dc5f7d63605de2a6efbf170d7e5b9bf99fd2c48d7"
+    },
+    {
+      "path": "tools/apply_architecture_port.py",
+      "old_sha256": null,
+      "new_sha256": "f211e5db8521c2b33129d231ab0d5af0e46702a1b4e865bc28c7a37ab83f2a93"
+    },
+    {
+      "path": "tools/architecture_common.py",
+      "old_sha256": null,
+      "new_sha256": "6d8691daa221da65aa0e5074e8a77969284f03aab974d6cde719bd392d216d84"
+    },
+    {
+      "path": "tools/architecture_compare.cpp",
+      "old_sha256": null,
+      "new_sha256": "cedab836b4d1548c0e9cb4d621eb79f804993ff18401e3a0d6eb74bb6577d6f6"
+    },
+    {
+      "path": "tools/audit_quant_dump.py",
+      "old_sha256": null,
+      "new_sha256": "69ab2a603b0b3b199569d2351d9dcdd57cb22278d805f46bb562a7a4280fd242"
+    },
+    {
+      "path": "tools/run_architecture_suite.py",
+      "old_sha256": null,
+      "new_sha256": "57e614f19aa1838c9002091962586441fd57adbed3f7e4cf84b68e766a2c9219"
+    },
+    {
+      "path": "tools/stamp_architecture_build.py",
+      "old_sha256": null,
+      "new_sha256": "1d85fbde5803240cc551e7ac636c0662e1c1c0dccb7a101b0947f14b45232a1f"
+    }
+  ]
+}

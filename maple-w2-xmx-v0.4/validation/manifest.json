@@ -1,0 +1,27 @@
+{
+  "version": "0.4",
+  "date": "2026-09-18",
+  "gcc_version": "g++ (Debian 14.2.0-19) 14.2.0",
+  "clang_version": "clang version 17.0.0 (https://github.com/swiftlang/llvm-project.git 10999b6d034fe318f3d56c83bddb6572593a8bb0)",
+  "checks": {
+    "ctest": "5/5 passed",
+    "python_unittest": "34 passed",
+    "cpu_grouping_check_count": 15476059,
+    "all_cpu_reference_check_count": 19557947,
+    "asan_ubsan": "all four CPU references passed",
+    "clang_grouping": "passed",
+    "unchanged_a8_arithmetic_and_glu": "exact source excerpt comparison passed",
+    "host_comparator_syntax_mock": "passed with temporary mock SYCL declarations; not a real SYCL compile",
+    "patch_apply": "23 changed files verified byte-identical after git apply to isolated v0.3 copy"
+  },
+  "sycl_compiler_available": false,
+  "sycl_compile": "not_run",
+  "gpu_execution": "not_run",
+  "performance": "not_measured",
+  "powershell_execution": "not_run",
+  "gpu_probes_included": [
+    "signed s2/s8 DPAS",
+    "stable grouping 48 cases / 102828 job entries, OOO and canaries"
+  ],
+  "runtime_validation_scope": "two snapshots full GPU baseline/grouped outputs and q/scales; sampled CPU reference up to three tokens each"
+}

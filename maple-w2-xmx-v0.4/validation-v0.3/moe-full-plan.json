@@ -1,0 +1,79 @@
+[
+  {
+    "name": "moe-smoke-q1",
+    "k": 256,
+    "hidden": 256,
+    "experts": 8,
+    "tokens": 1,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 1
+  },
+  {
+    "name": "moe-smoke-q4-ooo",
+    "k": 256,
+    "hidden": 256,
+    "experts": 8,
+    "tokens": 4,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 0
+  },
+  {
+    "name": "moe-maple-q1",
+    "k": 2048,
+    "hidden": 512,
+    "experts": 256,
+    "tokens": 1,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 1,
+    "real": true
+  },
+  {
+    "name": "moe-maple-q4",
+    "k": 2048,
+    "hidden": 512,
+    "experts": 256,
+    "tokens": 4,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 1,
+    "real": true
+  },
+  {
+    "name": "moe-maple-q1-split",
+    "k": 2048,
+    "hidden": 512,
+    "experts": 256,
+    "tokens": 1,
+    "gate_split": 4,
+    "down_split": 2,
+    "order": 1,
+    "real": true
+  },
+  {
+    "name": "moe-maple-q1-g32-h128",
+    "k": 2048,
+    "hidden": 512,
+    "experts": 256,
+    "tokens": 1,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 1,
+    "real": true,
+    "groups": "32",
+    "down_group": 128
+  },
+  {
+    "name": "moe-smoke-outlier-q8",
+    "k": 256,
+    "hidden": 256,
+    "experts": 8,
+    "tokens": 8,
+    "gate_split": 1,
+    "down_split": 1,
+    "order": 1,
+    "pattern": "outliers"
+  }
+]

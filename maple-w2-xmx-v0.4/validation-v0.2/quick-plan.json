@@ -1,0 +1,76 @@
+[
+  {
+    "name": "smoke-pair-f32",
+    "k": 256,
+    "m": 16,
+    "experts": 8,
+    "tokens": 1,
+    "pair": 1,
+    "per": 0,
+    "split": 1,
+    "input": "f32",
+    "pattern": "normal"
+  },
+  {
+    "name": "smoke-down-q4-f16-s2",
+    "k": 512,
+    "m": 16,
+    "experts": 8,
+    "tokens": 4,
+    "pair": 0,
+    "per": 1,
+    "split": 2,
+    "input": "f16",
+    "pattern": "normal"
+  },
+  {
+    "name": "smoke-zero",
+    "k": 256,
+    "m": 16,
+    "experts": 8,
+    "tokens": 1,
+    "pair": 1,
+    "per": 0,
+    "split": 1,
+    "input": "f32",
+    "pattern": "zeros"
+  },
+  {
+    "name": "smoke-rne-ties",
+    "k": 512,
+    "m": 16,
+    "experts": 8,
+    "tokens": 1,
+    "pair": 1,
+    "per": 0,
+    "split": 2,
+    "input": "f32",
+    "pattern": "ties"
+  },
+  {
+    "name": "maple-gate-up-q1-s1",
+    "k": 2048,
+    "m": 512,
+    "experts": 256,
+    "tokens": 1,
+    "pair": 1,
+    "per": 0,
+    "split": 1,
+    "input": "f32",
+    "pattern": "normal",
+    "model_kind": "gate-up"
+  },
+  {
+    "name": "maple-down-q1-s1",
+    "k": 512,
+    "m": 2048,
+    "experts": 256,
+    "tokens": 1,
+    "pair": 0,
+    "per": 1,
+    "split": 1,
+    "input": "f32",
+    "pattern": "normal",
+    "model_kind": "down"
+  }
+]
