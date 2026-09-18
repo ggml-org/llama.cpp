@@ -473,7 +473,7 @@ function gg_run_qwen3_0_6b {
             return 20
         fi
 
-        python3 - "$baseline_file" "$model" "$qnt" "$ppl" << 'PY'
+        py_out=$(python3 - "$baseline_file" "$model" "$qnt" "$ppl" << 'PY'
 import json, sys
 path, model, qnt, ppl_s = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 with open(path) as f:
@@ -484,17 +484,22 @@ if model not in models or qnt not in models[model]:
     sys.exit(21)
 base = float(models[model][qnt])
 ppl = float(ppl_s)
-if abs(ppl - base) / base > rel_tol:
+drift = abs(ppl - base) / base
+if drift > rel_tol:
+    print("%.6f %.6f" % (base, drift))
     sys.exit(22)
 sys.exit(0)
 PY
+)
         rc=$?
         if [ $rc -eq 21 ]; then
             printf '  - %s @ %s (FAIL: no baseline in json)\n' "$qnt" "$ppl"
             return 21
         fi
         if [ $rc -eq 22 ]; then
-            printf '  - %s @ %s (FAIL: drift vs baseline)\n' "$qnt" "$ppl"
+            base=$(echo "$py_out" | awk '{print $1}')
+            drift=$(echo "$py_out" | awk '{print $2}')
+            printf '  - %s @ %s (FAIL: drift vs baseline, drift %s from baseline %s)\n' "$qnt" "$ppl" "$drift" "$base"
             return 22
         fi
         if [ $rc -ne 0 ]; then
@@ -506,20 +511,20 @@ PY
         return 0
     }
 
-    check_ppl "qwen3-0.6b" "f16"  "$(grep "^\[1\]" $OUT/${ci}-tg-f16.log)"  | tee -a $OUT/${ci}-ppl.log
+    check_ppl "qwen3-0.6b" "f16"  "$(grep "^\[1\]" $OUT/${ci}-tg-f16.log)"
     if [ -z ${GG_BUILD_NO_BF16} ]; then
-        check_ppl "qwen3-0.6b" "bf16" "$(grep "^\[1\]" $OUT/${ci}-tg-bf16.log)" | tee -a $OUT/${ci}-ppl.log
+        check_ppl "qwen3-0.6b" "bf16" "$(grep "^\[1\]" $OUT/${ci}-tg-bf16.log)"
     fi
-    check_ppl "qwen3-0.6b" "q8_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q8_0.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q4_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_0.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log)" | tee -a $OUT/${ci}-ppl.log
-    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log)" | tee -a $OUT/${ci}-ppl.log
-    check_ppl "qwen3-0.6b" "q6_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q6_k.log)" | tee -a $OUT/${ci}-ppl.log
+    check_ppl "qwen3-0.6b" "q8_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q8_0.log)"
+    check_ppl "qwen3-0.6b" "q4_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_0.log)"
+    check_ppl "qwen3-0.6b" "q4_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_1.log)"
+    check_ppl "qwen3-0.6b" "q5_0" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_0.log)"
+    check_ppl "qwen3-0.6b" "q5_1" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_1.log)"
+    #check_ppl "qwen3-0.6b" "q2_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q2_k.log)"
+    check_ppl "qwen3-0.6b" "q3_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q3_k.log)"
+    check_ppl "qwen3-0.6b" "q4_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q4_k.log)"
+    check_ppl "qwen3-0.6b" "q5_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q5_k.log)"
+    check_ppl "qwen3-0.6b" "q6_k" "$(grep "^\[1\]" $OUT/${ci}-tg-q6_k.log)"
 
 
     set +e
