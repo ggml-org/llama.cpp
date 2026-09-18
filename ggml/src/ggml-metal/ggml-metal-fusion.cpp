@@ -696,6 +696,8 @@ static const std::vector<ggml_metal_fusion> ggml_metal_fusions = {
     { GGML_METAL_FUSION_SSM_CONV_SILU,  ops_ssm_conv_silu,          ops_ssm_conv_silu,              false, ggml_metal_fusion_check_ssm_conv_silu },
 };
 
+// ---- alloc deps -----------------------------------------------------------
+
 static bool ggml_metal_fusion_match_raw_pattern(
         const ggml_cgraph * gf, int node_idx, const std::vector<ggml_op> & ops) {
     if (node_idx < 0 || node_idx + (int) ops.size() > gf->n_nodes) {
