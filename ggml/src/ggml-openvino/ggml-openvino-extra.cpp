@@ -477,6 +477,20 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         layout.is_symmetric = true;
         break;
 
+    case GGML_TYPE_Q1_0:
+        // 1 bit per weight, 128 per block, sign-of-scale only -> signed i4 {-1,+1}, no zp.
+        layout.is_u4 = true;
+        layout.is_symmetric = true;
+        layout.weights_per_block = 128;
+        break;
+
+    case GGML_TYPE_Q2_0:
+        // 2 bits per weight, 64 per block, codes map to (q-1) in [-1,2] -> signed i4, no zp.
+        layout.is_u4 = true;
+        layout.is_symmetric = true;
+        layout.weights_per_block = 64;
+        break;
+
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q4_K:
         layout.is_u4 = true;
