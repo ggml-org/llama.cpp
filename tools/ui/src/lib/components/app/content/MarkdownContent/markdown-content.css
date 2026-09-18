@@ -1,3 +1,14 @@
+/* Long unbreakable content (inline code, paths, hashes) scrolls inside its
+   block instead of stretching the message row. The trailing (unstable) block
+   has display: contents, so the content root covers it too. */
+.markdown-content :global(.markdown-block) {
+	overflow-x: auto;
+}
+
+.markdown-content {
+	overflow-x: auto;
+}
+
 .markdown-block--unstable {
 	display: contents;
 }
