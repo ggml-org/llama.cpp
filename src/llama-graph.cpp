@@ -1515,11 +1515,7 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
-
-    if (w_s) {
-        res = ggml_mul(ctx0, res, w_s);
-    }
+    ggml_tensor * res = ggml_mul_mat_ext(ctx0, w, cur, w_s, nullptr);
 
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -1547,16 +1543,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
           ggml_tensor * w_s) const {
-    ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
+    ggml_tensor * res = ggml_mul_mat_id_ext(ctx0, w, cur, ids, w_s, nullptr);
 
-    if (w_s) {
-        const int64_t n_expert = w_s->ne[0];
-        const int64_t n_tokens = cur->ne[2];
-        ggml_tensor * s = ggml_reshape_3d(ctx0, w_s, 1, n_expert, 1);
-        s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
-        s = ggml_get_rows(ctx0, s, ids);
-        res = ggml_mul(ctx0, res, s);
-    }
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
         if (lw == nullptr) {
@@ -1708,34 +1696,18 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
-    // NVFP4 support is currently restricted to
-    // 1) LORA absence (*_s would be applied after LORA residual, which is incorrect)
-    // 2) bias absense (*_s would be applied after bias addition, which is incorrect)
-    // TODO: disambiguate LLM-architectural scales (which use *_s) from NVFP4 scale_2 (which also uses *_s currently)
-    auto has_lora = [this](ggml_tensor * w) {
-        if (!w) {
-            return false;
-        }
-        for (const auto & lora : *loras) {
-            if (lora.first->get_weight(w) != nullptr) {
-                return true;
-            }
-        }
-        return false;
-    };
-
+    // Low-precision weights (NVFP4, F8_E4M3) carry a per-tensor dequant scale that must be applied
+    // in dequant space. Route it into the matmul via the ext API so it lands before bias/LoRA.
+    // Architectural *_s (on full-precision weights) stays a post-matmul multiply.
     auto is_scaled_low_precision = [](ggml_tensor * w) {
         return w && (w->type == GGML_TYPE_NVFP4 || w->type == GGML_TYPE_F8_E4M3);
     };
 
-    GGML_ASSERT(!up_s   || !up_b   || !is_scaled_low_precision(up));
-    GGML_ASSERT(!gate_s || !gate_b || !is_scaled_low_precision(gate));
-    GGML_ASSERT(!down_s || !down_b || !is_scaled_low_precision(down));
-    GGML_ASSERT(!up_s   || !is_scaled_low_precision(up)   || !has_lora(up));
-    GGML_ASSERT(!gate_s || !is_scaled_low_precision(gate) || !has_lora(gate));
-    GGML_ASSERT(!down_s || !is_scaled_low_precision(down) || !has_lora(down));
+    const bool up_derived   = is_scaled_low_precision(up);
+    const bool gate_derived = is_scaled_low_precision(gate);
+    const bool down_derived = is_scaled_low_precision(down);
 
-    ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
+    ggml_tensor * tmp = up ? build_lora_mm(up, cur, up_derived ? up_s : nullptr) : cur;
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -1743,7 +1715,7 @@ ggml_tensor * llm_graph_context::build_ffn(
         cb(tmp, "ffn_up_b", il);
     }
 
-    if (up_s) {
+    if (up_s && !up_derived) {
         tmp = ggml_mul(ctx0, tmp, up_s);
         cb(tmp, "ffn_up_s", il);
     }
@@ -1752,12 +1724,12 @@ ggml_tensor * llm_graph_context::build_ffn(
         switch (type_gate) {
             case LLM_FFN_SEQ:
                 {
-                    cur = build_lora_mm(gate, tmp);
+                    cur = build_lora_mm(gate, tmp, gate_derived ? gate_s : nullptr);
                     cb(cur, "ffn_gate", il);
                 } break;
             case LLM_FFN_PAR:
                 {
-                    cur = build_lora_mm(gate, cur);
+                    cur = build_lora_mm(gate, cur, gate_derived ? gate_s : nullptr);
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -1767,7 +1739,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             cb(cur, "ffn_gate_b", il);
         }
 
-        if (gate_s) {
+        if (gate_s && !gate_derived) {
             cur = ggml_mul(ctx0, cur, gate_s);
             cb(cur, "ffn_gate_s", il);
         }
@@ -1875,7 +1847,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     if (down) {
-        cur = build_lora_mm(down, cur);
+        cur = build_lora_mm(down, cur, down_derived ? down_s : nullptr);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
@@ -1890,7 +1862,7 @@ ggml_tensor * llm_graph_context::build_ffn(
         cur = ggml_add(ctx0, cur, down_b);
     }
 
-    if (down_s) {
+    if (down_s && !down_derived) {
         cur = ggml_mul(ctx0, cur, down_s);
         cb(cur, "ffn_down_s", il);
     }
@@ -2844,15 +2816,10 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     if (wo) {
+        cur = build_lora_mm(wo, cur, wo_s);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
-            cur = build_lora_mm(wo, cur);
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
-            if (wo_s) {
-                cur = ggml_mul(ctx0, cur, wo_s);
-            }
-        } else {
-            cur = build_lora_mm(wo, cur, wo_s);
         }
     }
 
@@ -2931,15 +2898,10 @@ ggml_tensor * llm_graph_context::build_attn(
     cb(cur, "kqv_out", il);
 
     if (wo) {
+        cur = build_lora_mm(wo, cur, wo_s);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
             // GLM4 and GLM4_MOE seem to have numerical issues with half-precision accumulators
-            cur = build_lora_mm(wo, cur);
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
-            if (wo_s) {
-                cur = ggml_mul(ctx0, cur, wo_s);
-            }
-        } else {
-            cur = build_lora_mm(wo, cur, wo_s);
         }
     }
 
