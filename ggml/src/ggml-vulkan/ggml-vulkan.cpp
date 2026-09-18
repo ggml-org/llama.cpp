@@ -5752,10 +5752,9 @@ bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor) {
         (tensor->ne[3] == 1 || tensor->nb[3] == tensor->nb[2]*tensor->ne[2]);
 }
 
-// Batch stride in elements of a dim01 contiguous tensor read in place: nb[2]/nb[1]
-// is the number of rows per batch in memory, which exceeds ne[1] for a view.
+// Batch stride in elements of a tensor read in place.
 static uint32_t ggml_vk_batch_stride(const ggml_tensor * tensor) {
-    return (uint32_t)(tensor->ne[0] * (tensor->nb[2] / tensor->nb[1]));
+    return (uint32_t)(tensor->nb[2] / ggml_type_size(tensor->type) * ggml_blck_size(tensor->type));
 }
 
 vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src, const ggml_tensor * dst, ggml_type to) {
