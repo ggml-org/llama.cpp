@@ -107,6 +107,8 @@ class ServerProcess:
     reasoning: Literal['on', 'off', 'auto'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
+    skip_chat_parsing: bool | None = None
+    json_schema: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
     no_mmproj: bool | None = None
@@ -268,6 +270,10 @@ class ServerProcess:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.skip_chat_parsing:
+            server_args.append("--skip-chat-parsing")
+        if self.json_schema:
+            server_args.extend(["--json-schema", self.json_schema])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
         if self.no_mmproj:
