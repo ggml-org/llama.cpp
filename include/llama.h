@@ -43,7 +43,7 @@
 #define LLAMA_FILE_MAGIC_GGSQ 0x67677371u // 'ggsq'
 
 #define LLAMA_SESSION_MAGIC   LLAMA_FILE_MAGIC_GGSN
-#define LLAMA_SESSION_VERSION 10
+#define LLAMA_SESSION_VERSION 11
 
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
 #define LLAMA_STATE_SEQ_VERSION 3
@@ -869,9 +869,14 @@ extern "C" {
     LLAMA_API DEPRECATED(bool llama_save_session_file(
             struct llama_context * ctx,
                       const char * path_session,
-               const llama_token * tokens,
-                          size_t   n_token_count),
+             const llama_token * tokens,
+                         size_t   n_token_count),
         "use llama_state_save_file instead");
+
+    // Set the session hash for model identification (saved/verified in session files)
+    LLAMA_API void llama_state_set_hash(
+            struct llama_context * ctx,
+                      const char * hash);
 
     // Get the exact size needed to copy the state of a single sequence
     LLAMA_API size_t llama_state_seq_get_size(

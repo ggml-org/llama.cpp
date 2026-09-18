@@ -1882,6 +1882,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
+        {"--session-hash"}, "HASH",
+        "user-defined identifier saved/verified in session files for model identification",
+        [](common_params & params, const std::string & value) {
+            params.session_hash = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
+    add_opt(common_arg(
         {"-r", "--reverse-prompt"}, "PROMPT",
         "halt generation at PROMPT, return control in interactive mode\n",
         [](common_params & params, const std::string & value) {
@@ -3618,6 +3625,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!params.slot_save_path.empty() && params.slot_save_path[params.slot_save_path.size() - 1] != DIRECTORY_SEPARATOR) {
                 params.slot_save_path += DIRECTORY_SEPARATOR;
             }
+        }
+     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--slot-save-limit"}, "N",
+        "maximum number of slot cache files to keep (default: unlimited, oldest files are deleted first when limit is exceeded)",
+        [](common_params & params, const std::string & value) {
+            params.slot_save_limit = std::stoi(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

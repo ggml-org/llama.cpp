@@ -3348,7 +3348,7 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 
         const std::string arch_str = llm_arch_name(model.arch);
         io.write_string(arch_str);
-        // TODO: add more model-specific info which should prevent loading the session file if not identical
+        io.write_string(m_session_hash);
     }
 
     if (memory != nullptr) {
@@ -3373,7 +3373,12 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         if (cur_arch_str != arch_str) {
             throw std::runtime_error(format("wrong model arch: '%s' instead of '%s'", arch_str.c_str(), cur_arch_str.c_str()));
         }
-        // TODO: add more info which needs to be identical but which is not verified otherwise
+
+        std::string hash_str;
+        io.read_string(hash_str);
+        if (!m_session_hash.empty() && hash_str != m_session_hash) {
+            throw std::runtime_error(format("session hash mismatch: '%s' instead of '%s'", hash_str.c_str(), m_session_hash.c_str()));
+        }
     }
 
     if (memory) {
@@ -4254,6 +4259,10 @@ bool llama_state_save_file(llama_context * ctx, const char * path_session, const
     }
 }
 
+void llama_state_set_hash(llama_context * ctx, const char * hash) {
+    ctx->set_session_hash(hash ? hash : "");
+}
+
 size_t llama_state_seq_get_size(llama_context * ctx, llama_seq_id seq_id) {
     return llama_state_seq_get_size_ext(ctx, seq_id, 0);
 }
@@ -4402,4 +4411,8 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+void llama_context::set_session_hash(const std::string & hash) {
+    m_session_hash = hash;
 }

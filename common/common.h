@@ -511,6 +511,7 @@ struct common_params {
     std::string system_prompt        = "";                                                                  // NOLINT
     std::string prompt_file          = ""; // store the external prompt file name                           // NOLINT
     std::string path_prompt_cache    = ""; // path to file for saving/loading prompt eval state             // NOLINT
+    std::string session_hash         = ""; // user-defined identifier saved/verified in session files       // NOLINT
     std::string input_prefix         = ""; // string to prefix user inputs with                             // NOLINT
     std::string input_suffix         = ""; // string to suffix user inputs with                             // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
@@ -690,6 +691,7 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
+    int32_t slot_save_limit = 0; // 0 = unlimited
     std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;

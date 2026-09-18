@@ -2579,6 +2579,28 @@ private:
                         break;
                     }
 
+                    // clean up old slot cache files if limit is set
+                    if (params_base.slot_save_limit > 0 && !params_base.slot_save_path.empty()) {
+                        try {
+                            std::vector<std::pair<std::filesystem::path, std::filesystem::file_time_type>> files;
+                            for (const auto & entry : std::filesystem::directory_iterator(params_base.slot_save_path)) {
+                                if (entry.is_regular_file() && entry.path().extension() == ".ggsq") {
+                                    files.emplace_back(entry.path(), std::filesystem::last_write_time(entry.path()));
+                                }
+                            }
+                            std::sort(files.begin(), files.end(),
+                                [](const auto & a, const auto & b) { return a.second < b.second; });
+                            while ((int32_t)files.size() > params_base.slot_save_limit) {
+                                std::string removed = files.front().first.filename().string();
+                                std::filesystem::remove(files.front().first);
+                                files.erase(files.begin());
+                                SRV_WRN("removed old slot cache file: %s\n", removed.c_str());
+                            }
+                        } catch (const std::exception & err) {
+                            SRV_WRN("failed to clean up old slot cache files: %s\n", err.what());
+                        }
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 

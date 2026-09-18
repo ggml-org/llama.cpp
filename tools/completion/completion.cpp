@@ -208,6 +208,11 @@ int llama_completion(int argc, char ** argv) {
 
     if (!path_session.empty()) {
         LOG_INF("%s: attempting to load saved session from '%s'\n", __func__, path_session.c_str());
+
+        if (!params.session_hash.empty()) {
+            llama_state_set_hash(ctx, params.session_hash.c_str());
+        }
+
         if (!file_exists(path_session)) {
             LOG_INF("%s: session file does not exist, will create.\n", __func__);
         } else if (file_is_empty(path_session)) {

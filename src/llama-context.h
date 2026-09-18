@@ -179,7 +179,9 @@ struct llama_context {
           llama_seq_id   seq_id,
             const char * filepath,
      const llama_token * tokens,
-                size_t   n_token_count);
+                 size_t   n_token_count);
+
+    void set_session_hash(const std::string & hash);
 
     //
     // perf
@@ -398,4 +400,6 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    std::string m_session_hash;
 };
