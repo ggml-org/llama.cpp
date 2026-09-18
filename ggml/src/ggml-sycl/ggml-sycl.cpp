@@ -91,6 +91,7 @@
 
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
+int g_ggml_sycl_dev_debug = 0;
 int g_ggml_sycl_enable_optimize = 1;
 int g_ggml_sycl_enable_graph = 0;
 int g_ggml_sycl_enable_dnn = 1;
@@ -113,8 +114,8 @@ int g_ggml_sycl_enable_host_pinned_mem = 1;
 int g_ggml_sycl_host_pinned_mem_2g = 0;
 int g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_LEVEL_ZERO;
 
-
 static ggml_sycl_device_info ggml_sycl_init() {
+    GGML_SYCL_DEBUG("[SYCL] call ggml_sycl_init\n");
     ggml_sycl_device_info info = {};
 
     // Do not hard crash when there exists no SYCL devices.
@@ -205,12 +206,9 @@ static ggml_sycl_device_info ggml_sycl_init() {
     }
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
-    // Large buffers can be allocated before ggml_check_sycl() initializes other
-    // g_ggml_sycl_enable_* globals, so initialize this one as early as we can.
+    //update g_ggml_sycl_use_level_zero_api according to the device support
     g_ggml_sycl_use_level_zero_api =
-        info.ext_oneapi_level_zero && ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
-#else
-    g_ggml_sycl_use_level_zero_api = 0;
+        info.ext_oneapi_level_zero && g_ggml_sycl_use_level_zero_api;
 #endif
 
     return info;
@@ -314,23 +312,40 @@ static const char* dev2dev_int2str(int dev2dev) {
 * It's the first internal function to be called by them in SYCL backend.
 * This function is used to do initialize work for the SYCL backend and set the global variables.
 */
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+static ze_result_t init_zes() {
+    ze_result_t res = zesInit(0);
+    if (res != ZE_RESULT_SUCCESS) {
+        GGML_SYCL_DEBUG("Warning: [%s] zesInit failed with code %d. Sysman free-memory query be unavailable.\n",
+                            __func__, (int) res);
+    }
+    return res;
+}
+
+ze_result_t get_zes_init_res() {
+    static ze_result_t zes_init_res = init_zes();
+    GGML_SYCL_DEBUG("[SYCL] call %s: zesInit result: %d\n", __func__, (int) zes_init_res);
+    return zes_init_res;
+}
+#endif
+
 void initialize_sycl_begining() {
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
-    ze_result_t zes_init = zesInit(0);
-    if (zes_init != ZE_RESULT_SUCCESS) {
-        std::cerr << "Warning: zesInit failed [ggml_check_sycl] with code " << static_cast<int>(zes_init)
-                            << ". Sysman free-memory query may be unavailable.\n";
-    }
+    //must be called in initialization stage, before any other Level Zero API calls
+    GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
+    get_zes_init_res();
 #endif
 }
 
 static void ggml_check_sycl() try {
+    GGML_SYCL_DEBUG("[SYCL] ggml_check_sycl()\n");
     static bool initialized = false;
 
     if (!initialized) {
         initialize_sycl_begining();
 
         g_ggml_sycl_debug = ggml_sycl_get_env("GGML_SYCL_DEBUG", 0);
+        g_ggml_sycl_dev_debug = ggml_sycl_get_env("GGML_SYCL_DEV_DEBUG", 0);
         g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
         g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
         g_ggml_sycl_enable_dnn = ggml_sycl_get_env("GGML_SYCL_ENABLE_DNN", 1);
@@ -344,9 +359,13 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
 
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+        g_ggml_sycl_use_level_zero_api = ggml_sycl_get_env("GGML_SYCL_USE_LEVEL_ZERO_API", 1);
+#else
+        g_ggml_sycl_use_level_zero_api = 0;
+#endif
         g_ggml_sycl_dev2dev_memcpy = ggml_sycl_get_env("GGML_SYCL_DEV2DEV_MEMCPY", DEV2DEV_MEMCPY_SYCL);
         g_ggml_sycl_get_mem_api = ggml_sycl_get_env("GGML_SYCL_GET_MEM_API", MEMORY_API_TYPE_LEVEL_ZERO);
-
         if (g_ggml_sycl_use_level_zero_api == 0) {
             g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
             g_ggml_sycl_get_mem_api = MEMORY_API_TYPE_SYCL;
@@ -405,6 +424,7 @@ static void ggml_check_sycl() try {
 
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
+        GGML_LOG_INFO("  GGML_SYCL_DEV_DEBUG: %d\n", g_ggml_sycl_dev_debug);
 
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
         GGML_LOG_INFO("  GGML_SYCL_DEV2DEV_MEMCPY: %d (%s)\n", g_ggml_sycl_dev2dev_memcpy, dev2dev_int2str(g_ggml_sycl_dev2dev_memcpy));
@@ -945,6 +965,7 @@ inline void * aligned_malloc_host(size_t alignment, size_t size) {
 static ggml_backend_buffer_t
 ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
                                            size_t size) try {
+    GGML_SYCL_DEBUG("[SYCL] call %s: size=%zu\n", __func__, size);
     ggml_check_sycl();
 
     ggml_backend_sycl_buffer_type_context * buft_ctx = (ggml_backend_sycl_buffer_type_context *)buft->context;
@@ -990,12 +1011,25 @@ static size_t ggml_backend_sycl_buffer_type_get_alignment(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+bool is_bmg_g31_arch(int device) {
+    return ggml_sycl_info().devices[device].hw_info.arch == gpu_arch::intel_gpu_bmg_g31;
+}
+
 static size_t ggml_backend_sycl_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     size_t max_alloc_size = dpct::get_current_device().get_max_mem_alloc_size();
     if (g_ggml_sycl_host_pinned_mem_2g) {
         return std::min(max_alloc_size, (size_t) 2LL*1024*1024*1024);
     } else {
+        ggml_backend_sycl_buffer_type_context * ctx = (ggml_backend_sycl_buffer_type_context *)buft->context;
+        int device = ctx->device;
+        if(is_bmg_g31_arch(device)) {
+            //Todo, it's workaround for BMG-G31, which has a known issue with large allocations.
+            //The max alloc size is reduced to 60% of the reported max alloc size.
+            //remove it after https://github.com/intel/compute-runtime/issues/998 is fixed.
+            max_alloc_size = max_alloc_size*0.6;
+        }
         return max_alloc_size;
+
     }
     GGML_UNUSED(buft);
 }
@@ -1463,11 +1497,12 @@ static ggml_backend_buffer_type_i ggml_backend_sycl_split_buffer_type_interface 
     /* .is_host          = */ ggml_backend_sycl_split_buffer_type_is_host,
 };
 
-ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split) {
+ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type([[maybe_unused]] int main_device, const float * tensor_split) {
+    GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_split_buffer_type\n");
+
     static std::mutex mutex;
     std::lock_guard<std::mutex> lock(mutex);
 
-    GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_split_buffer_type\n");
     ggml_check_sycl();
     // FIXME: this is not thread safe
     static std::map<std::array<float, GGML_SYCL_MAX_DEVICES>, struct ggml_backend_buffer_type> buft_map;
@@ -1520,6 +1555,7 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
 
 //host pinned memory
 static void * ggml_backend_sycl_host_malloc(size_t size) {
+    GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_host_malloc\n");
     void * ptr = nullptr;
     try {
         ggml_check_sycl();
@@ -3098,10 +3134,14 @@ static void ggml_sycl_op_top_k(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    GGML_ASSERT(k > 0 && k <= 32);
+    GGML_ASSERT(k > 0);
     GGML_ASSERT(k <= ncols);
 
-    top_k_f32_sycl(ctx, src0_dd, dst_dd, ncols, nrows, k, main_stream);
+    if (k <= SYCL_TOP_K_SCAN_MERGE_MAX_K) {
+        top_k_f32_sycl(ctx, src0_dd, dst_dd, ncols, nrows, k, main_stream);
+    } else {
+        ggml_sycl_top_k_radix(ctx, src0_dd, dst_dd, ncols, nrows, k, main_stream);
+    }
 }
 
 inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -3216,7 +3256,7 @@ inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     SYCL_CHECK(0);
 }
 
-static void ggml_sycl_set_peer_access(const int n_tokens, int main_device) {
+static void ggml_sycl_set_peer_access(const int n_tokens, [[maybe_unused]] int main_device) {
     static bool peer_access_enabled = false;
 
     const bool enable_peer_access = n_tokens <= GGML_SYCL_PEER_MAX_BATCH_SIZE;
@@ -5341,8 +5381,8 @@ catch (sycl::exception const &exc) {
 }
 
 static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct ggml_tensor * dst) try {
+    GGML_SYCL_DEBUG("[SYCL] ggml_sycl_compute_forward: dst=%s, op=%s\n", dst->name, ggml_op_name(dst->op));
     if (!g_sycl_loaded) return false;
-    initialize_sycl_begining();
 
     if (dst->src[0] != nullptr && ggml_backend_buffer_is_sycl_split(dst->src[0]->buffer)) {
         ggml_sycl_set_peer_access(dst->src[1]->ne[1], ctx.device);
@@ -5725,11 +5765,27 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+bool sycl_get_mem_info(int device, size_t * free, size_t * total) {
+    GGML_SYCL_DEBUG("[SYCL] [%s] g_ggml_sycl_get_mem_api=%d\n",
+        __func__, g_ggml_sycl_get_mem_api);
+
+    MemoryAPIType mem_api_type = MemoryAPIType::MEMORY_API_TYPE_SYCL;
+
+#ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
+    mem_api_type = get_zes_init_res() == ZE_RESULT_SUCCESS ?
+        (MemoryAPIType) g_ggml_sycl_get_mem_api : MemoryAPIType::MEMORY_API_TYPE_SYCL;
+#else
+    mem_api_type = MemoryAPIType::MEMORY_API_TYPE_SYCL;
+#endif
+    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device),
+        *free, *total, mem_api_type);
+    GGML_SYCL_DEBUG("[SYCL] [%s] total = %zu free = %zu\n", __func__, *total, *free);
+    return res;
+}
+
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
-    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device), *free, *total,
-                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
-    if (!res) {
+    if (!sycl_get_mem_info(device, free, total)) {
         GGML_ABORT("[%s] failed to get device memory size", __func__);
     }
     ggml_sycl_memtrace_report_device("device memory query", device, *free, *total);
@@ -5991,6 +6047,20 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             }
         }
 
+        if (node->op == GGML_OP_SSM_CONV &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+            i += 2;
+            continue;
+        }
+
+        if (node->op == GGML_OP_SSM_CONV &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
+            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, nullptr, cgraph->nodes[i + 1]);
+            i++;
+            continue;
+        }
+
         if (node->op == GGML_OP_MUL_MAT && ggml_sycl_mul_mat_glu_mmvq_fused(*sycl_ctx, cgraph, i)) {
             i += 2;
             continue;
@@ -6177,12 +6247,12 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 }
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
-    bool res = get_memory_size(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total,
-                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
-    if (!res) {
+    if (!sycl_get_mem_info(ctx->device, free, total)) {
         GGML_ABORT("[%s] failed to get device memory size", __func__);
     }
+    GGML_SYCL_DEBUG("[SYCL] call %s total %zu free %zu\n", __func__, *total, *free);
     ggml_sycl_memtrace_report_device("device memory query (dev)", ctx->device, *free, *total);
 }
 
@@ -6391,13 +6461,13 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             break;
         case GGML_OP_DSV4_HC_PRE:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                op->type == GGML_TYPE_F32;
+                op->type == GGML_TYPE_F32 && ggml_get_op_params_i32(op, 1) == 0;
         case GGML_OP_DSV4_HC_COMB:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_DSV4_HC_POST:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
+                op->src[2]->type == GGML_TYPE_F32 && op->src[3] != nullptr && op->src[3]->type == GGML_TYPE_F32 &&
                 op->type == GGML_TYPE_F32;
         case GGML_OP_LIGHTNING_INDEXER:
             return op->src[0]->type == GGML_TYPE_F32 &&
@@ -6605,7 +6675,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                 op->type == GGML_TYPE_I32 &&
                 src0->type == GGML_TYPE_F32 &&
                 ggml_is_contiguous(src0) &&
-                k > 0 && k <= 32;
+                k > 0 && k <= src0->ne[0];
         }
         case GGML_OP_POOL_2D:
         case GGML_OP_POOL_1D:
@@ -7061,6 +7131,7 @@ static const ggml_backend_reg_i ggml_backend_sycl_reg_interface = {
 // backend registry
 
 ggml_backend_reg_t ggml_backend_sycl_reg() {
+    GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_reg\n");
     static ggml_backend_reg reg;
     static bool initialized = false;
 
@@ -7068,7 +7139,7 @@ ggml_backend_reg_t ggml_backend_sycl_reg() {
         static std::mutex mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
-            initialize_sycl_begining();
+            ggml_check_sycl();
             ggml_backend_sycl_reg_context * ctx = new ggml_backend_sycl_reg_context;
             const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
