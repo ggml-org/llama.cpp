@@ -167,6 +167,12 @@ value binary_expression::execute_impl(context & ctx) {
         }
         throw std::runtime_error("Cannot perform operation " + op.value + " on undefined values");
     } else if (is_val<value_none>(left_val) || is_val<value_none>(right_val)) {
+        if (!is_val<value_none>(right_val) && (op.value == "in" || op.value == "not in")) {
+            // case: none in {'low': 1}
+            // A null left operand is looked up like any other value.
+            bool member = test_is_in();
+            return mk_val<value_bool>(op.value == "in" ? member : !member);
+        }
         if (op.value == "+" || op.value == "~") {
             value res = mk_val<value_undefined>();
             if (workaround_concat_null_with_str(res)) {
@@ -835,6 +841,12 @@ value member_expression::execute_impl(context & ctx) {
             return slice_func->invoke(args);
         } else {
             property = this->property->execute(ctx);
+        }
+    } else if (is_stmt<integer_literal>(this->property)) {
+        // syntax: obj.index
+        property = mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val);
+        if (property->as_int() < 0) {
+            throw std::runtime_error("Static member property cannot be negative");
         }
     } else {
         // syntax: obj.prop
