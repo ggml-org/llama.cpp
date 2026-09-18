@@ -27,19 +27,47 @@ struct llama_kv_stream_model::implementation {
     std::vector<const void *> checked_indices;
     std::vector<int64_t> indices;
     bool external_mutation = false;
+    bool shared = false, suspended = false;
+    size_t suspended_tokens = 0;
+    ggml_backend_buffer_t shared_parent = nullptr;
+    llama_memory_resource_id pool_resource = 0, writer_resource = 0, attention_resource = 0;
+    llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
 
     ~implementation() { abort(); }
 
-    bool make_session() {
+    std::unique_ptr<llama_kv_stream_session> create_session(
+            const std::array<model_lease_ptr,3> & grants,
+            llama_memory_resource_id pool_id,
+            llama_memory_stage_id prefill_id,
+            llama_memory_stage_id decode_id) {
         llama_kv_stream_policy_config policy;
         policy.shape = config.host.shape; policy.capabilities = config.host.capabilities;
         policy.layers = config.host.layers; policy.pool_bytes = config.pool_bytes;
-        session = llama_kv_stream_session::create(config.backend,content,{policy,config.max_batch_rows,config.query_heads,config.measure,true,config.resume_decode},
-            leases[0].get(),leases[1].get(),leases[2].get());
-        return bool(session);
+        llama_kv_stream_session_config session_config{
+            policy,config.max_batch_rows,config.query_heads,config.measure,true,config.resume_decode};
+        session_config.pool_resource = pool_id;
+        session_config.prefill_stage = prefill_id;
+        session_config.decode_stage = decode_id;
+        auto next = llama_kv_stream_session::create(
+            config.backend,content,session_config,grants[0].get(),grants[1].get(),grants[2].get());
+        if (next && suspended_tokens && !next->restore(suspended_tokens)) return {};
+        return next;
+    }
+
+    bool make_session() {
+        auto next = create_session(leases,pool_resource,prefill_stage,decode_stage);
+        if (!next) return false;
+        session = std::move(next);
+        suspended = false;
+        return true;
     }
     // Scratch has no live conversation data. Release its backing before allocating the replacement.
     bool resize_attention(size_t bytes, bool decode) {
+        if (shared) {
+            auto * buffer = ggml_backend_memory_lease_buffer(leases[2].get());
+            if (!buffer || ggml_backend_buffer_get_size(buffer) < bytes) return false;
+            return !session || session->set_attention_workspace(leases[2].get(),decode);
+        }
         if (attention_arena && ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(attention_arena.get())) == bytes) return true;
         const size_t previous = attention_arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(attention_arena.get())) : 0;
         if (session && !session->set_attention_workspace(nullptr,decode)) return false;
@@ -55,6 +83,62 @@ struct llama_kv_stream_model::implementation {
         }
         if (previous) LLAMA_LOG_INFO("%s: KV attention workspace %.2f -> %.2f MiB (%s)\n",__func__,
             previous/1048576.0,bytes/1048576.0,decode ? "resumed decode" : "strict prefill");
+        return true;
+    }
+    void release_device_memory() {
+        session.reset();
+        for (auto & lease : leases) lease.reset();
+        attention_arena.reset();
+        arena.reset();
+        shared_parent = nullptr;
+        shared = false;
+    }
+
+    bool allocate_private() {
+        if (session || arena || attention_arena || leases[0] || leases[1] || leases[2]) return false;
+        auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(config.backend));
+        if (!type) return false;
+        pool_resource = writer_resource = attention_resource = 0;
+        prefill_stage = decode_stage = 0;
+        shared_parent = nullptr;
+        shared = false;
+        const std::array<size_t,2> sizes{config.pool_bytes,32768};
+        std::array<size_t,2> offsets{};
+        size_t total = 0;
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            if (total > SIZE_MAX-127) return false;
+            offsets[i] = (total+127)/128*128;
+            if (sizes[i] > SIZE_MAX-offsets[i]) return false;
+            total = offsets[i]+sizes[i];
+        }
+        arena.reset(ggml_backend_memory_arena_new(type,total));
+        if (!arena || !ggml_backend_memory_arena_begin(arena.get(),0)) {
+            release_device_memory();
+            return false;
+        }
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            if (!ggml_backend_memory_arena_reserve_at(
+                    arena.get(),config.host.cache_id*4+i+1,offsets[i],sizes[i],128,0,nullptr)) {
+                release_device_memory();
+                return false;
+            }
+        }
+        if (!ggml_backend_memory_arena_commit(arena.get())) {
+            release_device_memory();
+            return false;
+        }
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            leases[i].reset(ggml_backend_memory_arena_acquire(
+                arena.get(),config.host.cache_id*4+i+1));
+            if (!leases[i]) {
+                release_device_memory();
+                return false;
+            }
+        }
+        if (!resize_attention(host->layout().bytes,false) || !make_session()) {
+            release_device_memory();
+            return false;
+        }
         return true;
     }
     // Full-cache roots have stable addresses; views may change shape but cannot select another plane.
@@ -135,6 +219,7 @@ struct llama_kv_stream_model::implementation {
     }
     bool reset(bool clear) {
         abort(); session.reset();
+        suspended_tokens = 0;
         if (clear) ggml_backend_buffer_clear(host->buffer(),0);
         if (!content->invalidate()) return false;
         external_mutation = false;
@@ -143,7 +228,8 @@ struct llama_kv_stream_model::implementation {
     bool restore(size_t tokens) {
         if (!external_mutation || tokens > host->config().context_tokens) return false;
         session.reset();
-        if (!resize_attention(host->layout().bytes,false) || !make_session() || !session->restore(tokens)) return false;
+        suspended_tokens = tokens;
+        if (!resize_attention(host->layout().bytes,false) || !make_session()) return false;
         external_mutation = false;
         return true;
     }
@@ -186,20 +272,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             get()->version >= 5 && get()->resume_plan && get()->resume && get()->resume_plan(config.backend,
                 config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,s->host->layout().tokens,plan);
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
-        const std::array<size_t,2> sizes{config.pool_bytes,32768};
-        std::array<size_t,2> offsets{}; size_t total = 0;
-        for (size_t i = 0; i < sizes.size(); ++i) {
-            if (total > SIZE_MAX-127) return {};
-            offsets[i] = (total+127)/128*128;
-            if (sizes[i] > SIZE_MAX-offsets[i]) return {};
-            total = offsets[i]+sizes[i];
-        }
-        s->arena.reset(ggml_backend_memory_arena_new(type,total));
-        if (!s->arena || !ggml_backend_memory_arena_begin(s->arena.get(),0)) return {};
-        for (size_t i = 0; i < sizes.size(); ++i) if (!ggml_backend_memory_arena_reserve_at(s->arena.get(),s->config.host.cache_id*4+i+1,offsets[i],sizes[i],128,0,nullptr)) return {};
-        if (!ggml_backend_memory_arena_commit(s->arena.get())) return {};
-        for (size_t i = 0; i < sizes.size(); ++i) s->leases[i].reset(ggml_backend_memory_arena_acquire(s->arena.get(),s->config.host.cache_id*4+i+1));
-        if (!s->resize_attention(s->host->layout().bytes,false) || !s->make_session()) return {};
+        if (!s->allocate_private()) return {};
         const ggml_backend_execution_ops ops{
             [](void * p,const ggml_tensor * t) { return (*static_cast<std::shared_ptr<implementation> *>(p))->supports(t); },
             [](void * p,ggml_backend_t b,ggml_tensor * t) {
@@ -238,9 +311,157 @@ bool llama_kv_stream_model::restore(size_t tokens) { return impl->restore(tokens
 bool llama_kv_stream_model::truncate(size_t tokens) { return impl->truncate(tokens); }
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
-    return ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) +
+    if (impl->shared) return device_grant_bytes();
+    return (impl->arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) : 0) +
         (impl->attention_arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->attention_arena.get())) : 0);
 }
 bool llama_kv_stream_model::set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases) { return impl->session && impl->session->set_workspaces(leases); }
 void llama_kv_stream_model::release_graphs() { if (impl->session) impl->session->release_graphs(); }
 size_t llama_kv_stream_model::captured_layers() const { return impl->session ? impl->session->captured_layers() : 0; }
+
+bool llama_kv_stream_model::memory_requirements(
+        llama_kv_stream_memory_requirements & output) const noexcept {
+    if (!impl || !impl->host) return false;
+    auto * type = llama_kv_stream_device_buffer_type(ggml_backend_get_device(impl->config.backend));
+    if (!type) return false;
+    output = {
+        type,
+        impl->config.pool_bytes,
+        32768,
+        impl->host->layout().bytes,
+        impl->decode_bytes,
+        std::max(size_t(128),ggml_backend_buft_get_alignment(type)),
+    };
+    return true;
+}
+
+bool llama_kv_stream_model::prepare_shared_memory() {
+    auto & s = *impl;
+    if (s.shared || s.pending_k || (s.session && s.session->active())) return false;
+    if (s.suspended && !s.session) return true;
+    s.suspended_tokens = s.session ? s.session->tokens() : s.suspended_tokens;
+    s.release_device_memory();
+    s.suspended = true;
+    return true;
+}
+
+bool llama_kv_stream_model::resume_private_memory() {
+    auto & s = *impl;
+    return !s.shared && s.suspended && !s.session && s.allocate_private();
+}
+
+static bool model_region(
+        ggml_backend_memory_lease_t lease, ggml_backend_buffer_type_t type,
+        uint64_t id, size_t bytes, ggml_backend_memory_region & region,
+        uintptr_t & base) {
+    auto * buffer = ggml_backend_memory_lease_buffer(lease);
+    if (!buffer || !ggml_backend_memory_lease_get_region(lease,&region) ||
+            region.id != id || region.size != bytes ||
+            ggml_backend_buffer_get_type(buffer) != type ||
+            ggml_backend_buffer_get_size(buffer) != bytes) return false;
+    base = uintptr_t(ggml_backend_buffer_get_base(buffer));
+    return base && base <= UINTPTR_MAX-bytes;
+}
+
+bool llama_kv_stream_model::attach_shared_memory(
+        const llama_kv_stream_memory_binding & binding) {
+    auto & s = *impl;
+    llama_kv_stream_memory_requirements requirements;
+    if (!memory_requirements(requirements) || !s.suspended || s.session || s.shared ||
+            !binding.parent || !binding.pool || !binding.writer || !binding.attention ||
+            !binding.pool_resource || !binding.writer_resource || !binding.attention_resource ||
+            binding.pool_resource == binding.writer_resource ||
+            binding.pool_resource == binding.attention_resource ||
+            binding.writer_resource == binding.attention_resource ||
+            !binding.prefill_stage || !binding.decode_stage ||
+            binding.prefill_stage == binding.decode_stage ||
+            ggml_backend_buffer_get_type(binding.parent) != requirements.buffer_type) return false;
+
+    const size_t attention_bytes = std::max(
+        requirements.attention_prefill_bytes,requirements.attention_decode_bytes);
+    const std::array<ggml_backend_memory_lease_t,3> supplied{
+        binding.pool,binding.writer,binding.attention};
+    const std::array<uint64_t,3> ids{
+        binding.pool_resource,binding.writer_resource,binding.attention_resource};
+    const std::array<size_t,3> sizes{
+        requirements.pool_bytes,requirements.writer_bytes,attention_bytes};
+    std::array<ggml_backend_memory_region,3> regions{};
+    std::array<uintptr_t,3> addresses{};
+    const auto parent_base = uintptr_t(ggml_backend_buffer_get_base(binding.parent));
+    const size_t parent_bytes = ggml_backend_buffer_get_size(binding.parent);
+    if (!parent_base || parent_base > UINTPTR_MAX-parent_bytes) return false;
+    for (size_t i = 0; i < supplied.size(); ++i) {
+        if (!model_region(supplied[i],requirements.buffer_type,ids[i],sizes[i],
+                regions[i],addresses[i]) ||
+                addresses[i] < parent_base ||
+                addresses[i]-parent_base > parent_bytes-sizes[i] ||
+                addresses[i]%requirements.alignment) return false;
+        for (size_t j = 0; j < i; ++j) {
+            if (addresses[i] < addresses[j]+sizes[j] &&
+                    addresses[j] < addresses[i]+sizes[i]) return false;
+        }
+    }
+
+    std::array<model_lease_ptr,3> retained{{
+        {nullptr,ggml_backend_memory_lease_free},
+        {nullptr,ggml_backend_memory_lease_free},
+        {nullptr,ggml_backend_memory_lease_free},
+    }};
+    for (size_t i = 0; i < retained.size(); ++i) {
+        retained[i].reset(ggml_backend_memory_lease_retain(supplied[i]));
+        if (!retained[i]) return false;
+    }
+    auto candidate = s.create_session(
+        retained,binding.pool_resource,binding.prefill_stage,binding.decode_stage);
+    if (!candidate) return false;
+
+    s.leases = std::move(retained);
+    s.session = std::move(candidate);
+    s.pool_resource = binding.pool_resource;
+    s.writer_resource = binding.writer_resource;
+    s.attention_resource = binding.attention_resource;
+    s.prefill_stage = binding.prefill_stage;
+    s.decode_stage = binding.decode_stage;
+    s.shared_parent = binding.parent;
+    s.shared = true;
+    s.suspended = false;
+    s.arena.reset();
+    s.attention_arena.reset();
+    return true;
+}
+
+bool llama_kv_stream_model::detach_shared_memory() noexcept {
+    auto & s = *impl;
+    if (!s.shared) return s.suspended && !s.session;
+    if (s.pending_k || (s.session && s.session->active())) return false;
+    s.suspended_tokens = s.session ? s.session->tokens() : s.suspended_tokens;
+    s.release_device_memory();
+    s.pool_resource = s.writer_resource = s.attention_resource = 0;
+    s.prefill_stage = s.decode_stage = 0;
+    s.suspended = true;
+    return true;
+}
+
+llama_memory_consumer * llama_kv_stream_model::memory_consumer() noexcept {
+    return impl->shared && impl->session ? impl->session.get() : nullptr;
+}
+
+bool llama_kv_stream_model::uses_shared_memory() const noexcept {
+    return impl->shared;
+}
+
+ggml_backend_buffer_t llama_kv_stream_model::shared_parent() const noexcept {
+    return impl->shared_parent;
+}
+
+size_t llama_kv_stream_model::device_grant_bytes() const noexcept {
+    size_t total = 0;
+    for (const auto & lease : impl->leases) {
+        auto * buffer = ggml_backend_memory_lease_buffer(lease.get());
+        if (!buffer) return 0;
+        const size_t bytes = ggml_backend_buffer_get_size(buffer);
+        if (bytes > SIZE_MAX-total) return 0;
+        total += bytes;
+    }
+    return total;
+}

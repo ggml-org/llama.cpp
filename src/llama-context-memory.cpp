@@ -1,5 +1,6 @@
 #include "llama-context-memory.h"
 #include "llama-memory-workspace.h"
+#include "llama-kv-stream-model.h"
 #include "../ggml/src/ggml-cuda-graph.h"
 #include "ggml-cpp.h"
 
@@ -49,6 +50,9 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     std::unique_ptr<llama_memory_workspace> workspace;
     std::unique_ptr<llama_memory_transition> transition;
     llama_memory_text_phase_tracker text_phase;
+    llama_kv_stream_model * shared_stream = nullptr;
+    ggml_backend_buffer_t kv_parent = nullptr;
+    size_t kv_parent_capacity = 0;
 
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
@@ -56,6 +60,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
         GGML_ASSERT(invalidate());
         if (workspace) GGML_ASSERT(workspace->close());
         workspace.reset();
+        if (shared_stream) GGML_ASSERT(shared_stream->detach_shared_memory());
     }
 
     // Completion is independent of host admission; one pin can cover many queued graph splits.
@@ -103,13 +108,18 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends,
         const llama_compute_workspace_plan & plan) {
+    return create(sched,backends,plan,nullptr);
+}
+
+std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
+        const std::vector<ggml_backend_t> & backends,
+        const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream) {
     const auto & groups = plan.groups;
     if (!sched || !supported(backends) || plan.phase_sizes.empty() ||
             backends.size() != static_cast<size_t>(ggml_backend_sched_get_n_backends(sched))) return {};
     for (size_t i = 0; i < backends.size(); ++i) {
         if (ggml_backend_sched_get_backend(sched, static_cast<int>(i)) != backends[i]) return {};
     }
-    // Validate all group labels and phase geometry before the first physical allocation.
     for (const auto & phase : plan.phase_sizes) if (phase.size() != groups.size()) return {};
     for (size_t i = 0; i < groups.size(); ++i) {
         const auto & group = groups[i];
@@ -124,85 +134,221 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
         size_t maximum = 0;
         for (const auto & phase : plan.phase_sizes) {
             if (phase[i] > group.size || (phase[i] != 0 && phase[i] % group.alignment != 0)) return {};
-            maximum = std::max(maximum, phase[i]);
+            maximum = std::max(maximum,phase[i]);
         }
         if (maximum != group.size) return {};
     }
+
+    llama_kv_stream_memory_requirements kv;
+    if (stream && (plan.phase_sizes.size() != 2 || !stream->memory_requirements(kv) ||
+            !stream->prepare_shared_memory())) return {};
+    struct handoff_guard {
+        llama_kv_stream_model * stream;
+        bool complete = false;
+        ~handoff_guard() {
+            if (stream && !complete) stream->resume_private_memory();
+        }
+    } handoff{stream};
+
     try {
         auto state = std::make_unique<implementation>();
         state->sched = sched;
         for (auto * backend : backends) {
             context_cache cache{};
-            if (!context_cache_for(backend, cache)) return {};
+            if (!context_cache_for(backend,cache)) return {};
             state->caches.push_back(cache);
         }
         std::vector<llama_memory_stage_id> stages{1};
         llama_memory_transition_target target;
-        target.plan.stages.push_back({1, {}, {}});
+        target.plan.stages.push_back({1,{},{}});
         for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
-            if (phase > static_cast<size_t>(std::numeric_limits<llama_memory_stage_id>::max() - 2)) return {};
-            const llama_memory_stage_id id = phase + 2;
+            if (phase > static_cast<size_t>(std::numeric_limits<llama_memory_stage_id>::max()-2)) return {};
+            const llama_memory_stage_id id = phase+2;
             stages.push_back(id);
-            target.plan.stages.push_back({id, {id - 1}, {}});
+            target.plan.stages.push_back({id,{id-1},{}});
         }
         target.stage = stages.front();
+
+        const auto align_up = [](size_t value, size_t alignment, size_t & result) {
+            if (!alignment || (alignment & (alignment-1)) ||
+                    value > SIZE_MAX-(alignment-1)) return false;
+            result = (value+alignment-1)&~(alignment-1);
+            return true;
+        };
+        const size_t kv_attention = stream ?
+            std::max(kv.attention_prefill_bytes,kv.attention_decode_bytes) : 0;
+        size_t kv_group = std::numeric_limits<size_t>::max();
+        size_t kv_arena = std::numeric_limits<size_t>::max();
+        llama_memory_domain_id kv_domain = 0;
 
         std::vector<llama_memory_workspace_group> selected;
         std::vector<llama_memory_transition_arena> supplied;
         for (size_t i = 0; i < groups.size(); ++i) {
             const auto & group = groups[i];
-            ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(group.buft, group.size));
+            const bool carries_kv = stream && group.buft == kv.buffer_type;
+            if (carries_kv && kv_group != std::numeric_limits<size_t>::max()) return {};
+            size_t capacity = group.size;
+            if (carries_kv) {
+                for (size_t bytes : {kv.pool_bytes,kv.writer_bytes,kv_attention}) {
+                    if (!align_up(capacity,group.alignment,capacity) ||
+                            bytes > SIZE_MAX-capacity) return {};
+                    capacity += bytes;
+                }
+            }
+            ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(group.buft,capacity));
             if (!parent) return {};
-            if (!ggml_backend_buffer_supports_views(parent.get())) continue;
+            if (!ggml_backend_buffer_supports_views(parent.get())) {
+                if (carries_kv) return {};
+                continue;
+            }
             auto allocation = LLAMA_MEMORY_ALLOCATION_HOST;
-            if (!ggml_backend_buft_is_host(group.buft)) {
+            if (carries_kv) {
+                allocation = LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL;
+            } else if (!ggml_backend_buft_is_host(group.buft)) {
                 allocation = std::getenv("GGML_CUDA_ENABLE_UNIFIED_MEMORY") ?
                     LLAMA_MEMORY_ALLOCATION_MANAGED : LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL;
             } else {
                 for (const auto & cache : state->caches) {
-                    if (cache.release && group.buft == ggml_backend_dev_host_buffer_type(ggml_backend_get_device(cache.backend))) {
+                    if (cache.release && group.buft ==
+                            ggml_backend_dev_host_buffer_type(ggml_backend_get_device(cache.backend))) {
                         allocation = LLAMA_MEMORY_ALLOCATION_HOST_PINNED;
                     }
                 }
             }
-            const uint64_t id = i + 1;
+            const uint64_t id = i+1;
             llama_compute_arena_ptr arena(ggml_backend_memory_arena_new_from_buffer(parent.get()));
             if (!arena) return {};
-            llama_memory_workspace_group configured{group, {id, id, allocation, llama_memory_content::discardable}, {}};
-            configured.stages.push_back({stages.front(), group.size});
+            llama_memory_workspace_group configured{
+                group,{id,id,allocation,llama_memory_content::discardable},{}};
+            configured.stages.push_back({stages.front(),group.size});
             for (size_t phase = 0; phase < plan.phase_sizes.size(); ++phase) {
-                configured.stages.push_back({stages[phase + 1], plan.phase_sizes[phase][i]});
+                configured.stages.push_back({stages[phase+1],plan.phase_sizes[phase][i]});
             }
             selected.push_back(std::move(configured));
-            target.plan.domains.push_back({id, allocation, LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
-            target.budgets.push_back({id, allocation, group.size, group.alignment});
-            supplied.push_back({id, allocation, arena.get()});
-            state->arenas.push_back({group.buft, group.size, group.first_slot, std::move(arena)});
+            target.plan.domains.push_back({id,allocation,LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+            target.budgets.push_back({id,allocation,capacity,group.alignment});
+            supplied.push_back({id,allocation,arena.get()});
+            state->arenas.push_back({group.buft,capacity,group.first_slot,std::move(arena)});
+            if (carries_kv) {
+                kv_group = i;
+                kv_arena = state->arenas.size()-1;
+                kv_domain = id;
+                state->kv_parent = ggml_backend_memory_arena_parent(state->arenas.back().arena.get());
+                state->kv_parent_capacity = capacity;
+            }
         }
+        if (stream && kv_group == std::numeric_limits<size_t>::max()) return {};
+
         auto * owner = state.get();
-        state->workspace = std::make_unique<llama_memory_workspace>(sched, selected, llama_memory_workspace_hooks{
+        state->workspace = std::make_unique<llama_memory_workspace>(sched,selected,llama_memory_workspace_hooks{
             [owner] { owner->executor.quiesce(); return true; },
             [owner] { return owner->invalidate(); },
         });
-        if (!state->workspace->register_resources(target.plan, stages)) return {};
+        if (!state->workspace->register_resources(target.plan,stages)) return {};
+
+        uint64_t pool_id = 0, writer_id = 0, attention_id = 0;
+        if (stream) {
+            if (groups.size() > size_t(UINT64_MAX-3)) return {};
+            pool_id = uint64_t(groups.size()+1);
+            writer_id = pool_id+1;
+            attention_id = writer_id+1;
+            target.plan.resources.push_back({
+                pool_id,kv_domain,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,
+                llama_memory_content::reconstructible});
+            target.plan.resources.push_back({
+                writer_id,kv_domain,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,
+                llama_memory_content::discardable});
+            target.plan.resources.push_back({
+                attention_id,kv_domain,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,
+                llama_memory_content::discardable});
+            for (size_t i = 0; i < target.plan.stages.size(); ++i) {
+                const size_t attention = i == 0 ? kv_attention :
+                    (i == 1 ? kv.attention_prefill_bytes : kv.attention_decode_bytes);
+                auto & requirements = target.plan.stages[i].requirements;
+                requirements.push_back({
+                    pool_id,kv.pool_bytes,kv.pool_bytes,
+                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
+                    LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+                requirements.push_back({
+                    writer_id,kv.writer_bytes,kv.writer_bytes,
+                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
+                    LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+                requirements.push_back({
+                    attention_id,attention,attention,
+                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
+                    LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
+            }
+            target.plan.inputs.push_back(pool_id);
+            target.plan.outputs.push_back(pool_id);
+            if (llama_memory_plan_validate(target.plan).status != llama_memory_plan_status::success) return {};
+        }
+
+        if (stream) {
+            llama_memory_layout initial;
+            if (llama_memory_layout_elastic(
+                    target.plan,target.stage,target.budgets,target.fixed,initial).status !=
+                    llama_memory_layout_status::success ||
+                    initial.arenas.size() != state->arenas.size()) return {};
+            for (size_t i = 0; i < initial.arenas.size(); ++i) {
+                auto * arena = state->arenas[i].arena.get();
+                if (!ggml_backend_memory_arena_quiesce(arena) ||
+                        !ggml_backend_memory_arena_begin(arena,GGML_BACKEND_MEMORY_PLAN_NONE)) return {};
+                for (const auto & region : initial.arenas[i].regions) {
+                    if (!ggml_backend_memory_arena_reserve_at(
+                            arena,region.id,region.offset,region.size,
+                            region.alignment,region.flags,nullptr)) return {};
+                }
+                if (!ggml_backend_memory_arena_commit(arena) ||
+                        !ggml_backend_memory_arena_resume(arena)) return {};
+            }
+        }
+
         state->transition = std::make_unique<llama_memory_transition>(
             std::vector<llama_memory_consumer *>{state->workspace.get()});
         const auto prepared = state->transition->prepare(target);
         if (prepared.status == llama_memory_transition_status::prepared) {
-            if (state->transition->activate(supplied).status != llama_memory_transition_status::activated) return {};
+            if (state->transition->activate(supplied).status !=
+                    llama_memory_transition_status::activated) return {};
         } else if (prepared.status != llama_memory_transition_status::no_change) {
             return {};
         }
         for (size_t i = 0; i < selected.size(); ++i) {
             if (selected[i].stages.front().size == 0) continue;
-            state->leases.emplace_back(ggml_backend_memory_arena_acquire(state->arenas[i].arena.get(), selected[i].resource.id),
+            state->leases.emplace_back(ggml_backend_memory_arena_acquire(
+                state->arenas[i].arena.get(),selected[i].resource.id),
                 ggml_backend_memory_lease_free);
             if (!state->leases.back()) return {};
             state->bindings.push_back(state->leases.back().get());
         }
-        std::unique_ptr<llama_memory_executable> native = std::make_unique<context_executable>(state->caches);
-        if (!state->executor.capture(native, state->bindings, 1)) return {};
-        return std::unique_ptr<llama_context_memory>(new llama_context_memory(std::move(state)));
+
+        if (stream) {
+            std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> pool(
+                ggml_backend_memory_arena_acquire(state->arenas[kv_arena].arena.get(),pool_id),
+                ggml_backend_memory_lease_free);
+            std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> writer(
+                ggml_backend_memory_arena_acquire(state->arenas[kv_arena].arena.get(),writer_id),
+                ggml_backend_memory_lease_free);
+            std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)> attention(
+                ggml_backend_memory_arena_acquire(state->arenas[kv_arena].arena.get(),attention_id),
+                ggml_backend_memory_lease_free);
+            if (!pool || !writer || !attention ||
+                    !stream->attach_shared_memory({
+                        state->kv_parent,pool.get(),writer.get(),attention.get(),
+                        pool_id,writer_id,attention_id,stages[1],stages[2]})) return {};
+            state->shared_stream = stream;
+            auto * consumer = stream->memory_consumer();
+            if (!consumer) return {};
+            state->transition = std::make_unique<llama_memory_transition>(
+                std::vector<llama_memory_consumer *>{state->workspace.get(),consumer});
+        }
+
+        std::unique_ptr<llama_memory_executable> native =
+            std::make_unique<context_executable>(state->caches);
+        if (!state->executor.capture(native,state->bindings,1)) return {};
+        std::unique_ptr<llama_context_memory> result(
+            new llama_context_memory(std::move(state)));
+        handoff.complete = true;
+        return result;
     } catch (const std::bad_alloc &) {
         return {};
     }
@@ -241,6 +387,10 @@ void llama_context_memory::synchronize() { ggml_backend_sched_synchronize(impl->
 bool llama_context_memory::uses_arenas() const noexcept { return !impl->arenas.empty(); }
 
 const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept { return impl->bindings; }
+
+bool llama_context_memory::shares_kv_memory() const noexcept { return impl->shared_stream != nullptr; }
+ggml_backend_buffer_t llama_context_memory::shared_parent() const noexcept { return impl->kv_parent; }
+size_t llama_context_memory::shared_parent_capacity() const noexcept { return impl->kv_parent_capacity; }
 
 llama_memory_text_phase_result llama_context_memory::signal_text_phase(
         const llama_memory_text_phase_signal & signal) noexcept {

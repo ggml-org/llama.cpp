@@ -1,6 +1,22 @@
 #pragma once
 #include "llama-kv-stream-session.h"
 
+// Exact device-local grants contributed to the common text compute/KV parent.
+struct llama_kv_stream_memory_requirements {
+    ggml_backend_buffer_type_t buffer_type = nullptr;
+    size_t pool_bytes = 0, writer_bytes = 0;
+    size_t attention_prefill_bytes = 0, attention_decode_bytes = 0;
+    size_t alignment = 1;
+};
+
+// Borrowed candidate leases; the model retains them only after complete session reconstruction.
+struct llama_kv_stream_memory_binding {
+    ggml_backend_buffer_t parent = nullptr;
+    ggml_backend_memory_lease_t pool = nullptr, writer = nullptr, attention = nullptr;
+    llama_memory_resource_id pool_resource = 0, writer_resource = 0, attention_resource = 0;
+    llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
+};
+
 struct llama_kv_stream_model_config {
     ggml_backend_t backend = nullptr;
     llama_kv_stream_host_config host;
@@ -28,6 +44,17 @@ public:
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);
     void release_graphs();
     size_t captured_layers() const;
+    bool memory_requirements(llama_kv_stream_memory_requirements & output) const noexcept;
+    // Suspend private grants before parent allocation; attach validates all regions before publication.
+    bool prepare_shared_memory();
+    bool resume_private_memory();
+    bool attach_shared_memory(const llama_kv_stream_memory_binding & binding);
+    // The shared owner calls detach only after destroying its coordinator and workspace consumer.
+    bool detach_shared_memory() noexcept;
+    llama_memory_consumer * memory_consumer() noexcept;
+    bool uses_shared_memory() const noexcept;
+    ggml_backend_buffer_t shared_parent() const noexcept;
+    size_t device_grant_bytes() const noexcept;
 private:
     llama_kv_stream_model() = default;
     struct implementation;

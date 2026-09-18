@@ -444,6 +444,12 @@ llama_context::llama_context(
                 }
             }
 
+            if (cparams.kv_stream_pool_bytes &&
+                    ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
+                buft = llama_kv_stream_device_buffer_type(model.devices.front().dev);
+                if (!buft) throw std::runtime_error("missing device-local KV/compute buffer type");
+            }
+
             backend_buft.push_back(buft);
             backend_ptrs.push_back(backend.get());
             backend_buf_exp_size.push_back(0);
@@ -656,13 +662,20 @@ bool llama_context::prepare_compute_arenas(
         return false;
     }
 
-    if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 && llama_context_memory::supported(backend_ptrs)) {
-        compute_memory = llama_context_memory::create(sched.get(), backend_ptrs, plan);
+    llama_kv_stream_model * stream = nullptr;
+    if (cparams.kv_stream_pool_bytes && memory) {
+        stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
+        if (!stream) return false;
+    }
+    if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 &&
+            llama_context_memory::supported(backend_ptrs)) {
+        compute_memory = llama_context_memory::create(sched.get(),backend_ptrs,plan,stream);
         return compute_memory != nullptr;
     }
+    if (stream) return false;
 
     return llama_prepare_compute_arena_bindings(
-        sched.get(), backend_ptrs, plan.groups, compute_arenas);
+        sched.get(),backend_ptrs,plan.groups,compute_arenas);
 }
 
 void llama_context::release_kv_workspaces(bool retiring) {

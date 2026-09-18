@@ -2,13 +2,13 @@
 
 Saved: 2026-09-10
 
-Last source review: 2026-09-16, against the checkpoint commits below.
+Last source review: 2026-09-17, against the checkpoint commits below.
 
 ## Status and how to resume
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, and **6.3a** at `4b576eec7`; **6.2c** is implemented and qualified for user review.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`; **6.3b** is implemented and qualified for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -414,9 +414,10 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.1b | Committed | f1db07796 | Exact device-local shared-parent accounting; external device/host and managed-allocation reporting; alias validation; explicit transition peaks; opaque-residual reconciliation. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
 | 6.2a | Committed | 546fdf67b | Growth-only rebind to a disjoint external device lease; current-frontier policy replan, monotonic KV revision, preserved host/publication state, lazy host reload, CUDA numerical validation, and memcheck pass. |
 | 6.2b | Committed | 18dfa8f4d | Shrink/rebind to the minimum feasible pool, with old-work drain, concentrated layout/ring remap, dirty replacement mirrors, and preserved logical cache state. |
-| 6.2c | Ready for review | - | Common transition-consumer lifecycle releases the old pool before same-parent commit, reconstructs from host KV, restores prior policy metadata after failures, and poisons terminal recovery failures. |
+| 6.2c | Committed | 51444315c | Common transition-consumer lifecycle releases the old pool before same-parent commit, reconstructs from host KV, restores prior policy metadata after failures, and poisons terminal recovery failures. |
 | 6.3a | Committed | 4b576eec7 | Explicit logical-batch text phase, repeated-notification no-op, serial return to prefill, speculative rejection, and one immutable phase across all ubatches. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
-| 6.3b-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
+| 6.3b | Ready for review | - | One physical device-local parent holds fixed compute, KV pool, writer, and maximum attention grants; private-to-shared handoff preserves host KV and scheduler rebuilds. |
+| 6.3c-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3333,5 +3334,39 @@ TDD and validation evidence:
 - Production was stopped only for CUDA validation and restored successfully on port 1234.
 
 The coordinator's same-parent arena commit itself verifies the no-dual-grant property: a changed region cannot commit while the old changed-region lease remains live, and the successful transition retains exactly one new pool lease afterward. This stage remains CUDA/device-local and requires an exact pool region. Same-size address relocation is rejected rather than silently reusing stale policy metadata. The text context does not register or invoke this consumer yet; stable shared-parent wiring is stage **6.3b**.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+
+### Stage 6.3b implementation and validation
+
+Stage 6.3b integrates the serial CUDA compute workspace and fixed KV grants under one physically device-local parent allocation. The streaming backend now selects the explicit CUDA device-local buffer type for scheduler workspace tensors even when model weights use environment-controlled managed allocation. Other contexts and unsupported backends retain their prior buffer types and ownership paths.
+
+The shared parent contains four aligned regions at the conservative stage: maximum compute workspace, the configured KV resident/ring pool, 32 KiB writer scratch, and the maximum of strict-prefill and resumed-decode attention scratch. The existing phase-specific workspace and attention sizes remain recorded in the plan, but text-phase signals do not activate a repartition in this stage. Scheduler-visible workspace bytes therefore remain identical to the old fixed maximum.
+
+To avoid a transient second full KV allocation, the model suspends its private device session before allocating the combined parent. Authoritative host KV and the committed token frontier remain alive. Shared attachment validates the parent, exact region identities and sizes, allocation type, alignment, containment, non-overlap, resource IDs, and stage IDs; it retains all three KV leases only after a replacement session has been fully constructed and restored. Failed shared construction resumes the prior private allocation. A live shared owner rejects independent suspension so the coordinator can never retain a dangling session consumer.
+
+Context-memory teardown destroys the coordinator and workspace consumer before suspending the shared KV session and releasing the parent. Scheduler reconstruction repeats this host-preserving detach/attach sequence. The real adapter-reset test preserves a 672-token frontier across two scheduler rebuilds. The persistent coordinator now registers both compute workspace and KV pool consumers, but no phase transition is invoked yet.
+
+TDD and validation evidence:
+
+- The initial focused test reached undefined shared-memory/context-owner symbols at link time before implementation.
+- The CUDA KV model suite passes 5 cases / 80 assertions. It verifies one common parent, exact aligned parent capacity, exact KV component grants, unchanged scheduler workspace bytes, stable base across phase signals, live-owner suspension rejection, and mismatched-buffer fallback to a usable private session.
+- The CUDA context-owner suite passes 7 cases / 425 assertions, including native capture retirement. Compute Sanitizer reports zero errors and zero leaked device bytes for the complete KV model suite.
+- Focused ASan with leak detection and UBSan each pass context memory, KV model/session, and common recovery suites. A broader Debug matrix passes 15 memory/KV suites.
+- The full IQ4_XS Qwen3.8-27B test passes 4 cases / 483 assertions at ubatch 256 and 512 with both UVM disabled and enabled: maximum logit error 0, recurrent relative L2 error 0, and 32/32 matching continuation tokens. Prompt-cache restore, cancellation recovery, and scheduler reconstruction remain valid.
+- The complete CUDA llama-server target builds successfully. Production was stopped only for GPU validation and restored on port 1234.
+
+A matched Release IQ4_XS point used context 8192, prompt 8064, decode 128, Q8_0/Q4_0 KV, a 64 MiB pool, batch 512, ubatch 256, and UVM disabled:
+
+| Revision | Prefill tok/s | Decode tok/s | Steady VRAM |
+| --- | ---: | ---: | ---: |
+| 6.2c 51444315c | 1679.96 | 42.042 | 13310 MiB |
+| 6.3b | 1679.92 | 42.034 | 13316 MiB |
+| Change | -0.002% | -0.019% | +6 MiB |
+
+The throughput differences are below ordinary measurement noise. The 6 MiB process-level VRAM difference is below 0.05% and includes backend/driver rounding outside exact region accounting. Evidence is in /tmp/kv-63b-base-v2 and /tmp/kv-63b-current-v2.
+
+This stage intentionally keeps maximum compute and attention grants live and does not reclaim bytes on a phase signal. Writer and attention regions are fixed attachments in 6.3b; stage **6.3c** adds their transition-consumer lifecycle, phase-specific layouts, actual compute-to-KV reclamation, and affected-executable rebuilds.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.

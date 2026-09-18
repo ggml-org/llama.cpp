@@ -1,5 +1,6 @@
 #include "kv-stream-block-test.h"
 #include "../src/llama-kv-stream-model.h"
+#include "../src/llama-context-memory.h"
 
 // Quantization error is not adapter error: compare the exact bytes from an ordinary CUDA producer graph.
 static std::vector<uint8_t> reference_bytes(ggml_backend_t backend,const std::vector<float> & data,ggml_type type,float scale) {
@@ -26,6 +27,102 @@ int main(int argc,char ** argv) {
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
     ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr)), cpu(ggml_backend_cpu_init());
+    t.test("fixed_compute_and_kv_grants_share_one_device_parent", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page;
+        ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        if (!t.assert_true(bool(model))) return;
+
+        auto * device_type = llama_kv_stream_device_buffer_type(dev);
+        auto * cpu_type = ggml_backend_cpu_buffer_type();
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        std::vector<ggml_backend_buffer_type_t> types{device_type,cpu_type};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+            backends.data(),types.data(),types.size(),256,false,true));
+        if (!t.assert_true(bool(sched))) return;
+
+        const size_t device_alignment = ggml_backend_buft_get_alignment(device_type);
+        const size_t cpu_alignment = ggml_backend_buft_get_alignment(cpu_type);
+        llama_compute_workspace_plan plan;
+        plan.groups = {
+            {device_type,2*1048576,device_alignment,0},
+            {cpu_type,8192,cpu_alignment,1},
+        };
+        plan.phase_sizes = {
+            {2*1048576,8192},
+            {1048576,4096},
+        };
+
+        llama_kv_stream_memory_requirements requirements;
+        if (!t.assert_true(model->memory_requirements(requirements))) return;
+        auto owner = llama_context_memory::create(sched.get(),backends,plan,model.get());
+        if (!t.assert_true(bool(owner))) return;
+        t.assert_true(owner->shares_kv_memory());
+        t.assert_true(model->uses_shared_memory());
+        t.assert_true(!model->prepare_shared_memory());
+        t.assert_true(owner->shared_parent() == model->shared_parent());
+        t.assert_true(owner->shared_parent() != nullptr);
+        t.assert_equal(owner->shared_parent_capacity(),
+            ggml_backend_buffer_get_size(owner->shared_parent()));
+        const size_t expected_grants = requirements.pool_bytes + requirements.writer_bytes +
+            std::max(requirements.attention_prefill_bytes,requirements.attention_decode_bytes);
+        t.assert_equal(expected_grants,model->device_grant_bytes());
+        t.assert_equal(plan.groups[0].size,
+            ggml_backend_sched_get_buffer_size(sched.get(),backend.get()));
+        size_t expected_parent = plan.groups[0].size;
+        for (size_t bytes : {requirements.pool_bytes,requirements.writer_bytes,
+                std::max(requirements.attention_prefill_bytes,requirements.attention_decode_bytes)}) {
+            expected_parent = (expected_parent+device_alignment-1)&~(device_alignment-1);
+            expected_parent += bytes;
+        }
+        t.assert_equal(expected_parent,owner->shared_parent_capacity());
+        auto * base = ggml_backend_buffer_get_base(owner->shared_parent());
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::prefill,513,true,true,false}).status ==
+            llama_memory_text_phase_status::changed);
+        t.assert_true(owner->signal_text_phase({
+            llama_memory_text_phase::decode,1,true,true,false}).status ==
+            llama_memory_text_phase_status::changed);
+        t.assert_true(base == ggml_backend_buffer_get_base(owner->shared_parent()));
+        t.assert_equal(size_t(0),model->tokens());
+        t.assert_true(model->complete());
+
+        owner.reset();
+        t.assert_true(!model->uses_shared_memory());
+        t.assert_true(model->shared_parent() == nullptr);
+    });
+
+    t.test("shared_parent_mismatch_rejects_and_restores_private_model", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        ggml_kv_stream_layout page;
+        ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model = llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        if (!t.assert_true(bool(model))) return;
+        const size_t private_bytes = model->granted_bytes();
+
+        auto * ordinary = ggml_backend_get_default_buffer_type(backend.get());
+        auto * cpu_type = ggml_backend_cpu_buffer_type();
+        std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+        std::vector<ggml_backend_buffer_type_t> types{ordinary,cpu_type};
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+            backends.data(),types.data(),types.size(),256,false,true));
+        llama_compute_workspace_plan plan;
+        plan.groups = {
+            {ordinary,1048576,ggml_backend_buft_get_alignment(ordinary),0},
+            {cpu_type,8192,ggml_backend_buft_get_alignment(cpu_type),1},
+        };
+        plan.phase_sizes = {
+            {1048576,8192},
+            {524288,4096},
+        };
+        t.assert_true(!llama_context_memory::create(sched.get(),backends,plan,model.get()));
+        t.assert_true(!model->uses_shared_memory());
+        t.assert_true(model->shared_parent() == nullptr);
+        t.assert_true(model->complete());
+        t.assert_equal(private_bytes,model->granted_bytes());
+    });
+
     t.test("failed_scratch_replacement_keeps_host_state_and_can_retry", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);

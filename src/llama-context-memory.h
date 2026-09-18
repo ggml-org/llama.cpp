@@ -4,6 +4,8 @@
 #include "llama-memory-phase.h"
 #include "llama-context-workspace.h"
 
+class llama_kv_stream_model;
+
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
 // The caller owns the scheduler/backends and must not submit or mutate their graph caches concurrently.
 class llama_context_memory {
@@ -18,6 +20,9 @@ public:
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
             const llama_compute_workspace_plan & plan);
+    static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
+            const std::vector<ggml_backend_t> & backends,
+            const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream);
     ~llama_context_memory();
     llama_context_memory(const llama_context_memory &) = delete;
     llama_context_memory & operator=(const llama_context_memory &) = delete;
@@ -33,6 +38,9 @@ public:
     bool uses_arenas() const noexcept;
     // Borrowed handles; consumers retain them before capturing addresses from this workspace.
     const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
+    bool shares_kv_memory() const noexcept;
+    ggml_backend_buffer_t shared_parent() const noexcept;
+    size_t shared_parent_capacity() const noexcept;
 
 private:
     struct implementation;
