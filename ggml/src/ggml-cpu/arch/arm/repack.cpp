@@ -1836,7 +1836,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             svbool_t pg32_4 = svwhilelt_b32(0, 4);
             svbool_t pg32_8 = svptrue_b32();
             svbool_t pg16_8 = svwhilelt_b16(0, 8);
-            svbool_t pg16_16 = svwhilelt_b16(0, 16);
             svbool_t pg8_32 = svptrue_b8();
             
             // 1x8 tile corresponding to one q8_K row = 2 x 4 for NEON
