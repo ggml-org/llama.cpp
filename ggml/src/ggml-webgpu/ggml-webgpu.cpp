@@ -1518,9 +1518,14 @@ static webgpu_encoded_op ggml_webgpu_get_rows(webgpu_context & ctx,
     shader_lib_ctx.dst                            = dst;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
-    const uint32_t offset_src   = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type));
-    const uint32_t offset_dst   = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type));
-    const bool     vec4_aligned = offset_src % 4 == 0 && offset_dst % 4 == 0;
+    const uint32_t offset_src  = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type));
+    const uint32_t offset_dst  = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type));
+    const uint32_t stride_src1 = (uint32_t) (src->nb[1] / ggml_type_size(src->type));
+    const uint32_t stride_src2 = (uint32_t) (src->nb[2] / ggml_type_size(src->type));
+    const uint32_t stride_src3 = (uint32_t) (src->nb[3] / ggml_type_size(src->type));
+
+    const bool vec4_aligned = offset_src % 4 == 0 && offset_dst % 4 == 0 && stride_src1 % 4 == 0 &&
+                              stride_src2 % 4 == 0 && stride_src3 % 4 == 0;
 
     webgpu_pipeline pipeline  = ctx->shader_lib->get_get_rows_pipeline(shader_lib_ctx, vec4_aligned);
     auto *          decisions = static_cast<ggml_webgpu_get_rows_shader_decisions *>(pipeline.context.get());
@@ -1528,9 +1533,9 @@ static webgpu_encoded_op ggml_webgpu_get_rows(webgpu_context & ctx,
     std::vector<uint32_t> params = { offset_src,
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, idx) / ggml_type_size(idx->type)),
                                      offset_dst,
-                                     (uint32_t) (src->nb[1] / ggml_type_size(src->type)),
-                                     (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
-                                     (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
+                                     stride_src1,
+                                     stride_src2,
+                                     stride_src3,
                                      (uint32_t) (idx->nb[0] / ggml_type_size(idx->type)),
                                      (uint32_t) (idx->nb[1] / ggml_type_size(idx->type)),
                                      (uint32_t) (idx->nb[2] / ggml_type_size(idx->type)),
