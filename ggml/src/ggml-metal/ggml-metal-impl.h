@@ -624,7 +624,7 @@ typedef struct {
     uint64_t nbf1[3];
     uint64_t nbf2[3];
     uint64_t nbf3[3];
-    float    scale_val;
+    float    scale;
 } ggml_metal_kargs_norm;
 
 typedef struct {
@@ -1238,8 +1238,8 @@ typedef struct {
     int32_t  ne01;      // n_tokens
     uint64_t nb01;      // logits row stride
     uint64_t nb1_ids;   // ids row stride
-    float    val_clamp;
-    float    val_scale;
+    float    clamp;
+    float    scale;
 } ggml_metal_kargs_topk_moe;
 
 typedef struct {

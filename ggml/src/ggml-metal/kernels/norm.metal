@@ -83,7 +83,7 @@ kernel void kernel_norm_fuse_impl(
         }
         if (F == 2) {
             if (FC_norm_use_scale) {
-                y[i00] = (y[i00]*scale) * args.scale_val;
+                y[i00] = (y[i00]*scale) * args.scale;
             } else {
                 y[i00] = (y[i00]*scale)*f0[i00];
             }
@@ -162,7 +162,7 @@ kernel void kernel_rms_norm_fuse_impl(
         }
         if (F == 2) {
             if (FC_norm_use_scale) {
-                y[i00] = (x[i00]*scale) * args.scale_val;
+                y[i00] = (x[i00]*scale) * args.scale;
             } else {
                 y[i00] = (x[i00]*scale)*f0[i00];
             }

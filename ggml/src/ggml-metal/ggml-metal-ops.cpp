@@ -4170,7 +4170,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
         /*.nbf1   =*/ { nb01 },
         /*.nbf2   =*/ { nb02 },
         /*.nbf3   =*/ { nb03 },
-        /*.scale_val =*/ 1.0f,
+        /*.scale =*/ 1.0f,
     };
 
     int n_fuse = 1;
@@ -4221,7 +4221,7 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
             ctx->count_fusions(fusion);
 
             const ggml_tensor * scale_node = ctx->node(idx + 1);
-            args.scale_val = ggml_get_op_params_f32(scale_node, 0);
+            args.scale = ggml_get_op_params_f32(scale_node, 0);
 
             if (debug_fusion > 1) {
                 GGML_LOG_DEBUG("%s: fuse: %s + SCALE\n", __func__, ggml_op_name(op->op));
@@ -5487,24 +5487,24 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     const bool with_norm  = n_fuse >= 6;
     const bool with_scale = n_fuse == 4 || n_fuse == 7;
 
-    float val_clamp = -INFINITY;
+    float clamp = -INFINITY;
     if (with_norm) {
-        ggml_tensor * clamp = ctx->node(idx + 4);
-        val_clamp = ggml_get_op_params_f32(clamp, 0);
+        ggml_tensor * clamp_node = ctx->node(idx + 4);
+        clamp = ggml_get_op_params_f32(clamp_node, 0);
     }
 
-    float val_scale = 1.0f;
+    float scale = 1.0f;
     if (with_scale) {
-        ggml_tensor * scale = ctx->node(idx + n_fuse - 1);
-        val_scale = ggml_get_op_params_f32(scale, 0);
+        ggml_tensor * scale_node = ctx->node(idx + n_fuse - 1);
+        scale = ggml_get_op_params_f32(scale_node, 0);
     }
 
     ggml_metal_kargs_topk_moe args = {
         /*.ne01      =*/ (int32_t) n_tokens,
         /*.nb01      =*/ logits->nb[1],
         /*.nb1_ids   =*/ ids->nb[1],
-        /*.val_clamp =*/ val_clamp,
-        /*.val_scale =*/ val_scale,
+        /*.clamp =*/ clamp,
+        /*.scale =*/ scale,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, (int32_t) n_expert, (int32_t) n_expert_used, with_norm);
