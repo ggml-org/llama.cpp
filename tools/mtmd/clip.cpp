@@ -976,6 +976,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_SENSENOVA_U1:
+            {
+                builder = std::make_unique<clip_graph_sensenova_u1>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_EXAONE4_5:
             {
                 builder = std::make_unique<clip_graph_exaone4_5>(ctx, img);
@@ -1666,6 +1670,20 @@ struct clip_model_loader {
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
                     } break;
+                case PROJECTOR_TYPE_SENSENOVA_U1:
+                    {
+                        hparams.n_merge = 2;
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
+                        hparams.rope_theta = 10000.0f;
+                        hparams.set_limit_image_tokens(16, 4096);
+                        if (hparams.n_merge != 2) {
+                            throw std::runtime_error(string_format("%s: SenseNova U1 requires spatial_merge_size=2, got %u", __func__, hparams.n_merge));
+                        }
+                        hparams.set_warmup_n_tokens(16*16);
+                    } break;
                 case PROJECTOR_TYPE_MINIMAX_M3:
                     {
                         hparams.n_merge = 2; // spatial_merge_size
@@ -2227,9 +2245,15 @@ struct clip_model_loader {
         model.post_ln_w = get_tensor(string_format(TN_LN_POST, prefix, "weight"), false);
         model.post_ln_b = get_tensor(string_format(TN_LN_POST, prefix, "bias"),   false);
 
+        model.dense_embedding = get_tensor(TN_DENSE_EMBD, false);
+        model.dense_bias = get_tensor(TN_DENSE_BIAS, false);
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
         model.patch_embeddings_1 = get_tensor(TN_PATCH_EMBD_1, false);
+        if (model.proj_type == PROJECTOR_TYPE_SENSENOVA_U1 &&
+            (!model.patch_embeddings_0 || !model.patch_bias || !model.dense_embedding || !model.dense_bias)) {
+            throw std::runtime_error("SenseNova U1 projector requires patch/dense embedding weights and biases");
+        }
 
         model.norm_embd_w = get_tensor(string_format(TN_NORM_EMBD, "weight"), false);
         model.norm_embd_b = get_tensor(string_format(TN_NORM_EMBD, "bias"),   false);
@@ -3577,6 +3601,8 @@ struct clip_model_loader {
                     }
 
                 } break;
+            case PROJECTOR_TYPE_SENSENOVA_U1:
+                break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }
@@ -4038,6 +4064,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
@@ -4064,6 +4091,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
@@ -4144,6 +4172,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_MINIMAX_M3:
@@ -5068,6 +5097,19 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 }
                 set_input_i32("pos_w", pos_data);
             } break;
+        case PROJECTOR_TYPE_SENSENOVA_U1:
+            {
+                const int n_patches_per_row = image_size_width / patch_size;
+                std::vector<int> pos_data(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = i / n_patches_per_row;
+                }
+                set_input_i32("pos_y", pos_data);
+                for (int i = 0; i < n_pos; i++) {
+                    pos_data[i] = i % n_patches_per_row;
+                }
+                set_input_i32("pos_x", pos_data);
+            } break;
         case PROJECTOR_TYPE_DEEPSEEK4V:
             {
                 // set the 2D positions (mrope layout, only the first 2 channels are used)
@@ -5940,6 +5982,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_JANUS_PRO:
         case PROJECTOR_TYPE_YOUTUVL:
             return ctx->model.mm_1_b->ne[0];
+        case PROJECTOR_TYPE_SENSENOVA_U1:
+            return ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
