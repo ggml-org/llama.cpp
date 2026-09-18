@@ -3,9 +3,10 @@
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
 #include <HAP_farf.h>
-#include <HAP_perf.h>
-
 #include <string.h>
+
+#include "hex-common.h"
+#include "hex-profile.h"
 
 #include "hvx-copy.h"
 #include "hvx-utils.h"
@@ -14,28 +15,30 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 
 // ggml op_params layout for FILL:
 //   op_params[0] (as float) - the scalar fill value
 
-#define fill_preamble \
+#define fill_preamble                          \
     const struct htp_tensor * dst = octx->dst; \
-    \
-    const uint32_t ne0 = dst->ne[0]; \
-    const uint32_t ne1 = dst->ne[1]; \
-    const uint32_t ne2 = dst->ne[2]; \
-    const uint32_t ne3 = dst->ne[3]; \
-    \
-    const uint32_t nb1 = dst->nb[1]; \
-    const uint32_t nb2 = dst->nb[2]; \
-    const uint32_t nb3 = dst->nb[3]; \
-    \
+                                               \
+    const uint32_t ne0 = dst->ne[0];           \
+    const uint32_t ne1 = dst->ne[1];           \
+    const uint32_t ne2 = dst->ne[2];           \
+    const uint32_t ne3 = dst->ne[3];           \
+                                               \
+    const uint32_t nb1 = dst->nb[1];           \
+    const uint32_t nb2 = dst->nb[2];           \
+    const uint32_t nb3 = dst->nb[3];           \
+                                               \
     const uint32_t nr = ne1 * ne2 * ne3;
 
 struct htp_fill_context {
     struct htp_ops_context * octx;
     uint32_t nrows_per_thread;
     uint32_t total_rows;  // ne1 * ne2 * ne3
+    uint32_t row_start;
     bool     opt_path;
     HVX_Vector splat_vec;
     uint32_t   elem_size;
@@ -47,10 +50,15 @@ static void fill_thread(unsigned int nth, unsigned int ith, void * data) {
     fill_preamble;
 
     // Parallelise over the flat row index spanning ne1*ne2*ne3
-    const uint32_t ir0 = fctx->nrows_per_thread * ith;
-    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_thread, fctx->total_rows);
+    const uint32_t ir0 = fctx->row_start + fctx->nrows_per_thread * ith;
+    const uint32_t ir1 = MIN(ir0 + fctx->nrows_per_thread, fctx->row_start + fctx->total_rows);
 
-    uint64_t t1 = HAP_perf_get_qtimer_count();
+    if (ir0 >= ir1) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir0);
 
     if (fctx->opt_path) {
         // Opt path: tensor is fully contiguous, treat as flat array
@@ -69,9 +77,8 @@ static void fill_thread(unsigned int nth, unsigned int ith, void * data) {
         }
     }
 
-    uint64_t t2 = HAP_perf_get_qtimer_count();
-    FARF(HIGH, "fill %u/%u: rows %u:%u usec %u\n",
-         ith, nth, ir0, ir1, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir1);
+    FARF(HIGH, "fill %u/%u: rows %u:%u\n", ith, nth, ir0, ir1);
 }
 
 int op_fill(struct htp_ops_context * octx) {
@@ -85,8 +92,23 @@ int op_fill(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
+    uint32_t row_start = 0;
+    uint32_t nrows     = nr;
+
+    if (octx->ctx->mdev.count > 1) {
+        const uint32_t row_size = nb1;
+        const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(nr, htp_tensor_mdev_data_aligned(dst) ? rows_per_chunk : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
     // nr = ne1*ne2*ne3 (flat row count across all outer dims); parallelise over it.
-    const uint32_t n_threads = MIN(nr, octx->n_threads);
+    const uint32_t n_threads = octx->n_threads;
 
     // Optimize if fully contiguous: skip stride arithmetic, treat as flat array
     const bool opt_path = (nb2 == nb1 * ne1) && (nb3 == nb2 * ne2);
@@ -99,8 +121,9 @@ int op_fill(struct htp_ops_context * octx) {
 
     struct htp_fill_context fctx = {
         .octx             = octx,
-        .nrows_per_thread = (nr + n_threads - 1) / n_threads,
-        .total_rows       = nr,
+        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
+        .total_rows       = nrows,
+        .row_start        = row_start,
         .opt_path         = opt_path,
     };
 
@@ -117,7 +140,7 @@ int op_fill(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    worker_pool_run_func(octx->ctx->worker_pool, fill_thread, &fctx, n_threads);
+    work_queue_run(octx->ctx->work_queue, fill_thread, &fctx, n_threads);
 
     return HTP_STATUS_OK;
 }

@@ -25,7 +25,7 @@ GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
 // split tensor buffer that splits matrices by rows across multiple devices
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split);
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type([[maybe_unused]] int main_device, const float * tensor_split);
 
 // Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
 // trio queried by the meta-backend via ggml_backend_reg_get_proc_address.

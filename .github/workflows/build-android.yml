@@ -49,7 +49,7 @@ jobs:
           distribution: zulu
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           log-accepted-android-sdk-licenses: false
 
@@ -110,7 +110,7 @@ jobs:
       #   cache on:  https://github.com/ggerganov/tmp2/actions/runs/26534713799/job/78224189394
       #
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.21
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: android-ubuntu-arm64
       #    evict-old-files: 1d
@@ -123,7 +123,7 @@ jobs:
           distribution: temurin
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           log-accepted-android-sdk-licenses: false
 

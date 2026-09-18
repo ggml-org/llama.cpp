@@ -1,9 +1,6 @@
 #include "models.h"
 
 void llama_model_exaone4::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
-
     if (hparams.n_layer() == 64) {    // 32B
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
         hparams.n_swa = 4096;
