@@ -1,5 +1,8 @@
 # test-fusion baseline for device MTL
 # arch              ,moe ,mode    ,label                       ,  count
+afmoe               ,1   ,any     ,MUL+ADD                     ,      2
+afmoe               ,1   ,any     ,RMS_NORM+MUL                ,     10
+afmoe               ,1   ,any     ,RMS_NORM+MUL+ADD            ,      3
 arcee               ,0   ,any     ,RMS_NORM+MUL                ,      5
 arctic              ,0   ,any     ,MUL+ADD                     ,      4
 arctic              ,0   ,any     ,RMS_NORM+MUL                ,      7
@@ -21,6 +24,11 @@ bloom               ,0   ,any     ,NORM+MUL+ADD                ,      6
 chatglm             ,0   ,any     ,RMS_NORM+MUL                ,      5
 codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
 cogvlm              ,0   ,any     ,RMS_NORM+MUL                ,      5
+cohere2             ,0   ,any     ,ADD+ADD                     ,      2
+cohere2             ,0   ,any     ,NORM+MUL                    ,      3
+cohere2moe          ,1   ,any     ,ADD+ADD                     ,      2
+cohere2moe          ,1   ,any     ,MUL+ADD                     ,      2
+cohere2moe          ,1   ,any     ,RMS_NORM+MUL                ,      3
 command-r           ,0   ,any     ,NORM+MUL                    ,      3
 dbrx                ,0   ,any     ,MUL+ADD                     ,      4
 dbrx                ,0   ,any     ,NORM+MUL                    ,      5
@@ -42,12 +50,19 @@ deepseek4           ,0   ,any     ,RMS_NORM+MUL                ,     20
 dots1               ,0   ,any     ,ADD+ADD                     ,      1
 dots1               ,0   ,any     ,MUL+ADD                     ,      2
 dots1               ,0   ,any     ,RMS_NORM+MUL                ,      9
+dots3note           ,0   ,any     ,ADD+ADD                     ,      1
+dots3note           ,0   ,any     ,MUL+ADD                     ,      2
+dots3note           ,0   ,any     ,NORM+MUL+ADD                ,      1
+dots3note           ,0   ,any     ,RMS_NORM+MUL                ,     11
 dream               ,0   ,any     ,RMS_NORM+MUL                ,      5
 ernie4_5-moe        ,1   ,any     ,ADD+ADD                     ,      1
 ernie4_5-moe        ,1   ,any     ,MUL+ADD                     ,      2
 ernie4_5-moe        ,1   ,any     ,RMS_NORM+MUL                ,      5
 ernie4_5            ,0   ,any     ,RMS_NORM+MUL                ,      5
 exaone              ,0   ,any     ,RMS_NORM+MUL                ,      5
+exaone-moe          ,1   ,any     ,ADD+ADD                     ,      1
+exaone-moe          ,1   ,any     ,MUL+ADD                     ,      2
+exaone-moe          ,1   ,any     ,RMS_NORM+MUL                ,      9
 exaone4             ,0   ,any     ,RMS_NORM+MUL                ,      5
 exaone4             ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 falcon              ,0   ,any     ,ADD+ADD                     ,      2
@@ -57,6 +72,8 @@ falcon-h1           ,0   ,any     ,RMS_NORM+MUL                ,      9
 gemma               ,0   ,any     ,RMS_NORM+MUL                ,      5
 gemma2              ,0   ,any     ,RMS_NORM+MUL                ,      5
 gemma2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
+gemma3              ,0   ,any     ,RMS_NORM+MUL                ,      9
+gemma3              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 glm-dsa             ,0   ,any     ,ADD+ADD                     ,      1
 glm-dsa             ,0   ,any     ,MUL+ADD                     ,      2
 glm-dsa             ,0   ,any     ,NORM+MUL+ADD                ,      2
@@ -74,6 +91,7 @@ granite             ,0   ,any     ,RMS_NORM+MUL                ,      5
 granite             ,0   ,any     ,MUL+ADD                     ,      4
 granite             ,0   ,any     ,RMS_NORM+MUL                ,      5
 granite             ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+granite_swa         ,0   ,any     ,RMS_NORM+MUL                ,      5
 granitehybrid       ,0   ,any     ,RMS_NORM+MUL                ,      6
 granitemoe          ,1   ,any     ,RMS_NORM+MUL                ,      5
 granitemoe          ,1   ,any     ,MUL+ADD                     ,      4
@@ -111,6 +129,9 @@ kimi-linear         ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-linear         ,0   ,any     ,MUL+ADD                     ,      2
 kimi-linear         ,0   ,any     ,RMS_NORM+MUL                ,      7
 kimi-linear         ,0   ,any     ,RMS_NORM+SCALE              ,      2
+laguna              ,0   ,any     ,ADD+ADD                     ,      1
+laguna              ,0   ,any     ,MUL+ADD                     ,      2
+laguna              ,0   ,any     ,RMS_NORM+MUL                ,      9
 lfm2                ,0   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,MUL+ADD                     ,      2
 lfm2moe             ,1   ,any     ,RMS_NORM+MUL                ,      7
@@ -127,6 +148,14 @@ llama4              ,0   ,any     ,RMS_NORM+MUL                ,      9
 maincoder           ,0   ,any     ,RMS_NORM+MUL                ,      9
 mamba               ,0   ,any     ,RMS_NORM+MUL                ,      3
 mamba2              ,0   ,any     ,RMS_NORM+MUL                ,      5
+maple               ,0   ,any     ,MUL+ADD                     ,      4
+maple               ,0   ,any     ,RMS_NORM+MUL                ,      9
+maple               ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+mellum              ,0   ,any     ,MUL+ADD                     ,      4
+mellum              ,0   ,any     ,RMS_NORM+MUL                ,      9
+mellum              ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
+mimo2               ,0   ,any     ,MUL+ADD                     ,      4
+mimo2               ,0   ,any     ,RMS_NORM+MUL                ,      5
 minicpm             ,0   ,any     ,RMS_NORM+MUL                ,      5
 minicpm             ,0   ,any     ,MUL+ADD                     ,      4
 minicpm             ,0   ,any     ,RMS_NORM+MUL                ,      5
@@ -148,10 +177,14 @@ mistral4            ,0   ,any     ,ADD+ADD                     ,      1
 mistral4            ,0   ,any     ,MUL+ADD                     ,      2
 mistral4            ,0   ,any     ,RMS_NORM+MUL                ,      9
 mpt                 ,0   ,any     ,NORM+MUL+ADD                ,      5
+muse-glimmer        ,0   ,any     ,RMS_NORM+MUL                ,     10
+muse-glimmer        ,0   ,any     ,RMS_NORM+MUL+ADD            ,      3
 nanbeige            ,0   ,any     ,RMS_NORM+MUL                ,      5
 nemotron            ,0   ,any     ,NORM+MUL+ADD                ,      5
 nemotron_h          ,0   ,any     ,RMS_NORM+MUL                ,      5
 nemotron_h_moe      ,1   ,any     ,RMS_NORM+MUL                ,      5
+olmo2               ,0   ,any     ,RMS_NORM+MUL                ,      5
+olmo2               ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 olmoe               ,1   ,any     ,MUL+ADD                     ,      4
 olmoe               ,1   ,any     ,RMS_NORM+MUL                ,      9
 olmoe               ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS   ,      2
@@ -170,6 +203,8 @@ plamo               ,0   ,any     ,RMS_NORM+MUL                ,      3
 plamo2              ,0   ,any     ,RMS_NORM+MUL                ,     10
 plamo2              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 plamo2              ,0   ,any     ,SSM_CONV+UNARY              ,      1
+plamo3              ,0   ,any     ,RMS_NORM+MUL                ,      9
+plamo3              ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 pockettts           ,0   ,any     ,NORM+MUL+ADD                ,      5
 qwen                ,0   ,any     ,RMS_NORM+MUL                ,      5
 qwen2               ,0   ,any     ,RMS_NORM+MUL                ,      5
@@ -222,6 +257,7 @@ seed_oss            ,0   ,any     ,RMS_NORM+MUL                ,      5
 smallthinker        ,0   ,any     ,MUL+ADD                     ,      4
 smallthinker        ,0   ,any     ,RMS_NORM+MUL                ,      5
 smollm3             ,0   ,any     ,RMS_NORM+MUL                ,      5
+spark2_5            ,0   ,any     ,RMS_NORM+MUL                ,      5
 stablelm            ,0   ,any     ,NORM+MUL                    ,      4
 stablelm            ,0   ,any     ,NORM+MUL+ADD                ,      5
 starcoder           ,0   ,any     ,NORM+MUL+ADD                ,      5
