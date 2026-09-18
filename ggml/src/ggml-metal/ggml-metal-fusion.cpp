@@ -4,6 +4,7 @@
 #include "ggml-metal-device.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <set>
 #include <string>
@@ -328,17 +329,7 @@ static bool ggml_metal_fusion_check_topk_moe(
 
     // the fusion table operates on the non-empty node sequence; the raw graph also
     // contains the RESHAPE/VIEW nodes that the fused kernel elides.
-    const std::vector<ggml_op> * expected = nullptr;
-
-    if (with_norm && with_scale) {
-        expected = &ops_topk_moe_norm_scale_all;
-    } else if (with_norm) {
-        expected = &ops_topk_moe_norm_all;
-    } else if (with_scale) {
-        expected = &ops_topk_moe_scale_all;
-    } else {
-        expected = &ops_topk_moe_all;
-    }
+    const std::vector<ggml_op> & ops_all = fusion->ops_all;
 
     const int raw_start = node_idxs[idx];
     int       raw_end   = node_idxs[idx + n_ops - 1];
@@ -357,18 +348,16 @@ static bool ggml_metal_fusion_check_topk_moe(
     }
 
     const int raw_count = raw_end - raw_start + 1;
-    if (raw_count != (int) expected->size()) {
+    if (raw_count != (int) ops_all.size()) {
         return false;
     }
 
-    std::vector<ggml_op> raw_ops(raw_count);
-    std::vector<int>     raw_idxs(raw_count);
+    int raw_idxs[GGML_METAL_FUSION_MAX];
     for (int i = 0; i < raw_count; ++i) {
         raw_idxs[i] = raw_start + i;
-        raw_ops[i]  = gf->nodes[raw_start + i]->op;
-    }
-    if (!std::equal(expected->begin(), expected->end(), raw_ops.begin())) {
-        return false;
+        if (gf->nodes[raw_start + i]->op != ops_all[i]) {
+            return false;
+        }
     }
 
     const ggml_tensor * softmax        = gf->nodes[raw_start];
@@ -446,7 +435,7 @@ static bool ggml_metal_fusion_check_topk_moe(
     }
 
     const int outputs[2] = { raw_start + 3, raw_end };
-    if (!ggml_can_fuse_subgraph_ext(gf, raw_idxs.data(), raw_count, raw_ops.data(), outputs, 2)) {
+    if (!ggml_can_fuse_subgraph_ext(gf, raw_idxs, raw_count, ops_all.data(), outputs, 2)) {
         return false;
     }
 
@@ -469,8 +458,9 @@ struct ggml_metal_moe_reduce_match {
 };
 
 static bool ggml_metal_fusion_match_moe_reduce(
-        const ggml_cgraph * gf, int node_idx, ggml_metal_moe_reduce_match * match) {
-    if (match == nullptr || node_idx < 0 || node_idx + 3 > gf->n_nodes) {
+        const ggml_cgraph * gf, int node_idx, const std::vector<ggml_op> & ops_all,
+        ggml_metal_moe_reduce_match * match) {
+    if (match == nullptr || node_idx < 0 || node_idx + (int) ops_all.size() > gf->n_nodes) {
         return false;
     }
 
@@ -480,20 +470,21 @@ static bool ggml_metal_fusion_match_moe_reduce(
     }
 
     // MUL, then one VIEW per expert, then one ADD per additional expert
+    const int raw_count     = (int) ops_all.size();
+    const int n_expert_used = raw_count / 2;
+
+    if (n_expert_used < 2 || n_expert_used > GGML_METAL_MOE_REDUCE_MAX_EXPERTS ||
+        raw_count != 2 * n_expert_used) {
+        return false;
+    }
+
     int n_views = 0;
     while (node_idx + 1 + n_views < gf->n_nodes &&
            gf->nodes[node_idx + 1 + n_views]->op == GGML_OP_VIEW) {
         n_views++;
     }
 
-    if (n_views < 2 || n_views > GGML_METAL_MOE_REDUCE_MAX_EXPERTS) {
-        return false;
-    }
-
-    const int n_expert_used = n_views;
-    const int raw_count     = 1 + n_expert_used + (n_expert_used - 1);
-
-    if (node_idx + raw_count > gf->n_nodes) {
+    if (n_views != n_expert_used) {
         return false;
     }
 
@@ -503,11 +494,12 @@ static bool ggml_metal_fusion_match_moe_reduce(
         }
     }
 
-    std::vector<ggml_op> raw_ops(raw_count);
-    std::vector<int>     raw_idxs(raw_count);
+    int raw_idxs[GGML_METAL_FUSION_MAX];
     for (int i = 0; i < raw_count; ++i) {
         raw_idxs[i] = node_idx + i;
-        raw_ops[i]  = gf->nodes[node_idx + i]->op;
+        if (gf->nodes[node_idx + i]->op != ops_all[i]) {
+            return false;
+        }
     }
 
     const ggml_tensor * experts = mul->src[0];
@@ -553,7 +545,7 @@ static bool ggml_metal_fusion_match_moe_reduce(
     }
 
     const int outputs[1] = { node_idx + raw_count - 1 };
-    if (!ggml_can_fuse_subgraph_ext(gf, raw_idxs.data(), raw_count, raw_ops.data(), outputs, 1)) {
+    if (!ggml_can_fuse_subgraph_ext(gf, raw_idxs, raw_count, ops_all.data(), outputs, 1)) {
         return false;
     }
 
@@ -574,7 +566,7 @@ static bool ggml_metal_fusion_check_moe_reduce(
     GGML_UNUSED(nodes);
 
     ggml_metal_moe_reduce_match match;
-    if (!ggml_metal_fusion_match_moe_reduce(gf, node_idxs[idx], &match)) {
+    if (!ggml_metal_fusion_match_moe_reduce(gf, node_idxs[idx], fusion->ops_all, &match)) {
         return false;
     }
 
@@ -834,15 +826,8 @@ void ggml_metal_fusion_info_count_fusion(ggml_metal_fusion_info * finfo, const g
         return;
     }
 
-    int idx = -1;
-    for (size_t i = 0; i < ggml_metal_fusions.size(); i++) {
-        if (&ggml_metal_fusions[i] == fusion) {
-            idx = (int) i;
-            break;
-        }
-    }
-
-    if (idx >= 0 && idx < (int) finfo->counts.size()) {
+    const ptrdiff_t idx = fusion - ggml_metal_fusions.data();
+    if (idx >= 0 && idx < (ptrdiff_t) finfo->counts.size()) {
         finfo->counts[idx]++;
     }
 }
@@ -1042,13 +1027,19 @@ const ggml_metal_fusion * ggml_metal_fusion_next(
                 continue;
             }
 
-            // all current fusions are single-output elision chains, so the last node is the only output
-            // TODO: multi-output fusions: store pattern-relative offsets in the table and translate them here
-            int outputs_buf[1];
+            // primary output is the last node; additional outputs come from fusion.outs
+            int outputs_buf[GGML_METAL_FUSION_MAX];
             outputs_buf[0] = node_idxs[idx + n_ops - 1];
+            for (size_t i = 0; i < fusion.outs.size(); ++i) {
+                const int out_offset = fusion.outs[i];
+                GGML_ASSERT(out_offset >= 0 && out_offset < n_ops);
+                outputs_buf[i + 1] = node_idxs[idx + out_offset];
+            }
+
+            const int n_outputs = 1 + (int) fusion.outs.size();
 
             // structural subgraph checks (op sequence, elidable uses, view containment)
-            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, n_ops, fusion.ops.data(), outputs_buf, 1)) {
+            if (!ggml_can_fuse_subgraph_ext(gf, node_idxs + idx, n_ops, fusion.ops.data(), outputs_buf, n_outputs)) {
                 continue;
             }
         }
