@@ -14,7 +14,7 @@ struct ggml_metal_fusion {
 
     std::vector<ggml_op> ops;     // op sequence (fixed length, non-empty nodes)
     std::vector<ggml_op> ops_all; // full raw op sequence (may include empty RESHAPE/VIEW nodes)
-    std::vector<int>     out_offsets; // additional fused output nodes, relative to ops
+    std::vector<int>     outs;    // additional fused output nodes, relative to ops
 
     // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
     // check callback below is the sole validator (used for patterns that are not elision chains,
@@ -956,10 +956,10 @@ static bool ggml_metal_fusion_check_memory_ranges(
     };
 
     std::vector<const ggml_tensor *> dsts;
-    dsts.reserve(1 + fusion->out_offsets.size());
+    dsts.reserve(1 + fusion->outs.size());
     dsts.push_back(nodes[node_count - 1]);
 
-    for (int offset : fusion->out_offsets) {
+    for (int offset : fusion->outs) {
         GGML_ASSERT(offset >= 0 && offset < node_count);
         dsts.push_back(nodes[offset]);
     }
