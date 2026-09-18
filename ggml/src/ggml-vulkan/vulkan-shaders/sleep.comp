@@ -16,19 +16,30 @@ layout (push_constant) uniform parameter {
 const uint MAX_ITER = 1u << 27;
 
 void main() {
-    // the dispatch is a single workgroup, so all invocations spin concurrently and the delay does not accumulate
-    const uvec2 t0 = clockRealtime2x32EXT();
+    // only one invocation spins, devices that run the workgroup serially would multiply the delay
+    if (gl_LocalInvocationID.x == 0) {
+        const uvec2 t0 = clockRealtime2x32EXT();
 
-    for (uint iter = 0; iter < MAX_ITER; ++iter) {
-        const uvec2 t = clockRealtime2x32EXT();
+        uvec2 t = t0;
 
-        const uint lo = t.x - t0.x;
-        const uint hi = t.y - t0.y - (t.x < t0.x ? 1u : 0u);
+        for (uint iter = 0; iter < MAX_ITER; ++iter) {
+            t = clockRealtime2x32EXT();
 
-        if (hi != 0u || lo >= p.ticks) {
-            break;
+            const uint lo = t.x - t0.x;
+            const uint hi = t.y - t0.y - (t.x < t0.x ? 1u : 0u);
+
+            if (hi != 0u || lo >= p.ticks) {
+                break;
+            }
+        }
+
+        // the store never runs, but the compiler cannot prove it and has to keep the spin
+        if (t.x == 0xFFFFFFFFu && t.y == 0xFFFFFFFFu) {
+            data_d[0] = t.x;
         }
     }
+
+    barrier();
 
     for (uint i = gl_LocalInvocationID.x; i < p.ne; i += gl_WorkGroupSize.x) {
         data_d[i] = data_a[i];
