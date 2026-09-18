@@ -64,6 +64,9 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 
+// Lifts the given node to the specified rank using Unsqueeze op
+ov::Output<ov::Node> lift_to_rank(const ov::Output<ov::Node> & value, int64_t target_rank);
+
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
