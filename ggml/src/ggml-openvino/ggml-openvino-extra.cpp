@@ -9,6 +9,8 @@
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <optional>
+#include <sstream>
+#include <string>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;
@@ -35,6 +37,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DEBUG_NODE",
         "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
         "GGML_OPENVINO_NPU_COMPILE_CONFIG",
+        // Comma-separated KEY: VALUE pairs used by the NPU plugin
+        // e.g. "NPUW_FUNCALL_ASYNC=NO, NPUW_FOLD=NO"
+        "GGML_OPENVINO_NPU_PROPERTIES",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
@@ -100,6 +105,22 @@ void ggml_openvino_device_config::init() {
             ggml_openvino_getenv_str("GGML_OPENVINO_NPU_COMPILE_CONFIG");
         if (compilation_mode_params && strlen(compilation_mode_params) > 0) {
             compile_config["NPU_COMPILATION_MODE_PARAMS"] = compilation_mode_params;
+        }
+        const char * extra_props = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_PROPERTIES");
+        if (extra_props && strlen(extra_props) > 0) {
+            std::stringstream ss(extra_props);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                auto eq = item.find('=');
+                if (eq == std::string::npos) {
+                    GGML_LOG_WARN("GGML OpenVINO Backend: ignoring malformed NPU property '%s'\n", item.c_str());
+                    continue;
+                }
+                auto key = item.substr(0, eq);
+                auto value = item.substr(eq + 1);
+                GGML_LOG_INFO("GGML OpenVINO Backend: NPU property override %s=%s\n", key.c_str(), value.c_str());
+                compile_config[key] = value;
+            }
         }
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));
