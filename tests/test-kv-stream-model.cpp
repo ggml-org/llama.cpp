@@ -86,6 +86,9 @@ int main(int argc,char ** argv) {
         t.assert_equal(requirements.writer_bytes,initial_writer);
         t.assert_equal(requirements.attention_prefill_bytes,initial_attention);
         t.assert_equal(uint64_t(0),owner->phase_transition_count());
+        ggml_backend_buffer_clear(model->buffer(),0);
+        t.assert_true(model->restore(513));
+        t.assert_equal(size_t(513),model->tokens());
 
         t.assert_true(owner->signal_text_phase({
             llama_memory_text_phase::prefill,513,true,true,false}).status ==

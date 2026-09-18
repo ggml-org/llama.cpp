@@ -4,6 +4,7 @@
 #include "../src/llama-io.h"
 #include "testing.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 
@@ -159,6 +160,117 @@ static run_result evaluate(testing & t,llama_model * model,const std::vector<lla
     return result;
 }
 
+struct serial_phase_result {
+    std::vector<std::vector<float>> logits;
+    recurrent_snapshot recurrent;
+    std::vector<size_t> pool_grants;
+    std::vector<int64_t> prefill_after_decode_us;
+};
+
+static serial_phase_result evaluate_serial_phases(testing & t, llama_model * model,
+        const std::vector<llama_token> & prompt, size_t pool) {
+    serial_phase_result result;
+    auto params = llama_context_default_params();
+    params.n_ctx = 2048; params.n_batch = 512; params.n_ubatch = 256;
+    params.n_threads = params.n_threads_batch = 8; params.n_seq_max = 1;
+    params.type_k = GGML_TYPE_Q8_0; params.type_v = GGML_TYPE_Q4_0;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    params.kv_stream_pool_bytes = pool;
+    context_ptr context(llama_init_from_model(model,params),llama_free);
+    if (!t.assert_true(bool(context))) return result;
+    auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(context.get()));
+    auto * stream = hybrid->get_mem_attn()->get_kv_stream();
+    if (!t.assert_true(bool(stream) == (pool != 0))) return result;
+    const size_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    auto batch = llama_batch_init(512,0,1);
+    struct batch_guard {
+        llama_batch & batch;
+        ~batch_guard() { llama_batch_free(batch); }
+    } batch_owner{batch};
+    size_t position = 0;
+
+    const auto submit = [&](const std::vector<llama_token> & tokens, bool decode) {
+        if (tokens.empty() || tokens.size() > 512) return false;
+        batch.n_tokens = int32_t(tokens.size());
+        for (size_t i = 0; i < tokens.size(); ++i) {
+            batch.token[i] = tokens[i];
+            batch.pos[i] = llama_pos(position+i);
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = i+1 == tokens.size();
+        }
+        llama_set_kv_stream_decode(context.get(),decode);
+        if (llama_decode(context.get(),batch) != 0) return false;
+        position += tokens.size();
+        return true;
+    };
+    const auto capture = [&] {
+        auto * logits = llama_get_logits_ith(context.get(),-1);
+        result.logits.emplace_back(logits,logits+vocab);
+        if (stream) result.pool_grants.push_back(stream->pool_grant_bytes());
+    };
+    const auto append = [&](size_t first,size_t count,bool decode) {
+        if (first > prompt.size() || count > prompt.size()-first) return false;
+        return submit({prompt.begin()+first,prompt.begin()+first+count},decode);
+    };
+    const auto append_prompt = [&](size_t count) {
+        for (size_t first = 0; first < count; first += 512) {
+            const size_t chunk = std::min(size_t(512),count-first);
+            if (!append(first,chunk,false)) return false;
+        }
+        return true;
+    };
+    const auto fixed_decode = [&](size_t count,size_t seed) {
+        for (size_t i = 0; i < count; ++i) {
+            if (!append((seed+i)%prompt.size(),1,true)) return false;
+        }
+        return true;
+    };
+    const auto timed_prefill = [&](size_t first,size_t count) {
+        const auto begin = std::chrono::steady_clock::now();
+        const bool ok = append(first,count,false);
+        const auto end = std::chrono::steady_clock::now();
+        result.prefill_after_decode_us.push_back(
+            std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count());
+        return ok;
+    };
+    const auto clear = [&] {
+        llama_memory_clear(llama_get_memory(context.get()),true);
+        position = 0;
+        return !stream || stream->tokens() == 0;
+    };
+
+    if (!t.assert_true(append_prompt(640))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(192,3))) return {};
+    capture();
+    if (!t.assert_true(timed_prefill(80,7))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(16,101))) return {};
+    capture();
+    if (!t.assert_true(timed_prefill(160,192))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(16,211))) return {};
+    capture();
+    if (!t.assert_true(timed_prefill(17,3))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(8,307))) return {};
+    capture();
+
+    if (!t.assert_true(clear() && append_prompt(17))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(8,401))) return {};
+    capture();
+    if (!t.assert_true(clear() && append_prompt(640))) return {};
+    capture();
+    if (!t.assert_true(fixed_decode(8,503))) return {};
+    capture();
+    llama_synchronize(context.get());
+    hybrid->get_mem_recr()->state_write(result.recurrent,0,0);
+    if (stream) t.assert_equal(position,stream->tokens());
+    return result;
+}
+
 int main(int argc,char ** argv) {
     testing t;
     t.test("streaming_is_disabled_by_default", [&](testing & t) { t.assert_equal(size_t(0),llama_context_default_params().kv_stream_pool_bytes); });
@@ -188,6 +300,53 @@ int main(int argc,char ** argv) {
             if (mode == 4) p.n_rs_seq = 1;
             context_ptr context(llama_init_from_model(model.get(),p),llama_free); t.assert_true(!context);
         }
+    });
+    t.test("serial_decode_prefill_alternation_matches_stock", [&](testing & t) {
+        const auto baseline = evaluate_serial_phases(t,model.get(),prompt,0);
+        const auto streamed = evaluate_serial_phases(t,model.get(),prompt,16*1048576);
+        if (!t.assert_equal(baseline.logits.size(),streamed.logits.size()) ||
+                !t.assert_equal(size_t(12),streamed.logits.size()) ||
+                !t.assert_equal(streamed.logits.size(),streamed.pool_grants.size()) ||
+                !t.assert_equal(size_t(3),streamed.prefill_after_decode_us.size()) ||
+                !t.assert_equal(baseline.prefill_after_decode_us.size(),
+                    streamed.prefill_after_decode_us.size())) return;
+        float maximum = 0;
+        size_t matching = 0;
+        for (size_t phase = 0; phase < baseline.logits.size(); ++phase) {
+            if (!t.assert_equal(baseline.logits[phase].size(),streamed.logits[phase].size())) return;
+            for (size_t token = 0; token < baseline.logits[phase].size(); ++token) {
+                const float actual = streamed.logits[phase][token];
+                if (!std::isfinite(actual)) { t.assert_true(false); return; }
+                maximum = std::max(maximum,std::abs(baseline.logits[phase][token]-actual));
+            }
+            matching += std::max_element(baseline.logits[phase].begin(),baseline.logits[phase].end())-
+                baseline.logits[phase].begin() ==
+                std::max_element(streamed.logits[phase].begin(),streamed.logits[phase].end())-
+                streamed.logits[phase].begin();
+        }
+        t.out << "serial phase max logit error=" << maximum
+              << ", matching boundaries=" << matching << '/' << baseline.logits.size() << '\n';
+        t.assert_true(maximum < .05f);
+        t.assert_equal(baseline.logits.size(),matching);
+        t.assert_true(baseline.recurrent.metadata == streamed.recurrent.metadata);
+        t.assert_true(baseline.recurrent.tensors == streamed.recurrent.tensors);
+        const size_t prefill_pool = streamed.pool_grants.front();
+        const size_t decode_pool = streamed.pool_grants[1];
+        t.assert_true(decode_pool > prefill_pool);
+        for (size_t i = 0; i < 8; ++i) {
+            t.assert_equal(i%2 ? decode_pool : prefill_pool,streamed.pool_grants[i]);
+        }
+        t.assert_equal(prefill_pool,streamed.pool_grants[8]);
+        t.assert_equal(decode_pool,streamed.pool_grants[9]);
+        t.assert_equal(prefill_pool,streamed.pool_grants[10]);
+        t.assert_equal(decode_pool,streamed.pool_grants[11]);
+        t.out << "decode-to-prefill baseline -> streamed us:";
+        for (size_t i = 0; i < streamed.prefill_after_decode_us.size(); ++i) {
+            t.out << ' ' << baseline.prefill_after_decode_us[i] << "->"
+                  << streamed.prefill_after_decode_us[i] << " (delta "
+                  << streamed.prefill_after_decode_us[i]-baseline.prefill_after_decode_us[i] << ')';
+        }
+        t.out << '\n';
     });
     for (uint32_t ubatch : {256u,512u}) t.test("hybrid_prefill_decode_and_recurrent_state_match_ub_"+std::to_string(ubatch), [&](testing & t) {
         const auto baseline = evaluate(t,model.get(),prompt,ubatch,0,{});
