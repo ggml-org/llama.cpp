@@ -6257,6 +6257,49 @@ struct test_conv_2d : public test_case {
     }
 };
 
+// GGML_OP_IM2COL + GGML_OP_MUL_MAT
+// the im2col of a BF16 kernel is F32, which puts F32 in src0 and BF16 in src1 of the mul_mat
+struct test_conv_1d_dw : public test_case {
+    const std::array<int64_t, 4> ne_input;  // T, C
+    const std::array<int64_t, 4> ne_kernel; // K, 1, C
+    const ggml_type type_kernel;
+    const int stride;
+    const int padding;
+    const int dilation;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CONV_1D_DW";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(ne_input, ne_kernel, type_kernel, stride, padding, dilation);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_conv_1d_dw(
+            std::array<int64_t, 4> ne_input = {64, 16, 1, 1},
+            std::array<int64_t, 4> ne_kernel = {3, 1, 16, 1},
+            ggml_type type_kernel = GGML_TYPE_F32,
+            int stride = 1, int padding = 0, int dilation = 1)
+        : ne_input(ne_input), ne_kernel(ne_kernel), type_kernel(type_kernel), stride(stride), padding(padding), dilation(dilation) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        ggml_set_name(input, "input");
+
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * out = ggml_conv_1d_dw(ctx, kernel, input, stride, padding, dilation);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_CONV_2D_DW
 struct test_conv_2d_dw : public test_case {
     const std::array<int64_t, 4> ne_input;
@@ -9305,6 +9348,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
 
+    for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_conv_1d_dw({64, 16, 1, 1}, {3, 1, 16, 1}, kernel_type, 1, 0, 1));
+        test_cases.emplace_back(new test_conv_1d_dw({64, 16, 1, 1}, {7, 1, 16, 1}, kernel_type, 1, 3, 1));
+        test_cases.emplace_back(new test_conv_1d_dw({97, 33, 1, 1}, {5, 1, 33, 1}, kernel_type, 2, 2, 2));
+    }
+
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F32, 1, 0, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F32, 1, 0, 1, true));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F32, 2, 1, 1, false));
@@ -9944,6 +9993,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
+
+    // BF16 in src1, as ggml_conv_1d_dw emits it for a BF16 kernel
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 1, 256, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 1, 256, {3, 2}, {2, 2}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_BF16, 16, 8, 256, {1, 1}, {1, 1}));
 
     // token-tile boundary coverage. With n_used == n_mats every token routes to every expert, so
     // each expert receives exactly n rows, with no dependence on the random draw. mul_mm_id is used
