@@ -2,8 +2,11 @@ import type { AgenticConfig } from '$lib/types/agentic';
 
 export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
 
-// JSON detection: trimmed content opens with an object or array literal.
-export const TOOL_RESULT_JSON_OPEN_REGEX = /^[[{]/;
+// JSON detection: an attachment placeholder also starts with `[`, but is
+// plain text (`[Attachment saved: ...]`), not an array literal. Require the
+// first array value (or the closing bracket for an empty array) to look like
+// a valid JSON token before attempting JSON.parse.
+export const TOOL_RESULT_JSON_OPEN_REGEX = /^(?:\{|\[\s*(?:[[\]"{\-0-9]|true|false|null))/;
 
 // Search-summary wire format used by file-glob and grep tools:
 //   <matches>

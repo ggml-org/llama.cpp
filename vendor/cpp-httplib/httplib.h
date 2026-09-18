@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.54.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003601"
+#define CPPHTTPLIB_VERSION "0.56.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003800"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -215,8 +215,36 @@
 #define CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH 16777216
 #endif
 
-#ifndef CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
-#define CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND 300
+// One macro used to set the read timeout for both sides. They want different
+// defaults: a client's read timeout is the caller's own tool (it waits forever
+// until asked not to), while a server keeps a ceiling that reclaims a worker
+// from a peer that has gone quiet. The old name still works and sets both.
+#ifdef CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#pragma message(                                                               \
+    "CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND is deprecated; define "          \
+    "CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND and/or "                  \
+    "CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND instead")
+#ifndef CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND                        \
+  CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#endif
+#ifndef CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND                        \
+  CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#endif
+#endif
+
+// 0 waits forever. A read timeout is how a caller gets control back to send on
+// the same connection; it is not a liveness check (that is ping/pong). Only a
+// timeout set at runtime through set_read_timeout() is reported as
+// ws::Timeout; when one of these compile-time defaults elapses, read() returns
+// ws::Fail and closes the connection.
+#ifndef CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND 0
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND 300
 #endif
 
 #ifndef CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND
@@ -1817,10 +1845,12 @@ struct Response {
   std::string file_content_path_;
   std::string file_content_content_type_;
 
-  // Content coding chosen for a file-backed content provider, decided once
-  // where the file is opened so that the ETag and the body cannot disagree.
-  // `EncodingType::None` for every other kind of response.
-  detail::EncodingType file_content_encoding_ = detail::EncodingType::None;
+  // Content coding chosen for the response body, decided once so that the
+  // headers and the body cannot disagree: where the file is opened for a
+  // file-backed content provider (keeping the ETag honest), and in
+  // `apply_ranges()` for a chunked content provider. `EncodingType::None`
+  // for every other kind of response.
+  detail::EncodingType content_coding_ = detail::EncodingType::None;
 };
 
 enum class Error {
@@ -2359,6 +2389,7 @@ private:
 
   bool parse_request_line(const char *s, Request &req) const;
   detail::EncodingType static_file_encoding(const Request &req,
+                                            const Response &res,
                                             const std::string &content_type,
                                             size_t length) const;
   bool apply_static_file_compression(const Request &req, Response &res) const;
@@ -3663,6 +3694,9 @@ ssize_t read_socket(socket_t sock, void *ptr, size_t size, int flags);
 
 EncodingType encoding_type(const Request &req, const std::string &content_type);
 
+EncodingType encoding_type(const Request &req, const Response &res,
+                           const std::string &content_type);
+
 EncodingType encoding_type(const Request &req, const Response &res);
 
 class BufferStream final : public Stream {
@@ -4345,7 +4379,11 @@ enum class CloseStatus : uint16_t {
   InternalError = 1011,
 };
 
-enum ReadResult : int { Fail = 0, Text = 1, Binary = 2 };
+// Timeout is returned only when a read timeout was set and it elapsed before
+// any byte of a frame arrived: nothing was consumed and the connection is
+// still open, so the caller can send on it and read again. `msg` is left
+// untouched, so a `while (ws.read(msg))` loop must not treat it as a message.
+enum ReadResult : int { Fail = 0, Text = 1, Binary = 2, Timeout = 3 };
 
 // Result of WebSocketClient::connect(). Truthy only when the WebSocket
 // upgrade handshake fully succeeded. On failure error() identifies the
@@ -4405,6 +4443,18 @@ public:
   const Request &request() const;
   bool is_open() const;
 
+  // Bound how long read() waits before returning Timeout. 0 waits forever.
+  // A server handler owns its connection's timeout this way; a client sets it
+  // through WebSocketClient. Safe to call while another thread is in read().
+  //
+  // Only a timeout set here is reported as Timeout. The compile-time default
+  // (CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND) is a backstop rather
+  // than a request for control, so when it elapses read() returns Fail and
+  // closes the connection, and `while (ws.read(msg))` ends as it always has.
+  void set_read_timeout(time_t sec, time_t usec = 0);
+  template <class Rep, class Period>
+  void set_read_timeout(const std::chrono::duration<Rep, Period> &duration);
+
 private:
   friend class httplib::Server;
   friend class WebSocketClient;
@@ -4440,6 +4490,10 @@ private:
   int max_missed_pongs_;
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
+  // Set once the caller has bounded read() through set_read_timeout(). Until
+  // then the timeout in effect is the compile-time default, and elapsing it
+  // is a failure that closes the connection, not a Timeout.
+  std::atomic<bool> read_timeout_set_{false};
   std::mutex write_mutex_;
   // Owned by whichever thread is parsing frames off strm_. Only one thread
   // may do so: read_websocket_frame() reads a payload until it has the whole
@@ -4527,8 +4581,9 @@ private:
   bool is_valid_ = false;
   socket_t sock_ = INVALID_SOCKET;
   std::unique_ptr<WebSocket> ws_;
-  time_t read_timeout_sec_ = CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND;
+  time_t read_timeout_sec_ = CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND;
   time_t read_timeout_usec_ = 0;
+  bool read_timeout_set_ = false; // see WebSocket::read_timeout_set_
   time_t write_timeout_sec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND;
   time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
   time_t websocket_ping_interval_sec_ =
@@ -4561,6 +4616,13 @@ private:
 };
 
 template <class Rep, class Period>
+inline void WebSocket::set_read_timeout(
+    const std::chrono::duration<Rep, Period> &duration) {
+  detail::duration_to_sec_and_usec(
+      duration, [&](time_t sec, time_t usec) { set_read_timeout(sec, usec); });
+}
+
+template <class Rep, class Period>
 inline void WebSocketClient::set_read_timeout(
     const std::chrono::duration<Rep, Period> &duration) {
   detail::duration_to_sec_and_usec(
@@ -4586,8 +4648,14 @@ namespace impl {
 
 bool is_valid_utf8(const std::string &s);
 
-bool read_websocket_frame(Stream &strm, Opcode &opcode, std::string &payload,
-                          bool &fin, bool expect_masked, size_t max_len);
+// Three states, because a failure that consumed bytes and one that consumed
+// none are not the same thing: the first has left the stream in the middle of
+// a frame and the connection cannot be reused, the second can just be retried.
+enum class FrameRead { Ok, Fail, Timeout };
+
+FrameRead read_websocket_frame(Stream &strm, Opcode &opcode,
+                               std::string &payload, bool &fin,
+                               bool expect_masked, size_t max_len);
 
 } // namespace impl
 

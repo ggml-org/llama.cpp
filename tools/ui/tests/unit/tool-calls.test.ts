@@ -1,5 +1,8 @@
 import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
-import { parseEditFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
+import {
+	parseEditFileMeta,
+	parseEditFileTitleMeta
+} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
 import { parseExecShellCommandMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
 import { parseFileGlobSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/file-glob-search';
 import { parseGrepSearchMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/grep-search';
@@ -7,10 +10,10 @@ import { parseReadFileMeta } from '$lib/components/app/chat/ChatMessages/ChatMes
 import { parseRunJavascriptMeta } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/run-javascript';
 import {
 	parseWriteFileMeta,
-	type WriteFileMeta
+	parseWriteFileTitleMeta
 } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import type { AgenticSection, WriteFileMeta } from '$lib/types';
 import { abbreviateHome, formatCwdMessage, lastPathSegment, parseCwdMessage } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -220,6 +223,113 @@ describe('parseWriteFileMeta', () => {
 		);
 
 		expect(meta?.errorMessage).toBe('permission denied');
+	});
+});
+
+describe('parseWriteFileTitleMeta', () => {
+	it('matches the full meta for path, language and result fields', () => {
+		const args = JSON.stringify({ content: 'x'.repeat(50_000), path: '/foo.ts' });
+		const toolResult = '{"result":"wrote","bytes":42}';
+		const section = makeSection(
+			{ toolArgs: args, toolName: BuiltInTool.SERVER_WRITE_FILE, toolResult },
+			BuiltInTool.SERVER_WRITE_FILE
+		);
+		const full = parseWriteFileMeta(section);
+		const title = parseWriteFileTitleMeta(section);
+
+		expect(title?.filePath).toBe(full?.filePath);
+		expect(title?.fileName).toBe(full?.fileName);
+		expect(title?.language).toBe(full?.language);
+		expect(title?.bytesWritten).toBe(full?.bytesWritten);
+		expect(title?.resultMessage).toBe(full?.resultMessage);
+		expect(title?.errorMessage).toBe(full?.errorMessage);
+	});
+
+	it('extracts a path with escaped characters without parsing the content blob', () => {
+		const section = makeSection(
+			{
+				toolArgs: '{"path":"/a\\nb\\"c/d.ts","content":"x"}',
+				toolName: BuiltInTool.SERVER_WRITE_FILE
+			},
+			BuiltInTool.SERVER_WRITE_FILE
+		);
+
+		expect(parseWriteFileTitleMeta(section)?.filePath).toBe('/a\nb"c/d.ts');
+	});
+
+	it('falls back to the full parse for args the extractor can not see', () => {
+		const section = makeSection(
+			{
+				// key written with an escaped unicode escape sequence in the name
+				toolArgs: '{"\\u0070ath":"/foo.ts","content":"x"}',
+				toolName: BuiltInTool.SERVER_WRITE_FILE
+			},
+			BuiltInTool.SERVER_WRITE_FILE
+		);
+
+		expect(parseWriteFileTitleMeta(section)?.filePath).toBe('/foo.ts');
+	});
+
+	it('accepts partial args like the full parser', () => {
+		const section = makeSection(
+			{ toolArgs: '{"path":"/foo.t', toolName: BuiltInTool.SERVER_WRITE_FILE },
+			BuiltInTool.SERVER_WRITE_FILE
+		);
+
+		expect(parseWriteFileTitleMeta(section)?.filePath).toBe('/foo.t');
+	});
+
+	it('returns null for sections with a different tool name', () => {
+		expect(
+			parseWriteFileTitleMeta(
+				makeSection({
+					toolArgs: '{"path":"/x","content":"y"}',
+					toolName: BuiltInTool.SERVER_READ_FILE
+				})
+			)
+		).toBeNull();
+	});
+});
+
+describe('parseEditFileTitleMeta', () => {
+	it('matches the full meta for path and result fields', () => {
+		const section = makeSection(
+			{
+				toolArgs: '{"path":"/foo.ts","edits":[{"old_text":"a","new_text":"b"}]}' + ' '.repeat(0),
+				toolName: BuiltInTool.SERVER_EDIT_FILE,
+				toolResult: '{"result":"ok","edits_applied":1}'
+			},
+			BuiltInTool.SERVER_EDIT_FILE
+		);
+		const full = parseEditFileMeta(section);
+		const title = parseEditFileTitleMeta(section);
+
+		expect(title?.filePath).toBe(full?.filePath);
+		expect(title?.fileName).toBe(full?.fileName);
+		expect(title?.editsApplied).toBe(full?.editsApplied);
+		expect(title?.resultMessage).toBe(full?.resultMessage);
+		expect(title?.errorMessage).toBe(full?.errorMessage);
+	});
+
+	it('surfaces errorMessage from the result blob without parsing args', () => {
+		const section = makeSection(
+			{
+				toolArgs: '{"path":"/foo.ts","edits":[]}',
+				toolName: BuiltInTool.SERVER_EDIT_FILE,
+				toolResult: '{"error":"permission denied"}'
+			},
+			BuiltInTool.SERVER_EDIT_FILE
+		);
+
+		expect(parseEditFileTitleMeta(section)?.errorMessage).toBe('permission denied');
+	});
+
+	it('returns null when args have no path-like field', () => {
+		expect(
+			parseEditFileTitleMeta(
+				makeSection({ toolArgs: '{"edits":[]}', toolName: BuiltInTool.SERVER_EDIT_FILE })
+			)
+		).toBeNull();
 	});
 });
 
