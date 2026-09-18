@@ -34,6 +34,10 @@ typedef struct {
 #define N_R0_Q1_0 4
 #define N_SG_Q1_0 2
 #define N_SIMDWIDTH 64
+#elif defined (POWERVR_GPU)
+#define N_R0_Q1_0 4
+#define N_SG_Q1_0 2
+#define N_SIMDWIDTH 128
 #endif
 
 inline float block_q_1_0_dot_y(global block_q1_0 * qb, float sumy, float yl[NB_Q1_0], short il) {

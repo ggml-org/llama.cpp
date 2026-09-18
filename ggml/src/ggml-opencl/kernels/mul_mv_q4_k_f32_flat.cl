@@ -16,6 +16,12 @@
 #define ADRENO_GPU 1
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
+#else
+#define POWERVR_GPU 1
+#define REQD_SUBGROUP_SIZE_16   // Nothing required here
+#define REQD_SUBGROUP_SIZE_32   // Nothing required here
+#define REQD_SUBGROUP_SIZE_64   // Nothing required here
+#define REQD_SUBGROUP_SIZE_128  // Nothing required here
 #endif
 
 //------------------------------------------------------------------------------
@@ -47,6 +53,10 @@ typedef struct {
 #define N_DST 16
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
+#elif defined (POWERVR_GPU)
+#define N_DST 16
+#define N_SIMDGROUP 2
+#define N_SIMDWIDTH 128
 #endif
 
 #undef  BLOCK_STRIDE

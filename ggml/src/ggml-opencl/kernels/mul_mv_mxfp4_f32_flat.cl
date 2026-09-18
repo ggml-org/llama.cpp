@@ -63,6 +63,10 @@ static inline float e8m0_to_fp32(uchar x) {
 #define N_SG_MXFP4 2
 #define N_SIMDWIDTH 64
 #define SRC0Q_IMG
+#elif defined (POWERVR_GPU)
+#define N_R0_MXFP4 2
+#define N_SG_MXFP4 2
+#define N_SIMDWIDTH 128
 #endif
 
 #ifdef INTEL_GPU

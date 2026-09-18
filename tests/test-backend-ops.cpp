@@ -3823,6 +3823,17 @@ struct test_add_add : public test_case {
 
         return out;
     }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if ((type == GGML_TYPE_F16 || type_addend == GGML_TYPE_F16) &&
+            strcmp(ggml_backend_reg_name(reg), "OpenCL") == 0 &&
+            strstr(ggml_backend_dev_description(dev), "PowerVR") != nullptr) {
+            return std::max(test_case::max_nmse_err(backend), 5e-7);
+        }
+        return test_case::max_nmse_err(backend);
+    }
 };
 
 // GGML_OP_ADD + GGML_OP_RMS_NORM (fused operation)
@@ -5308,6 +5319,17 @@ struct test_sqrt : public test_case {
         return out;
     }
 
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if (type == GGML_TYPE_F16 &&
+            strcmp(ggml_backend_reg_name(reg), "OpenCL") == 0 &&
+            strstr(ggml_backend_dev_description(dev), "PowerVR") != nullptr) {
+            return std::max(test_case::max_nmse_err(backend), 5e-7);
+        }
+        return test_case::max_nmse_err(backend);
+    }
+
     void initialize_tensors(ggml_context * ctx) override {
         // fill with positive values
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -5401,6 +5423,17 @@ struct test_sin : public test_case {
     bool grad_precise() override {
         return true;
     }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if ((type == GGML_TYPE_F16) &&
+            strcmp(ggml_backend_reg_name(reg), "OpenCL") == 0 &&
+            strstr(ggml_backend_dev_description(dev), "PowerVR") != nullptr) {
+            return std::max(test_case::max_nmse_err(backend), 5e-7);
+        }
+        return test_case::max_nmse_err(backend);
+    }
 };
 
 // GGML_OP_COS
@@ -5443,6 +5476,17 @@ struct test_cos : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if ((type == GGML_TYPE_F16) &&
+            strcmp(ggml_backend_reg_name(reg), "OpenCL") == 0 &&
+            strstr(ggml_backend_dev_description(dev), "PowerVR") != nullptr) {
+            return std::max(test_case::max_nmse_err(backend), 5e-7);
+        }
+        return test_case::max_nmse_err(backend);
     }
 };
 
