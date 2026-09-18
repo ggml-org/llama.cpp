@@ -47,13 +47,11 @@
 export { default as ModelsSelectorDropdown } from './ModelsSelectorDropdown.svelte';
 
 /**
- * **ModelsSelectorTabs** - View tabs for the selector
  *
  * Switches the rendered view: the favorites of every backend, the local server's
  * models, or the remote backends'. Purely a display concern - the backend that
  * serves requests follows the selected model.
  */
-export { default as ModelsSelectorTabs } from './ModelsSelectorTabs.svelte';
 
 /**
  * **ModelsSelectorList** - Grouped model options list

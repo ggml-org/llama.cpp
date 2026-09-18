@@ -7,8 +7,7 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorReasoningPanel,
-		ModelsSelectorTabs
+		ModelsSelectorReasoningPanel
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
@@ -296,15 +295,6 @@
 						searchClass="bg-transparent"
 						searchValue={ms.searchTerm}
 					>
-						<!-- View tabs (favorites first), sticky under the search input. -->
-						{#snippet subheader()}
-							<ModelsSelectorTabs
-								activeId={ms.viewId}
-								onAdd={handleAddBackend}
-								onSelect={ms.setView}
-							/>
-						{/snippet}
-
 						<!-- Option list; the search header sticks to the top and the actions
 						     footer to the bottom of the content scrollport. -->
 						<div class="models-list px-1.5">
@@ -361,7 +351,7 @@
 							<ModelsSelectorList
 								activeId={ms.activeId}
 								{currentModel}
-								favorites={ms.isFavoritesView ? ms.favoriteItems : []}
+								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
 								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
