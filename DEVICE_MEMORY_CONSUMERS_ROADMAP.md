@@ -8,7 +8,7 @@ Last source review: 2026-09-17, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`, and **6.3c** at `7ad14ee86`; **6.4a** is implemented and qualified for user review.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`, and **6.3c** at `7ad14ee86`, and **6.4a** at `5eb1088d2`; **6.4b** is implemented and qualified for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -418,8 +418,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.3a | Committed | 4b576eec7 | Explicit logical-batch text phase, repeated-notification no-op, serial return to prefill, speculative rejection, and one immutable phase across all ubatches. Debug, ASan/leak, UBSan, CUDA-enabled compile, and broader regressions pass. |
 | 6.3b | Committed | 4bf33a5e3 | One physical device-local parent holds fixed compute, KV pool, writer, and maximum attention grants; private-to-shared handoff preserves host KV and scheduler rebuilds. |
 | 6.3c | Committed | 7ad14ee86 | Prefill-to-decode transition shrinks compute and attention grants into a larger decode KV pool under the same parent; execution is retired and recaptured once per real phase change. |
-| 6.4a | Ready for review | - | Populated-cache decode-to-prefill shrink, lazy resident reload, repeated alternation, and cleared short/long serial requests are qualified against stock execution. |
-| 6.4b-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
+| 6.4a | Committed | 5eb1088d2 | Populated-cache decode-to-prefill shrink, lazy resident reload, repeated alternation, and cleared short/long serial requests are qualified against stock execution. |
+| 6.4b | Ready for review | - | Prompt reuse, whole-cache restoration, cancellation at both phase boundaries, recoverable coordinator interruption, retry, and explicit terminal invalidation are qualified. |
+| 6.5a-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3417,6 +3418,24 @@ TDD and validation evidence:
 - With UVM disabled and enabled, the IQ4_XS suite passes 5 cases / 546 assertions. All 12 serial phase boundaries are bit-exact against stock, the final recurrent metadata/tensors are exact, and the existing ubatch 256/512 cases retain zero maximum logit error with 32/32 matching continuation tokens.
 - On the Debug UVM-off run, observed baseline-to-streamed times for the 7-, 192-, and 3-token prefills were 19.3->39.8 ms, 77.2->129.9 ms, and 21.2->31.9 ms. The corresponding UVM-on run was 19.3->39.5 ms, 77.1->128.9 ms, and 21.2->31.5 ms. These deltas include coordinator transition, graph reservation, lazy resident reload, and the prefill itself; stage 6.5c will separate those diagnostics.
 - Compute Sanitizer passes the populated-frontier CUDA model suite with 111/111 assertions, zero errors, and zero leaked bytes.
+- Focused ASan/leak and UBSan builds/tests pass. The broader CUDA memory/KV matrix passes all 18 tests.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+### Stage 6.4b implementation and validation
+
+Stage 6.4b qualifies prompt reuse, cache restoration, cancellation, and interrupted phase changes without changing runtime source code. The 6.3c lifecycle already kept authoritative host KV and recurrent state independent of physical phase grants, while 6.4a established ordinary alternation. This stage exercises the remaining failure boundaries through the real context and coordinator paths.
+
+The IQ4_XS serial scenario now saves the complete context immediately before each direction change. It first aborts a decode-to-prefill request after the memory layout has changed, restores the saved KV/recurrent state, retries the appended prefill, and captures its logits. It then aborts the following prefill-to-decode request, restores again, retries decode, and captures another boundary. Together with the prior live-cache and cleared-request sequence, this produces 14 stock-versus-streamed phase checkpoints.
+
+A focused CUDA test injects one parent-view creation failure during a populated 513-token prefill-to-decode arena commit. The context reports `transition_failed`, recovery restores the original prefill pool and phase tracker around the unchanged parent address, and the cached-token frontier remains 513. After removing the fault, the same decode transition succeeds, expands the pool, and returns to prefill normally. Arena recovery reuses the prior committed views, so repeated view-factory failure is not a valid way to force reverse failure; the existing binding-recovery test remains the explicit terminal case and verifies that a failed reverse bind poisons the session and rejects subsequent work.
+
+TDD and validation evidence:
+
+- The boundary-cancellation test passed on its first runtime attempt: both saved-state restorations were accepted, retries completed, and all 14 phase-boundary logits plus final recurrent metadata/tensors were bit-exact with stock.
+- The initial coordinator fault test intentionally combined recoverable and presumed terminal view failures. Diagnostics showed both recovered correctly because reverse activation reused prior committed views. The invalid terminal assumption was removed; the valid recoverable path passes 15 assertions, while the existing true reverse-binding failure continues to cover explicit invalid-session behavior.
+- With UVM disabled and enabled, the full IQ4_XS suite passes 5 cases / 558 assertions. Existing ubatch 256/512 checks remain at zero maximum logit error, zero recurrent relative L2 error, and 32/32 matching continuation tokens.
+- Compute Sanitizer passes the six-case CUDA model suite with 126/126 assertions, zero errors, and zero leaked bytes.
 - Focused ASan/leak and UBSan builds/tests pass. The broader CUDA memory/KV matrix passes all 18 tests.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.

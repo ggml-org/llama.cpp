@@ -20,6 +20,36 @@ static std::vector<uint8_t> reference_bytes(ggml_backend_t backend,const std::ve
     std::vector<uint8_t> result(ggml_nbytes(output)); ggml_backend_tensor_get(output,result.data(),0,result.size()); return result;
 }
 
+struct parent_view_fault {
+    using factory = ggml_backend_buffer_t (*)(ggml_backend_buffer_t,size_t,size_t);
+    inline static parent_view_fault * active = nullptr;
+    ggml_backend_buffer_t parent;
+    factory original;
+    size_t failures;
+    size_t calls = 0;
+
+    parent_view_fault(ggml_backend_buffer_t parent,size_t failures) :
+        parent(parent),original(parent ? parent->view_buffer : nullptr),failures(failures) {
+        GGML_ASSERT(parent && original && !active);
+        active = this;
+        parent->view_buffer = create;
+    }
+    ~parent_view_fault() {
+        parent->view_buffer = original;
+        active = nullptr;
+    }
+    static ggml_backend_buffer_t create(
+            ggml_backend_buffer_t parent,size_t offset,size_t size) {
+        GGML_ASSERT(active && parent == active->parent);
+        ++active->calls;
+        if (active->failures) {
+            --active->failures;
+            return nullptr;
+        }
+        return active->original(parent,offset,size);
+    }
+};
+
 int main(int argc,char ** argv) {
     testing t;
     if (argc < 2 || std::strcmp(argv[1],"--cuda")) {
@@ -148,6 +178,69 @@ int main(int argc,char ** argv) {
         owner.reset();
         t.assert_true(!model->uses_shared_memory());
         t.assert_true(model->shared_parent() == nullptr);
+    });
+
+    t.test("interrupted_phase_transition_recovers_and_retries", [&](testing & t) {
+        {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+            ggml_kv_stream_layout page;
+            ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            auto model = llama_kv_stream_model::create(
+                {backend.get(),f.host->config(),page.bytes*4,256,4});
+            if (!t.assert_true(bool(model))) return;
+
+            auto * device_type = llama_kv_stream_device_buffer_type(dev);
+            auto * cpu_type = ggml_backend_cpu_buffer_type();
+            std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+            std::vector<ggml_backend_buffer_type_t> types{device_type,cpu_type};
+            ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+                backends.data(),types.data(),types.size(),256,false,true));
+            llama_compute_workspace_plan plan;
+            plan.groups = {
+                {device_type,2*1048576,ggml_backend_buft_get_alignment(device_type),0},
+                {cpu_type,8192,ggml_backend_buft_get_alignment(cpu_type),1},
+            };
+            plan.phase_sizes = {{2*1048576,8192},{1048576,4096}};
+            auto owner = llama_context_memory::create(
+                sched.get(),backends,plan,model.get());
+            if (!t.assert_true(bool(owner))) return;
+            const auto initial_pool = model->pool_grant_bytes();
+            auto * base = ggml_backend_buffer_get_base(owner->shared_parent());
+            ggml_backend_buffer_clear(model->buffer(),0);
+            if (!t.assert_true(model->restore(513))) return;
+            t.assert_true(owner->signal_text_phase({
+                llama_memory_text_phase::prefill,513,true,true,false}).status ==
+                llama_memory_text_phase_status::changed);
+
+            size_t calls = 0;
+            {
+                parent_view_fault fault(
+                    owner->shared_parent(),1);
+                const auto failed = owner->signal_text_phase({
+                    llama_memory_text_phase::decode,1,true,true,false});
+                t.assert_true(failed.status ==
+                    llama_memory_text_phase_status::transition_failed);
+                calls = fault.calls;
+            }
+            t.assert_true(calls > 0);
+            t.assert_true(base ==
+                ggml_backend_buffer_get_base(owner->shared_parent()));
+            t.assert_equal(initial_pool,model->pool_grant_bytes());
+            t.assert_equal(size_t(513),model->tokens());
+            t.assert_true(owner->text_phase().phase ==
+                llama_memory_text_phase::prefill);
+
+            const auto retry = owner->signal_text_phase({
+                llama_memory_text_phase::decode,1,true,true,false});
+            t.assert_true(model->complete());
+            t.assert_true(retry.status ==
+                llama_memory_text_phase_status::changed);
+            t.assert_true(model->pool_grant_bytes() > initial_pool);
+            t.assert_true(owner->signal_text_phase({
+                llama_memory_text_phase::prefill,7,true,true,false}).status ==
+                llama_memory_text_phase_status::changed);
+            t.assert_equal(initial_pool,model->pool_grant_bytes());
+        }
     });
 
     t.test("shared_parent_mismatch_rejects_and_restores_private_model", [&](testing & t) {

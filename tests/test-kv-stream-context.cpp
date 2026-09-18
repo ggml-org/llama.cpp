@@ -239,6 +239,30 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
         position = 0;
         return !stream || stream->tokens() == 0;
     };
+    const auto cancel_and_restore = [&](size_t first,size_t count,bool decode) {
+        if (first > prompt.size() || count > prompt.size()-first || !count || count > 512) return false;
+        const size_t state_size = llama_state_get_size(context.get());
+        std::vector<uint8_t> state(state_size);
+        if (llama_state_get_data(context.get(),state.data(),state.size()) != state_size) return false;
+        batch.n_tokens = int32_t(count);
+        for (size_t i = 0; i < count; ++i) {
+            batch.token[i] = prompt[first+i];
+            batch.pos[i] = llama_pos(position+i);
+            batch.n_seq_id[i] = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i] = i+1 == count;
+        }
+        struct abort_data { int calls = 0; } abort;
+        llama_set_kv_stream_decode(context.get(),decode);
+        llama_set_abort_callback(context.get(),[](void * opaque) {
+            return ++static_cast<abort_data *>(opaque)->calls > 0;
+        },&abort);
+        const int32_t status = llama_decode(context.get(),batch);
+        llama_set_abort_callback(context.get(),nullptr,nullptr);
+        if (status != 2 || abort.calls == 0 ||
+                llama_state_set_data(context.get(),state.data(),state.size()) != state_size) return false;
+        return !stream || stream->tokens() == position;
+    };
 
     if (!t.assert_true(append_prompt(640))) return {};
     capture();
@@ -264,6 +288,13 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     if (!t.assert_true(clear() && append_prompt(640))) return {};
     capture();
     if (!t.assert_true(fixed_decode(8,503))) return {};
+    capture();
+
+    if (!t.assert_true(cancel_and_restore(80,7,false))) return {};
+    if (!t.assert_true(append(80,7,false))) return {};
+    capture();
+    if (!t.assert_true(cancel_and_restore(503,1,true))) return {};
+    if (!t.assert_true(append(503,1,true))) return {};
     capture();
     llama_synchronize(context.get());
     hybrid->get_mem_recr()->state_write(result.recurrent,0,0);
@@ -301,11 +332,11 @@ int main(int argc,char ** argv) {
             context_ptr context(llama_init_from_model(model.get(),p),llama_free); t.assert_true(!context);
         }
     });
-    t.test("serial_decode_prefill_alternation_matches_stock", [&](testing & t) {
+    t.test("serial_phase_alternation_and_boundary_cancellation_match_stock", [&](testing & t) {
         const auto baseline = evaluate_serial_phases(t,model.get(),prompt,0);
         const auto streamed = evaluate_serial_phases(t,model.get(),prompt,16*1048576);
         if (!t.assert_equal(baseline.logits.size(),streamed.logits.size()) ||
-                !t.assert_equal(size_t(12),streamed.logits.size()) ||
+                !t.assert_equal(size_t(14),streamed.logits.size()) ||
                 !t.assert_equal(streamed.logits.size(),streamed.pool_grants.size()) ||
                 !t.assert_equal(size_t(3),streamed.prefill_after_decode_us.size()) ||
                 !t.assert_equal(baseline.prefill_after_decode_us.size(),
@@ -340,6 +371,8 @@ int main(int argc,char ** argv) {
         t.assert_equal(decode_pool,streamed.pool_grants[9]);
         t.assert_equal(prefill_pool,streamed.pool_grants[10]);
         t.assert_equal(decode_pool,streamed.pool_grants[11]);
+        t.assert_equal(prefill_pool,streamed.pool_grants[12]);
+        t.assert_equal(decode_pool,streamed.pool_grants[13]);
         t.out << "decode-to-prefill baseline -> streamed us:";
         for (size_t i = 0; i < streamed.prefill_after_decode_us.size(); ++i) {
             t.out << ' ' << baseline.prefill_after_decode_us[i] << "->"
