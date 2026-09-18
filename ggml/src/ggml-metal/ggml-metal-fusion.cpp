@@ -796,37 +796,37 @@ struct ggml_metal_fusion_info * ggml_metal_fusion_info_init(bool enabled, int de
     return finfo;
 }
 
-void ggml_metal_fusion_info_free(struct ggml_metal_fusion_info * finfo) {
+void ggml_metal_fusion_info_free(ggml_metal_fusion_info * finfo) {
     delete finfo;
 }
 
-bool ggml_metal_fusion_info_enabled(const struct ggml_metal_fusion_info * finfo) {
+bool ggml_metal_fusion_info_enabled(const ggml_metal_fusion_info * finfo) {
     return finfo->enabled;
 }
 
-bool ggml_metal_fusion_info_stats(const struct ggml_metal_fusion_info * finfo) {
+bool ggml_metal_fusion_info_stats(const ggml_metal_fusion_info * finfo) {
     return finfo->stats;
 }
 
-int ggml_metal_fusion_info_debug(const struct ggml_metal_fusion_info * finfo) {
+int ggml_metal_fusion_info_debug(const ggml_metal_fusion_info * finfo) {
     return finfo->debug;
 }
 
-int ggml_metal_fusion_info_n_fusions(const struct ggml_metal_fusion_info * finfo) {
+int ggml_metal_fusion_info_n_fusions(const ggml_metal_fusion_info * finfo) {
     return (int) finfo->labels.size();
 }
 
-const char * ggml_metal_fusion_info_label(const struct ggml_metal_fusion_info * finfo, int idx) {
+const char * ggml_metal_fusion_info_label(const ggml_metal_fusion_info * finfo, int idx) {
     GGML_ASSERT(idx >= 0 && idx < (int) finfo->labels.size());
     return finfo->labels[idx].c_str();
 }
 
-uint64_t ggml_metal_fusion_info_count(const struct ggml_metal_fusion_info * finfo, int idx) {
+uint64_t ggml_metal_fusion_info_count(const ggml_metal_fusion_info * finfo, int idx) {
     GGML_ASSERT(idx >= 0 && idx < (int) finfo->counts.size());
     return finfo->counts[idx];
 }
 
-void ggml_metal_fusion_info_count_fusion(struct ggml_metal_fusion_info * finfo, const struct ggml_metal_fusion * fusion) {
+void ggml_metal_fusion_info_count_fusion(ggml_metal_fusion_info * finfo, const ggml_metal_fusion * fusion) {
     if (!finfo->stats || fusion == nullptr) {
         return;
     }
@@ -844,11 +844,11 @@ void ggml_metal_fusion_info_count_fusion(struct ggml_metal_fusion_info * finfo, 
     }
 }
 
-void ggml_metal_fusion_info_set_enabled(struct ggml_metal_fusion_info * finfo, bool enabled) {
+void ggml_metal_fusion_info_set_enabled(ggml_metal_fusion_info * finfo, bool enabled) {
     finfo->enabled = enabled;
 }
 
-void ggml_metal_fusion_info_labels_init(struct ggml_metal_fusion_info * finfo) {
+void ggml_metal_fusion_info_labels_init(ggml_metal_fusion_info * finfo) {
     if (finfo->labels_set) {
         return;
     }
@@ -864,16 +864,16 @@ void ggml_metal_fusion_info_labels_init(struct ggml_metal_fusion_info * finfo) {
     finfo->labels_set = true;
 }
 
-void ggml_metal_fusion_info_stats_init(struct ggml_metal_fusion_info * finfo) {
+void ggml_metal_fusion_info_stats_init(ggml_metal_fusion_info * finfo) {
     finfo->stats = true;
     ggml_metal_fusion_info_labels_init(finfo);
 }
 
-void ggml_metal_fusion_info_stats_reset(struct ggml_metal_fusion_info * finfo) {
+void ggml_metal_fusion_info_stats_reset(ggml_metal_fusion_info * finfo) {
     std::fill(finfo->counts.begin(), finfo->counts.end(), 0);
 }
 
-int ggml_metal_fusion_info_stats_get(const struct ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n) {
+int ggml_metal_fusion_info_stats_get(const ggml_metal_fusion_info * finfo, const char ** labels, uint64_t * counts, int n) {
     const int n_fusions = (int) finfo->labels.size();
 
     if (labels == nullptr) {
