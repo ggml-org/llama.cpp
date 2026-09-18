@@ -70,10 +70,12 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
     }
 
     if (context.get_view_input_size(2)) {
-        // Same as l2_norm case 1
-        v = std::make_shared<ov::op::v0::Squeeze>(v, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+        // Fold the sliced feature axis back into [B, T, H_v, S_v]. Keep the batch dim with
+        // special_zero and infer T with -1 rather than squeezing to a fixed rank first: the
+        // sliced operand is [B, 1, T, F] in the default path but [B, T, 1, F] in the stateful
+        // one, and this form is correct for both.
         auto v_shape = context.get_input_shape(2).to_shape();
-        std::vector<int64_t> reshape_pattern = {0, 0, (int64_t) v_shape[2], (int64_t) v_shape[3]};
+        std::vector<int64_t> reshape_pattern = {0, -1, (int64_t) v_shape[2], (int64_t) v_shape[3]};
         v = std::make_shared<ov::op::v1::Reshape>(
             v, ov::op::v0::Constant::create(ov::element::i64, {4}, reshape_pattern), true);
     }

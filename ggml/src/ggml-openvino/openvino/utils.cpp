@@ -266,7 +266,9 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
     auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
     ov::Output<ov::Node> axes;
     if (axis == -1) {
-        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {context.is_stateful() ? 2 : 3});
+        const auto & in_ps = input.get_partial_shape();
+        FRONT_END_GENERAL_CHECK(in_ps.rank().is_static(), "process_view_input requires a static input rank");
+        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {in_ps.rank().get_length() - 1});
     } else {
         axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {axis});
     }
