@@ -71,7 +71,7 @@ typedef struct ggml_metal_fusion ggml_metal_fusion;
 void ggml_metal_fusion_add_alloc_deps(
         void * user_data,
         void (*add_alloc_dep)(void *, struct ggml_tensor *, struct ggml_tensor *),
-        const struct ggml_cgraph * gf);
+        struct ggml_cgraph * gf);
 
 // ---- shared fusion info ---------------------------------------------------
 

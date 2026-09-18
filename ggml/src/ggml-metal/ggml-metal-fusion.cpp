@@ -694,19 +694,19 @@ static bool ggml_metal_fusion_match_raw_pattern(
 static void ggml_metal_fusion_add_pattern_alloc_deps(
         void * user_data,
         void (*add_alloc_dep)(void *, ggml_tensor *, ggml_tensor *),
-        const ggml_cgraph * gf,
+        ggml_cgraph * gf,
         const ggml_metal_fusion * fusion,
         int node_idx) {
     const int last_node = node_idx + fusion->n_raw_ops - 1;
 
     // keep all external inputs alive until the fused output
-    std::set<const ggml_tensor *> seen;
+    std::set<ggml_tensor *> seen;
     for (int j = 0; j < fusion->n_raw_ops; ++j) {
-        const ggml_tensor * node = gf->nodes[node_idx + j];
+        ggml_tensor * node = gf->nodes[node_idx + j];
         for (int s = 0; s < GGML_MAX_SRC; ++s) {
-            const ggml_tensor * src = node->src[s];
+            ggml_tensor * src = node->src[s];
             if (src && seen.insert(src).second) {
-                add_alloc_dep(user_data, const_cast<ggml_tensor *>(src), const_cast<ggml_tensor *>(gf->nodes[last_node]));
+                add_alloc_dep(user_data, src, gf->nodes[last_node]);
             }
         }
         seen.insert(node);
@@ -716,7 +716,7 @@ static void ggml_metal_fusion_add_pattern_alloc_deps(
 void ggml_metal_fusion_add_alloc_deps(
         void * user_data,
         void (*add_alloc_dep)(void *, ggml_tensor *, ggml_tensor *),
-        const ggml_cgraph * gf) {
+        ggml_cgraph * gf) {
     for (int i = 0; i < gf->n_nodes; ++i) {
         const ggml_metal_fusion * best = nullptr;
         int best_raw = 0;
