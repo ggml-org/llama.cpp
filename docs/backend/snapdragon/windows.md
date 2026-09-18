@@ -146,7 +146,7 @@ Please note that the same certificate can be used for signing any number of buil
 
 ## Sign and install a release package
 
-The Windows arm64 Hexagon release contains the HTP libraries and `libggml-htp.inf`, but not a signed catalog. Extract the release archive, then use an elevated Powershell terminal to generate and sign the catalog. Set these paths to the extracted package, your certificate, and the Windows SDK tools installed on your system:
+The Windows arm64 Hexagon release contains the HTP libraries and `libggml-htp.inf`, but not a signed catalog. Extract the release archive, then use an elevated PowerShell terminal to generate and sign the catalog. Set these paths to the extracted package, your certificate, and the Windows SDK tools installed on your system:
 
 ```
 > $package="c:\Users\MyUser\Downloads\llama-bin-win-hexagon-arm64"
