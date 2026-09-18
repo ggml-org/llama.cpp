@@ -9,6 +9,7 @@
 
 import { browser } from '$app/environment';
 import { ACTIVE_BACKEND_LOCALSTORAGE_KEY, LOCAL_BACKEND_ID, SETTINGS_KEYS } from '$lib/constants';
+import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { Backend } from '$lib/types';
 import { setBackendsResolver } from '$lib/utils/api-base';
@@ -44,7 +45,7 @@ class BackendsStore {
 	}
 
 	get enabled(): Backend[] {
-		return this.list.filter((backend) => backend.enabled);
+		return this.list.filter((backend) => backend.enabled && !this.isMissingLocal(backend));
 	}
 
 	get external(): Backend[] {
@@ -97,6 +98,11 @@ class BackendsStore {
 				backend.id === backendId ? { ...backend, ...updates } : backend
 			)
 		);
+	}
+
+	/** The built-in backend counts only when a local server answered this session. */
+	private isMissingLocal(backend: Backend): boolean {
+		return backend.id === LOCAL_BACKEND_ID && serverStore.localServerMissing;
 	}
 
 	private saveExternal(backends: Backend[]): void {

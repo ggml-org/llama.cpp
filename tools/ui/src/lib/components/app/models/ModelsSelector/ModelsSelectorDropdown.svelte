@@ -201,7 +201,13 @@
 				<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
-			<p class="text-xs text-muted-foreground">No models available.</p>
+			<button
+				class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				onclick={handleAddBackend}
+				type="button"
+			>
+				No models yet. Add a backend to get started.
+			</button>
 		{/if}
 	{:else}
 		{@const triggerStatus = triggerModel

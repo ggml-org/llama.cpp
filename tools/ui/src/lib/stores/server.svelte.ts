@@ -24,6 +24,11 @@ class ServerStore {
 	status = $state<number | null>(null);
 	private fetchBackendId: string | undefined;
 	private fetchPromise: Promise<void> | null = null;
+	/**
+	 * Whether a local llama.cpp server answered. Null until the first probe
+	 * resolves: the bundled build is served by one, the hosted PWA is not.
+	 */
+	private localAvailable: boolean | null = null;
 	/** Local server state kept alive while an external backend is active. */
 	private localState: { props: ApiLlamaCppServerProps | null; role: ServerRole | null } | null =
 		null;
@@ -43,7 +48,12 @@ class ServerStore {
 	}
 
 	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
-		return this.props?.default_generation_settings?.params || null;
+		return this.localProps?.default_generation_settings?.params || null;
+	}
+
+	/** A local llama.cpp server answered, either now or earlier this session. */
+	get hasLocalServer(): boolean {
+		return this.localAvailable === true;
 	}
 
 	get isModelMode(): boolean {
@@ -52,6 +62,32 @@ class ServerStore {
 
 	get isRouterMode(): boolean {
 		return this.role === ServerRole.ROUTER;
+	}
+
+	/**
+	 * Local server state. The local server is the base of the installation, so
+	 * its props and role come from the mirror while another backend is active
+	 * instead of following the selected model.
+	 */
+	private get localFacts(): { props: ApiLlamaCppServerProps | null; role: ServerRole | null } {
+		if (getBackend()?.id === LOCAL_BACKEND_ID) return { props: this.props, role: this.role };
+
+		return this.localState ?? { props: null, role: null };
+	}
+
+	/** The local server runs as a router, independent of the active backend. */
+	get localIsRouter(): boolean {
+		return this.localFacts.role === ServerRole.ROUTER;
+	}
+
+	/** Props of the local server, from the active backend or the cache. */
+	get localProps(): ApiLlamaCppServerProps | null {
+		return this.localFacts.props;
+	}
+
+	/** The local server is known to be unreachable: local-only UI stays out. */
+	get localServerMissing(): boolean {
+		return this.localAvailable === false;
 	}
 
 	get uiSettings(): Record<string, string | number | boolean> | undefined {
@@ -126,12 +162,21 @@ class ServerStore {
 				this.error = null;
 				this.status = null;
 				this.detectRole(props);
+
+				if (backendId === LOCAL_BACKEND_ID) {
+					this.localAvailable = true;
+					// mirror the local facts as they arrive: a later clear() must not
+					// be able to wipe what the local server told us
+					this.localState = { props, role: this.role };
+				}
 			} catch (error: unknown) {
 				if (getBackend()?.id !== backendId) return;
 
 				this.error = error instanceof Error ? error.message : String(error);
 				this.status = error instanceof ApiError ? error.status : null;
 				console.error('Error fetching server properties:', error);
+
+				if (backendId === LOCAL_BACKEND_ID) this.localAvailable = false;
 
 				if (this.status === 503) {
 					this.scheduleRetry();
@@ -174,8 +219,11 @@ class ServerStore {
 				props,
 				role: props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL
 			};
+			this.localAvailable = true;
 		} catch {
-			// the local tab falls back to fetching when it is opened
+			// no local server in this deployment: mark it missing so the local
+			// backend drops out of the enabled list
+			this.localAvailable = false;
 		}
 	}
 

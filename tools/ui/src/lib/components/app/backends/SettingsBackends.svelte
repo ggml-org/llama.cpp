@@ -3,7 +3,7 @@
 	import { BackendCard, DialogBackendForm } from '$lib/components/app/backends';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
-	import { backendsModelsStore, backendsStore } from '$lib/stores';
+	import { backendsModelsStore, backendsStore, serverStore } from '$lib/stores';
 	import type { Backend } from '$lib/types';
 	import { fade } from 'svelte/transition';
 
@@ -43,11 +43,13 @@
 		onSaved={() => void backendsModelsStore.loadAll()}
 	/>
 
-	<BackendCard
-		backend={backendsStore.local}
-		isLocal
-		onToggle={(enabled) => backendsStore.setLocalEnabled(enabled)}
-	/>
+	{#if !serverStore.localServerMissing}
+		<BackendCard
+			backend={backendsStore.local}
+			isLocal
+			onToggle={(enabled) => backendsStore.setLocalEnabled(enabled)}
+		/>
+	{/if}
 
 	{#each backendsStore.external as backend (backend.id)}
 		<BackendCard

@@ -45,7 +45,8 @@
 		showCenteredEmpty && conversationsStore.activeMessages.length === 0 && !chatStore.isLoading
 	);
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
-	let isServerLoading = $derived(serverStore.loading);
+	// no local server in this deployment: never block on its probe
+	let isServerLoading = $derived(serverStore.loading && !serverStore.localServerMissing);
 	const availability = useBackendAvailability();
 	let hasPropsError = $derived(availability.isOffline);
 	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
