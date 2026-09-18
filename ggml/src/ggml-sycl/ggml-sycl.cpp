@@ -5834,8 +5834,19 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
 
     GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        (stream)->memcpy((char *)tensor->data + offset, data, size)));
+
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        auto & ptr_q = get_sycl_host_malloc_queue();
+        if (ptr_q.get_context() == stream->get_context()) {
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                (stream)->memcpy((char *)tensor->data + offset, data, size)));
+        } else {
+            memcpy_host_forward(*stream, ptr_q, (char *)tensor->data + offset , data, size);
+        }
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (stream)->memcpy((char *)tensor->data + offset, data, size)));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
