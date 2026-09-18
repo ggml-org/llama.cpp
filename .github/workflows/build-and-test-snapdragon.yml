@@ -29,7 +29,7 @@ concurrency:
 
 jobs:
   android-ndk-snapdragon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.7'
     defaults:
@@ -59,7 +59,7 @@ jobs:
           path: pkg-snapdragon/llama.cpp
 
   linux-iot-snapdragon:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.7'
     defaults:

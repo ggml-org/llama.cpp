@@ -33,7 +33,7 @@ env:
 
 jobs:
   default:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     steps:
       - name: Clone
@@ -59,7 +59,7 @@ jobs:
           ./gradlew build --no-daemon
 
   ndk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
     defaults:
@@ -93,7 +93,7 @@ jobs:
           path: pkg-adb/llama.cpp
 
   arm64:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     env:
       NDK_VERSION: "29.0.14206865"
