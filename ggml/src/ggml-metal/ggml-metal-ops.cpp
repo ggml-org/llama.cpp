@@ -2379,7 +2379,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    if (ggml_metal_use_fwht(op)) {
+    if (ggml_metal_op_mul_mat_use_fwht(op)) {
         return ggml_metal_op_fwht(ctx, idx);
     }
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
