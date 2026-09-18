@@ -51,8 +51,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                               cudaStream_t     stream) {
     ggml_cuda_pool_alloc<int>   temp_indices_alloc(pool, ncols * nrows);
     ggml_cuda_pool_alloc<float> temp_keys_alloc(pool, ncols * nrows);
-    // the one-shot DeviceRadixSort API does not support in-place keys: the internal
-    // double-buffer ping-pong requires distinct input and output key buffers
+    // Device*Sort algorithms currently do not allow for in-place sorting/aliasing of input/outputs
     ggml_cuda_pool_alloc<float> temp_keys_out_alloc(pool, ncols * nrows);
 
     int *   temp_indices = temp_indices_alloc.get();
