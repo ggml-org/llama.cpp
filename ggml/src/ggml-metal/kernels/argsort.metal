@@ -1,6 +1,8 @@
 #include "common.h"
 
 constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
+constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
+constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
 
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
@@ -352,9 +354,9 @@ kernel void kernel_topk_moe_f32(
         return;
     }
 
-    const int n_expert  = (int) args.ne00;
-    const int top_k     = (int) args.top_k;
-    const int lane      = (int) tiisg;
+    const int n_expert   = FC_topk_moe_n_expert;
+    const int top_k      = FC_topk_moe_top_k;
+    const int lane       = (int) tiisg;
     const int n_per_lane = (n_expert + 31) / 32;
 
     device const float * logits_row = (device const float *) (src0 + row * args.nb01);
@@ -375,20 +377,20 @@ kernel void kernel_topk_moe_f32(
 
     // softmax over the expert logits
     float max_val = -INFINITY;
-    for (int i = 0; i < n_per_lane; ++i) {
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
         max_val = max(max_val, wt[i]);
     }
     max_val = simd_max(max_val);
 
     float sum_val = 0.0f;
-    for (int i = 0; i < n_per_lane; ++i) {
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
         wt[i] = exp(wt[i] - max_val);
         sum_val += wt[i];
     }
     sum_val = simd_sum(sum_val);
 
     const float inv_sum = 1.0f / sum_val;
-    for (int i = 0; i < n_per_lane; ++i) {
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
         wt[i] *= inv_sum;
     }
 
@@ -398,7 +400,7 @@ kernel void kernel_topk_moe_f32(
         float best_val = -INFINITY;
         int   best_expert = -1;
 
-        for (int i = 0; i < n_per_lane; ++i) {
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
             const int expert = lane + i * 32;
             if (expert < n_expert && (wt[i] > best_val || (wt[i] == best_val && expert < best_expert))) {
                 best_val    = wt[i];
@@ -435,12 +437,12 @@ kernel void kernel_topk_moe_f32(
         wt_sum = simd_sum(wt_sum);
         wt_sum = max(wt_sum, args.val_clamp);
         const float inv = 1.0f / wt_sum;
-        for (int i = 0; i < n_per_lane; ++i) {
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
             output_weights[i] *= inv;
         }
     }
 
-    for (int i = 0; i < n_per_lane; ++i) {
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
         const int idx = i * 32 + lane;
         if (idx < top_k) {
             weights_row[idx] = output_weights[i] * args.val_scale;

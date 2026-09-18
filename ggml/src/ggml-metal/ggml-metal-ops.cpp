@@ -5500,16 +5500,14 @@ int ggml_metal_op_topk_moe(ggml_metal_op_t ctx, int idx) {
     }
 
     ggml_metal_kargs_topk_moe args = {
-        /*.ne00      =*/ (int32_t) n_expert,
         /*.ne01      =*/ (int32_t) n_tokens,
         /*.nb01      =*/ logits->nb[1],
         /*.nb1_ids   =*/ ids->nb[1],
-        /*.top_k     =*/ (int32_t) n_expert_used,
         /*.val_clamp =*/ val_clamp,
         /*.val_scale =*/ val_scale,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, with_norm);
+    auto pipeline = ggml_metal_library_get_pipeline_topk_moe(lib, (int32_t) n_expert, (int32_t) n_expert_used, with_norm);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
