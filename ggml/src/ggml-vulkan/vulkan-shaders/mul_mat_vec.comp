@@ -74,8 +74,13 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
             ibi += p.ncols;
 
 #if K_PER_ITER == 8
+#if defined(DATA_A_PTQ1_0)
+            vec4 v, v2;
+            ptq1_0_trits8(ib, a_offset, iqs, v, v2);
+#else
             vec4 v = dequantize4(ib, iqs, a_offset);
             vec4 v2 = dequantize4(ib, iqs+(4/QUANT_R), a_offset);
+#endif
 
             const vec2 dm = get_dm(ib, a_offset);
             if (dm.y != 0) { // quant has min component
@@ -138,6 +143,54 @@ void iter_aligned_nonquant(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint
 }
 #endif
 
+#if defined(DATA_A_PTQ1_0)
+// Eight lanes own a whole block: six packed qs words, one qh tail, one
+// inactive lane. Each packed byte is loaded once and supplies all its trits.
+// Keep the common reduction and fusion path, including partial output tiles.
+void accumulate_ptq1_0(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS],
+                      uint first_row, uint num_rows, uint tid) {
+    const uint lane = tid & 7u;
+    const uint blocks = p.ncols / 128u;
+    if (lane == 7u) {
+        return;
+    }
+    for (uint block = tid / 8u; block < blocks; block += BLOCK_SIZE / 8u) {
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            const uint base = j*p.batch_stride_b + b_offset + block*128u;
+            if (lane < 6u) {
+                const uint start = lane < 4u ? lane*4u : 80u + (lane-4u)*4u;
+                const uint step = lane < 4u ? 16u : 8u;
+                vec4 activation[5];
+                [[unroll]] for (uint t = 0; t < 5u; ++t) {
+                    activation[t] = vec4(data_b_v4[(base + start + t*step)/4u]);
+                }
+                [[unroll]] for (uint row = 0; row < num_rows; ++row) {
+                    const uint ib = a_offset + (first_row + row)*blocks + block;
+                    const uint packed = data_a_packed32[ib].qs[lane];
+                    uvec4 bytes = (uvec4(packed) >> uvec4(0u, 8u, 16u, 24u)) & 255u;
+                    float sum = 0.0f;
+                    [[unroll]] for (uint t = 0; t < 5u; ++t) {
+                        bytes *= 3u;
+                        sum += dot(activation[t], vec4(bytes >> 8u) - 1.0f);
+                        bytes &= 255u;
+                    }
+                    temp[j][row] += sum * get_dm(ib - a_offset, a_offset).x;
+                }
+            } else {
+                const vec4 b0 = vec4(data_b_v4[(base + 120u)/4u]);
+                const vec4 b1 = vec4(data_b_v4[(base + 124u)/4u]);
+                [[unroll]] for (uint row = 0; row < num_rows; ++row) {
+                    const uint ib = (first_row + row)*blocks + block;
+                    vec4 lo, hi;
+                    ptq1_0_trits8(ib, a_offset, 120u, lo, hi);
+                    temp[j][row] += (dot(b0, lo) + dot(b1, hi)) * get_dm(ib, a_offset).x;
+                }
+            }
+        }
+    }
+}
+#endif
+
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint tid = gl_LocalInvocationID.x;
 
@@ -157,6 +210,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         }
     }
 
+#if defined(DATA_A_PTQ1_0)
+    accumulate_ptq1_0(temp, first_row, num_rows, tid);
+#else
     uint num_iters = p.ncols / (K_PER_ITER * BLOCK_SIZE);
     if (num_iters * K_PER_ITER * BLOCK_SIZE + K_PER_ITER*tid < p.ncols) {
         num_iters++;
@@ -242,6 +298,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     }
 #endif
 
+#endif // DATA_A_PTQ1_0
     reduce_result(temp, d_offset, first_row, num_rows, tid);
 }
 

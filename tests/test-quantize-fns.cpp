@@ -126,6 +126,37 @@ static int test_vec_dot_f32(bool verbose) {
     return num_failed;
 }
 
+// Check arithmetic separately from the unavoidable loss of ternary quantization.
+static int test_vec_dot_ptq1_0(bool verbose) {
+    const auto * q = ggml_get_type_traits(GGML_TYPE_PTQ1_0);
+    const auto * cpu = ggml_get_type_traits_cpu(GGML_TYPE_PTQ1_0);
+    const auto * v = ggml_get_type_traits(cpu->vec_dot_type);
+    const auto * vcpu = ggml_get_type_traits_cpu(cpu->vec_dot_type);
+    int num_failed = 0;
+    for (int n : {128, 256, 384, 4096, 5120, 17408}) {
+        std::vector<float> a(n), b(n), da(n), db(n);
+        std::vector<uint8_t> qa(ggml_row_size(GGML_TYPE_PTQ1_0, n));
+        std::vector<uint8_t> qb(ggml_row_size(cpu->vec_dot_type, n));
+        generate_data(0.0f, n, a.data());
+        generate_data(1.0f, n, b.data());
+        cpu->from_float(a.data(), qa.data(), n);
+        vcpu->from_float(b.data(), qb.data(), n);
+        q->to_float(qa.data(), da.data(), n);
+        v->to_float(qb.data(), db.data(), n);
+        float result = INFINITY;
+        cpu->vec_dot(n, &result, 0, qa.data(), 0, qb.data(), 0, 1);
+        const float ref = dot_product(da.data(), db.data(), n);
+        const float error = fabsf(result - ref) / n;
+        const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("ptq1_0 dequantized dot n=%5d: %s (ref=%f got=%f err=%f)\n",
+                   n, RESULT_STR[failed], ref, result, error);
+        }
+    }
+    return num_failed;
+}
+
 static int test_vec_dot_q(bool verbose) {
     int num_failed = 0;
 
@@ -156,6 +187,7 @@ static int test_vec_dot_q(bool verbose) {
             const float total_error = total_quantization_error(qfns, qfns_cpu, test_size, test_data.data());
             const float max_quantization_error =
                 type == GGML_TYPE_Q1_0    ? MAX_QUANTIZATION_TOTAL_ERROR_BINARY :
+                type == GGML_TYPE_PTQ1_0  ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_TQ1_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_TQ2_0   ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
                 type == GGML_TYPE_Q2_0    ? MAX_QUANTIZATION_TOTAL_ERROR_TERNARY :
@@ -184,7 +216,7 @@ static int test_vec_dot_q(bool verbose) {
                 ? MAX_DOT_PRODUCT_ERROR_LOWBIT
                 : type == GGML_TYPE_Q1_0
                 ? MAX_DOT_PRODUCT_ERROR_BINARY
-                : type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 || type == GGML_TYPE_Q2_0
+                : type == GGML_TYPE_PTQ1_0 || type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0 || type == GGML_TYPE_Q2_0
                 ? MAX_DOT_PRODUCT_ERROR_TERNARY
                 : type == GGML_TYPE_NVFP4
                 ? MAX_DOT_PRODUCT_ERROR_FP4
@@ -221,6 +253,7 @@ int main(int argc, char * argv[]) {
 
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
+    num_failed += test_vec_dot_ptq1_0(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);

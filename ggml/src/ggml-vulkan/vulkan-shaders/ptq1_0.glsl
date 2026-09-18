@@ -46,4 +46,57 @@ float ptq1_0_trit(uint ib, uint a_offset, uint e) {
     return float(int((v * 3u) >> 8u) - 1);
 }
 
+// Decode four independent bytes at the same trit position. One aligned word
+// load replaces four byte loads; mask before multiplying by 3, not afterwards.
+vec4 ptq1_0_decode4(uint packed, uint power) {
+    const uvec4 bytes = (uvec4(packed) >> uvec4(0u, 8u, 16u, 24u)) & 255u;
+    return vec4((((bytes * power) & 255u) * 3u) >> 8u) - 1.0f;
+}
+
+// e must be even. All qs region/position boundaries are multiples of eight.
+vec2 ptq1_0_trits2(uint ib, uint a_offset, uint e) {
+    uint packed;
+    uint n;
+    if (e < 120u) {
+        const uint q = e < 80u ? (e & 15u) : (16u + (e & 7u));
+        n = e < 80u ? (e >> 4u) : ((e - 80u) >> 3u);
+        packed = data_a_packed32[a_offset + ib].qs[q >> 2u] >> ((q & 2u) * 8u);
+    } else {
+        packed = uint(data_a_packed32[a_offset + ib].qh);
+        n = (e - 120u) >> 1u;
+    }
+    const uvec2 bytes = uvec2(packed, packed >> 8u) & 255u;
+    return vec2((((bytes * ptq1_0_pow3(n)) & 255u) * 3u) >> 8u) - 1.0f;
+}
+
+// e must be four-aligned. The qh tail repeats two bytes at successive powers.
+vec4 ptq1_0_trits4(uint ib, uint a_offset, uint e) {
+    if (e < 120u) {
+        const uint q = e < 80u ? (e & 15u) : (16u + (e & 7u));
+        const uint n = e < 80u ? (e >> 4u) : ((e - 80u) >> 3u);
+        return ptq1_0_decode4(data_a_packed32[a_offset + ib].qs[q >> 2u], ptq1_0_pow3(n));
+    }
+    const uint packed = uint(data_a_packed32[a_offset + ib].qh);
+    const uvec2 bytes = uvec2(packed, packed >> 8u) & 255u;
+    const uvec4 powers = e == 120u ? uvec4(1u, 1u, 3u, 3u) : uvec4(9u, 9u, 27u, 27u);
+    return vec4((((bytes.xyxy * powers) & 255u) * 3u) >> 8u) - 1.0f;
+}
+
+// Shared hot path for matvec and matmul: one region decision and one power
+// selection per eight outputs, with just two word loads (one halfword for qh).
+void ptq1_0_trits8(uint ib, uint a_offset, uint e, out vec4 lo, out vec4 hi) {
+    if (e < 120u) {
+        const uint q = e < 80u ? (e & 15u) : 16u;
+        const uint n = e < 80u ? (e >> 4u) : ((e - 80u) >> 3u);
+        const uint power = ptq1_0_pow3(n);
+        lo = ptq1_0_decode4(data_a_packed32[a_offset + ib].qs[q >> 2u], power);
+        hi = ptq1_0_decode4(data_a_packed32[a_offset + ib].qs[(q >> 2u) + 1u], power);
+    } else {
+        const uint packed = uint(data_a_packed32[a_offset + ib].qh);
+        const uvec2 bytes = uvec2(packed, packed >> 8u) & 255u;
+        lo = vec4((((bytes.xyxy * uvec4(1u, 1u, 3u, 3u)) & 255u) * 3u) >> 8u) - 1.0f;
+        hi = vec4((((bytes.xyxy * uvec4(9u, 9u, 27u, 27u)) & 255u) * 3u) >> 8u) - 1.0f;
+    }
+}
+
 #endif // PTQ1_0_GLSL

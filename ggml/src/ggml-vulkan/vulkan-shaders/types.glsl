@@ -225,7 +225,16 @@ struct block_ptq1_0
     float16_t d;
 };
 
+// Same 28-byte stride: qs at 0, qh at 24, fp16 scale at 26.
+struct block_ptq1_0_packed32
+{
+    uint32_t qs[6];
+    uint16_t qh;
+    float16_t d;
+};
+
 #if defined(DATA_A_PTQ1_0)
+#define A_TYPE_PACKED32 block_ptq1_0_packed32
 #define QUANT_K QUANT_K_PTQ1_0
 #define QUANT_R QUANT_R_PTQ1_0
 #define QUANT_AUXF 1

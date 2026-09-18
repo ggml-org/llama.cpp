@@ -130,13 +130,10 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #include "ptq1_0.glsl"
 
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
-    return vec2(ptq1_0_trit(ib, a_offset, iqs), ptq1_0_trit(ib, a_offset, iqs + 1u));
+    return ptq1_0_trits2(ib, a_offset, iqs);
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
-    return vec4(ptq1_0_trit(ib, a_offset, iqs),
-                ptq1_0_trit(ib, a_offset, iqs + 1u),
-                ptq1_0_trit(ib, a_offset, iqs + 2u),
-                ptq1_0_trit(ib, a_offset, iqs + 3u));
+    return ptq1_0_trits4(ib, a_offset, iqs);
 }
 #endif
 
