@@ -836,6 +836,11 @@ struct ggml_backend_sched {
     // used for debugging graph reallocations [GGML_SCHED_DEBUG_REALLOC]
     // ref: https://github.com/ggml-org/llama.cpp/pull/17617
     int debug_realloc;
+
+    // used for counting graph reallocations without aborting [GGML_SCHED_LOG_REALLOC]
+    int log_realloc;
+    int n_realloc;
+
     int debug_graph_size;
     int debug_prev_graph_size;
 };
@@ -1613,6 +1618,14 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         GGML_LOG_DEBUG("%s: failed to allocate graph, reserving (backend_ids_changed = %d)\n", __func__, backend_ids_changed);
 #endif
 
+        if (sched->log_realloc > 0) {
+            sched->n_realloc++;
+            const bool unexpected = !backend_ids_changed && sched->debug_prev_graph_size == sched->debug_graph_size;
+            GGML_LOG_INFO("%s: graph realloc #%d (nodes = %d, leafs = %d, backend_ids_changed = %d, unexpected = %d)\n",
+                    __func__, sched->n_realloc, sched->graph.n_nodes, sched->graph.n_leafs,
+                    backend_ids_changed, unexpected);
+        }
+
         if (sched->debug_realloc > 0) {
             // we are interested only in situations where the graph was reallocated even though its size remained the same [GGML_SCHED_DEBUG_REALLOC]
             // example: https://github.com/ggml-org/llama.cpp/pull/17143
@@ -1867,6 +1880,12 @@ ggml_backend_sched_t ggml_backend_sched_new(
 #endif
     const char * GGML_SCHED_DEBUG_REALLOC = getenv("GGML_SCHED_DEBUG_REALLOC");
     sched->debug_realloc = GGML_SCHED_DEBUG_REALLOC ? atoi(GGML_SCHED_DEBUG_REALLOC) : sched->debug_realloc;
+
+    // GGML_SCHED_DEBUG_REALLOC aborts on the reallocations it reports, so it cannot be
+    // used to find out how many a real run performs. This one only counts and logs them.
+    const char * GGML_SCHED_LOG_REALLOC = getenv("GGML_SCHED_LOG_REALLOC");
+    sched->log_realloc = GGML_SCHED_LOG_REALLOC ? atoi(GGML_SCHED_LOG_REALLOC) : 0;
+    sched->n_realloc   = 0;
 
     sched->n_backends = n_backends;
     sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
