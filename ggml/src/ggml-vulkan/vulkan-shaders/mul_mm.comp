@@ -138,6 +138,9 @@ shared FLOAT_TYPEV2 buf_b[BN * SHMEM_STRIDE];
 shared ACC_TYPE coopmat_stage[TM * TN * NUM_WARPS];
 #endif
 
+#if defined(DATA_A_PTQ1_0)
+#include "ptq1_0.glsl"
+#endif
 #include "mul_mm_id_funcs.glsl"
 #include "mul_mm_funcs.glsl"
 

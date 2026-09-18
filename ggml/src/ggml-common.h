@@ -191,6 +191,19 @@ typedef struct {
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
+// PTQ1_0: Prism-private ternary at group size 128 (ported from PrismML-Eng/llama.cpp).
+// Same base-3 trit packing as upstream TQ1_0 (type 34) but one fp16 scale per 128
+// weights instead of per 256. 1.75 bpw, and lossless for checkpoints that are already
+// ternary at group 128 -- TQ1_0 cannot represent those, because a 256-wide scale has
+// to discard one of the two group scales it straddles.
+#define QK_PTQ1_0 128
+typedef struct {
+    uint8_t qs[(QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5]; // 24 B, 5 trits per byte -> 120 values
+    uint8_t qh[QK_PTQ1_0/64];                   //  2 B, 4 trits per byte ->   8 values
+    ggml_half d;                                // scale
+} block_ptq1_0;
+static_assert(sizeof(block_ptq1_0) == sizeof(ggml_half) + QK_PTQ1_0/64 + (QK_PTQ1_0 - 4*QK_PTQ1_0/64)/5, "wrong ptq1_0 block size/padding");
+
 #define QK4_0 32
 typedef struct {
     ggml_half d;           // delta
