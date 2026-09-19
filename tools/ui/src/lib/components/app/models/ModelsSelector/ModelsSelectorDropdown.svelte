@@ -1,18 +1,22 @@
 <script lang="ts">
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelItem } from './utils';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
 	import {
-		ChatFormActionAddReasoningSubmenu,
 		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorOption
+		ModelsSelectorOption,
+		ModelsSelectorReasoningPanel
 	} from '$lib/components/app';
+	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
+		MODEL_SELECTOR_ICON,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
@@ -39,9 +43,6 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
-	// The model submenu opens together with the menu so the list and its search
-	// box are immediately available, as before the submenu was introduced
-	let modelSubOpen = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -51,20 +52,25 @@
 			highlightedId = null;
 
 			if (open) {
-				// Defer submenu open so the Sub component is mounted first;
-				// setting bind:open synchronously can be lost if the Sub hasn't
-				// rendered yet.
-				queueMicrotask(() => {
-					if (isOpen) modelSubOpen = true;
+				// Defer focus so the content is mounted; bits-ui auto-focuses the
+				// opened content by default which can yank the page scroll, so we
+				// prevent that on the Content and refocus the search here.
+				requestAnimationFrame(() => {
+					if (!isOpen) return;
+
+					document
+						.querySelector<HTMLElement>(DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR)
+						?.focus({ preventScroll: true });
 				});
-			} else {
-				modelSubOpen = false;
 			}
 		},
 		useGlobalSelection: () => useGlobalSelection
 	});
 
 	const reasoning = useReasoningMenu();
+
+	const selectedOption = $derived(ms.getDisplayOption());
+	const triggerModel = $derived(selectedOption?.model ?? null);
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -75,27 +81,12 @@
 		highlightedId = null;
 	});
 
-	// Focus the model submenu's search box without scrolling the page. bits-ui
-	// auto-focuses the opened content by default, which can yank the page
-	// scroll; we prevent that on the Content and refocus the search here.
-	$effect(() => {
-		if (!isOpen || !modelSubOpen) return;
-
-		requestAnimationFrame(() => {
-			const search = document.querySelector<HTMLElement>(
-				'[data-slot="dropdown-menu-sub-content"] input'
-			);
-
-			search?.focus({ preventScroll: true });
-		});
-	});
-
 	// Keyboard navigation follows the on-screen row order, not the flat option list order.
 	let visualOrder = $derived.by(() => {
 		const order: string[] = [];
 
-		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
 		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
+		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
 		}
@@ -123,6 +114,13 @@
 		}
 
 		highlightedId = visualOrder[index];
+	}
+
+	// Pointer/focus interaction with the sticky actions footer (reasoning submenu,
+	// discover models) leaves the option list, so drop the row highlight the same
+	// way we do when the dropdown first opens. Keyboard arrows set it again.
+	function clearHighlight() {
+		highlightedId = null;
 	}
 
 	// Alt+Enter only unloads and keeps the dropdown open.
@@ -180,7 +178,7 @@
 					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
 					className
 				]}
-				style="max-width: min(calc(100cqw - 10rem), 20rem)"
+				style="max-width: min(calc(100cqw - 10rem), 48rem)"
 			>
 				<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
@@ -188,8 +186,6 @@
 			<p class="text-xs text-muted-foreground">No models available.</p>
 		{/if}
 	{:else}
-		{@const selectedOption = ms.getDisplayOption()}
-		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
 			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
@@ -264,94 +260,90 @@
 
 				<DropdownMenu.Content
 					align="end"
-					class="w-full md:min-w-64 md:max-w-80 max-w-[calc(100vw-2rem)]"
+					class="w-full md:min-w-80 md:max-w-[26rem] max-w-[calc(100vw-2rem)] p-0!"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
-					<DropdownMenu.Sub bind:open={modelSubOpen}>
-						<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-							<MODEL_SELECTOR_ICON class="h-4 w-4" />
+					<DropdownMenuSearchable
+						emptyMessage="No models found."
+						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
+						onSearchChange={(v) => ms.setSearchTerm(v)}
+						onSearchKeyDown={handleSearchKeyDown}
+						placeholder="Search models..."
+						searchClass="bg-transparent"
+						searchValue={ms.searchTerm}
+					>
+						<!-- Option list; the search header sticks to the top and the actions
+						     footer to the bottom of the content scrollport. -->
+						<div class="models-list px-1.5">
+							{#if !ms.isCurrentModelInCache && currentModel}
+								<!-- Show unavailable model as first option (disabled) -->
+								<button
+									aria-disabled="true"
+									aria-selected="true"
+									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+									disabled
+									role="option"
+									type="button"
+								>
+									<ModelId class="flex-1" hideQuantization modelId={currentModel} />
 
-							{#if selectedOption}
-								<ModelId
-									class="min-w-0 flex-1 overflow-hidden"
-									hideOrgName={!showOrgNameInTrigger}
-									hideQuantization
-									modelId={selectedOption.model}
-								/>
-							{:else}
-								<span class="min-w-0 flex-1 truncate text-muted-foreground">No model</span>
+									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+								</button>
 							{/if}
-						</DropdownMenu.SubTrigger>
 
-						<DropdownMenu.SubContent class="w-100 max-w-[calc(100vw-2rem)] pt-0">
-							<DropdownMenuSearchable
-								emptyMessage="No models found."
-								isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
-								onSearchChange={(v) => ms.setSearchTerm(v)}
-								onSearchKeyDown={handleSearchKeyDown}
-								placeholder="Search models..."
-								searchValue={ms.searchTerm}
+							{#if ms.filteredOptions.length === 0}
+								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+							{/if}
+
+							{#snippet modelOption(item: ModelItem, _hideOrgName: boolean)}
+								{@const { option } = item}
+								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
+								{@const isHighlighted = option.id === highlightedId}
+								{@const isFav = ms.isFavorite(option.model)}
+
+								<ModelsSelectorOption
+									hideOrgName
+									{isFav}
+									{isHighlighted}
+									{isSelected}
+									onInfoClick={ms.handleInfoClick}
+									onKeyDown={(event) => {
+										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
+											event.preventDefault();
+											void handleModelKeyAction(option.id, event.altKey);
+										}
+									}}
+									onMouseEnter={() => (highlightedId = option.id)}
+									onSelect={ms.handleSelect}
+									{option}
+									showBaseModelAvatar
+								/>
+							{/snippet}
+
+							<ModelsSelectorList
+								activeId={ms.activeId}
+								{currentModel}
+								groups={ms.groupedFilteredOptions}
+								onInfoClick={ms.handleInfoClick}
+								onSelect={ms.handleSelect}
+								renderOption={modelOption}
+								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+							/>
+						</div>
+
+						{#snippet footer()}
+							<!-- Sticky actions footer: reasoning effort panel.
+							     Sticks to the bottom of the content scrollport. -->
+							<div
+								class="px-1.5"
+								onfocusin={clearHighlight}
+								onmouseenter={clearHighlight}
+								role="none"
 							>
-								<div class="models-list">
-									{#if !ms.isCurrentModelInCache && currentModel}
-										<!-- Show unavailable model as first option (disabled) -->
-										<button
-											aria-disabled="true"
-											aria-selected="true"
-											class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
-											disabled
-											role="option"
-											type="button"
-										>
-											<ModelId class="flex-1" hideQuantization modelId={currentModel} />
-
-											<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-										</button>
-									{/if}
-
-									{#if ms.filteredOptions.length === 0}
-										<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
-									{/if}
-
-									{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
-										{@const { option } = item}
-										{@const isSelected = currentModel === option.model || ms.activeId === option.id}
-										{@const isHighlighted = option.id === highlightedId}
-										{@const isFav = ms.isFavorite(option.model)}
-
-										<ModelsSelectorOption
-											{hideOrgName}
-											{isFav}
-											{isHighlighted}
-											{isSelected}
-											onInfoClick={ms.handleInfoClick}
-											onKeyDown={(event) => {
-												if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
-													event.preventDefault();
-													void handleModelKeyAction(option.id, event.altKey);
-												}
-											}}
-											onMouseEnter={() => (highlightedId = option.id)}
-											onSelect={ms.handleSelect}
-											{option}
-										/>
-									{/snippet}
-
-									<ModelsSelectorList
-										activeId={ms.activeId}
-										{currentModel}
-										groups={ms.groupedFilteredOptions}
-										onInfoClick={ms.handleInfoClick}
-										onSelect={ms.handleSelect}
-										renderOption={modelOption}
-										sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
-									/>
-								</div>
-							</DropdownMenuSearchable>
-						</DropdownMenu.SubContent>
-					</DropdownMenu.Sub>
-
-					<ChatFormActionAddReasoningSubmenu />
+								<ModelsSelectorReasoningPanel inMenu />
+							</div>
+						{/snippet}
+					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
@@ -364,7 +356,7 @@
 							class={[
 								`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 								!ms.isCurrentModelInCache
-									? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+									? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
 									: forceForegroundText
 										? 'text-foreground'
 										: ms.isHighlightedCurrentModelActive
