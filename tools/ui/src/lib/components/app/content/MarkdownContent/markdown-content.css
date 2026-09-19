@@ -1,12 +1,8 @@
-/* Long unbreakable content (inline code, paths, hashes) scrolls inside its
-   block instead of stretching the message row. The trailing (unstable) block
-   has display: contents, so the content root covers it too. */
-.markdown-content :global(.markdown-block) {
-	overflow-x: auto;
-}
-
+/* Long unbreakable content (inline code, paths, hashes) wraps inside the
+   column; break-word keeps the min-content width intact, so wide tables and
+   code blocks still scroll in their own containers. */
 .markdown-content {
-	overflow-x: auto;
+	overflow-wrap: break-word;
 }
 
 .markdown-block--unstable {
