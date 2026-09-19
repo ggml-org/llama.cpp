@@ -1333,26 +1333,32 @@ class TensorNameMap:
 
         MODEL_TENSOR.HC_ATTN_FN: (
             "model.layers.{bid}.hc_attn_layer.hc_pre.hc_fn", # hy-v4
+            "model.layers.{bid}.attn_hc.hc_fn",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_ATTN_BASE: (
             "model.layers.{bid}.hc_attn_layer.hc_pre.hc_base", # hy-v4
+            "model.layers.{bid}.attn_hc.hc_base",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_ATTN_SCALE: (
             "model.layers.{bid}.hc_attn_layer.hc_pre.hc_scale", # hy-v4
+            "model.layers.{bid}.attn_hc.hc_scale",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_FFN_FN: (
             "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_fn", # hy-v4
+            "model.layers.{bid}.ffn_hc.hc_fn",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_FFN_BASE: (
             "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_base", # hy-v4
+            "model.layers.{bid}.ffn_hc.hc_base",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_FFN_SCALE: (
             "model.layers.{bid}.hc_mlp_layer.hc_pre.hc_scale", # hy-v4
+            "model.layers.{bid}.ffn_hc.hc_scale",              # xing4_0
         ),
 
         MODEL_TENSOR.HC_HEAD_FN: (

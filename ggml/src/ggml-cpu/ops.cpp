@@ -11417,6 +11417,142 @@ void ggml_compute_forward_dsv4_hc_post(
     }
 }
 
+// ggml_compute_forward_xing4_0_hc_comb
+//
+// xing4_0 semantics: comb is [src, dst, n_tokens] (ne0 = src, fastest), raw
+// logits are clamped to [-30,30] before softmax, softmax is over src, then all
+// sinkhorn iterations do norm_src then norm_dst (src first). eps is only added
+// to the normalization denominators, never to the values.
+
+static void ggml_xing4_0_hc_comb_norm_dst(float * comb, float eps) {
+    constexpr int64_t hc = 4;
+
+    for (int64_t isrc = 0; isrc < hc; ++isrc) {
+        float sum = eps;
+        for (int64_t idst = 0; idst < hc; ++idst) {
+            sum += comb[isrc + hc*idst];
+        }
+
+        const float inv_sum = 1.0f / sum;
+        for (int64_t idst = 0; idst < hc; ++idst) {
+            comb[isrc + hc*idst] *= inv_sum;
+        }
+    }
+}
+
+static void ggml_xing4_0_hc_comb_norm_src(float * comb, float eps) {
+    constexpr int64_t hc = 4;
+
+    for (int64_t idst = 0; idst < hc; ++idst) {
+        float sum = eps;
+        for (int64_t isrc = 0; isrc < hc; ++isrc) {
+            sum += comb[isrc + hc*idst];
+        }
+
+        const float inv_sum = 1.0f / sum;
+        for (int64_t isrc = 0; isrc < hc; ++isrc) {
+            comb[isrc + hc*idst] *= inv_sum;
+        }
+    }
+}
+
+static void ggml_compute_forward_xing4_0_hc_comb_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * mixes = dst->src[0];
+    const ggml_tensor * scale = dst->src[1];
+    const ggml_tensor * base  = dst->src[2];
+
+    GGML_ASSERT(mixes->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(base->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    constexpr int64_t hc = 4;
+    constexpr int64_t comb_offset = 2*hc;
+    constexpr int64_t hc_mix_dim = (2 + hc)*hc;
+
+    const int64_t n_tokens = mixes->ne[1];
+
+    GGML_ASSERT(mixes->ne[0] == hc_mix_dim);
+    GGML_ASSERT(dst->ne[0] == hc);
+    GGML_ASSERT(dst->ne[1] == hc);
+    GGML_ASSERT(dst->ne[2] == n_tokens);
+    GGML_ASSERT(scale->ne[0] >= 3);
+    GGML_ASSERT(base->ne[0] == hc_mix_dim);
+
+    GGML_TENSOR_LOCALS(size_t, nbm, mixes, nb);
+    GGML_TENSOR_LOCALS(size_t, nbs, scale, nb);
+    GGML_TENSOR_LOCALS(size_t, nbb, base,  nb);
+    GGML_TENSOR_LOCALS(size_t, nbd, dst,   nb);
+
+    const float eps = ggml_get_op_params_f32(dst, 0);
+    const int32_t n_iter = ggml_get_op_params_i32(dst, 1);
+    GGML_ASSERT(n_iter > 0);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t dr  = (n_tokens + nth - 1) / nth;
+    const int64_t it0 = dr * ith;
+    const int64_t it1 = MIN(it0 + dr, n_tokens);
+
+    const float scale_comb = *(const float *) ((const char *) scale->data + 2*nbs0);
+
+    for (int64_t it = it0; it < it1; ++it) {
+        float comb[hc*hc];
+
+        for (int64_t idst = 0; idst < hc; ++idst) {
+            float max = -INFINITY;
+            for (int64_t isrc = 0; isrc < hc; ++isrc) {
+                const int64_t idx = isrc + hc*idst;
+                const float xv = *(const float *) ((const char *) mixes->data + (comb_offset + idx)*nbm0 + it*nbm1);
+                const float bv = *(const float *) ((const char *) base->data  + (comb_offset + idx)*nbb0);
+                const float v  = xv * scale_comb + bv;
+                comb[idx] = MAX(MIN(v, 30.0f), -30.0f);
+                max = MAX(max, comb[idx]);
+            }
+
+            // exp(-max) only -- NO sum normalization here, so the first norm_src
+            // below adds eps to the denominator, matching with_clamp exactly.
+            for (int64_t isrc = 0; isrc < hc; ++isrc) {
+                const int64_t idx = isrc + hc*idst;
+                comb[idx] = expf(comb[idx] - max);
+            }
+        }
+
+        // with_clamp: every sinkhorn normalization is inside the loop, src first.
+        for (int32_t i = 0; i < n_iter; ++i) {
+            ggml_xing4_0_hc_comb_norm_src(comb, eps);
+            ggml_xing4_0_hc_comb_norm_dst(comb, eps);
+        }
+
+        for (int64_t isrc = 0; isrc < hc; ++isrc) {
+            for (int64_t idst = 0; idst < hc; ++idst) {
+                const int64_t idx = isrc + hc*idst;
+                *(float *) ((char *) dst->data + isrc*nbd0 + idst*nbd1 + it*nbd2) = comb[idx];
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_xing4_0_hc_comb(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_xing4_0_hc_comb_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(

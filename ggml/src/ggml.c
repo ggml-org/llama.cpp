@@ -1084,6 +1084,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "XING4_0_HC_COMB",
 
     "UNARY",
 
@@ -1101,7 +1102,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1216,7 +1217,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6604,6 +6605,49 @@ struct ggml_tensor * ggml_dsv4_hc_post(
     result->src[1] = residual;
     result->src[2] = post;
     result->src[3] = comb;
+
+    return result;
+}
+
+// ggml_xing4_0_hc_comb
+
+struct ggml_tensor * ggml_xing4_0_hc_comb(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * mixes,
+        struct ggml_tensor  * scale,
+        struct ggml_tensor  * base,
+        float                 eps,
+        int32_t               n_iter) {
+    GGML_ASSERT(mixes->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(base->type == GGML_TYPE_F32);
+    GGML_ASSERT(n_iter > 0);
+
+    const int64_t hc         = 4; // xing4_0 always uses 4 residual streams
+    const int64_t hc_mix_dim = (2 + hc)*hc;
+    const int64_t n_tokens   = mixes->ne[1];
+
+    GGML_ASSERT(mixes->ne[0] == hc_mix_dim);
+    GGML_ASSERT(mixes->ne[2] == 1);
+    GGML_ASSERT(mixes->ne[3] == 1);
+    GGML_ASSERT(scale->ne[0] >= 3);
+    GGML_ASSERT(scale->ne[1] == 1);
+    GGML_ASSERT(scale->ne[2] == 1);
+    GGML_ASSERT(scale->ne[3] == 1);
+    GGML_ASSERT(base->ne[0] == hc_mix_dim);
+    GGML_ASSERT(base->ne[1] == 1);
+    GGML_ASSERT(base->ne[2] == 1);
+    GGML_ASSERT(base->ne[3] == 1);
+
+    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hc, hc, n_tokens);
+
+    ggml_set_op_params_f32(result, 0, eps);
+    ggml_set_op_params_i32(result, 1, n_iter);
+
+    result->op     = GGML_OP_XING4_0_HC_COMB;
+    result->src[0] = mixes;
+    result->src[1] = scale;
+    result->src[2] = base;
 
     return result;
 }
