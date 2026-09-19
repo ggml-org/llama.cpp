@@ -1154,6 +1154,15 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_lfm2(tmpl, params, /* tool_list_tokens = */ false);
     }
 
+    // GigaChat 3.5: role/message separators with GCML tool calls inside the assistant turn.
+    if (src.find("<|role_sep|>") != std::string::npos &&
+        src.find("<|message_sep|>") != std::string::npos &&
+        src.find("GCML") != std::string::npos &&
+        src.find("tool_calls") != std::string::npos) {
+        LOG_DBG("Using specialized template: GigaChat3.5\n");
+        return common_chat_params_init_gigachat35(tmpl, params);
+    }
+
     // GigaChatV3 format detection
     if (src.find("<|role_sep|>") != std::string::npos &&
         src.find("<|message_sep|>") != std::string::npos &&
