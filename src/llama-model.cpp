@@ -3226,6 +3226,18 @@ int32_t llama_model_n_devices(const struct llama_model * model) {
     return (int32_t)model->devices.size();
 }
 
+size_t llama_model_layer_ffn_nbytes(const llama_model * model, uint32_t il) {
+    if (il >= model->layers.size()) {
+        return 0;
+    }
+    const llama_layer & layer = model->layers[il];
+    size_t nbytes = 0;
+    nbytes += layer.ffn_gate ? ggml_nbytes(layer.ffn_gate) : 0;
+    nbytes += layer.ffn_up   ? ggml_nbytes(layer.ffn_up)   : 0;
+    nbytes += layer.ffn_down ? ggml_nbytes(layer.ffn_down) : 0;
+    return nbytes;
+}
+
 ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int i) {
     if (i < 0 || i >= (int)model->devices.size()) {
         return nullptr;
