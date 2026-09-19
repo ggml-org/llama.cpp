@@ -841,6 +841,7 @@ struct console_printer : public printer {
         } else if (result.test_mode == "support") {
             print_support_console(result);
         }
+        fflush(stdout);
     }
 
     void print_operation(const test_operation_info & info) override {
@@ -850,6 +851,7 @@ struct console_printer : public printer {
         // Handle large tensor skip first
         if (info.is_large_tensor_skip) {
             printf("skipping large tensors for speed \n");
+            fflush(stdout);
             return;
         }
 
@@ -860,6 +862,7 @@ struct console_printer : public printer {
             } else {
                 printf("not supported [%s]\n", info.backend_name.c_str());
             }
+            fflush(stdout);
             return;
         }
 
@@ -896,6 +899,7 @@ struct console_printer : public printer {
         } else {
             printf("\033[1;31mFAIL\033[0m\n");
         }
+        fflush(stdout);
     }
 
     void print_summary(const test_summary_info & info) override {
