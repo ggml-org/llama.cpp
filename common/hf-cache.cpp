@@ -30,6 +30,11 @@ namespace hf_cache {
 
 namespace fs = std::filesystem;
 
+static std::string path_to_utf8(const fs::path & p) {
+    const auto s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
 static fs::path get_cache_directory() {
     static const fs::path cache = []() {
         struct {
@@ -343,11 +348,11 @@ hf_files get_repo_files(const std::string & repo_id,
             file.url = endpoint + repo_id + "/resolve/" + commit + "/" + file.path;
 
             fs::path final_path = commit_path / file.path;
-            file.final_path = final_path.string();
+            file.final_path = path_to_utf8(final_path);
 
             if (!file.oid.empty() && !fs::exists(final_path)) {
                 fs::path local_path = blobs_path / file.oid;
-                file.local_path = local_path.string();
+                file.local_path = path_to_utf8(local_path);
             } else {
                 file.local_path = file.final_path;
             }
@@ -438,7 +443,7 @@ hf_files get_cached_files(const std::string & repo_id) {
                 hf_file file;
                 file.repo_id = _repo_id;
                 file.path = path.generic_string();
-                file.local_path = entry.path().string();
+                file.local_path = path_to_utf8(entry.path());
                 file.final_path = file.local_path;
                 files.push_back(std::move(file));
             }
@@ -452,8 +457,8 @@ std::string finalize_file(const hf_file & file) {
     static std::atomic<bool> symlinks_disabled{false};
 
     std::error_code ec;
-    fs::path local_path(file.local_path);
-    fs::path final_path(file.final_path);
+    fs::path local_path = fs::u8path(file.local_path);
+    fs::path final_path = fs::u8path(file.final_path);
 
     if (local_path == final_path || fs::exists(final_path, ec)) {
         return file.final_path;
