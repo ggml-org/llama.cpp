@@ -167,7 +167,7 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="pointer-events-none flex items-center justify-center gap-2 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav &&
+			class="pointer-events-none flex items-center justify-center gap-1 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav &&
 			showFavIndicator
 				? ''
 				: 'opacity-0 group-hover:opacity-100'}"
@@ -178,9 +178,9 @@
 				<!-- the wrapper above stays visible for a favorite, this one does not -->
 				<span class="flex opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
 					<ActionIcon
-						class="h-3 w-3 hover:text-foreground"
+						class="h-5 w-5 hover:text-foreground"
 						icon={Info}
-						iconSize="h-2.5 w-2.5"
+						iconSize="h-4 w-4"
 						onclick={() => onInfoClick(option.model)}
 						tooltip="Model information"
 						tooltipAsTitle
@@ -189,25 +189,25 @@
 			{/if}
 
 			{#if isFav}
-				<!-- a favorite keeps a colored stroke heart at rest; hovering the icon
-				     itself swaps it for the crossed one -->
-				<span class="group/heart flex h-3 w-3 items-center justify-center">
-					<span class="flex group-hover/heart:hidden">
+				<!-- a favorite keeps a colored stroke heart at rest; hovering the row
+				     swaps it for the crossed one -->
+				<span class="flex h-5 w-5 items-center justify-center">
+					<span class="flex group-hover:hidden [@media(pointer:coarse)]:hidden">
 						<ActionIcon
-							class="h-3 w-3 text-rose-500 hover:text-foreground"
+							class="h-5 w-5 text-rose-500 hover:text-foreground"
 							icon={Heart}
-							iconSize="h-2.5 w-2.5"
+							iconSize="h-4 w-4"
 							onclick={() => modelsStore.toggleFavorite(option.model)}
 							tooltip="Remove from favorites"
 							tooltipAsTitle
 						/>
 					</span>
 
-					<span class="hidden group-hover/heart:flex">
+					<span class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 						<ActionIcon
-							class="h-3 w-3 hover:text-foreground"
+							class="h-5 w-5 hover:text-foreground"
 							icon={HeartOff}
-							iconSize="h-2.5 w-2.5"
+							iconSize="h-4 w-4"
 							onclick={() => modelsStore.toggleFavorite(option.model)}
 							tooltip="Remove from favorites"
 							tooltipAsTitle
@@ -216,9 +216,9 @@
 				</span>
 			{:else}
 				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
+					class="h-5 w-5 hover:text-foreground"
 					icon={Heart}
-					iconSize="h-2.5 w-2.5"
+					iconSize="h-4 w-4"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Add to favorites"
 					tooltipAsTitle
@@ -229,20 +229,20 @@
 		{#if !canLoad}
 			<!-- remote rows have no load state, the column stays out of the way -->
 		{:else if isLoading}
-			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
+			<div class="flex w-5 items-center justify-center">
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 			</div>
 		{:else if isFailed}
-			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
+			<div class="flex w-5 items-center justify-center">
 				<CircleAlert
 					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-foreground"
+						class="h-5 w-5 text-red-500 hover:text-foreground"
 						icon={RotateCw}
-						iconSize="h-2.5 w-2.5"
+						iconSize="h-4 w-4"
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 						tooltip="Retry loading model"
@@ -251,16 +251,16 @@
 				</div>
 			</div>
 		{:else if isSleeping}
-			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
+			<div class="flex w-5 items-center justify-center">
 				<span
 					class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
+						class="h-5 w-5 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
 						icon={PowerOff}
-						iconSize="h-2.5 w-2.5"
+						iconSize="h-4 w-4"
 						onclick={(e) => {
 							e?.stopPropagation();
 							modelsStore.status.unload(option.model);
@@ -271,16 +271,16 @@
 				</div>
 			</div>
 		{:else if isLoaded}
-			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
+			<div class="flex w-5 items-center justify-center">
 				<span
 					class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
+						class="h-5 w-5 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
 						icon={PowerOff}
-						iconSize="h-2.5 w-2.5"
+						iconSize="h-4 w-4"
 						onclick={() => modelsStore.status.unload(option.model)}
 						stopPropagationOnClick
 						tooltip="Unload model"
@@ -289,16 +289,16 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
+			<div class="flex w-5 items-center justify-center">
 				<span
 					class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 [@media(pointer:coarse)]:text-muted-foreground"
+						class="h-5 w-5 [@media(pointer:coarse)]:text-muted-foreground"
 						icon={Power}
-						iconSize="h-2.5 w-2.5"
+						iconSize="h-4 w-4"
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 						tooltip="Load model"
