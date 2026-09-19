@@ -10,6 +10,7 @@
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
+#include "../src/llama-model.h"
 
 #include <cinttypes>
 #include <cstddef>
@@ -65,7 +66,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-l/--lora-shapes] [-v N] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -434,6 +435,96 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         throw std::runtime_error("failed to create llama context");
     }
     return std::make_pair(std::move(model), std::move(lctx));
+}
+
+// lora pair for an MoE tensor of the base model, written to a temporary file
+static FILE * get_lora_file(
+        const std::string & name, const ggml_tensor * model_tensor, int64_t n_expert_a, int64_t n_expert_b) {
+    const int64_t n_rank = 8;
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ 1024*1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ false,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+
+    ggml_tensor * a = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, model_tensor->ne[0], n_rank, n_expert_a);
+    ggml_tensor * b = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, n_rank, model_tensor->ne[1], n_expert_b);
+    ggml_set_name(a, (name + ".lora_a").c_str());
+    ggml_set_name(b, (name + ".lora_b").c_str());
+    memset(a->data, 0, ggml_nbytes(a));
+    memset(b->data, 0, ggml_nbytes(b));
+
+    gguf_context_ptr gguf_ctx(gguf_init_empty());
+    gguf_set_val_str(gguf_ctx.get(), "general.type",         "adapter");
+    gguf_set_val_str(gguf_ctx.get(), "general.architecture", "llama");
+    gguf_set_val_str(gguf_ctx.get(), "adapter.type",         "lora");
+    gguf_set_val_f32(gguf_ctx.get(), "adapter.lora.alpha",   1.0f);
+    gguf_add_tensor(gguf_ctx.get(), a);
+    gguf_add_tensor(gguf_ctx.get(), b);
+
+    FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
+    if (file == nullptr) {
+        return nullptr;
+    }
+    if (!gguf_write_to_file_ptr(gguf_ctx.get(), file, /*only_meta =*/ false)) {
+        fclose(file);
+        return nullptr;
+    }
+    rewind(file);
+
+    return file;
+}
+
+// the expert ids of the base model are reused for the lora tensors, so an expert count mismatch
+// makes ggml_mul_mat_id() access out of bounds, ref: https://github.com/ggml-org/llama.cpp/issues/29128
+static int test_lora_shapes(const size_t seed) {
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, /*moe =*/ true);
+    auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+
+    const std::string name = "blk.0.ffn_gate_exps.weight";
+
+    const ggml_tensor * model_tensor = model_and_ctx.first->get_tensor(name.c_str());
+    GGML_ASSERT(model_tensor != nullptr);
+
+    const int64_t n_expert = model_tensor->ne[2];
+    GGML_ASSERT(n_expert > 1);
+
+    struct test_case {
+        const char * label;
+        int64_t      n_expert_a;
+        int64_t      n_expert_b;
+        bool         expect_loaded;
+    };
+
+    const std::vector<test_case> cases = {
+        { "matching expert count", n_expert, n_expert, true  },
+        { "undersized lora_a",     1,        n_expert, false },
+        { "undersized lora_b",     n_expert, 1,        false },
+    };
+
+    bool all_ok = true;
+    for (const test_case & tc : cases) {
+        FILE * file = get_lora_file(name, model_tensor, tc.n_expert_a, tc.n_expert_b);
+        if (file == nullptr) {
+            printf("%s: could not write the lora adapter to a temporary file, skipping\n", __func__);
+            return 0;
+        }
+
+        llama_adapter_lora * adapter = llama_adapter_lora_init_from_file_ptr(model_and_ctx.first.get(), file);
+        fclose(file);
+
+        const bool loaded = adapter != nullptr;
+        llama_adapter_lora_free(adapter);
+
+        const bool ok = loaded == tc.expect_loaded;
+        all_ok = all_ok && ok;
+
+        printf("%s: %-21s -> %-8s %s\n", __func__, tc.label, loaded ? "loaded" : "rejected", ok ? "OK" : "FAIL");
+    }
+
+    return all_ok ? 0 : 1;
 }
 
 static std::vector<float> get_logits(
@@ -835,6 +926,7 @@ int main(int argc, char ** argv) {
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
     std::string out;
+    bool lora_shapes = false;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -872,6 +964,9 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+        if (strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--lora-shapes") == 0) {
+            lora_shapes = true;
+        }
         if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
@@ -884,6 +979,9 @@ int main(int argc, char ** argv) {
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (lora_shapes) {
+            return test_lora_shapes(seed);
+        }
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
