@@ -99,9 +99,9 @@ class Dots3NoteModel(DeepseekV2Model):
         # --no-mtp: drop the NextN/MTP block; --mtp: keep only that block plus the shared embeddings/norm/lm_head
         if is_mtp and cls.no_mtp:
             return None
-        if cls.mtp_only and not is_mtp and name not in (
+        if cls.mtp_only and not is_mtp and (cls.mtp_shared_embd or name not in (
             "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-        ):
+        )):
             return None
 
         return name, gen
