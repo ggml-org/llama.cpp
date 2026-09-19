@@ -86,8 +86,20 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int64_t              conv_channels,
             int                  il);
 
+    // recurrent state input of build_recurrent_attn: (n_embd_s, n_seqs), like build_rs
+    // when the ubatch can update its cache rows in place (inp->rs_inplace) and the layer runs on the CPU
+    // (dev_layer), this is a view of the cache rows themselves and build_recurrent_attn updates them in
+    // place (ggml_gated_delta_net_inplace): no gather, no output state, no write-back.
+    // otherwise it is the gathered copy of build_rs. GGML_GDN_STATE_GATHER=1 forces the gathered path.
+    ggml_tensor * build_rs_state(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        ssm_states_all,
+            int32_t              n_seqs,
+            ggml_backend_dev_t   dev_layer);
+
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
-    // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
+    // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs), a gathered copy or (build_rs_state) a view of the
+    //    cache rows, which are then updated in place; returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(
             llm_graph_input_rs * inp,
             ggml_tensor *        ssm_states_all,

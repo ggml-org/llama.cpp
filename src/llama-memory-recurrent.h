@@ -26,7 +26,7 @@ public:
                      uint32_t   n_rs_seq,
         const layer_filter_cb & filter);
 
-    ~llama_memory_recurrent() = default;
+    ~llama_memory_recurrent();
 
     //
     // llama_memory_i
@@ -123,6 +123,18 @@ private:
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
+    // host buffers backed by an anonymous private mmap (Linux): zero on first touch, so the
+    // pages of untouched cells never become resident. wrapped with
+    // ggml_backend_cpu_buffer_from_ptr, which does not own the memory - unmapped in the
+    // destructor after the buffers are freed. empty when LLAMA_RS_EAGER_ZERO=1 or on other
+    // platforms (eager allocation + memset)
+    struct rs_mmap_region {
+        ggml_backend_buffer_t buf;
+        void *                ptr;
+        size_t                size;
+    };
+    std::vector<rs_mmap_region> mmaps;
+
     size_t total_size() const;
 
     size_t size_r_bytes() const;
@@ -176,6 +188,13 @@ public:
     ggml_tensor * get_p_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    // true when the cache rows [head, head + n_seqs) can be updated in place by the graph of
+    // this ubatch: not the full (reserve) context, no rollback snapshots, no extra rows to
+    // relocate (n_rs == n_seqs) and every cell reads its own state (s_copy(i) == head + i).
+    // side-effect free on purpose: unlike s_copy() it never resets the per-seq rollback index,
+    // so it can be evaluated at graph build and again in can_reuse
+    bool rs_inplace_ok(uint32_t n_seqs) const;
 
 private:
     const llama_memory_status status;

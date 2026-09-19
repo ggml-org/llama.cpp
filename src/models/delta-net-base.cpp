@@ -3,6 +3,8 @@
 #include "llama-impl.h"
 #include "llama-memory-recurrent.h"
 
+#include <cstdlib>
+
 // utility to get one slice from the third dimension
 // input dim:  [x, y, c, b]
 // output dim: [x, y, 1, b]
@@ -524,6 +526,45 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     return conv_input;
 }
 
+ggml_tensor * llm_build_delta_net_base::build_rs_state(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        ssm_states_all,
+        int32_t              n_seqs,
+        ggml_backend_dev_t   dev_layer) {
+    const auto * mctx_cur = inp->mctx;
+
+    // GGML_GDN_STATE_GATHER=1 forces the gathered path (same-binary A/B)
+    static const bool gather_env = getenv("GGML_GDN_STATE_GATHER") != nullptr;
+
+    // the in-place op is the fused kernel: take it only where the gathered path runs the fused kernel too
+    const bool fused = ubatch.n_seq_tokens == 1 ? cparams.fused_gdn_ar : cparams.fused_gdn_ch;
+
+    // the in-place op is implemented by the CPU backend only and mutates the cache rows directly
+    const bool inplace = !gather_env && inp->rs_inplace && fused &&
+        ssm_states_all->type == GGML_TYPE_F32 &&
+        ggml_backend_dev_type(dev_layer) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+        ggml_backend_buffer_is_host(ssm_states_all->buffer);
+
+    if (!inplace) {
+        return build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
+    }
+
+    const int32_t state_size = hparams.n_embd_s();
+    const int32_t rs_zero    = mctx_cur->get_rs_z();
+    const auto    kv_head    = mctx_cur->get_head();
+
+    // rs_inplace_ok: the ubatch covers the whole cell range, there are no extra rows to relocate
+    GGML_ASSERT(mctx_cur->get_n_rs() == (uint32_t) n_seqs);
+
+    // same as build_rs without the gather: clear the state of a fresh sequence before the op reads it
+    // (a no-op when the view is zero-sized)
+    ggml_tensor * state_zero = ggml_view_1d(ctx0, ssm_states_all, state_size*(rs_zero >= 0), rs_zero*ssm_states_all->nb[1]*(rs_zero >= 0));
+    ggml_build_forward_expand(gf, ggml_scale_inplace(ctx0, state_zero, 0));
+
+    // the cache rows of the ubatch themselves - build_recurrent_attn updates them in place
+    return ggml_view_2d(ctx0, ssm_states_all, state_size, n_seqs, ssm_states_all->nb[1], kv_head*ssm_states_all->nb[1]);
+}
+
 ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         llm_graph_input_rs * inp,
         ggml_tensor *        ssm_states_all,
@@ -544,6 +585,33 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const int64_t n_seq_tokens = q->ne[2];
 
     const bool keep = cparams.n_rs_seq > 0;
+
+    // in-place path (build_rs_state): s is a view of the cache rows [kv_head, kv_head + n_seqs) themselves
+    if (s->view_src == ssm_states_all) {
+        GGML_ASSERT(!keep);
+        GGML_ASSERT(s->view_offs == kv_head * hparams.n_embd_s() * ggml_element_size(ssm_states_all));
+
+        // the state is updated in the cache rows: no output state, no write-back
+        ggml_tensor * gdn_out = ggml_gated_delta_net_inplace(ctx0, q, k, v, g, b, s);
+        if (n_seq_tokens > 1) {
+            res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
+        } else {
+            res->add_fused_node({LLM_FUSED_OP_GDN_AR, gdn_out, il});
+        }
+
+        // only the CPU backend implements the in-place form, and it has to run on the original rows
+        ggml_backend_sched_set_tensor_backend(sched, gdn_out, backend_cpu);
+
+        ggml_tensor * output = ggml_view_4d(ctx0, gdn_out,
+            S_v, H_v, n_seq_tokens, n_seqs,
+            ggml_row_size(gdn_out->type, S_v),
+            ggml_row_size(gdn_out->type, S_v * H_v),
+            ggml_row_size(gdn_out->type, S_v * H_v * n_seq_tokens),
+            0);
+        cb(output, "attn_output", il);
+
+        return output;
+    }
 
     if (!keep) {
         auto attn_out = build_delta_net(q, k, v, g, b, s, il);

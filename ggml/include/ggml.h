@@ -2659,6 +2659,24 @@ extern "C" {
             struct ggml_tensor  * state,
             int64_t               K);
 
+    // in-place form of ggml_gated_delta_net with K == 1: the recurrent state is updated in `state`
+    // itself (typically a view of the recurrent-state cache) instead of being copied into the output,
+    // so the result carries the attention scores only: [S_v*H_v, n_tokens*n_seqs]. The state is
+    // computed by exactly the same sequence of operations as in ggml_gated_delta_net, so the results
+    // are bit-identical.
+    //
+    // note: only the CPU backend implements this form. The op mutates one of its sources, so the
+    //       caller has to make sure it is executed by the CPU backend on the original `state`
+    //       (e.g. ggml_backend_sched_set_tensor_backend) and in graph order.
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state);
+
     // DSA lightning indexer
     //
     // q:       [n_embd_idx, n_head_idx, n_batch, ne3 ]
