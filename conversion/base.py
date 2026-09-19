@@ -1864,6 +1864,9 @@ class TextModel(ModelBase):
         if chkhsh == "653660222fb704f61cbf2b618a8ae6502b7f8b20c980f9a5de07ed78e13319cd":
             # ref: https://huggingface.co/ufakai/ufakzeka-1
             res = "ufakzeka"
+        if chkhsh == "079be25958f51a600a944c6c529381549910befee3970e703cbd2fbb9ea5468f":
+            # ref: https://huggingface.co/fraunhofer-iis/elmod-2.7b-base
+            res = "elmod"
 
         if res is None:
             logger.warning("\n")
