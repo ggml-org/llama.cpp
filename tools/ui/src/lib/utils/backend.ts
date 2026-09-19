@@ -14,6 +14,7 @@ import {
 	BACKEND_PROTOCOLS,
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
+	FAVICON_SERVICE_URL,
 	LOCAL_BACKEND_ID
 } from '$lib/constants';
 import type {
@@ -34,18 +35,21 @@ export function backendModelsUrl(backend: Backend): string {
 	return joinBackendUrl(backend.baseUrl, backend.modelsPath ?? DEFAULT_BACKEND_MODELS_PATH);
 }
 
+/** Icon size requested from the favicon service, shown at 16px. */
+const FAVICON_SIZE = 64;
+
 /**
- * Favicon of a backend's root domain, for endpoints with no bundled mark. API
- * hosts rarely serve one, so the subdomain is dropped: `api.z.ai` -> `z.ai`.
+ * Favicon of a backend's root domain, used when no bundled mark matches. API
+ * hosts rarely serve a favicon themselves, so the subdomain is dropped
+ * (`api.z.ai` -> `z.ai`) and the icon is requested through a favicon service.
  * Returns null when the URL carries no usable host.
  */
 export function backendFaviconUrl(baseUrl: string): string | null {
 	try {
-		const { hostname, protocol } = new URL(baseUrl);
-		const labels = hostname.split('.');
-		const root = labels.length > 2 ? labels.slice(-2).join('.') : hostname;
+		const labels = new URL(baseUrl).hostname.split('.');
+		const root = labels.length > 2 ? labels.slice(-2).join('.') : labels.join('.');
 
-		return `${protocol}//${root}/favicon.ico`;
+		return root ? `${FAVICON_SERVICE_URL}${root}&sz=${FAVICON_SIZE}` : null;
 	} catch {
 		return null;
 	}
