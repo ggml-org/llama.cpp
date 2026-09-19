@@ -3318,7 +3318,6 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
 // #define PRETOKENIZERDEBUG
 
 void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer_variant> & buffer, bool parse_special) const {
-
     // for each special token
     for (const llama_token special_id : cache_special_tokens) {
         const auto & data = vocab.get_token_data(special_id);
