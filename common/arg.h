@@ -122,6 +122,8 @@ struct common_params_context {
 
 // parse input arguments from CLI
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
+// TODO: this function can load ggml backend (by calling llama_support_rpc)
+//       this is a side-effect that should be avoided
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
 // load all backends and print the list of available (non-CPU) devices to stdout
