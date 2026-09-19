@@ -187,7 +187,7 @@ def test_different_result_different_seed(n_slots: int):
         last_res = res
 
 # TODO figure why it don't work with temperature = 1
-# @pytest.mark.parametrize("temperature", [0.0, 1.0])
+# @pytest.mark.parametrize("temperature", [0.0, 1.0])
 @pytest.mark.parametrize("n_batch", [16, 32])
 @pytest.mark.parametrize("temperature", [0.0])
 def test_consistent_result_different_batch_size(n_batch: int, temperature: float):
