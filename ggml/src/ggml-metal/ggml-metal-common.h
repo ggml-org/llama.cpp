@@ -3,7 +3,6 @@
 #pragma once
 
 #include <stdbool.h>
-#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,12 +48,9 @@ bool ggml_mem_ranges_check(ggml_mem_ranges_t mrs, const struct ggml_tensor * ten
 void ggml_graph_optimize(struct ggml_cgraph * gf);
 
 // mat-mat vs mat-vec dispatch; used by both supports_op and ggml_metal_op_mul_mat*
+bool ggml_metal_op_mul_mat_use_fwht (const struct ggml_tensor * op);
 bool ggml_metal_op_mul_mat_use_mm   (const struct ggml_tensor * op, bool has_simdgroup_mm);
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm);
-
-// FWHT dispatch; used by both supports_op and ggml_metal_op_mul_mat
-bool ggml_metal_fwht_supported_size    (int64_t n);
-bool ggml_metal_op_mul_mat_use_fwht    (const struct ggml_tensor * op);
 
 #ifdef __cplusplus
 }

@@ -7,17 +7,8 @@
 
 #include <vector>
 
-bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
-    const int64_t ne00 = op->src[0]->ne[0];
-    const int64_t ne11 = op->src[1]->ne[1];
-
-    return !ggml_is_transposed(op->src[0]) &&
-           !ggml_is_transposed(op->src[1]) &&
-           has_simdgroup_mm && ne00 >= 64 && ne11 > 8;
-}
-
 // must stay in sync with the kernel_fwht_<type>_<N> templates in misc.metal
-bool ggml_metal_fwht_supported_size(int64_t n) {
+static bool ggml_metal_fwht_supported_size(int64_t n) {
     return n == 64 || n == 128 || n == 256 || n == 512;
 }
 
@@ -32,6 +23,15 @@ bool ggml_metal_op_mul_mat_use_fwht(const struct ggml_tensor * op) {
            ggml_is_contiguous(op) &&
            ggml_are_same_shape(op->src[1], op) &&
            ggml_metal_fwht_supported_size(op->src[1]->ne[0]);
+}
+
+bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
+    const int64_t ne00 = op->src[0]->ne[0];
+    const int64_t ne11 = op->src[1]->ne[1];
+
+    return !ggml_is_transposed(op->src[0]) &&
+           !ggml_is_transposed(op->src[1]) &&
+           has_simdgroup_mm && ne00 >= 64 && ne11 > 8;
 }
 
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
