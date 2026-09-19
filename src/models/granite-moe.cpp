@@ -9,8 +9,7 @@ void llama_model_granite_moe::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_1B_A400M; break;
-        case 32: type = LLM_TYPE_3B; break;
-        case 40: type = LLM_TYPE_3B; break;
+        case 32: type = LLM_TYPE_3B_A800M; break;
         // Add additional layer/vocab/etc checks here for other model sizes
         default: type = LLM_TYPE_UNKNOWN;
     }

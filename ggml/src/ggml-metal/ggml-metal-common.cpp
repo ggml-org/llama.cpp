@@ -1,4 +1,5 @@
 #include "ggml-metal-common.h"
+#include "ggml-metal-fusion.h"
 
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -221,38 +222,63 @@ struct node_info {
     void add_fused(ggml_tensor * t) {
         fused.push_back(t);
     }
+
+    bool is_output(const ggml_tensor * t) const {
+        if (t == node) {
+            return true;
+        }
+        for (const auto * f : fused) {
+            if (t == f) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
     // helper to add node src and dst ranges
     const auto & h_add = [](ggml_mem_ranges_t mrs, const node_info & node) {
+        // only external sources matter: sources produced by the fused group are internal
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_add_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_add_src(mrs, src)) {
                     return false;
                 }
             }
         }
 
-        // keep track of the sources of the fused nodes as well
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_add_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_add_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_add_dst(mrs, node.dst());
+        // all fused tensors are produced by the fused kernel
+        if (!ggml_mem_ranges_add_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_add_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // helper to check if a node can run concurrently with the existing set of nodes
     const auto & h_check = [](ggml_mem_ranges_t mrs, const node_info & node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_check_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_check_src(mrs, src)) {
                     return false;
                 }
             }
@@ -260,15 +286,25 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_check_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_check_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_check_dst(mrs, node.dst());
+        if (!ggml_mem_ranges_check_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_check_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // perform reorders only across these types of ops
@@ -390,11 +426,7 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 }
 
 void ggml_graph_optimize(ggml_cgraph * gf) {
-    constexpr int MAX_FUSE = 16;
-
     const int n = gf->n_nodes;
-
-    enum ggml_op ops[MAX_FUSE];
 
     std::vector<node_info> nodes;
     nodes.reserve(gf->n_nodes);
@@ -402,47 +434,23 @@ void ggml_graph_optimize(ggml_cgraph * gf) {
     // fuse nodes:
     // we don't want to make reorders that break fusing, so we first pack all fusable tensors
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
+    //
+    // the fusable sequences are declared in the fusion table (ggml-metal-fuse.cpp), so the
+    // packing here is driven by the same patterns that the op encoders will later use
     for (int i = 0; i < n; i++) {
         node_info node = {
             /*.node =*/ gf->nodes[i],
             /*.fused =*/ {},
         };
 
-        // fuse only ops that start with these operations
-        // can be expanded when needed
-        if (node.op() == GGML_OP_ADD ||
-            node.op() == GGML_OP_NORM ||
-            node.op() == GGML_OP_RMS_NORM) {
-            ops[0] = node.op();
+        const int f = ggml_metal_fusion_max(gf, i);
 
-            int f = i + 1;
-            while (f < n && f < i + MAX_FUSE) {
-                // conservatively allow fusing only these ops
-                // can be expanded when needed
-                if (gf->nodes[f]->op != GGML_OP_ADD &&
-                    gf->nodes[f]->op != GGML_OP_MUL &&
-                    gf->nodes[f]->op != GGML_OP_NORM &&
-                    gf->nodes[f]->op != GGML_OP_RMS_NORM) {
-                    break;
-                }
-                ops[f - i] = gf->nodes[f]->op;
-                f++;
-            }
+        // add the fused tensors into the node info so we can unfuse them later
+        for (int k = 1; k < f; k++) {
+            ++i;
 
-            f -= i;
-            for (; f > 1; f--) {
-                if (ggml_can_fuse(gf, i, ops, f)) {
-                    break;
-                }
-            }
-
-            // add the fused tensors into the node info so we can unfuse them later
-            for (int k = 1; k < f; k++) {
-                ++i;
-
-                // the .dst() becomes the last fused tensor
-                node.add_fused(gf->nodes[i]);
-            }
+            // the .dst() becomes the last fused tensor
+            node.add_fused(gf->nodes[i]);
         }
 
         nodes.push_back(std::move(node));
