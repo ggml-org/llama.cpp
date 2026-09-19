@@ -69,6 +69,16 @@ if (Vulkan_FOUND)
                              ggml-vulkan-debug.cpp
                             )
 
+    # Internal cross-TU symbols (vk_instance, ggml_vk_*, ...) must not be
+    # exported: if a duplicate copy of this library is dlopened and dlclosed
+    # (e.g. by ggml_backend_load_all() scanning the executable directory),
+    # symbol interposition would otherwise make the duplicate's destructors
+    # tear down the live library's globals. Public API symbols are marked
+    # with GGML_BACKEND_API (default visibility) explicitly.
+    set_target_properties(ggml-vulkan PROPERTIES
+                          CXX_VISIBILITY_PRESET hidden
+                          VISIBILITY_INLINES_HIDDEN ON)
+
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
     # Test all shader extensions
