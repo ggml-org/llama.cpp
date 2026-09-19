@@ -289,3 +289,69 @@ def test_embedding_openai_library_base64():
     # make sure the decoded data is the same as the original
     for x, y in zip(floats, vec0):
         assert abs(x - y) < EPSILON
+
+
+def _assert_invalid_request(res, ctx=None):
+    assert res.status_code == 400, ctx
+    assert isinstance(res.body, dict), ctx
+    assert "error" in res.body, ctx
+    err = res.body["error"]
+    assert err.get("type") == "invalid_request_error", ctx
+    assert err.get("code") == 400, ctx
+    assert isinstance(err.get("message"), str) and len(err["message"]) > 0, ctx
+
+
+def _assert_valid_embedding(res, ctx=None):
+    assert res.status_code == 200, ctx
+    assert "data" in res.body, ctx
+    assert len(res.body["data"]) >= 1, ctx
+    assert "embedding" in res.body["data"][0], ctx
+
+
+def test_embedding_invalid_request():
+    global server
+    server.pooling = 'last'
+    server.start()
+
+    invalid_cases = [
+        {"input": []},
+        {"input": True},
+        {"input": {"foo": "bar"}},
+        {"input": ["ok", True]},
+        {"input": [12, "hi", None]},
+        {"input": "hello", "encoding_format": 1},
+        {"input": "hello", "embd_normalize": "2"},
+    ]
+    for data in invalid_cases:
+        res = server.make_request("POST", "/v1/embeddings", data=data)
+        _assert_invalid_request(res, ("POST", "/v1/embeddings", data))
+        # Verify the same server still handles a valid request after rejecting this one.
+        _assert_valid_embedding(
+            server.make_request("POST", "/v1/embeddings", data={"input": "hello"}),
+            ("valid follow-up after", "POST", "/v1/embeddings", data),
+        )
+
+    for raw in (b"{not json", b""):
+        res = server.make_request("POST", "/v1/embeddings", body=raw)
+        _assert_invalid_request(res, ("POST", "/v1/embeddings", raw))
+        # Verify the same server still handles a valid request after rejecting this one.
+        _assert_valid_embedding(
+            server.make_request("POST", "/v1/embeddings", data={"input": "hello"}),
+            ("valid follow-up after", "POST", "/v1/embeddings", raw),
+        )
+
+    # Representative checks for /embeddings, which shares the embeddings handler with /v1/embeddings.
+    native_invalid_cases = [
+        {"content": []},
+        {"input": []},
+        {"input": True},
+    ]
+    for data in native_invalid_cases:
+        res = server.make_request("POST", "/embeddings", data=data)
+        _assert_invalid_request(res, ("POST", "/embeddings", data))
+
+    # Verify /embeddings still succeeds with its existing response shape.
+    res = server.make_request("POST", "/embeddings", data={"content": "hello"})
+    assert res.status_code == 200
+    assert isinstance(res.body, list)
+    assert "embedding" in res.body[0]
