@@ -3522,3 +3522,33 @@ Matched Release IQ4_XS measurement used context 139,264, prompt 138,752, 512 dec
 Artifacts are under `/tmp/cross-token-base-139k` and `/tmp/cross-token-current-139k`. The measured gain is intentionally smaller than the full 5.8 ms exposed-H2D estimate: this stage removes the token-boundary startup portion, while intra-token ring turnover remains. Deadline-driven span/lookahead tuning and selective ring headroom remain separate follow-up work.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+
+### Stage 6.7a: backend-neutral sparse deadline feedback
+
+Stage 6.7a removes most steady-state deadline instrumentation without weakening copy/compute correctness dependencies. The common feedback sampler starts at stride one, keeps two dense clean runs, and then backs off geometrically through strides 2, 4, and 8. Every layer keeps its first eligible stable-history upload sampled regardless of stride, so no layer becomes permanently invisible. Any accepted sample containing a miss immediately resets the next collected run to dense sampling. Cancellation, cache-generation changes, layout replacement, invalid feedback, and explicit feedback reset also restore dense cadence.
+
+The decision is entirely backend-neutral. The resident scheduler converts the cadence decision into the existing `enqueue_span_with_feedback(..., eligible)` bit. CUDA still records the same ready/deadline markers for selected uploads and retains mandatory copy-ready and slot-consumption events for every upload. No backend interface, CUDA kernel, transfer ordering, attention arithmetic, or KV byte count changes. Other backends automatically receive the policy when they implement the existing copy-ops feedback contract.
+
+Semantic eligibility and diagnostic-bank availability remain distinct. If both bounded snapshot banks are occupied, inference proceeds without markers, preserves previously accepted feedback, and does not advance or reset cadence. The selected stride and actual instrumented-upload count are exposed through internal prefetch statistics, allowing tests and future diagnostics to distinguish copy calls from optional probes.
+
+TDD and qualification evidence:
+
+- The first pure build failed because `llama_kv_stream_feedback_sampler` did not exist. Its tests cover 1->2->4->8 backoff, the per-layer floor, ineligible uploads, invalid observations, miss recovery, and explicit reset.
+- The first CUDA integration build failed because prefetch statistics did not expose the selected stride or probe count.
+- The CUDA integration observes **32, 32, 16, 16, 8, 8, 8** actual probes across seven clean eight-layer runs, while every run completes and cumulative backend sample counts match exactly.
+- Snapshot-bank backpressure, delayed delivery, cancellation epochs, span trials, mutable tails, cross-token adoption, and all KV type-pair controls continue to pass. The prefetch suite passes **17 cases / 3,196 assertions** and the policy suite **26 / 139,987**.
+- Compute Sanitizer memcheck passes the complete prefetch and session suites with zero errors and zero leaked bytes. The session suite passes **9 / 481**, the model suite **7 / 159**, and the full IQ4_XS context suite **5 / 560** with zero maximum logit error, zero recurrent relative L2 error, 14/14 matching phase boundaries, and 32/32 matching tokens at ubatch 256 and 512.
+- Focused common/CPU, ASan with leak checking, and UBSan policy/prefetch/session/model suites pass.
+
+Matched Release IQ4_XS measurement used context 139,264, prompt 138,752, 512 decoded tokens, batch/ubatch 256, Q8_0/Q4_0 KV, UVM disabled, and a 2,688 MiB shared-device budget:
+
+| Implementation | Prefill tok/s | Decode tok/s | Decode ms/token |
+| --- | ---: | ---: | ---: |
+| Stage 6.6 cross-token baseline | 775.96 | 24.270 | 41.203 |
+| Sparse deadline feedback | 777.96 | 24.423 | 40.944 |
+| Isolated change | +0.26% | **+0.63%** | **-0.258 ms** |
+
+Relative to the stage-6.5 baseline at 23.734 tok/s, stages 6.6 and 6.7a together improve this point by **2.90%**. Benchmark artifacts are under `/tmp/cross-token-current-139k` and `/tmp/sparse-feedback-current-139k`. Sparse feedback targets optional marker overhead only; the remaining intra-token exposed H2D time belongs to the forthcoming per-layer deadline-aware residency/lookahead work.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.

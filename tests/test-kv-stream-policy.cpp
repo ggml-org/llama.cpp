@@ -110,6 +110,39 @@ int main() {
         sample.samples = UINT64_MAX; t.assert_true(!window.add(sample));
         window.reset(); t.assert_true(!window.snapshot().available && before.epoch != window.snapshot().epoch);
     });
+    t.test("feedback_sampling_backs_off_after_clean_runs_and_recovers_on_miss", [](testing & t) {
+        llama_kv_stream_feedback_sampler sampler(8,2);
+        const auto selected=[&](size_t layers,size_t uploads) {
+            sampler.begin_run();
+            size_t count=0;
+            for (size_t layer=0;layer<layers;++layer) for (size_t upload=0;upload<uploads;++upload)
+                count += sampler.select(upload==0,true);
+            return count;
+        };
+        t.assert_equal(size_t(24),selected(3,8));
+        t.assert_equal(size_t(1),sampler.stride());
+        t.assert_true(sampler.observe(24,0));
+        t.assert_equal(size_t(1),sampler.stride());
+        t.assert_true(sampler.observe(24,0));
+        t.assert_equal(size_t(2),sampler.stride());
+        t.assert_equal(size_t(12),selected(3,8));
+        t.assert_true(sampler.observe(12,0) && sampler.observe(12,0));
+        t.assert_equal(size_t(4),sampler.stride());
+        t.assert_equal(size_t(6),selected(3,8));
+        t.assert_true(sampler.observe(6,0) && sampler.observe(6,0));
+        t.assert_equal(size_t(8),sampler.stride());
+        t.assert_equal(size_t(3),selected(3,8));
+        sampler.begin_run();
+        t.assert_true(!sampler.select(true,false));
+        t.assert_true(sampler.select(true,true));
+        t.assert_true(!sampler.observe(0,0));
+        t.assert_true(!sampler.observe(3,4));
+        t.assert_equal(size_t(8),sampler.stride());
+        t.assert_true(sampler.observe(5,1));
+        t.assert_equal(size_t(1),sampler.stride());
+        sampler.reset();
+        t.assert_equal(size_t(1),sampler.stride());
+    });
     t.test("span_trials_require_matching_samples_and_a_measurable_gain", [](testing & t) {
         for (double bounded : {8.0,9.99,12.0}) {
             llama_kv_stream_span_tuner tuner(2);

@@ -3,6 +3,32 @@
 #include "../ggml/src/ggml-kv-stream-copy.h"
 #include <cmath>
 
+// Common cadence for optional deadline instrumentation; correctness dependencies are never sampled away.
+class llama_kv_stream_feedback_sampler {
+public:
+    explicit llama_kv_stream_feedback_sampler(size_t maximum_stride = 8, uint32_t clean_runs = 2) :
+        maximum(std::max(size_t(1),maximum_stride)), required(std::max(1u,clean_runs)) {}
+    void reset() { current=1; clean=0; ordinal=0; }
+    void begin_run() { ordinal=0; }
+    bool select(bool first_in_layer, bool eligible) {
+        if (!eligible) return false;
+        const bool result=first_in_layer || ordinal%current == 0;
+        ++ordinal; return result;
+    }
+    bool observe(uint64_t samples, uint64_t misses) {
+        if (!samples || misses > samples) return false;
+        if (misses) { current=1; clean=0; return true; }
+        if (++clean < required) return true;
+        clean=0;
+        current=current >= maximum-current ? maximum : std::min(maximum,current*2);
+        return true;
+    }
+    size_t stride() const { return current; }
+private:
+    size_t maximum, current=1, ordinal=0;
+    uint32_t required, clean=0;
+};
+
 // Convert completed backend windows to cumulative policy counters without claiming hardware utilization.
 class llama_kv_stream_feedback_window {
 public:

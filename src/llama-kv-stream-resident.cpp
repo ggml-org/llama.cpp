@@ -50,10 +50,10 @@ struct llama_kv_stream_resident::implementation {
     struct prefetch_sequence {
         llama_kv_stream_prefetch_plan plan;
         std::vector<uint32_t> layers;
-        std::vector<uint8_t> resident_dirty;
+        std::vector<uint8_t> resident_dirty, feedback_layer_sampled;
         size_t active = 0, padded = 0, span = 0, stable = 0, next = 0;
         uint64_t generation = 0, epoch = 0;
-        bool started = false, feedback_valid = true, primed = false;
+        bool started = false, feedback_valid = true, primed = false, measurement_active = false;
         uint32_t queries = 0;
         bool profile = false;
         bool decode = false;
@@ -68,6 +68,7 @@ struct llama_kv_stream_resident::implementation {
     std::vector<uint32_t> feedback_layers;
     llama_kv_stream_feedback_window window;
     llama_kv_stream_span_tuner tuner;
+    llama_kv_stream_feedback_sampler sampler;
     ggml_kv_stream_copy_feedback last_feedback;
     struct pending_feedback {
         uint64_t id = 0, epoch = 0;
@@ -116,7 +117,7 @@ struct llama_kv_stream_resident::implementation {
 
     // Discard both counter continuity and timing trials after unknown content or execution changes.
     void reset_feedback() {
-        window.reset(next_feedback_epoch.fetch_add(1,std::memory_order_relaxed)); tuner.reset(); last_feedback = {};
+        window.reset(next_feedback_epoch.fetch_add(1,std::memory_order_relaxed)); tuner.reset(); sampler.reset(); last_feedback = {};
         feedback_pending = {};
         feedback_generation = feedback_epoch = 0;
     }
@@ -130,7 +131,9 @@ struct llama_kv_stream_resident::implementation {
             if (found == feedback_pending.end()) continue;
             const auto entry = *found; *found = {};
             if (!accept || entry.epoch != window.snapshot().epoch) continue;
-            if (!window.add(snapshot.value)) { reset_feedback(); continue; }
+            if (!window.add(snapshot.value) || !sampler.observe(snapshot.value.samples,snapshot.value.misses)) {
+                reset_feedback(); continue;
+            }
             last_feedback = snapshot.value;
             const size_t slots = binding.initial_policy.ring_slots, bounded = std::min(slots,bounded_span);
             if (entry.queries == 1 && bounded < slots && (entry.span == bounded || entry.span >= slots))
@@ -196,13 +199,23 @@ struct llama_kv_stream_resident::implementation {
                 if (!ensure_copies(binding.initial_policy.ring_slots)) return false;
                 if (!(measuring ? copy_ops->begin_with_feedback(copies.get(),seq.profile) : copy_ops->begin(copies.get()))) return false;
                 seq.started = true;
+                seq.measurement_active=measuring && seq.profile && copy_ops->feedback_id(copies.get());
+            }
+            bool feedback_eligible=r.stable;
+            if (measuring) {
+                const bool first=!seq.feedback_layer_sampled[r.layer];
+                feedback_eligible=seq.measurement_active && sampler.select(first,feedback_eligible);
+                if (feedback_eligible) {
+                    seq.feedback_layer_sampled[r.layer]=true;
+                    ++seq.stats.feedback_uploads;
+                }
             }
             llama_kv_stream_host_layer host;
             if (!content->host()->layer(seq.layers[r.layer],host)) return false;
             const size_t live = std::min(r.tokens,seq.active-r.first);
             const void * k = static_cast<const char *>(host.k)+r.first*page.k_token_bytes;
             const void * v = static_cast<const char *>(host.v)+r.first*page.v_token_bytes;
-            if (!(measuring ? copy_ops->enqueue_span_with_feedback(copies.get(),r.slot,k,v,live,r.tokens,r.stable) :
+            if (!(measuring ? copy_ops->enqueue_span_with_feedback(copies.get(),r.slot,k,v,live,r.tokens,feedback_eligible) :
                     copy_ops->enqueue_span(copies.get(),r.slot,k,v,live,r.tokens))) return false;
             if (!seq.plan.mark_submitted(index)) return false;
             seq.stats.max_layer_distance = std::max(seq.stats.max_layer_distance,r.layer-seq.next);
@@ -228,8 +241,9 @@ struct llama_kv_stream_resident::implementation {
             finished_sequence.copy_bytes = copied.bytes; finished_sequence.copy_calls = copied.calls;
         }
         if (measuring) {
-            if (success && sequence->started && sequence->feedback_valid && sequence->profile) record_feedback(sequence->span);
-            else reset_feedback();
+            if (success && sequence->started && sequence->feedback_valid && sequence->profile) {
+                if (sequence->measurement_active) record_feedback(sequence->span);
+            } else reset_feedback();
         }
         finished_sequence.pending_pages = 0;
         if (copies && copy_host != content->host()->buffer()) { copies.reset(); copy_host = nullptr; }
@@ -364,7 +378,7 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
     if (stable > active) return false;
     try {
         auto seq = std::make_unique<implementation::prefetch_sequence>();
-        seq->layers = layers; seq->resident_dirty.resize(layers.size(),false);
+        seq->layers = layers; seq->resident_dirty.resize(layers.size(),false); seq->feedback_layer_sampled.resize(layers.size(),false);
         seq->active = active; seq->padded = (active+255)/256*256; seq->span = span; seq->stable = stable;
         seq->queries = feedback_context.query_tokens;
         seq->decode = feedback_context.decode;
@@ -376,6 +390,8 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             seq->profile |= feedback_context.decode && seq->queries == 1 && prefixes.back() < immutable;
         }
         if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,s.binding.initial_policy.ring_slots,span,stable)) return false;
+        seq->stats.feedback_stride=s.sampler.stride();
+        if (seq->profile) s.sampler.begin_run();
         if (std::any_of(prefixes.begin(),prefixes.end(),[&](size_t prefix) { return prefix < seq->padded; }) && !s.enter_streamed()) return false;
         if (!s.writer_lease) release_write_workspace();
         s.busy = true; s.valid = false;
