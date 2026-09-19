@@ -279,6 +279,8 @@ static const char * lazy_mode_str(llama_lazy_mode mode) {
             return "auto";
         case LLAMA_LAZY_MODE_ON:
             return "on";
+        case LLAMA_LAZY_MODE_DIRECT:
+            return "on-direct";
         default:
             GGML_ABORT("invalid lazy mode");
     }
@@ -476,7 +478,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -fa, --flash-attn <on|off|auto>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
-    printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
+    printf("  -lzm, --lazy-mode <on|on-direct|auto|off>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
@@ -816,6 +818,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     llama_lazy_mode mode;
                     if (m == "on") {
                         mode = LLAMA_LAZY_MODE_ON;
+                    } else if (m == "on-direct") {
+                        mode = LLAMA_LAZY_MODE_DIRECT;
                     } else if (m == "auto") {
                         mode = LLAMA_LAZY_MODE_AUTO;
                     } else if (m == "off") {

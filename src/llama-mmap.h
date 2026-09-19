@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 #include <cstdio>
@@ -23,6 +24,11 @@ struct llama_file {
     size_t size() const;
 
     int file_id() const; // fileno overload
+
+    const std::string & name() const; // path this file was opened from
+
+    // positional read, bypassing any buffering; not thread-safe and not valid on a direct I/O file
+    void read_at(size_t offset, void * dst, size_t len) const;
 
     void seek(size_t offset, int whence) const;
 
