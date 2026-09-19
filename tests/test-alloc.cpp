@@ -808,6 +808,8 @@ static void test_alloc_ctx_tensors_from_buft_size_matches() {
         x[2] = make_input_with_size(ctx, 8);
         assign_names(ctx);
 
+        GGML_UNUSED(x);
+
         ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
         GGML_ASSERT(buffer != nullptr);
         GGML_ASSERT(backend.context->allocated_total() == 24);
@@ -823,6 +825,8 @@ static void test_alloc_ctx_tensors_from_buft_size_matches() {
         x[3] = make_input_with_size(ctx, 8);
         assign_names(ctx);
 
+        GGML_UNUSED(x);
+
         ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
         GGML_ASSERT(buffer != nullptr);
         GGML_ASSERT(backend.context->allocated_total() == 32);
@@ -835,6 +839,9 @@ static void test_alloc_ctx_tensors_from_buft_size_matches() {
         ggml_tensor * view  = ggml_view_1d(ctx, base, 2, 0);
         ggml_tensor * extra = make_input_1d(ctx, 2);
         assign_names(ctx);
+
+        GGML_UNUSED(view);
+        GGML_UNUSED(extra);
 
         ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
         GGML_ASSERT(buffer != nullptr);
