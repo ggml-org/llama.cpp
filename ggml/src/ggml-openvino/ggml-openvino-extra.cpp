@@ -124,6 +124,16 @@ void ggml_openvino_device_config::init() {
             return;
         }
 
+        cl_ulong device_max_alloc = 0;
+        err = clGetDeviceInfo(cl_device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(device_max_alloc), &device_max_alloc,
+                              nullptr);
+        if (err == CL_SUCCESS) {
+            max_alloc_size = device_max_alloc;
+        } else {
+            // not fatal, ggml then allocates one buffer
+            GGML_LOG_WARN("Failed to get OpenCL max allocation size: %d\n", err);
+        }
+
         cl_context cl_ctx = clCreateContext(nullptr, 1, &cl_device, nullptr, nullptr, &err);
         if (err != CL_SUCCESS) {
             GGML_LOG_ERROR("Failed to create OpenCL context: %d\n", err);
@@ -209,6 +219,10 @@ bool ggml_openvino_release_weights_enabled(const std::string & device) {
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
+}
+
+size_t ggml_openvino_max_alloc_size() {
+    return ggml_openvino_get_device_config().max_alloc_size;
 }
 
 // Get the remote context for the current device (returns empty optional for CPU)
