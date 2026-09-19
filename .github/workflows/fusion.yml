@@ -63,9 +63,9 @@ jobs:
         id: generate_models
         run: |
           rm -rf build-ci-models && mkdir -p build-ci-models
-          ./build/bin/test-llama-archs -o build-ci-models
+          ./build/bin/test-llama-archs -o build-ci-models --errors-only
 
       - name: Test fusion
         id: test_fusion
         run: |
-          ./build/bin/test-fusion --models build-ci-models --device MTL0 --check tests/fusion/MTL.csv
+          ./build/bin/test-fusion --models build-ci-models --device MTL0 --check tests/fusion/MTL.csv --errors-only

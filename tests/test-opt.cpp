@@ -5,6 +5,10 @@
 #include "ggml-backend.h"
 #include "ggml-opt.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cmath>
 #include <cinttypes>
 #include <cstring>
@@ -171,25 +175,47 @@ static void helper_free_ctx_data(struct helper_ctx_data ctx_data) {
     ggml_opt_dataset_free(ctx_data.dataset_unsupervised);
 }
 
+// verdict of a single sub-test; INFO, so hidden with --errors-only
+static void print_ok_detail(bool subtest_ok) {
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
+    if (subtest_ok) {
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
+    } else {
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
+    }
+}
+
+// verdict of the whole test; always visible
 static void print_ok(bool subtest_ok) {
-    printf(subtest_ok ? "\033[1;32mOK\033[0m\n" : "\033[1;31mFAIL\033[0m\n");
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
+    if (subtest_ok) {
+        printf("%sOK%s\n", col_ok, col_end);
+    } else {
+        printf("%sFAIL%s\n", col_fail, col_end);
+    }
 }
 
 static void helper_after_test(
         enum ggml_opt_optimizer_type optim,
         const char * func, const bool high_level, const std::string options,
         const std::string subtest, const bool subtest_ok, int & ntest, int & npass) {
-    printf("  %s(high_level=%s%s, subtest=%s, optimizer=%s): ",
-           func, high_level ? "yes" : "no", options.c_str(), subtest.c_str(), ggml_opt_optimizer_name(optim));
-    print_ok(subtest_ok);
+    LOG_CNT("  %s(high_level=%s%s, subtest=%s, optimizer=%s): ",
+            func, high_level ? "yes" : "no", options.c_str(), subtest.c_str(), ggml_opt_optimizer_name(optim));
+    print_ok_detail(subtest_ok);
     if (subtest_ok)
         npass++;
     ntest++;
 }
 
 static void print_ok(const char * func, bool subtest_ok, int & npass, int & ntest, const char * args = "") {
-    printf("  %s(%s): ", func, args);
-    print_ok(subtest_ok);
+    LOG_CNT("  %s(%s): ", func, args);
+    print_ok_detail(subtest_ok);
     if (subtest_ok)
         npass++;
     ++ntest;
@@ -263,13 +289,13 @@ static std::pair<int, int> test_dataset(
                 }
             }
 
-            printf("  %s(shuffle=%s, ndata_shard=%" PRId64 ", ndata_batch=%" PRId64 "): ",
-                   __func__, shuffle ? "yes" : "no", ndata_shard, ndata_batch);
+            LOG_CNT("  %s(shuffle=%s, ndata_shard=%" PRId64 ", ndata_batch=%" PRId64 "): ",
+                    __func__, shuffle ? "yes" : "no", ndata_shard, ndata_batch);
             if (subtest_ok) {
-                printf("\033[1;32mOK\033[0m\n");
+                print_ok_detail(true);
                 npass++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                print_ok_detail(false);
             }
             ntest++;
         }
@@ -310,12 +336,12 @@ static std::pair<int, int> test_grad(
                 subtest_ok = false;
             }
         }
-        printf("  %s(): ", __func__);
+        LOG_CNT("  %s(): ", __func__);
         if (subtest_ok) {
-            printf("\033[1;32mOK\033[0m\n");
+            print_ok_detail(true);
             npass++;
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            print_ok_detail(false);
         }
         ntest++;
     }
@@ -896,7 +922,16 @@ static std::pair<int, int> test_backend(
 }
 
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-opt");
+
     ggml_log_set(nullptr, nullptr);
     ggml_backend_load_all();
     const size_t dev_count = ggml_backend_dev_count();
@@ -931,12 +966,12 @@ int main(void) {
                 backends_modded.data(), nullptr, backends_modded.size(), GGML_DEFAULT_GRAPH_SIZE, false, true);
 
             char const* devname = ggml_backend_dev_name(devs[i]);
-            printf("Backend %zu/%zu: %s\n", i + 1, dev_count, devname);
-            printf("  Device description: %s\n", ggml_backend_dev_description(devs[i]));
+            LOG_INF("Backend %zu/%zu: %s\n", i + 1, dev_count, devname);
+            LOG_INF("  Device description: %s\n", ggml_backend_dev_description(devs[i]));
             size_t free, total;  // NOLINT
             ggml_backend_dev_memory(devs[i], &free, &total);
-            printf("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
-            printf("\n");
+            LOG_INF("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
+            LOG_CNT("\n");
 
             bool skip;
             {
@@ -973,21 +1008,27 @@ int main(void) {
             std::pair<int, int> result;
             if (!skip) {
                 result = test_backend(backend_sched, backends[i], optim);
-                printf("  %d/%d tests passed\n", result.first, result.second);
+                LOG_CNT("  %d/%d tests passed\n", result.first, result.second);
             }
 
-            printf("  Backend %s %s: ", ggml_backend_name(backends[i]), ggml_opt_optimizer_name(optim));
+            const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+            const char * const col_ok    = use_color ? "\033[1;32m" : "";
+            const char * const col_fail  = use_color ? "\033[1;31m" : "";
+            const char * const col_skip  = use_color ? "\033[0;33m" : "";
+            const char * const col_end   = use_color ? "\033[0m"    : "";
+
+            LOG_CNT("  Backend %s %s: ", ggml_backend_name(backends[i]), ggml_opt_optimizer_name(optim));
             if (skip) {
-                printf("\033[0;33mSKIPPED\033[0m\n");
+                LOG_CNT("%sSKIPPED%s\n", col_skip, col_end);
                 n_ok++;
             } else if (result.first == result.second) {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 n_ok++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             }
             ++n_total;
-            printf("\n");
+            LOG_CNT("\n");
             ggml_backend_sched_free(backend_sched);
         }
     }
@@ -996,8 +1037,11 @@ int main(void) {
         ggml_backend_free(backend);
     }
 
+    common_log_flush(common_log_main());
     printf("%zu/%zu backend*optimizer passed\n", n_ok, n_total);
     bool ok = n_ok == n_total;
     print_ok(ok);
+    LOG("%s: %s\n", "test-opt", ok ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
     return ok ? 0 : 1;
 }

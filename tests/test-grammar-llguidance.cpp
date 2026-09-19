@@ -4,6 +4,9 @@
 
 #include "sampling.h"
 
+#include "arg.h"
+#include "log.h"
+
 #include <cassert>
 #include <string>
 #include <vector>
@@ -49,22 +52,23 @@ static bool match_string(const std::string & input, llama_sampler * grammar) {
 
 static void test(const std::string & test_desc, const std::string & grammar_str,
                  const std::vector<std::string> & passing_strings, const std::vector<std::string> & failing_strings) {
-    fprintf(stderr, "⚫ Testing %s\n%s\n", test_desc.c_str(), grammar_str.c_str());
-    fflush(stderr);
+    LOG_INF("⚫ Testing %s\n%s\n", test_desc.c_str(), grammar_str.c_str());
+    common_log_flush(common_log_main());
 
     auto * grammar = llama_sampler_init_llg(vocab, "lark", grammar_str.c_str());
 
-    fprintf(stderr, "  🔵 Valid strings:\n");
+    LOG_INF("  🔵 Valid strings:\n");
 
     // Passing strings
     for (const auto & test_string : passing_strings) {
-        fprintf(stderr, "    \"%s\" ", test_string.c_str());
-        fflush(stderr);
+        // partial line, completed by the next message: LOG_CNT adds no prefix
+        LOG_CNT("    \"%s\" ", test_string.c_str());
+        common_log_flush(common_log_main());
 
         bool matched = match_string(test_string, grammar);
 
         if (!matched) {
-            fprintf(stderr, "❌ (failed to match)\n");
+            LOG_ERR("❌ (failed to match)\n");
 
             // DEBUG: Write strings to files so that we can analyze more easily with gbnf-validator program to see exactly where things failed.
             // DEBUG: Write the grammar_str to test-grammar-integration.grammar.gbnf
@@ -81,8 +85,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
                 fclose(string_file);
             }
 
-            fprintf(stderr,
-                    "\n NOTE: Debug grammar file generated. To analyze this failure in detail, run the following "
+            LOG_ERR("\n NOTE: Debug grammar file generated. To analyze this failure in detail, run the following "
                     "command:     ./test-gbnf-validator test-grammar-integration.grammar.gbnf "
                     "test-grammar-integration.string.txt\n\n");
         } else {
@@ -92,17 +95,18 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
         assert(matched);
     }
 
-    fprintf(stderr, "  🟠 Invalid strings:\n");
+    LOG_INF("  🟠 Invalid strings:\n");
 
     // Failing strings
     for (const auto & test_string : failing_strings) {
-        fprintf(stderr, "    \"%s\" ", test_string.c_str());
-        fflush(stderr);
+        // partial line, completed by the next message: LOG_CNT adds no prefix
+        LOG_CNT("    \"%s\" ", test_string.c_str());
+        common_log_flush(common_log_main());
 
         bool matched = match_string(test_string, grammar);
 
         if (matched) {
-            fprintf(stderr, "❌ (incorrectly matched)\n");
+            LOG_ERR("❌ (incorrectly matched)\n");
         } else {
             fprintf(stdout, "✅︎\n");
         }
@@ -1124,11 +1128,11 @@ start: /[A-Z ]*/)";
     for (const auto token : tokens) {
         one_hot(tok_arr, token);
 
-        fprintf(stderr, "applying token: %d\n", token);
+        LOG_DBG("applying token: %d\n", token);
         llama_sampler_apply(sampler, &tok_arr);
 
         auto idx = tok_arr.selected;
-        fprintf(stderr, " -> %d %f\n", cur[idx].id, cur[idx].logit);
+        LOG_DBG(" -> %d %f\n", cur[idx].id, cur[idx].logit);
         assert(cur[tok_arr.selected].id == token);
         llama_sampler_accept(sampler, token);
     }
@@ -1144,17 +1148,35 @@ start: /[A-Z ]*/)";
     assert(cur[tok_arr.selected].id == tok_eos);
 }
 
-int main(int argc, const char ** argv) {
-    fprintf(stdout, "Running llguidance integration tests...\n");
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
 
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <vocab-file>\n", argv[0]);
+    std::string vocab_file;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else if (vocab_file.empty()) {
+            vocab_file = argv[i];
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    const char * vocab_file = argv[1];
+    fprintf(stdout, "Running llguidance integration tests...\n");
 
-    fprintf(stderr, "reading vocab from: '%s'\n", vocab_file);
+    if (vocab_file.empty()) {
+        LOG_ERR("Usage: %s <vocab-file>\n", argv[0]);
+        common_log_flush(common_log_main());
+        return 1;
+    }
+
+    LOG_INF("reading vocab from: '%s'\n", vocab_file.c_str());
 
     llama_model *   model;
     llama_context * ctx;
@@ -1167,10 +1189,11 @@ int main(int argc, const char ** argv) {
 
         mparams.vocab_only = true;
 
-        model = llama_model_load_from_file(vocab_file, mparams);
+        model = llama_model_load_from_file(vocab_file.c_str(), mparams);
 
         if (model == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, vocab_file);
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, vocab_file.c_str());
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -1180,8 +1203,9 @@ int main(int argc, const char ** argv) {
         ctx = llama_init_from_model(model, cparams);
 
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, vocab_file);
+            LOG_ERR("%s: error: failed to load vocab '%s'\n", __func__, vocab_file.c_str());
             llama_model_free(model);
+            common_log_flush(common_log_main());
             return 1;
         }
     }
@@ -1199,6 +1223,7 @@ int main(int argc, const char ** argv) {
     llama_free(ctx);
     llama_model_free(model);
 
+    common_log_flush(common_log_main());
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }

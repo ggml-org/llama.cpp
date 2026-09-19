@@ -1,6 +1,8 @@
+#include "arg.h"
 #include "testing.h"
 
 #include "llama.h"
+#include "log.h"
 
 #include "../src/llama-batch.h"
 #include "../src/llama-memory.h"
@@ -651,6 +653,28 @@ static void test_mrope(testing & t) {
 }
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    // this test takes an optional filter as its only positional argument
+    std::string filter;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else if (filter.empty()) {
+            filter = argv[i];
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-batch-alloc");
+
     testing t;
 
     const char * verbose = getenv("LLAMA_TEST_VERBOSE");
@@ -661,8 +685,8 @@ int main(int argc, char ** argv) {
         llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
     }
 
-    if (argc > 1) {
-        t.set_filter(argv[1]);
+    if (!filter.empty()) {
+        t.set_filter(filter);
     }
 
     t.test("init",      test_init);
@@ -670,5 +694,8 @@ int main(int argc, char ** argv) {
     t.test("keep_tail", test_keep_tail);
     t.test("mrope",     test_mrope);
 
-    return t.summary();
+    const int rc = t.summary();
+    LOG("%s: %s\n", "test-batch-alloc", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }

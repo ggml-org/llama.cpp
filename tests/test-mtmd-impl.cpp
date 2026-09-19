@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "testing.h"
 
 #include "mtmd-image.h"
@@ -142,17 +143,37 @@ MAKE_TEST(test_temporal_merge_grouping) {
 //
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     testing t(std::cout);
     t.verbose = true;
 
     // usage: test-mtmd-impl [filter_regex]
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
-        t.set_filter(argv[i]);
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            t.set_filter(argv[i]);
+        }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    // log.h cannot be included here (clip-impl.h redefines LOG_*), so print the start line directly
+    printf("%s: running\n", "test-mtmd-impl");
 
     for (const auto & e : test_registry::all()) {
         t.test(e.name, e.fn);
     }
 
-    return t.summary();
+    const int rc = t.summary();
+    // log.h cannot be included here (clip-impl.h redefines LOG_*), so print the result line directly
+    printf("%s: %s\n", "test-mtmd-impl", rc == 0 ? "PASSED" : "FAILED");
+    return rc;
 }

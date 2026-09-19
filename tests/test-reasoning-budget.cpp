@@ -4,6 +4,10 @@
 #include "llama.h"
 #include "ggml.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -85,7 +89,7 @@ static void test_reasoning_budget(
 
         llama_sampler_accept(sampler, sequence[i]);
 
-        fprintf(stderr, "    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
+        LOG_TRC("    i=%zu: token=%d, finite_count=%zu, finite_token=%d\n", i, (int)sequence[i], finite_count, (int)finite_token);
 
         if (finite_count == 1) {
             if (actual_force_start == SIZE_MAX) {
@@ -103,28 +107,28 @@ static void test_reasoning_budget(
     // Verify forcing occurred at expected positions
     if (expected_force_start == SIZE_MAX) {
         if (actual_force_start != SIZE_MAX) {
-            fprintf(stderr, "Test '%s' FAILED: Expected no forcing, but forcing occurred at %zu\n", test_name, actual_force_start);
+            LOG_ERR("Test '%s' FAILED: Expected no forcing, but forcing occurred at %zu\n", test_name, actual_force_start);
             GGML_ASSERT(false && "Expected no forcing, but forcing occurred");
         }
     } else {
         if (actual_force_start == SIZE_MAX) {
-            fprintf(stderr, "Test '%s' FAILED: Expected forcing but none occurred\n", test_name);
+            LOG_ERR("Test '%s' FAILED: Expected forcing but none occurred\n", test_name);
             GGML_ASSERT(false && "Expected forcing but none occurred");
         }
         if (actual_force_start != expected_force_start) {
-            fprintf(stderr, "Test '%s' FAILED: Forcing started at %zu, expected %zu\n", test_name, actual_force_start, expected_force_start);
+            LOG_ERR("Test '%s' FAILED: Forcing started at %zu, expected %zu\n", test_name, actual_force_start, expected_force_start);
             GGML_ASSERT(false && "Forcing started at wrong position");
         }
     }
 
     if (expected_force_end != SIZE_MAX) {
         if (actual_force_end < expected_force_end) {
-            fprintf(stderr, "Test '%s' FAILED: Forcing ended at %zu, expected >= %zu\n", test_name, actual_force_end, expected_force_end);
+            LOG_ERR("Test '%s' FAILED: Forcing ended at %zu, expected >= %zu\n", test_name, actual_force_end, expected_force_end);
             GGML_ASSERT(false && "Forcing ended too early");
         }
     }
 
-    fprintf(stderr, "  Test '%s' passed (force_start=%zu, force_end=%zu)\n", test_name, actual_force_start, actual_force_end);
+    LOG_INF("  Test '%s' passed (force_start=%zu, force_end=%zu)\n", test_name, actual_force_start, actual_force_end);
     (void)sequence;
 }
 
@@ -255,7 +259,7 @@ static void test_reasoning_budget_force_manual() {
     // a null sampler is safely ignored
     GGML_ASSERT(!common_reasoning_budget_force(nullptr));
 
-    fprintf(stderr, "  Test 'manual force transition' passed\n");
+    LOG_INF("  Test 'manual force transition' passed\n");
 }
 
 static void test_reasoning_budget_end_match() {
@@ -330,7 +334,7 @@ static void test_reasoning_budget_end_match() {
     // a null sampler is safely ignored
     GGML_ASSERT(common_reasoning_budget_get_end_match(nullptr) == nullptr);
 
-    fprintf(stderr, "  Test 'matched end sequence' passed\n");
+    LOG_INF("  Test 'matched end sequence' passed\n");
 }
 
 // UTF-8 boundary detection unit test
@@ -358,9 +362,18 @@ static void test_utf8_boundary_detection() {
     GGML_ASSERT(common_utf8_is_complete(std::string("hello\xC3\xA9", 7)));    // ASCII + complete 2-byte
 }
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-reasoning-budget");
+
     // Reasoning budget sampler tests
-    printf("Testing reasoning budget sampler... ");
+    LOG_INF("Testing reasoning budget sampler...\n");
 
     // Test 1: Basic budget with start/end tokens - no forcing (natural end before budget exhausted)
     {
@@ -495,11 +508,13 @@ int main(void) {
     test_reasoning_budget_force_manual();
     test_reasoning_budget_end_match();
 
-    printf("OK (12 tests passed)\n");
+    LOG_CNT("OK (12 tests passed)\n");
 
-    printf("Testing UTF-8 boundary detection... ");
+    LOG_INF("Testing UTF-8 boundary detection...\n");
     test_utf8_boundary_detection();
-    printf("OK\n");
+    LOG_CNT("OK\n");
 
+    LOG("%s: %s\n", "test-reasoning-budget", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

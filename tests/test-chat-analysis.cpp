@@ -1,6 +1,8 @@
 #include "chat-auto-parser.h"
 #include "chat-auto-parser-helpers.h"
 #include "chat.h"
+#include "arg.h"
+#include "common.h"
 #include "log.h"
 #include "jinja/caps.h"
 #include "jinja/runtime.h"
@@ -84,16 +86,16 @@ static std::string read_file(const std::string & path) {
 }
 
 static void print_usage(const char * program_name) {
-    LOG_ERR("Debug the auto-parser's differential analysis: render a template with/without tools, reasoning, etc. and show the diffs.\n");
-    LOG_ERR("\nUsage: %s [options]\n", program_name);
-    LOG_ERR("\nOptions:\n");
-    LOG_ERR("  --template <name>       Analyze specific template from test suite (e.g., 'deepseek' or 'DeepSeek-V3.1')\n");
-    LOG_ERR("  --template-file <path>  Analyze custom template file\n");
-    LOG_ERR("  --all                   Analyze all templates from test suite (default when no arguments are given)\n");
-    LOG_ERR("\nExamples:\n");
-    LOG_ERR("  %s --all\n", program_name);
-    LOG_ERR("  %s --template deepseek\n", program_name);
-    LOG_ERR("  %s --template-file my-template.jinja\n", program_name);
+    LOG_INF("Debug the auto-parser's differential analysis: render a template with/without tools, reasoning, etc. and show the diffs.\n");
+    LOG_INF("\nUsage: %s [options]\n", program_name);
+    LOG_INF("\nOptions:\n");
+    LOG_INF("  --template <name>       Analyze specific template from test suite (e.g., 'deepseek' or 'DeepSeek-V3.1')\n");
+    LOG_INF("  --template-file <path>  Analyze custom template file\n");
+    LOG_INF("  --all                   Analyze all templates from test suite (default when no arguments are given)\n");
+    LOG_INF("\nExamples:\n");
+    LOG_INF("  %s --all\n", program_name);
+    LOG_INF("  %s --template deepseek\n", program_name);
+    LOG_INF("  %s --template-file my-template.jinja\n", program_name);
 }
 
 static bool parse_options(int argc, char ** argv, analysis_options & opts) {
@@ -270,15 +272,15 @@ static json make_assistant_one_tool_with_reasoning() {
 }
 
 static void print_diff_split(const std::string & title, const diff_split & diff) {
-    LOG_ERR("\n%s=== %s ===%s\n", ANSI_CYAN, title.c_str(), ANSI_RESET);
-    LOG_ERR("%sCommon Prefix:%s '%s'\n", ANSI_PREFIX, ANSI_RESET, diff.prefix.c_str());
-    LOG_ERR("%sCommon Suffix:%s '%s'\n", ANSI_SUFFIX, ANSI_RESET, diff.suffix.c_str());
-    LOG_ERR("%sLeft (difference):%s '%s'\n", ANSI_GREEN, ANSI_RESET, diff.left.c_str());
-    LOG_ERR("%sRight (difference):%s '%s'\n", ANSI_ORANGE, ANSI_RESET, diff.right.c_str());
+    LOG_INF("\n%s=== %s ===%s\n", ANSI_CYAN, title.c_str(), ANSI_RESET);
+    LOG_INF("%sCommon Prefix:%s '%s'\n", ANSI_PREFIX, ANSI_RESET, diff.prefix.c_str());
+    LOG_INF("%sCommon Suffix:%s '%s'\n", ANSI_SUFFIX, ANSI_RESET, diff.suffix.c_str());
+    LOG_INF("%sLeft (difference):%s '%s'\n", ANSI_GREEN, ANSI_RESET, diff.left.c_str());
+    LOG_INF("%sRight (difference):%s '%s'\n", ANSI_ORANGE, ANSI_RESET, diff.right.c_str());
 }
 
 static void check_reasoning_variables(const common_chat_template & tmpl) {
-    LOG_ERR("\n%s=== Checking Reasoning Variables ===%s\n", ANSI_CYAN, ANSI_RESET);
+    LOG_INF("\n%s=== Checking Reasoning Variables ===%s\n", ANSI_CYAN, ANSI_RESET);
 
     try {
         // Create a list of candidate reasoning/thinking variable names to probe
@@ -355,11 +357,11 @@ static void check_reasoning_variables(const common_chat_template & tmpl) {
         }
 
         if (accessed_vars.empty()) {
-            LOG_ERR("%sNo reasoning/thinking-related variables were queried by the template%s\n", ANSI_GRAY, ANSI_RESET);
+            LOG_INF("%sNo reasoning/thinking-related variables were queried by the template%s\n", ANSI_GRAY, ANSI_RESET);
         } else {
-            LOG_ERR("Template queries the following reasoning/thinking-related variables:\n");
+            LOG_INF("Template queries the following reasoning/thinking-related variables:\n");
             for (const auto & var : accessed_vars) {
-                LOG_ERR("  %s- %s%s\n", ANSI_ORANGE, var.c_str(), ANSI_RESET);
+                LOG_INF("  %s- %s%s\n", ANSI_ORANGE, var.c_str(), ANSI_RESET);
             }
         }
 
@@ -369,12 +371,12 @@ static void check_reasoning_variables(const common_chat_template & tmpl) {
 }
 
 static void analyze_template(const std::string & template_path) {
-    LOG_ERR("\n");
-    LOG_ERR("%s", ANSI_PURPLE);
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("                    ANALYZING TEMPLATE: %s\n", template_path.c_str());
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("%s", ANSI_RESET);
+    LOG_INF("\n");
+    LOG_INF("%s", ANSI_PURPLE);
+    LOG_INF("================================================================================\n");
+    LOG_INF("                    ANALYZING TEMPLATE: %s\n", template_path.c_str());
+    LOG_INF("================================================================================\n");
+    LOG_INF("%s", ANSI_RESET);
 
     std::string template_source;
     try {
@@ -389,14 +391,14 @@ static void analyze_template(const std::string & template_path) {
         json tools = build_tools_definition();
 
         // ===== CAPABILITIES ANALYSIS =====
-        LOG_ERR("\n%s=== Template Capabilities (from jinja::caps) ===%s\n", ANSI_CYAN, ANSI_RESET);
+        LOG_INF("\n%s=== Template Capabilities (from jinja::caps) ===%s\n", ANSI_CYAN, ANSI_RESET);
         auto caps = chat_template.original_caps();
-        LOG_ERR("%ssupports_tools:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_tools ? "true" : "false");
-        LOG_ERR("%ssupports_tool_calls:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_tool_calls ? "true" : "false");
-        LOG_ERR("%ssupports_system_role:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_system_role ? "true" : "false");
-        LOG_ERR("%ssupports_parallel_tool_calls:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_parallel_tool_calls ? "true" : "false");
-        LOG_ERR("%ssupports_typed_content:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_typed_content ? "true" : "false");
-        LOG_ERR("%ssupports_string_content:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_string_content ? "true" : "false");
+        LOG_INF("%ssupports_tools:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_tools ? "true" : "false");
+        LOG_INF("%ssupports_tool_calls:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_tool_calls ? "true" : "false");
+        LOG_INF("%ssupports_system_role:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_system_role ? "true" : "false");
+        LOG_INF("%ssupports_parallel_tool_calls:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_parallel_tool_calls ? "true" : "false");
+        LOG_INF("%ssupports_typed_content:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_typed_content ? "true" : "false");
+        LOG_INF("%ssupports_string_content:%s %s\n", ANSI_BLUE, ANSI_RESET, caps.supports_string_content ? "true" : "false");
 
         // ===== DIFFERENTIAL ANALYSIS =====
 
@@ -584,32 +586,68 @@ static void analyze_template(const std::string & template_path) {
 }
 
 int main(int argc, char ** argv) {
-    // Set log level to capture all output
-    common_log_set_verbosity_thold(99);
+    common_params params;
+    params.model.path = "."; // placeholder so common_params_parse does not require --model
+    common_init();
 
-    analysis_options opts;
-    if (!parse_options(argc, argv, opts)) {
+    // this tool handles --all/--template/--template-file and -h itself; every other option goes to the common parser
+    std::vector<char *> common_argv;
+    std::vector<char *> own_argv;
+    common_argv.push_back(argv[0]);
+    own_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        const std::string arg = argv[i];
+        if (arg == "--all" || arg == "-h" || arg == "--help") {
+            own_argv.push_back(argv[i]);
+        } else if (arg == "--template" || arg == "--template-file") {
+            own_argv.push_back(argv[i]);
+            if (i + 1 < argc) {
+                own_argv.push_back(argv[++i]);
+            }
+        } else if (arg[0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            own_argv.push_back(argv[i]); // unrecognised token: parse_options reports it
+        }
+    }
+    common_argv.push_back(nullptr);
+    own_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
 
-    LOG_ERR("\n");
-    LOG_ERR("%s", ANSI_PURPLE);
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("                      TEMPLATE ANALYSIS TOOL\n");
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("%s", ANSI_RESET);
-    LOG_ERR("Analyzing %s%zu%s template(s)\n", ANSI_CYAN, opts.template_paths.size(), ANSI_RESET);
+    // capture all output unless the user asked for a lower verbosity threshold
+    common_log_set_verbosity_thold(params.verbosity < LOG_DEFAULT_LLAMA ? params.verbosity : 99);
+
+    analysis_options opts;
+    if (!parse_options((int) own_argv.size() - 1, own_argv.data(), opts)) {
+        common_log_flush(common_log_main());
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-chat-analysis");
+
+    LOG_INF("\n");
+    LOG_INF("%s", ANSI_PURPLE);
+    LOG_INF("================================================================================\n");
+    LOG_INF("                      TEMPLATE ANALYSIS TOOL\n");
+    LOG_INF("================================================================================\n");
+    LOG_INF("%s", ANSI_RESET);
+    LOG_INF("Analyzing %s%zu%s template(s)\n", ANSI_CYAN, opts.template_paths.size(), ANSI_RESET);
 
     for (const auto & path : opts.template_paths) {
+        LOG_INF("  running %s\n", path.c_str());
         analyze_template(path);
     }
 
-    LOG_ERR("\n");
-    LOG_ERR("%s", ANSI_GREEN);
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("                      ANALYSIS COMPLETE\n");
-    LOG_ERR("================================================================================\n");
-    LOG_ERR("%s", ANSI_RESET);
+    LOG_INF("\n");
+    LOG_INF("%s", ANSI_GREEN);
+    LOG_INF("================================================================================\n");
+    LOG_INF("                      ANALYSIS COMPLETE\n");
+    LOG_INF("================================================================================\n");
+    LOG_INF("%s", ANSI_RESET);
 
+    LOG("%s: %s\n", "test-chat-analysis", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

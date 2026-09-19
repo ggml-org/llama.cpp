@@ -4,12 +4,43 @@
 #include "ggml-rpc.h"
 #include "ggml.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
+#include <vector>
+
 int main(int argc, char ** argv) {
-    GGML_ASSERT(argc == 3);
+    std::vector<const char *> endpoints;
+
+    {
+        common_params params;
+        params.model.path = "."; // this test takes no model
+        common_init();
+
+        // the test takes two positional endpoints, everything else goes to common_params_parse
+        std::vector<char *> common_argv;
+        common_argv.push_back(argv[0]);
+        for (int i = 1; i < argc; i++) {
+            if (argv[i][0] == '-') {
+                common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+            } else {
+                endpoints.push_back(argv[i]);
+            }
+        }
+        common_argv.push_back(nullptr);
+        if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+            return 1;
+        }
+    }
+
+    LOG("%s: running\n", "test-rpc-multi-server");
+
+    GGML_ASSERT(endpoints.size() == 2);
     ggml_backend_load_all();
 
-    const char * endpoint_a = argv[1];
-    const char * endpoint_b = argv[2];
+    const char * endpoint_a = endpoints[0];
+    const char * endpoint_b = endpoints[1];
 
     ggml_backend_t backend_a = ggml_backend_rpc_init(endpoint_a, 0);
     ggml_backend_t backend_b = ggml_backend_rpc_init(endpoint_b, 0);
@@ -43,5 +74,8 @@ int main(int argc, char ** argv) {
     ggml_free(ctx);
     ggml_backend_free(backend_b);
     ggml_backend_free(backend_a);
+
+    LOG("%s: %s\n", "test-rpc-multi-server", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

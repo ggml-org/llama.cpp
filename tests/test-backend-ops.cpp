@@ -20,6 +20,10 @@
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <algorithm>
 #include <atomic>
 #include <array>
@@ -833,6 +837,14 @@ struct printer {
 };
 
 struct console_printer : public printer {
+    // the printer is created after the CLI has been parsed, so the threshold is final here:
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_blue = use_color ? "\033[1;34m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
+
     void print_test_result(const test_result & result) override {
         if (result.test_mode == "test") {
             print_test_console(result);
@@ -844,21 +856,21 @@ struct console_printer : public printer {
     }
 
     void print_operation(const test_operation_info & info) override {
-        printf("  %s(%s): ", info.op_name.c_str(), info.op_params.c_str());
+        LOG_CNT("  %s(%s): ", info.op_name.c_str(), info.op_params.c_str());
         fflush(stdout);
 
         // Handle large tensor skip first
         if (info.is_large_tensor_skip) {
-            printf("skipping large tensors for speed \n");
+            LOG_CNT("skipping large tensors for speed \n");
             return;
         }
 
         // Handle not supported status
         if (info.status == test_status_t::NOT_SUPPORTED) {
             if (!info.failure_reason.empty()) {
-                printf("not supported [%s]\n", info.failure_reason.c_str());
+                LOG_CNT("not supported [%s]\n", info.failure_reason.c_str());
             } else {
-                printf("not supported [%s]\n", info.backend_name.c_str());
+                LOG_CNT("not supported [%s]\n", info.backend_name.c_str());
             }
             return;
         }
@@ -866,52 +878,52 @@ struct console_printer : public printer {
         // Handle errors and additional information
         if (info.has_error) {
             if (info.error_component == "allocation") {
-                fprintf(stderr, "failed to allocate tensors [%s] ", info.backend_name.c_str());
+                LOG_ERR("failed to allocate tensors [%s] ", info.backend_name.c_str());
             } else if (info.error_component == "backend") {
-                fprintf(stderr, "  Failed to initialize %s backend\n", info.backend_name.c_str());
+                LOG_ERR("  Failed to initialize %s backend\n", info.backend_name.c_str());
             } else {
-                fprintf(stderr, "Error in %s: %s\n", info.error_component.c_str(), info.error_details.c_str());
+                LOG_ERR("Error in %s: %s\n", info.error_component.c_str(), info.error_details.c_str());
             }
         }
 
         // Handle gradient info
         if (info.has_gradient_info) {
-            printf("[%s] nonfinite gradient at index %" PRId64 " (%s=%f) ", info.op_name.c_str(), info.gradient_index,
-                   info.gradient_param_name.c_str(), info.gradient_value);
+            LOG_CNT("[%s] nonfinite gradient at index %" PRId64 " (%s=%f) ", info.op_name.c_str(), info.gradient_index,
+                    info.gradient_param_name.c_str(), info.gradient_value);
         }
 
         // Handle MAA error
         if (info.has_maa_error) {
-            printf("[%s] MAA = %.9f > %.9f ", info.op_name.c_str(), info.maa_error, info.maa_threshold);
+            LOG_CNT("[%s] MAA = %.9f > %.9f ", info.op_name.c_str(), info.maa_error, info.maa_threshold);
         }
 
         // Handle compare failure
         if (info.is_compare_failure) {
-            printf("compare failed ");
+            LOG_CNT("compare failed ");
         }
 
         // Print final status
         if (info.status == test_status_t::OK) {
-            printf("\033[1;32mOK\033[0m\n");
+            LOG_CNT("%sOK%s\n", col_ok, col_end);
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            LOG_CNT("%sFAIL%s\n", col_fail, col_end);
         }
     }
 
     void print_summary(const test_summary_info & info) override {
         if (info.is_backend_summary) {
-            printf("%zu/%zu backends passed\n", info.tests_passed, info.tests_total);
+            LOG_CNT("%zu/%zu backends passed\n", info.tests_passed, info.tests_total);
         } else {
-            printf("  %zu/%zu tests passed\n", info.tests_passed, info.tests_total);
+            LOG_CNT("  %zu/%zu tests passed\n", info.tests_passed, info.tests_total);
         }
     }
 
     void print_backend_status(const backend_status_info & info) override {
-        printf("  Backend %s: ", info.backend_name.c_str());
+        LOG_CNT("  Backend %s: ", info.backend_name.c_str());
         if (info.status == test_status_t::OK) {
-            printf("\033[1;32mOK\033[0m\n");
+            LOG_CNT("%sOK%s\n", col_ok, col_end);
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            LOG_CNT("%sFAIL%s\n", col_fail, col_end);
         }
     }
 
@@ -920,30 +932,30 @@ struct console_printer : public printer {
     }
 
     void print_backend_init(const backend_init_info & info) override {
-        printf("Backend %zu/%zu: %s\n", info.device_index + 1, info.total_devices, info.device_name.c_str());
+        LOG_INF("Backend %zu/%zu: %s\n", info.device_index + 1, info.total_devices, info.device_name.c_str());
 
         if (info.skipped) {
-            printf("  %s\n", info.skip_reason.c_str());
+            LOG_INF("  %s\n", info.skip_reason.c_str());
             return;
         }
 
         if (!info.description.empty()) {
-            printf("  Device description: %s\n", info.description.c_str());
+            LOG_INF("  Device description: %s\n", info.description.c_str());
         }
 
         if (info.has_memory_info) {
-            printf("  Device memory: %zu MB (%zu MB free)\n", info.memory_total_mb, info.memory_free_mb);
+            LOG_INF("  Device memory: %zu MB (%zu MB free)\n", info.memory_total_mb, info.memory_free_mb);
         }
 
-        printf("\n");
+        LOG_CNT("\n");
     }
 
     void print_overall_summary(const overall_summary_info & info) override {
         printf("%zu/%zu backends passed\n", info.backends_passed, info.backends_total);
         if (info.all_passed) {
-            printf("\033[1;32mOK\033[0m\n");
+            printf("%sOK%s\n", col_ok, col_end);
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            printf("%sFAIL%s\n", col_fail, col_end);
         }
     }
 
@@ -960,28 +972,30 @@ struct console_printer : public printer {
 
   private:
     void print_test_console(const test_result & result) {
-        printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        LOG_CNT("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
         fflush(stdout);
 
         if (!result.supported) {
-            printf("not supported [%s] ", result.backend_name.c_str());
-            printf("\n");
+            LOG_CNT("not supported [%s] ", result.backend_name.c_str());
+            LOG_CNT("\n");
             return;
         }
 
         if (result.passed) {
-            printf("\033[1;32mOK\033[0m\n");
+            LOG_CNT("%sOK%s\n", col_ok, col_end);
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            LOG_CNT("%sFAIL%s\n", col_fail, col_end);
         }
     }
 
     void print_perf_console(const test_result & result) {
-        int len = printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        const std::string label = "  " + result.op_name + "(" + result.op_params + "): ";
+        int len = (int) label.size();
+        LOG_CNT("%s", label.c_str());
         fflush(stdout);
 
         if (!result.supported) {
-            printf("not supported\n");
+            LOG_CNT("not supported\n");
             return;
         }
 
@@ -991,9 +1005,9 @@ struct console_printer : public printer {
         if (last - len < 5) {
             last += align;
         }
-        printf("%*s", last - len, "");
+        LOG_CNT("%*s", last - len, "");
 
-        printf("    %8d runs - %8.2f us/run - ", result.n_runs, result.time_us);
+        LOG_CNT("    %8d runs - %8.2f us/run - ", result.n_runs, result.time_us);
 
         if (result.flops > 0) {
             auto format_flops = [](double flops) -> std::string {
@@ -1010,22 +1024,22 @@ struct console_printer : public printer {
                 return buf;
             };
             uint64_t op_flops_per_run = result.flops * result.time_us / 1e6;
-            printf("%s/run - \033[1;34m%sS\033[0m", format_flops(op_flops_per_run).c_str(),
-                   format_flops(result.flops).c_str());
+            LOG_CNT("%s/run - %s%sS%s", format_flops(op_flops_per_run).c_str(), col_blue,
+                    format_flops(result.flops).c_str(), col_end);
         } else {
-            printf("%8zu kB/run - \033[1;34m%7.2f GB/s\033[0m", result.memory_kb, result.bandwidth_gb_s);
+            LOG_CNT("%8zu kB/run - %s%7.2f GB/s%s", result.memory_kb, col_blue, result.bandwidth_gb_s, col_end);
         }
-        printf("\n");
+        LOG_CNT("\n");
     }
 
     void print_support_console(const test_result & result) {
-        printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        LOG_CNT("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
         fflush(stdout);
 
         if (result.supported) {
-            printf("\033[1;32mSUPPORTED\033[0m\n");
+            LOG_CNT("%sSUPPORTED%s\n", col_ok, col_end);
         } else {
-            printf("\033[1;31mNOT SUPPORTED\033[0m\n");
+            LOG_CNT("%sNOT SUPPORTED%s\n", col_fail, col_end);
         }
     }
 };
@@ -1595,7 +1609,7 @@ struct test_case {
         // warmup run
         ggml_status status = ggml_backend_graph_compute(backend, gf);
         if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+            LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
             return false;
         }
 
@@ -1650,7 +1664,7 @@ struct test_case {
             int64_t start_time = ggml_time_us();
             ggml_status status = ggml_backend_graph_compute(backend, gf);
             if (status != GGML_STATUS_SUCCESS) {
-                fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
                 return false;
             }
             int64_t end_time = ggml_time_us();
@@ -1841,12 +1855,12 @@ struct test_case {
 
         ggml_status status = ggml_backend_graph_compute(backend, gf);
         if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+            LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
             return false;
         }
         status = ggml_backend_graph_compute(backend, gb);
         if (status != GGML_STATUS_SUCCESS) {
-            fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+            LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
             return false;
         }
 
@@ -1900,7 +1914,7 @@ struct test_case {
                 ggml_backend_tensor_set(t, &xiu, i*sizeof(float), sizeof(float));
                 status = ggml_backend_graph_compute(backend, gf);
                 if (status != GGML_STATUS_SUCCESS) {
-                    fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                    LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
                     return false;
                 }
                 ggml_backend_tensor_get(out, &fu, 0, ggml_nbytes(out));
@@ -1908,7 +1922,7 @@ struct test_case {
                 ggml_backend_tensor_set(t, &xid, i*sizeof(float), sizeof(float));
                 status = ggml_backend_graph_compute(backend, gf);
                 if (status != GGML_STATUS_SUCCESS) {
-                    fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                    LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
                     return false;
                 }
                 ggml_backend_tensor_get(out, &fd, 0, ggml_nbytes(out));
@@ -1917,7 +1931,7 @@ struct test_case {
                     ggml_backend_tensor_set(t, &xiuh, i*sizeof(float), sizeof(float));
                     status = ggml_backend_graph_compute(backend, gf);
                     if (status != GGML_STATUS_SUCCESS) {
-                        fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                        LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
                         return false;
                     }
                     ggml_backend_tensor_get(out, &fuh, 0, ggml_nbytes(out));
@@ -1925,7 +1939,7 @@ struct test_case {
                     ggml_backend_tensor_set(t, &xidh, i*sizeof(float), sizeof(float));
                     status = ggml_backend_graph_compute(backend, gf);
                     if (status != GGML_STATUS_SUCCESS) {
-                        fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+                        LOG_ERR("%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
                         return false;
                     }
                     ggml_backend_tensor_get(out, &fdh, 0, ggml_nbytes(out));
@@ -11933,6 +11947,10 @@ static void usage(char ** argv) {
 }
 
 int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
     test_mode mode = MODE_TEST;
     output_formats output_format = CONSOLE;
     const char * op_names_filter = nullptr;
@@ -11940,6 +11958,9 @@ int main(int argc, char ** argv) {
     const char * params_filter = nullptr;
     const char * test_file_path = nullptr;
     int parallel_workers = 1;
+
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "test") == 0) {
@@ -12005,11 +12026,20 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         } else {
             usage(argv);
             return 1;
         }
     }
+
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-backend-ops");
 
     // load and enumerate backends
     ggml_backend_load_all();
@@ -12071,12 +12101,17 @@ int main(int argc, char ** argv) {
         output_printer->print_footer();
     }
 
+    common_log_flush(common_log_main());
     output_printer->print_overall_summary(
         overall_summary_info(n_ok, ggml_backend_dev_count(), n_ok == ggml_backend_dev_count()));
 
     if (n_ok != ggml_backend_dev_count()) {
+        LOG("%s: %s\n", "test-backend-ops", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
+    LOG("%s: %s\n", "test-backend-ops", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

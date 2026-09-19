@@ -1,11 +1,15 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <chrono>
-#include <iostream>
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
+#include <string>
 #include <vector>
 #include <thread>
 
@@ -40,7 +44,8 @@ static void test_barrier(int n_threads, int n_rounds) {
     struct ggml_threadpool_params tpp  = ggml_threadpool_params_default(n_threads);
     struct ggml_threadpool* threadpool = ggml_threadpool_new(&tpp);
     if (!threadpool) {
-        fprintf(stderr, "threadpool create failed : n_threads %d\n", n_threads);
+        LOG_ERR("threadpool create failed : n_threads %d\n", n_threads);
+        common_log_flush(common_log_main());
         exit(1);
     }
 
@@ -50,11 +55,10 @@ static void test_barrier(int n_threads, int n_rounds) {
     std::vector<uint8_t> work_data(cplan.work_size);
     cplan.work_data = work_data.data();
 
-    std::cerr << "graph-compute with"
-              << "\n n_threads: " << n_threads
-              << "\n   n_nodes: " << n_nodes
-              << "\n  n_rounds: " << n_rounds
-              << "\n";
+    LOG_INF("graph-compute with"
+            "\n n_threads: %d"
+            "\n   n_nodes: %d"
+            "\n  n_rounds: %d\n", n_threads, n_nodes, n_rounds);
     // ggml_graph_print(gf);
 
     // Warmup
@@ -70,10 +74,10 @@ static void test_barrier(int n_threads, int n_rounds) {
 
     auto usec = std::chrono::duration_cast<std::chrono::microseconds>(t1-t0).count();
     auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(t1-t0).count();
-    std::cerr << "graph-compute took " << usec << " usec "
-              << "\n " << (float) usec / n_rounds << " usec per-iter"
-              << "\n " << (float) nsec / (n_rounds * n_nodes) << " nsec per-node"
-              << "\n";
+    LOG_INF("graph-compute took %lld usec "
+            "\n %g usec per-iter"
+            "\n %g nsec per-node\n",
+            (long long) usec, (float) usec / n_rounds, (float) nsec / (n_rounds * n_nodes));
 
     ggml_threadpool_free(threadpool);
     ggml_free(ctx);
@@ -108,15 +112,15 @@ static void test_active(int n_threads, int n_rounds) {
     struct ggml_threadpool_params tpp  = ggml_threadpool_params_default(n_threads);
     struct ggml_threadpool* threadpool = ggml_threadpool_new(&tpp);
     if (!threadpool) {
-        fprintf(stderr, "threadpool create failed : n_threads %d\n", n_threads);
+        LOG_ERR("threadpool create failed : n_threads %d\n", n_threads);
+        common_log_flush(common_log_main());
         exit(1);
     }
 
-    std::cerr << "graph-compute with"
-              << "\n n_threads: " << n_threads
-              << "\n   n_nodes: " << n_nodes
-              << "\n  n_rounds: " << n_rounds
-              << "\n";
+    LOG_INF("graph-compute with"
+            "\n n_threads: %d"
+            "\n   n_nodes: %d"
+            "\n  n_rounds: %d\n", n_threads, n_nodes, n_rounds);
     // ggml_graph_print(gf);
 
     // In this test we keep changing the number of threads every 4th iteration
@@ -181,16 +185,17 @@ static void test_multi_graph(int n_threads, int n_rounds) {
     struct ggml_threadpool_params tpp  = ggml_threadpool_params_default(n_threads);
     struct ggml_threadpool* threadpool = ggml_threadpool_new(&tpp);
     if (!threadpool) {
-        fprintf(stderr, "threadpool create failed : n_threads %d\n", n_threads);
+        LOG_ERR("threadpool create failed : n_threads %d\n", n_threads);
+        common_log_flush(common_log_main());
         exit(1);
     }
 
-    std::cerr << "graph-compute with"
-              << "\n gf0 n_nodes: " << ggml_graph_n_nodes(gf0)
-              << "\n gf1 n_nodes: " << ggml_graph_n_nodes(gf1)
-              << "\n   n_threads: " << n_threads
-              << "\n    n_rounds: " << n_rounds
-              << "\n";
+    LOG_INF("graph-compute with"
+            "\n gf0 n_nodes: %d"
+            "\n gf1 n_nodes: %d"
+            "\n   n_threads: %d"
+            "\n    n_rounds: %d\n",
+            ggml_graph_n_nodes(gf0), ggml_graph_n_nodes(gf1), n_threads, n_rounds);
 
     // In this test we keep changing the number of threads every 4th iteration
     // and we compute two graphs back to back to test graph frequent graph switching
@@ -214,17 +219,38 @@ static void test_multi_graph(int n_threads, int n_rounds) {
 
 
 int main(int argc, char *argv[]) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    // this test takes n_threads and n_rounds as positional arguments
+    std::vector<std::string> positional;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            positional.push_back(argv[i]);
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
 
     int n_threads = std::max(1, std::min(4, (int) std::thread::hardware_concurrency()));
     int n_rounds  = 100;
 
-    if (argc > 1) {
-        n_threads = std::atoi(argv[1]);
+    if (positional.size() > 0) {
+        n_threads = std::atoi(positional[0].c_str());
     }
 
-    if (argc > 2) {
-        n_rounds  = std::atoi(argv[2]);
+    if (positional.size() > 1) {
+        n_rounds  = std::atoi(positional[1].c_str());
     }
+
+    LOG("%s: running\n", "test-barrier");
 
     test_barrier(n_threads, n_rounds);
 
@@ -232,5 +258,7 @@ int main(int argc, char *argv[]) {
 
     test_multi_graph(n_threads,  n_rounds * 10);
 
+    LOG("%s: %s\n", "test-barrier", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

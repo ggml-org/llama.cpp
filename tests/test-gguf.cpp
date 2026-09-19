@@ -3,6 +3,10 @@
 #include "../ggml/src/ggml-impl.h"
 #include "gguf.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -748,6 +752,14 @@ static bool handcrafted_check_tensor_data(const gguf_context * gguf_ctx, const u
 }
 
 static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
+    LOG_INF("  running %s\n", __func__);
+
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
+
     int npass = 0;
     int ntest = 0;
 
@@ -791,7 +803,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
     };
 
     for (enum handcrafted_file_type hft : hfts) {
-        printf("%s: handcrafted_file_type=%s\n", __func__, handcrafted_file_type_name(hft).c_str());
+        LOG_CNT("%s: handcrafted_file_type=%s\n", __func__, handcrafted_file_type_name(hft).c_str());
         FILE * file = get_handcrafted_file(seed, hft);
 
 #ifdef _WIN32
@@ -813,24 +825,24 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         struct gguf_context * gguf_ctx = gguf_init_from_file_ptr(file, gguf_params);
 
         if (expect_context_not_null(hft)) {
-            printf("%s:   - context_not_null: ", __func__);
+            LOG_CNT("%s:   - context_not_null: ", __func__);
         } else {
-            printf("%s:   - context_null: ", __func__);
+            LOG_CNT("%s:   - context_null: ", __func__);
         }
         if (bool(gguf_ctx) == expect_context_not_null(hft)) {
-            printf("\033[1;32mOK\033[0m\n");
+            LOG_CNT("%sOK%s\n", col_ok, col_end);
             npass++;
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            LOG_CNT("%sFAIL%s\n", col_fail, col_end);
         }
         ntest++;
 
         if (hft >= offset_has_data && !expect_context_not_null(hft)) {
-            printf("%s:   - no_dangling_ggml_context_pointer: ", __func__);
+            LOG_CNT("%s:   - no_dangling_ggml_context_pointer: ", __func__);
             if (ctx) {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             } else {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 npass++;
             }
             ntest++;
@@ -839,23 +851,23 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         const bool alignment_defined = hft == HANDCRAFTED_TENSORS_CUSTOM_ALIGN || hft == HANDCRAFTED_DATA_CUSTOM_ALIGN;
 
         if (expect_context_not_null(hft)) {
-            printf("%s:   - check_header: ", __func__);
+            LOG_CNT("%s:   - check_header: ", __func__);
             if (handcrafted_check_header(gguf_ctx, seed, hft >= offset_has_kv, hft >= offset_has_tensors, alignment_defined)) {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 npass++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             }
             ntest++;
         }
 
         if (expect_context_not_null(hft) && hft >= offset_has_kv) {
-            printf("%s:   - check_kv: ", __func__);
+            LOG_CNT("%s:   - check_kv: ", __func__);
             if (handcrafted_check_kv(gguf_ctx, seed, hft >= offset_has_tensors, alignment_defined)) {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 npass++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             }
             ntest++;
         }
@@ -863,23 +875,23 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         // HANDCRAFTED_TENSORS_ZERO_DIM deliberately mangles the tensor shapes to 0 elements,
         // so only assert that it loads without crashing; skip the exact-geometry comparison.
         if (expect_context_not_null(hft) && hft >= offset_has_tensors && hft != HANDCRAFTED_TENSORS_ZERO_DIM) {
-            printf("%s:   - check_tensors: ", __func__);
+            LOG_CNT("%s:   - check_tensors: ", __func__);
             if (handcrafted_check_tensors(gguf_ctx, seed)) {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 npass++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             }
             ntest++;
         }
 
         if (expect_context_not_null(hft) && hft >= offset_has_data) {
-            printf("%s:   - check_tensor_data: ", __func__);
+            LOG_CNT("%s:   - check_tensor_data: ", __func__);
             if (handcrafted_check_tensor_data(gguf_ctx, seed, file)) {
-                printf("\033[1;32mOK\033[0m\n");
+                LOG_CNT("%sOK%s\n", col_ok, col_end);
                 npass++;
             } else {
-                printf("\033[1;31mFAIL\033[0m\n");
+                LOG_CNT("%sFAIL%s\n", col_fail, col_end);
             }
             ntest++;
         }
@@ -889,7 +901,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
             ggml_free(ctx);
             gguf_free(gguf_ctx);
         }
-        printf("\n");
+        LOG_CNT("\n");
     }
 
 
@@ -1187,9 +1199,15 @@ static std::pair<int, int> test_roundtrip(
         ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta,
         const roundtrip_read_mode read_mode) {
     ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-    printf("%s: device=%s, backend=%s, only_meta=%s, read_mode=%s\n",
+    LOG_INF("  running %s: device=%s, backend=%s, only_meta=%s, read_mode=%s\n",
         __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend),
         only_meta ? "yes" : "no", roundtrip_read_mode_name(read_mode));
+
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
 
     int npass = 0;
     int ntest = 0;
@@ -1248,76 +1266,76 @@ static std::pair<int, int> test_roundtrip(
         gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
     }
 
-    printf("%s: same_version: ", __func__);
+    LOG_CNT("%s: same_version: ", __func__);
     if (gguf_get_version(gguf_ctx_0) == gguf_get_version(gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: same_n_kv: ", __func__);
+    LOG_CNT("%s: same_n_kv: ", __func__);
     if (gguf_get_n_kv(gguf_ctx_0) == gguf_get_n_kv(gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: same_n_tensors: ", __func__);
+    LOG_CNT("%s: same_n_tensors: ", __func__);
     if (gguf_get_n_tensors(gguf_ctx_0) == gguf_get_n_tensors(gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_orig_kv_in_read: ", __func__);
+    LOG_CNT("%s: all_orig_kv_in_read: ", __func__);
     if (all_kv_in_other(gguf_ctx_0, gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_read_kv_in_orig: ", __func__);
+    LOG_CNT("%s: all_read_kv_in_orig: ", __func__);
     if (all_kv_in_other(gguf_ctx_1, gguf_ctx_0)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_orig_tensors_in_read: ", __func__);
+    LOG_CNT("%s: all_orig_tensors_in_read: ", __func__);
     if (all_tensors_in_other(gguf_ctx_0, gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_read_tensors_in_orig: ", __func__);
+    LOG_CNT("%s: all_read_tensors_in_orig: ", __func__);
     if (all_tensors_in_other(gguf_ctx_1, gguf_ctx_0)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
     if (!only_meta) {
-        printf("%s: same_tensor_data: ", __func__);
+        LOG_CNT("%s: same_tensor_data: ", __func__);
         if (same_tensor_data(ctx_0, ctx_1)) {
-            printf("\033[1;32mOK\033[0m\n");
+            LOG_CNT("%sOK%s\n", col_ok, col_end);
             npass++;
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            LOG_CNT("%sFAIL%s\n", col_fail, col_end);
         }
         ntest++;
     }
@@ -1330,13 +1348,20 @@ static std::pair<int, int> test_roundtrip(
     ggml_backend_free(backend);
     fclose(file);
 
-    printf("\n");
+    LOG_CNT("\n");
     return std::make_pair(npass, ntest);
 }
 
 static std::pair<int, int> test_gguf_set_kv(ggml_backend_dev_t dev, const unsigned int seed) {
     ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-    printf("%s: device=%s, backend=%s\n", __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend));
+    LOG_INF("  running %s: device=%s, backend=%s\n",
+        __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend));
+
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
 
     int npass = 0;
     int ntest = 0;
@@ -1366,50 +1391,50 @@ static std::pair<int, int> test_gguf_set_kv(ggml_backend_dev_t dev, const unsign
     gguf_set_kv(gguf_ctx_1, gguf_ctx_0);
     gguf_set_kv(gguf_ctx_2, gguf_ctx_0);
 
-    printf("%s: same_n_kv: ", __func__);
+    LOG_CNT("%s: same_n_kv: ", __func__);
     if (gguf_get_n_kv(gguf_ctx_0) == gguf_get_n_kv(gguf_ctx_2)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_kv_0_in_1: ", __func__);
+    LOG_CNT("%s: all_kv_0_in_1: ", __func__);
     if (all_kv_in_other(gguf_ctx_0, gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_kv_0_in_2: ", __func__);
+    LOG_CNT("%s: all_kv_0_in_2: ", __func__);
     if (all_kv_in_other(gguf_ctx_0, gguf_ctx_2)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
     gguf_set_kv(gguf_ctx_0, gguf_ctx_1);
 
-    printf("%s: same_n_kv_after_double_copy: ", __func__);
+    LOG_CNT("%s: same_n_kv_after_double_copy: ", __func__);
     if (gguf_get_n_kv(gguf_ctx_0) == gguf_get_n_kv(gguf_ctx_1)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
-    printf("%s: all_kv_1_in_0_after_double_copy: ", __func__);
+    LOG_CNT("%s: all_kv_1_in_0_after_double_copy: ", __func__);
     if (all_kv_in_other(gguf_ctx_1, gguf_ctx_0)) {
-        printf("\033[1;32mOK\033[0m\n");
+        LOG_CNT("%sOK%s\n", col_ok, col_end);
         npass++;
     } else {
-        printf("\033[1;31mFAIL\033[0m\n");
+        LOG_CNT("%sFAIL%s\n", col_fail, col_end);
     }
     ntest++;
 
@@ -1422,7 +1447,7 @@ static std::pair<int, int> test_gguf_set_kv(ggml_backend_dev_t dev, const unsign
     gguf_free(gguf_ctx_2);
     ggml_backend_free(backend);
 
-    printf("\n");
+    LOG_CNT("\n");
     return std::make_pair(npass, ntest);
 }
 
@@ -1432,17 +1457,39 @@ static void print_usage() {
 }
 
 int main(int argc, char ** argv) {
-    if (argc > 2) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+
+    // this test takes an optional seed as its only positional argument
+    std::vector<std::string> positional;
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            positional.push_back(argv[i]);
+        }
+    }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    if (positional.size() > 1) {
         print_usage();
         return 1;
     }
 
     std::random_device rd;
-    const unsigned int seed = argc < 2 ? rd() : std::stoi(argv[1]);
+    const unsigned int seed = positional.empty() ? rd() : std::stoi(positional[0]);
+
+    LOG("%s: running\n", "test-gguf");
 
     // Initialize ggml backends early so the prints aren't interleaved with the test results:
     ggml_backend_dev_count();
-    fprintf(stderr, "\n");
+    LOG_CNT("\n"); // bare separator, LOG_CNT adds no prefix
 
     int npass = 0;
     int ntest = 0;
@@ -1483,11 +1530,22 @@ int main(int argc, char ** argv) {
         }
     }
 
+    const bool ok = npass == ntest;
+
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const char * const col_ok   = use_color ? "\033[1;32m" : "";
+    const char * const col_fail = use_color ? "\033[1;31m" : "";
+    const char * const col_end  = use_color ? "\033[0m"    : "";
+
+    common_log_flush(common_log_main());
     printf("%d/%d tests passed\n", npass, ntest);
-    if (npass != ntest) {
-        printf("\033[1;31mFAIL\033[0m\n");
-        return 1;
+    if (!ok) {
+        printf("%sFAIL%s\n", col_fail, col_end);
+    } else {
+        printf("%sOK%s\n", col_ok, col_end);
     }
-    printf("\033[1;32mOK\033[0m\n");
-    return 0;
+    LOG("%s: %s\n", "test-gguf", ok ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return ok ? 0 : 1;
 }

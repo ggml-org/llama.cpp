@@ -22,6 +22,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    LOG("%s: running\n", "test-thread-safety");
+
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -56,6 +58,8 @@ int main(int argc, char ** argv) {
     std::atomic<bool> failed = false;
 
     for (int m = 0; m < num_models; ++m) {
+        LOG_INF("  running model %d/%d\n", m + 1, num_models);
+
         auto mparams = common_model_params_to_llama(params);
 
         if (m < gpu_dev_count) {
@@ -71,6 +75,8 @@ int main(int argc, char ** argv) {
         llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
         if (model == NULL) {
             LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+            LOG("%s: %s\n", "test-thread-safety", "FAILED");
+            common_log_flush(common_log_main());
             return 1;
         }
 
@@ -156,11 +162,15 @@ int main(int argc, char ** argv) {
         thread.join();
     }
 
-    if (failed) {
+    const bool ok = !failed;
+
+    if (!ok) {
         LOG_ERR("One or more threads failed.\n");
-        return 1;
+    } else {
+        LOG_INF("All threads finished without errors.\n");
     }
 
-    LOG_INF("All threads finished without errors.\n");
-    return 0;
+    LOG("%s: %s\n", "test-thread-safety", ok ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return ok ? 0 : 1;
 }

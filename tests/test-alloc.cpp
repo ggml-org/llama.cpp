@@ -4,6 +4,10 @@
 #include "../ggml/src/ggml-impl.h"
 #include "ggml.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <algorithm>
 #include <exception>
 #include <memory>
@@ -189,7 +193,7 @@ static int get_leaf_id(ggml_cgraph * graph, const char * tensor_name) {
             return i;
         }
     }
-    fprintf(stderr, "leaf not found: %s\n", tensor_name);
+    LOG_ERR("leaf not found: %s\n", tensor_name);
     return -1;
 }
 
@@ -199,7 +203,7 @@ static int get_node_id(ggml_cgraph * graph, const char * tensor_name) {
             return i;
         }
     }
-    fprintf(stderr, "node not found: %s", tensor_name);
+    LOG_ERR("node not found: %s", tensor_name);
     return -1;
 }
 
@@ -651,13 +655,23 @@ static void test_graph_optimize_alloc_dep() {
 }
 
 static void run(const char * name, void (*f)()) {
-    printf("%s ", name);
-    fflush(stdout);
+    LOG_INF("  running %s\n", name);
+    // drain the queue, so the name is on disk if f() aborts
+    common_log_flush(common_log_main());
     f();
-    printf("PASSED\n");
+    LOG_CNT("PASSED\n");
 }
 
-int main() {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-alloc");
+
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);
@@ -672,5 +686,8 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+
+    LOG("%s: %s\n", "test-alloc", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

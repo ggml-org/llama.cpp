@@ -2,6 +2,21 @@ import os
 import pytest
 from filelock import FileLock
 from utils import *
+import utils
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--errors-only",
+        action="store_true",
+        default=False,
+        help="Run llama-server with WARN log verbosity, hiding INFO/TRACE/DEBUG logs",
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def configure_errors_only(request):
+    utils.errors_only = request.config.getoption("--errors-only")
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -26,7 +41,7 @@ def stop_server_after_each_test():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def load_server_presets(configure_worker_port, tmp_path_factory):
+def load_server_presets(configure_worker_port, configure_errors_only, tmp_path_factory):
     # this will be run once per test session, before any tests
 
     # serialize model downloads across parallel workers.

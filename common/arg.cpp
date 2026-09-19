@@ -3938,6 +3938,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LOG_VERBOSITY"));
     add_opt(common_arg(
+        {"--errors-only"},
+        "Set verbosity threshold to WARN (only print warnings and errors)",
+        [](common_params & params) {
+            params.verbosity = LOG_LEVEL_WARN;
+            common_log_set_verbosity_thold(LOG_LEVEL_WARN);
+        }
+    ));
+    add_opt(common_arg(
         {"--log-prefix"},
         {"--no-log-prefix"},
         "Enable prefix in log messages",

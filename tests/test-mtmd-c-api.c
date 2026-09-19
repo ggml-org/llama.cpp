@@ -6,7 +6,10 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+// this test is C, it cannot use the common LOG_* macros
 int main(void) {
+    printf("%s: running\n", "test-mtmd-c-api");
+
     printf("\n\nTesting libmtmd C API...\n");
     printf("--------\n\n");
 
@@ -17,6 +20,7 @@ int main(void) {
 
     if (!chunks) {
         fprintf(stderr, "Failed to create input chunks\n");
+        printf("%s: %s\n", "test-mtmd-c-api", "FAILED");
         return 1;
     }
 
@@ -167,6 +171,8 @@ int main(void) {
     mtmd_input_chunks_free(chunks);
 
     printf("\n\nDONE: test libmtmd C API...\n");
+
+    printf("%s: %s\n", "test-mtmd-c-api", "PASSED");
 
     return 0;
 }

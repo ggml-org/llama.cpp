@@ -197,7 +197,7 @@ run_backend_ops_case() {
   esac
   echo "=== [backend-ops:$dtype] test-backend-ops -b HTP0 -o MUL_MAT ==="
   timeout 600 env GGML_HEXAGON_NDEV=1 GGML_HEXAGON_HOSTBUF=0 ./bin/test-backend-ops \
-      -b HTP0 -o MUL_MAT -p "$pattern" \
+      -b HTP0 -o MUL_MAT -p "$pattern" --errors-only \
       > "$log" 2>&1
   local rc=$?
   note_timeout_if_triggered "$rc" 600 "$log"

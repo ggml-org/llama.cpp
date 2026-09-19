@@ -8,6 +8,7 @@
 
 #include "arg.h"
 #include "common.h"
+#include "log.h"
 #include "llama.h"
 
 #include <vector>
@@ -28,6 +29,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    LOG("%s: running\n", "test-state-restore-fragmented");
+
     // init
 
     ggml_backend_load_all();
@@ -38,7 +41,9 @@ int main(int argc, char ** argv) {
     llama_context * ctx = llama_init->context();
 
     if (model == nullptr || ctx == nullptr) {
-        fprintf(stderr, "%s : failed to init\n", __func__);
+        LOG_ERR("%s : failed to init\n", __func__);
+        LOG("%s: %s\n", "test-state-restore-fragmented", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
@@ -58,26 +63,30 @@ int main(int argc, char ** argv) {
     batch.logits[batch.n_tokens - 1] = true;
 
     if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "%s : failed to decode seq 0\n", __func__);
+        LOG_ERR("%s : failed to decode seq 0\n", __func__);
+        LOG("%s: %s\n", "test-state-restore-fragmented", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
 
-    fprintf(stderr, "%s : processed prompt on seq 0, 1, 2 (%zu tokens each)\n", __func__, tokens.size());
+    LOG_INF("%s : processed prompt on seq 0, 1, 2 (%zu tokens each)\n", __func__, tokens.size());
 
     // Save state of seq 1
     std::vector<uint8_t> seq_state(llama_state_seq_get_size(ctx, 1));
     const size_t ncopy = llama_state_seq_get_data(ctx, seq_state.data(), seq_state.size(), 1);
     if (ncopy != seq_state.size()) {
-        fprintf(stderr, "%s : failed to save seq 1 state\n", __func__);
+        LOG_ERR("%s : failed to save seq 1 state\n", __func__);
+        LOG("%s: %s\n", "test-state-restore-fragmented", "FAILED");
+        common_log_flush(common_log_main());
         return 1;
     }
-    fprintf(stderr, "%s : saved seq 1 state, %zu bytes\n", __func__, ncopy);
+    LOG_INF("%s : saved seq 1 state, %zu bytes\n", __func__, ncopy);
 
     // clear seq 1 to create a "hole" in the KV cache (fragmentation)
     // 0.20.20.20.2....
     llama_memory_t mem = llama_get_memory(ctx);
     llama_memory_seq_rm(mem, 1, -1, -1);
-    fprintf(stderr, "%s : cleared seq 1 to create fragmentation\n", __func__);
+    LOG_INF("%s : cleared seq 1 to create fragmentation\n", __func__);
 
     // Now the cache has holes where seq 1 was
     // This creates fragmentation - there's no contiguous block large enough
@@ -88,13 +97,15 @@ int main(int argc, char ** argv) {
     // Before the fix, this would fail with "failed to find available cells in kv cache"
     const size_t nset = llama_state_seq_set_data(ctx, seq_state.data(), seq_state.size(), 1);
     if (nset != seq_state.size()) {
-        fprintf(stderr, "%s : FAILED to restore seq state into fragmented cache (got %zu, expected %zu)\n",
+        LOG_ERR("%s : FAILED to restore seq state into fragmented cache (got %zu, expected %zu)\n",
                 __func__, nset, seq_state.size());
-        fprintf(stderr, "%s : This is the bug - state restore fails with fragmented KV cache\n", __func__);
+        LOG_ERR("%s : This is the bug - state restore fails with fragmented KV cache\n", __func__);
+        LOG("%s: %s\n", "test-state-restore-fragmented", "FAILED");
         llama_batch_free(batch);
+        common_log_flush(common_log_main());
         return 1;
     }
-    fprintf(stderr, "%s : restored state into seq 1, %zu bytes\n", __func__, nset);
+    LOG_INF("%s : restored state into seq 1, %zu bytes\n", __func__, nset);
 
     // Verify we can decode with the restored state
     // Generate one token to verify the restored state is usable
@@ -109,17 +120,21 @@ int main(int argc, char ** argv) {
     common_batch_add(batch, next_token, (int)tokens.size(), {1}, true);
 
     if (llama_decode(ctx, batch)) {
-        fprintf(stderr, "%s : failed to decode with restored state\n", __func__);
+        LOG_ERR("%s : failed to decode with restored state\n", __func__);
+        LOG("%s: %s\n", "test-state-restore-fragmented", "FAILED");
         llama_sampler_free(smpl);
         llama_batch_free(batch);
+        common_log_flush(common_log_main());
         return 1;
     }
 
-    fprintf(stderr, "%s : successfully decoded with restored state, generated: '%s'\n", __func__, next_token_str.c_str());
-    fprintf(stderr, "%s : SUCCESS - state restore works with fragmented KV cache\n", __func__);
+    LOG_INF("%s : successfully decoded with restored state, generated: '%s'\n", __func__, next_token_str.c_str());
+    LOG_INF("%s : SUCCESS - state restore works with fragmented KV cache\n", __func__);
 
     llama_sampler_free(smpl);
     llama_batch_free(batch);
 
+    LOG("%s: %s\n", "test-state-restore-fragmented", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

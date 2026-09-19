@@ -278,17 +278,17 @@ function gg_run_test_llama_archs_tensor_split {
     set -e
 
     if [ ! -z ${GG_BUILD_CUDA} ]; then
-        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
     fi
 
     if [ ! -z ${GG_BUILD_METAL} ]; then
-        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 --errors-only 2>&1
     fi
 
     set +e
@@ -307,7 +307,7 @@ function gg_run_test_llama_archs_models {
         rm -rf build-ci-models && mkdir -p build-ci-models
 
         # generate the dummy models used by the model-dependent tests
-        ./build-ci-release/bin/test-llama-archs -o build-ci-models 2>&1
+        ./build-ci-release/bin/test-llama-archs -o build-ci-models --errors-only 2>&1
     fi
 
     set +e
@@ -455,10 +455,10 @@ function gg_run_qwen3_0_6b {
 
     (time ./bin/llama-imatrix --model ${model_f16} -f ${wiki_test} -ngl 99 -c 1024 -b 512 --chunks 2 ) 2>&1 | tee -a $OUT/${ci}-imatrix.log
 
-    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off                ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
-    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on                 ) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa off --no-op-offload --errors-only) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 10 -c 1024 -fa on  --no-op-offload --errors-only) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa off --errors-only) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
+    (time ./bin/test-save-load-state --model ${model_q4_0} -ngl 99 -c 1024 -fa on  --errors-only) 2>&1 | tee -a $OUT/${ci}-save-load-state.log
 
     function check_ppl {
         qnt="$1"
@@ -676,9 +676,9 @@ function gg_run_test_backend_ops {
 
     # TODO: reduce the test-backend-ops timeout to 1800s
     if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
-        (time timeout 3600 ./bin/test-backend-ops ${args_extra} -b CPU) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra} -b CPU --errors-only) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     else
-        (time timeout 3600 ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
+        (time timeout 3600 ./bin/test-backend-ops ${args_extra} --errors-only) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     fi
 
     set +e

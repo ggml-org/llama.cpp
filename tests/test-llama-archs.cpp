@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "common.h"
 #include "log.h"
 #include "ggml-backend.h"
@@ -730,18 +731,24 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
     const std::string template_row_cfg = std::string("|%" + std::to_string(max_arch_name_length) + "s|%") + std::to_string(max_device_label_length) + "s|%6s|";
     const std::string template_row_res = "%15s %10s|%20s|\n";
 
+    // no ANSI escapes at WARN or lower (--errors-only)
+    const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+    const std::string status_skip = use_color ? "\033[1;33mSKIP\033[0m" : "SKIP";
+    const std::string status_ok   = use_color ? "\033[1;32mOK\033[0m"   : "OK";
+    const std::string status_fail = use_color ? "\033[1;31mFAIL\033[0m" : "FAIL";
+
     bool all_ok = true;
     common_log_flush(common_log_main());
-    printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
-    printf("|");
+    LOG_CNT(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
+    LOG_CNT("|");
     for (size_t i = 0; i < max_arch_name_length; i++) {
-        printf("-");
+        LOG_CNT("-");
     }
-    printf("|");
+    LOG_CNT("|");
     for (size_t i = 0; i < max_device_label_length; i++) {
-        printf("-");
+        LOG_CNT("-");
     }
-    printf("|------|---------------|---------|\n");
+    LOG_CNT("|------|---------------|---------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -773,14 +780,14 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
-                printf(template_row_cfg.c_str(),
+                LOG_CNT(template_row_cfg.c_str(),
                     llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
-                fflush(stdout);
+                common_log_flush(common_log_main());
 
                 std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_dev;
                 std::vector<float> logits_dev;
-                std::string status_nmse      = "\033[1;33mSKIP\033[0m";
-                std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
+                std::string status_nmse      = status_skip;
+                std::string status_roundtrip = status_skip;
                 char nmse_str[12] = {0};
 
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -794,10 +801,10 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
-                        status_nmse = "\033[1;32mOK\033[0m";
+                        status_nmse = status_ok;
                         if (nmse_val > 1e-4) {
                             all_ok = false;
-                            status_nmse = "\033[1;31mFAIL\033[0m";
+                            status_nmse = status_fail;
                         }
                     }
 
@@ -815,12 +822,12 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                         auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, dc.devs, dc.split_mode, encode);
                         const std::vector<float> logits_roundtrip = get_logits(
                             model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
-                        status_roundtrip = "\033[1;32mOK\033[0m";
+                        status_roundtrip = status_ok;
                         GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                         for (size_t i = 0; i < logits_roundtrip.size(); i++) {
                             if (logits_roundtrip[i] != logits_dev[i]) {
                                 all_ok = false;
-                                status_roundtrip = "\033[1;31mFAIL\033[0m";
+                                status_roundtrip = status_fail;
                                 break;
                             }
                         }
@@ -828,7 +835,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                 }
 
                 // log the results for this test case
-                printf(template_row_res.c_str(),
+                LOG_CNT(template_row_res.c_str(),
                     status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
             }
         }
@@ -838,8 +845,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
 }
 
 int main(int argc, char ** argv) {
-    // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
-    common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
+    common_params params;
+    params.model.path = "."; // this test takes no model
     common_init();
 
     std::random_device rd;
@@ -850,58 +857,79 @@ int main(int argc, char ** argv) {
 
     int verbosity = LOG_LEVEL_ERROR;
 
+    std::vector<char *> common_argv;
+    common_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv);
             return 0;
-        }
-        if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
+        } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
                 const std::string arch_name = argv[++i];
                 arch = llm_arch_from_string(arch_name);
                 if (arch == LLM_ARCH_UNKNOWN) {
                     LOG_ERR("%s: unkown LLM architecture: %s\n", __func__, arch_name.c_str());
+                    common_log_flush(common_log_main());
                     return 1;
                 }
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
                 seed = std::stoull(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-v") == 0) {
+        } else if (strcmp(argv[i], "-v") == 0) {
             if (i + 1 < argc) {
                 verbosity = std::stoull(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
+        } else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
             } else {
                 usage(argv);
                 return 1;
             }
+        } else if (argv[i][0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
         }
     }
+    common_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    // the parser sets the threshold from the parsed verbosity; keep the max verbosity so that the
+    // test's own -v N stays the effective filter, unless the user asked for a lower threshold (--errors-only)
+    common_log_set_verbosity_thold(params.verbosity < LOG_DEFAULT_LLAMA ? params.verbosity : LOG_LEVEL_DEBUG);
+
+    LOG("%s: running\n", "test-llama-archs");
+    common_log_flush(common_log_main()); // the seed line below goes to stdout directly, so drain the start line first
+
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
         if (!out.empty()) {
-            return save_models(arch, seed, verbosity, out);
+            const int rc = save_models(arch, seed, verbosity, out);
+            LOG("%s: %s\n", "test-llama-archs", rc == 0 ? "PASSED" : "FAILED");
+            common_log_flush(common_log_main());
+            return rc;
         }
-        return test_backends(arch, seed, verbosity);
+        const int rc = test_backends(arch, seed, verbosity);
+        LOG("%s: %s\n", "test-llama-archs", rc == 0 ? "PASSED" : "FAILED");
+        common_log_flush(common_log_main());
+        return rc;
     } catch (const std::exception & err) {
-        fprintf(stderr, "encountered runtime error: %s\n", err.what());
+        LOG_ERR("encountered runtime error: %s\n", err.what());
+        LOG("%s: %s\n", "test-llama-archs", "FAILED");
+        common_log_flush(common_log_main());
         return -1;
     }
 }

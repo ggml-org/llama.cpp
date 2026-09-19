@@ -4,6 +4,8 @@
 #include "chat.h"
 #include "gguf.h"
 #include "jinja/runtime.h"
+#include "arg.h"
+#include "common.h"
 #include "log.h"
 #include "peg-parser.h"
 #include "testing.h"
@@ -16,6 +18,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <vector>
 
 using namespace autoparser;
 
@@ -175,24 +178,24 @@ static std::string read_gguf_chat_template(const std::string & path) {
 }
 
 static void print_usage(const char * program_name) {
-    LOG_ERR("Test the chat template auto-parser; also usable as a debug tool that shows the generated PEG parser, GBNF grammar and triggers for a given template.\n");
-    LOG_ERR("\nUsage: %s [filter_regex]                       run the automated tests (default)\n", program_name);
-    LOG_ERR("       %s <template_or_gguf_path> [options]     debug a single template\n", program_name);
-    LOG_ERR("\nDebug mode options:\n");
-    LOG_ERR("  --no-tools              Disable tool definitions\n");
-    LOG_ERR("  --force-tool-call       Set tool calls to forced\n");
-    LOG_ERR("  --parallel-tool-calls=0|1 Set parallel_tool_calls (default: 1)\n");
-    LOG_ERR("  --generation-prompt=0|1 Set add_generation_prompt (default: 1)\n");
-    LOG_ERR("  --enable-reasoning=0|1  Enable reasoning parsing (default: 1)\n");
-    LOG_ERR("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
-    LOG_ERR("  --debug-jinja           Enable Jinja fine-grained debug\n");
-    LOG_ERR("  --input-message=TYPE    Message type to render:\n");
-    LOG_ERR("                          content_only, reasoning_content, tool_call_only,\n");
-    LOG_ERR("                          content_tool_call, reasoning_tool_call,\n");
-    LOG_ERR("                          content_fake_tool_call, all\n");
-    LOG_ERR("\nExamples:\n");
-    LOG_ERR("  %s template.jinja --input-message=all --generation-prompt=1\n", program_name);
-    LOG_ERR("  %s template.jinja --output=template --input-message=tool_call_only\n", program_name);
+    LOG_INF("Test the chat template auto-parser; also usable as a debug tool that shows the generated PEG parser, GBNF grammar and triggers for a given template.\n");
+    LOG_INF("\nUsage: %s [filter_regex]                       run the automated tests (default)\n", program_name);
+    LOG_INF("       %s <template_or_gguf_path> [options]     debug a single template\n", program_name);
+    LOG_INF("\nDebug mode options:\n");
+    LOG_INF("  --no-tools              Disable tool definitions\n");
+    LOG_INF("  --force-tool-call       Set tool calls to forced\n");
+    LOG_INF("  --parallel-tool-calls=0|1 Set parallel_tool_calls (default: 1)\n");
+    LOG_INF("  --generation-prompt=0|1 Set add_generation_prompt (default: 1)\n");
+    LOG_INF("  --enable-reasoning=0|1  Enable reasoning parsing (default: 1)\n");
+    LOG_INF("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
+    LOG_INF("  --debug-jinja           Enable Jinja fine-grained debug\n");
+    LOG_INF("  --input-message=TYPE    Message type to render:\n");
+    LOG_INF("                          content_only, reasoning_content, tool_call_only,\n");
+    LOG_INF("                          content_tool_call, reasoning_tool_call,\n");
+    LOG_INF("                          content_fake_tool_call, all\n");
+    LOG_INF("\nExamples:\n");
+    LOG_INF("  %s template.jinja --input-message=all --generation-prompt=1\n", program_name);
+    LOG_INF("  %s template.jinja --output=template --input-message=tool_call_only\n", program_name);
 }
 
 static bool parse_bool_option(const std::string & value) {
@@ -336,8 +339,8 @@ static void render_scenario(const common_chat_template & tmpl,
                             const json &                 tools,
                             bool                         add_generation_prompt,
                             bool                         enable_thinking) {
-    LOG_ERR("\n=== Scenario: %s ===\n", scenario_name.c_str());
-    LOG_ERR("add_generation_prompt: %s, enable_thinking: %s\n", add_generation_prompt ? "true" : "false",
+    LOG_INF("\n=== Scenario: %s ===\n", scenario_name.c_str());
+    LOG_INF("add_generation_prompt: %s, enable_thinking: %s\n", add_generation_prompt ? "true" : "false",
             enable_thinking ? "true" : "false");
 
     // When add_generation_prompt is true, add a trailing user message to trigger the prompt
@@ -349,7 +352,7 @@ static void render_scenario(const common_chat_template & tmpl,
         });
     }
 
-    LOG_ERR("Messages:\n%s\n", final_messages.dump(2).c_str());
+    LOG_TRC("Messages:\n%s\n", final_messages.dump(2).c_str());
 
     try {
         generation_params inputs;
@@ -363,9 +366,9 @@ static void render_scenario(const common_chat_template & tmpl,
 
         std::string output = common_chat_template_direct_apply(tmpl, inputs);
 
-        LOG_ERR("\n--- Rendered Output ---\n");
-        LOG_ERR("%s\n", output.c_str());
-        LOG_ERR("--- End Output (length: %zu) ---\n", output.length());
+        LOG_INF("\n--- Rendered Output ---\n");
+        LOG_INF("%s\n", output.c_str());
+        LOG_INF("--- End Output (length: %zu) ---\n", output.length());
     } catch (const std::exception & e) {
         LOG_ERR("Rendering failed: %s\n", e.what());
     }
@@ -395,7 +398,7 @@ static void render_all_scenarios(const common_chat_template & tmpl,
 
     // Also render with add_generation_prompt=true to show the prompt ending
     if (message_type == input_message_type::ALL) {
-        LOG_ERR("\n\n=== Generation Prompt Scenarios (add_generation_prompt=true) ===\n");
+        LOG_INF("\n\n=== Generation Prompt Scenarios (add_generation_prompt=true) ===\n");
 
         json prompt_messages = json::array({ user_msg });
         render_scenario(tmpl, "generation_prompt_only", prompt_messages, tools, true, enable_thinking);
@@ -438,8 +441,8 @@ static int debug_single_template(const debug_options & opts) {
         return 1;
     }
 
-    LOG_ERR("Analyzing template: %s\n", opts.template_path.c_str());
-    LOG_ERR("Options: with_tools=%s, generation_prompt=%s, enable_reasoning=%s\n", opts.with_tools ? "true" : "false",
+    LOG_INF("Analyzing template: %s\n", opts.template_path.c_str());
+    LOG_INF("Options: with_tools=%s, generation_prompt=%s, enable_reasoning=%s\n", opts.with_tools ? "true" : "false",
             opts.generation_prompt ? "true" : "false", opts.enable_reasoning ? "true" : "false");
 
     try {
@@ -451,17 +454,17 @@ static int debug_single_template(const debug_options & opts) {
         common_chat_params            parser_data;
         if (std::optional<common_chat_params> spec_tmpl =
                 common_chat_try_specialized_template(chat_template, template_source, params)) {
-            LOG_ERR("\n");
-            LOG_ERR("This template uses a specialized parser, analysis results will not be available.\n");
+            LOG_INF("\n");
+            LOG_INF("This template uses a specialized parser, analysis results will not be available.\n");
             parser_data = *spec_tmpl;
         } else {
             // Render template scenarios if requested
             if (opts.input_message != input_message_type::NONE &&
                 (opts.mode == output_mode::TEMPLATE || opts.mode == output_mode::BOTH)) {
-                LOG_ERR("\n");
-                LOG_ERR("================================================================================\n");
-                LOG_ERR("                         TEMPLATE RENDERING OUTPUT\n");
-                LOG_ERR("================================================================================\n");
+                LOG_INF("\n");
+                LOG_INF("================================================================================\n");
+                LOG_INF("                         TEMPLATE RENDERING OUTPUT\n");
+                LOG_INF("================================================================================\n");
 
                 render_all_scenarios(chat_template, tools, opts.generation_prompt, opts.enable_reasoning,
                                      opts.input_message);
@@ -469,10 +472,10 @@ static int debug_single_template(const debug_options & opts) {
 
             // Output analysis if requested
             if (opts.mode == output_mode::ANALYSIS || opts.mode == output_mode::BOTH) {
-                LOG_ERR("\n");
-                LOG_ERR("================================================================================\n");
-                LOG_ERR("                           TEMPLATE ANALYSIS\n");
-                LOG_ERR("================================================================================\n");
+                LOG_INF("\n");
+                LOG_INF("================================================================================\n");
+                LOG_INF("                           TEMPLATE ANALYSIS\n");
+                LOG_INF("================================================================================\n");
 
                 struct autoparser analysis;
                 analysis.analyze_template(chat_template);
@@ -483,25 +486,25 @@ static int debug_single_template(const debug_options & opts) {
         }
 
         if (!std::empty(parser_data.parser)) {
-            LOG_ERR("\n=== Generated Parser ===\n");
+            LOG_INF("\n=== Generated Parser ===\n");
             common_peg_arena arena;
             arena.load(parser_data.parser);
-            LOG_ERR("%s\n", arena.dump(arena.root()).c_str());
+            LOG_INF("%s\n", arena.dump(arena.root()).c_str());
 
-            LOG_ERR("\n=== Generated Grammar ===\n");
-            LOG_ERR("%s\n", parser_data.grammar.c_str());
+            LOG_INF("\n=== Generated Grammar ===\n");
+            LOG_INF("%s\n", parser_data.grammar.c_str());
 
-            LOG_ERR("\n=== Generated Lazy Grammar ===\n");
-            LOG_ERR("%d\n", parser_data.grammar_lazy);
+            LOG_INF("\n=== Generated Lazy Grammar ===\n");
+            LOG_INF("%d\n", parser_data.grammar_lazy);
 
-            LOG_ERR("\n=== Generated Grammar Triggers ===\n");
+            LOG_INF("\n=== Generated Grammar Triggers ===\n");
             for (const common_grammar_trigger & cgt : parser_data.grammar_triggers) {
-                LOG_ERR("Token: %d | Type: %d | Value: %s\n", cgt.token, cgt.type, cgt.value.c_str());
+                LOG_INF("Token: %d | Type: %d | Value: %s\n", cgt.token, cgt.type, cgt.value.c_str());
             }
 
-            LOG_ERR("\n=== Preserved Tokens ===\n");
+            LOG_INF("\n=== Preserved Tokens ===\n");
             for (const std::string & token : parser_data.preserved_tokens) {
-                LOG_ERR("  '%s'\n", token.c_str());
+                LOG_INF("  '%s'\n", token.c_str());
             }
         }
     } catch (const std::exception & e) {
@@ -513,20 +516,59 @@ static int debug_single_template(const debug_options & opts) {
 }
 
 int main(int argc, char * argv[]) {
-    if (argc > 1) {
-        std::string arg = argv[1];
+    common_params params;
+    params.model.path = "."; // placeholder so common_params_parse does not require --model
+    common_init();
+
+    // this tool handles -h/--help, its debug options and one positional argument
+    // (template path or test filter) itself; every other option goes to the common parser
+    std::vector<char *> common_argv;
+    std::vector<char *> own_argv;
+    common_argv.push_back(argv[0]);
+    own_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        const std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help" ||
+            arg == "--force-tool-call" || arg == "--debug-jinja" || arg == "--no-tools" ||
+            arg.rfind("--parallel-tool-calls=", 0) == 0 ||
+            arg.rfind("--generation-prompt=", 0) == 0 ||
+            arg.rfind("--enable-reasoning=", 0) == 0 ||
+            arg.rfind("--output=", 0) == 0 ||
+            arg.rfind("--input-message=", 0) == 0) {
+            own_argv.push_back(argv[i]);
+        } else if (arg[0] == '-') {
+            common_argv.push_back(argv[i]); // an option: let common_params_parse handle it
+        } else {
+            own_argv.push_back(argv[i]); // positional: template path or test filter
+        }
+    }
+    common_argv.push_back(nullptr);
+    own_argv.push_back(nullptr);
+    if (!common_params_parse((int) common_argv.size() - 1, common_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    // capture all output unless the user asked for a lower verbosity threshold
+    const int own_verbosity = params.verbosity < LOG_DEFAULT_LLAMA ? params.verbosity : 99;
+    const int own_argc = (int) own_argv.size() - 1;
+    char ** own_argv_data = own_argv.data();
+
+    if (own_argc > 1) {
+        std::string arg = own_argv_data[1];
         if (arg == "-h" || arg == "--help") {
-            common_log_set_verbosity_thold(99);
-            print_usage(argv[0]);
+            common_log_set_verbosity_thold(own_verbosity);
+            print_usage(own_argv_data[0]);
+            common_log_flush(common_log_main());
             return 0;
         }
 
         // debug mode: if the first argument is an existing file, analyze that template instead of running the automated tests
         if (std::filesystem::is_regular_file(arg)) {
-            common_log_set_verbosity_thold(99);
+            common_log_set_verbosity_thold(own_verbosity);
 
             debug_options opts;
-            if (!parse_debug_options(argc, argv, opts)) {
+            if (!parse_debug_options(own_argc, own_argv_data, opts)) {
+                common_log_flush(common_log_main());
                 return 1;
             }
 
@@ -534,17 +576,21 @@ int main(int argc, char * argv[]) {
                 jinja::enable_debug(true);
             }
 
-            return debug_single_template(opts);
+            const int rc = debug_single_template(opts);
+            common_log_flush(common_log_main());
+            return rc;
         }
     }
+
+    LOG("%s: running\n", "test-chat-auto-parser");
 
     testing t(std::cout);
     t.verbose = true;
 
     // usage: test-chat-auto-parser [filter_regex]
 
-    if (argc > 1) {
-        t.set_filter(argv[1]);
+    if (own_argc > 1) {
+        t.set_filter(own_argv_data[1]);
     }
 
     t.test("diff_split", test_calculate_diff_split);
@@ -565,7 +611,10 @@ int main(int argc, char * argv[]) {
     t.test("bailing_v3", test_bailing_v3_tool_format);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
-    return t.summary();
+    const int rc = t.summary();
+    LOG("%s: %s\n", "test-chat-auto-parser", rc == 0 ? "PASSED" : "FAILED");
+    common_log_flush(common_log_main());
+    return rc;
 }
 
 static void test_marker_separation(testing & t) {

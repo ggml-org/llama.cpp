@@ -1573,7 +1573,9 @@ char * common_get_model_or_exit(int argc, char * argv[]) {
 
     char * path = getenv("LLAMACPP_TEST_MODELFILE");
     if (!path || strlen(path) == 0) {
-        fprintf(stderr, "\033[33mWARNING: No model file provided. Skipping this test. Set LLAMACPP_TEST_MODELFILE=<gguf_model_path> to silence this warning and run this test.\n\033[0m");
+        const bool use_color = common_log_get_verbosity_thold() > LOG_LEVEL_WARN;
+        fprintf(stderr, "%sWARNING: No model file provided. Skipping this test. Set LLAMACPP_TEST_MODELFILE=<gguf_model_path> to silence this warning and run this test.\n%s",
+                use_color ? LOG_COL_YELLOW : "", use_color ? LOG_COL_DEFAULT : "");
         exit(EXIT_SUCCESS);
     }
 

@@ -1,6 +1,10 @@
 #include "ggml.h"
 #include "ggml-cpu.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -124,7 +128,19 @@ static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * 
     ggml_graph_compute(graph, &plan);
 }
 
-int main(int /*argc*/, const char ** /*argv*/) {
+int main(int argc, char ** argv) {
+    // the body below declares its own "params", so scope the parsed one
+    {
+        common_params params;
+        params.model.path = "."; // this test takes no model
+        common_init();
+        if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+            return 1;
+        }
+    }
+
+    LOG("%s: running\n", "test-rope");
+
     struct ggml_init_params params = {
         /* .mem_size   = */ 128*1024*1024,
         /* .mem_buffer = */ NULL,
@@ -245,12 +261,14 @@ int main(int /*argc*/, const char ** /*argv*/) {
             //    printf("%f %f\n", r1_data[i], r2_data[i]);
             //}
 
-            printf("mode: %d\n", mode);
-            printf("sum0: %f\n", sum0);
-            printf("sum1: %f\n", sum1);
-            printf("diff: %f\n", diff);
-            printf("rel err: %f\n", diff / sum0);
-            printf("rel err: %f\n", diff / sum1);
+            LOG_INF("mode: %d\n", mode);
+            LOG_INF("sum0: %f\n", sum0);
+            LOG_INF("sum1: %f\n", sum1);
+            LOG_INF("diff: %f\n", diff);
+            LOG_INF("rel err: %f\n", diff / sum0);
+            LOG_INF("rel err: %f\n", diff / sum1);
+            // drain the queue, the checks below abort
+            common_log_flush(common_log_main());
 
             GGML_ASSERT(diff / sum0 < 0.0001f);
             GGML_ASSERT(diff / sum1 < 0.0001f);
@@ -259,5 +277,7 @@ int main(int /*argc*/, const char ** /*argv*/) {
 
     ggml_free(ctx0);
 
+    LOG("%s: %s\n", "test-rope", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }

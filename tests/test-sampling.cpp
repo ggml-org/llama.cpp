@@ -1,6 +1,10 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
@@ -15,11 +19,11 @@ extern struct llama_sampler * llama_sampler_init_dry_testing(float dry_multiplie
 
 static void dump(const llama_token_data_array * cur_p) {
     for (size_t i = 0; i < cur_p->size; i++) {
-        printf("%d: %f (%f)\n", cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
+        LOG_CNT("%d: %f (%f)\n", cur_p->data[i].id, cur_p->data[i].p, cur_p->data[i].logit);
     }
 }
 
-#define DUMP(__cur_p) do { printf("%s:%d (%s)\n", __FILE__, __LINE__, __func__); dump((__cur_p)); printf("-\n"); } while(0)
+#define DUMP(__cur_p) do { LOG_CNT("%s:%d (%s)\n", __FILE__, __LINE__, __func__); dump((__cur_p)); LOG_CNT("-\n"); } while(0)
 
 struct sampler_tester {
     sampler_tester(size_t n_vocab) {
@@ -76,6 +80,8 @@ static llama_token sample_dist(llama_sampler * sampler, const std::vector<float>
 }
 
 static void test_dist_singleton_rng() {
+    LOG_INF("  running %s\n", __func__);
+
     llama_sampler * singleton = llama_sampler_init_dist(4242);
     llama_sampler * control   = llama_sampler_init_dist(4242);
 
@@ -92,6 +98,8 @@ static void test_dist_singleton_rng() {
 }
 
 static void test_temp(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -103,6 +111,8 @@ static void test_temp(const std::vector<float> & probs, const std::vector<float>
 }
 
 static void test_temp_ext(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp, float delta, float exponent) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -114,6 +124,8 @@ static void test_temp_ext(const std::vector<float> & probs, const std::vector<fl
 }
 
 static void test_top_k(const std::vector<float> & probs, const std::vector<float> & probs_expected, int k) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -125,6 +137,8 @@ static void test_top_k(const std::vector<float> & probs, const std::vector<float
 }
 
 static void test_top_p(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -136,6 +150,8 @@ static void test_top_p(const std::vector<float> & probs, const std::vector<float
 }
 
 static void test_min_p(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -147,6 +163,8 @@ static void test_min_p(const std::vector<float> & probs, const std::vector<float
 }
 
 static void test_xtc(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p, float t) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -157,6 +175,8 @@ static void test_xtc(const std::vector<float> & probs, const std::vector<float> 
 }
 
 static void test_typical(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -170,6 +190,8 @@ static void test_penalties(
     const std::vector<float> & probs, const std::vector<llama_token> & last_tokens,
     const std::vector<float> & probs_expected, float repeat_penalty, float alpha_frequency, float alpha_presence
 ) {
+    LOG_INF("  running %s\n", __func__);
+
     GGML_ASSERT(probs.size() == probs_expected.size());
 
     sampler_tester tester(probs, probs_expected);
@@ -194,6 +216,8 @@ static void test_dry(
     int dry_allowed_length, int dry_penalty_last_n,
     const std::vector<std::vector<llama_token>> & seq_breakers
 ) {
+    LOG_INF("  running %s\n", __func__);
+
     GGML_ASSERT(probs.size() == expected_probs.size());
 
     sampler_tester tester(probs, expected_probs);
@@ -212,6 +236,8 @@ static void test_dry(
 }
 
 static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, int n) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(probs, probs_expected);
 
     DUMP(&tester.cur_p);
@@ -224,6 +250,8 @@ static void test_top_n_sigma(const std::vector<float> & probs, const std::vector
 
 static void test_sampler_queue(const size_t n_vocab, const std::string & samplers_sequence, const int top_k, const float top_p, const float min_p
 ) {
+    LOG_INF("  running %s\n", __func__);
+
     sampler_tester tester(n_vocab);
 
           llama_token min_token_id = 0;
@@ -293,7 +321,7 @@ static void test_sampler_queue(const size_t n_vocab, const std::string & sampler
         }
     }
 
-    printf("Sampler queue %3s OK with n_vocab=%05zu top_k=%5d top_p=%f min_p=%f\n",
+    LOG_CNT("Sampler queue %3s OK with n_vocab=%05zu top_k=%5d top_p=%f min_p=%f\n",
            samplers_sequence.c_str(), n_vocab, top_k, top_p, min_p);
 }
 
@@ -312,12 +340,14 @@ static void bench(llama_sampler * cnstr, const char * cnstr_name, const std::vec
     }
     const int64_t t_end = ggml_time_us();
     llama_sampler_free(cnstr);
-    printf("%-43s: %8.3f us/iter\n", cnstr_name, (t_end - t_start) / (float)n_iter);
+    LOG_CNT("%-43s: %8.3f us/iter\n", cnstr_name, (t_end - t_start) / (float)n_iter);
 }
 
 #define BENCH(__cnstr, __data, __n_iter) bench((__cnstr), #__cnstr, (__data), (__n_iter))
 
 static void test_perf() {
+    LOG_INF("  running %s\n", __func__);
+
     const int n_vocab = 1 << 17;
 
     std::vector<llama_token_data> data;
@@ -335,7 +365,16 @@ static void test_perf() {
     BENCH(llama_sampler_init_xtc    (1.0f, 0.1f, 1, 1),       data, 32);
 }
 
-int main(void) {
+int main(int argc, char ** argv) {
+    common_params params;
+    params.model.path = "."; // this test takes no model
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    LOG("%s: running\n", "test-sampling");
+
     ggml_time_init();
 
     test_dist_singleton_rng();
@@ -366,12 +405,12 @@ int main(void) {
     test_min_p({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f/0.4f},                                  1.00f);
     test_min_p({0.1f, 0.2f, 0.3f, 0.4f}, {0.4f/0.4f},                                  1.05f);
 
-    printf("XTC should:\n");
+    LOG_CNT("XTC should:\n");
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.1f},                                0.99f, 0.09f);
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.2f, 0.1f},                          0.99f, 0.19f);
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.3f, 0.2f, 0.1f},                    0.99f, 0.29f);
 
-    printf("XTC should not:\n");
+    LOG_CNT("XTC should not:\n");
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.4f, 0.3f, 0.2f, 0.1f},              0.99f, 0.39f);
 
     test_typical({0.97f, 0.01f, 0.01f, 0.01f}, {0.97f},            0.5f);
@@ -424,9 +463,12 @@ int main(void) {
     test_sampler_queue(10000, "mkp", 100, 0.8f, 0.1f);
     test_sampler_queue(10000, "mpk", 100, 0.8f, 0.1f);
 
-    printf("OK\n");
+    LOG_CNT("OK\n");
 
     test_perf();
 
+    // the tests abort on failure, so reaching this point means they all passed
+    LOG("%s: %s\n", "test-sampling", "PASSED");
+    common_log_flush(common_log_main());
     return 0;
 }
