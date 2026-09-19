@@ -106,6 +106,7 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * />
  * ```
  */
+export { default as DialogBackends } from './DialogBackends.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**

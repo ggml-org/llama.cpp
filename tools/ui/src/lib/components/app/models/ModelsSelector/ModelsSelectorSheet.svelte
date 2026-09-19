@@ -204,7 +204,7 @@
 							/>
 						</div>
 
-						<div class="px-2 pb-1">
+						<div class="flex flex-col px-2 pb-1">
 							<ModelsSelectorReasoningPanel />
 						</div>
 					</div>

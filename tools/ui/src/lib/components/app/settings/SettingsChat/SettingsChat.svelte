@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { RefreshCw } from '@lucide/svelte';
-	import { SettingsBackends } from '$lib/components/app/backends';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
@@ -165,8 +164,6 @@
 						<SettingsChatToolsTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
-					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.BACKENDS}
-						<SettingsBackends />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields

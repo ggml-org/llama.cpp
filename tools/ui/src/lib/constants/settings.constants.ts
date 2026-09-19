@@ -11,7 +11,6 @@ import {
 	Monitor,
 	Moon,
 	PencilRuler,
-	Server,
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
@@ -196,30 +195,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		],
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
 		title: SETTINGS_SECTION_TITLES.GENERAL
-	},
-	// Backends (non-UI config object)
-	{
-		icon: Server,
-		settings: [
-			{
-				defaultValue: '[]',
-				help: 'Configure external API backends as a JSON list. The local backend is always available.',
-				key: SETTINGS_KEYS.BACKENDS,
-				label: 'Backends',
-				standaloneField: false,
-				type: SettingsFieldType.INPUT
-			},
-			{
-				defaultValue: true,
-				help: 'Query the llama-server that serves this UI. Disable it when this UI runs standalone and talks to external backends only.',
-				key: SETTINGS_KEYS.LOCAL_BACKEND_ENABLED,
-				label: 'Local backend',
-				standaloneField: false,
-				type: SettingsFieldType.CHECKBOX
-			}
-		],
-		slug: SETTINGS_SECTION_SLUGS.BACKENDS,
-		title: SETTINGS_SECTION_TITLES.BACKENDS
 	},
 	// Display
 	{
