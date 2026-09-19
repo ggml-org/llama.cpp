@@ -35,6 +35,10 @@ export default defineConfig(({ mode }) => {
 			minify: true
 		},
 
+		define: {
+			__WEB_ONLY__: JSON.stringify(!!process.env.LLAMA_UI_WEB_ONLY)
+		},
+
 		plugins: [
 			tailwindcss(),
 			sveltekit(),
