@@ -26,6 +26,9 @@
 		isSelected: boolean;
 		isHighlighted: boolean;
 		isFav: boolean;
+		/** Show the filled heart at rest. Off inside the favorites section, where
+		 * every row is a favorite. */
+		showFavIndicator?: boolean;
 		hideOrgName?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
@@ -45,7 +48,8 @@
 		onMouseEnter,
 		onSelect,
 		option,
-		showBaseModelAvatar = false
+		showBaseModelAvatar = false,
+		showFavIndicator = true
 	}: Props = $props();
 
 	// row actions follow the backend that serves the row, not the selected one
@@ -163,18 +167,53 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="pointer-events-none flex items-center justify-center gap-0.75 pl-2 opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
+			class="pointer-events-none flex items-center justify-center gap-2 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav &&
+			showFavIndicator
+				? ''
+				: 'opacity-0 group-hover:opacity-100'}"
 			onclick={(e) => e.stopPropagation()}
 		>
+			<!-- info button: only shown when model is loaded and callback is provided -->
+			{#if isLoaded && onInfoClick}
+				<!-- the wrapper above stays visible for a favorite, this one does not -->
+				<span class="flex opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
+					<ActionIcon
+						class="h-3 w-3 hover:text-foreground"
+						icon={Info}
+						iconSize="h-2.5 w-2.5"
+						onclick={() => onInfoClick(option.model)}
+						tooltip="Model information"
+						tooltipAsTitle
+					/>
+				</span>
+			{/if}
+
 			{#if isFav}
-				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
-					icon={HeartOff}
-					iconSize="h-2.5 w-2.5"
-					onclick={() => modelsStore.toggleFavorite(option.model)}
-					tooltip="Remove from favorites"
-					tooltipAsTitle
-				/>
+				<!-- a favorite keeps a colored stroke heart at rest; hovering the icon
+				     itself swaps it for the crossed one -->
+				<span class="group/heart flex h-3 w-3 items-center justify-center">
+					<span class="flex group-hover/heart:hidden">
+						<ActionIcon
+							class="h-3 w-3 text-rose-500 hover:text-foreground"
+							icon={Heart}
+							iconSize="h-2.5 w-2.5"
+							onclick={() => modelsStore.toggleFavorite(option.model)}
+							tooltip="Remove from favorites"
+							tooltipAsTitle
+						/>
+					</span>
+
+					<span class="hidden group-hover/heart:flex">
+						<ActionIcon
+							class="h-3 w-3 hover:text-foreground"
+							icon={HeartOff}
+							iconSize="h-2.5 w-2.5"
+							onclick={() => modelsStore.toggleFavorite(option.model)}
+							tooltip="Remove from favorites"
+							tooltipAsTitle
+						/>
+					</span>
+				</span>
 			{:else}
 				<ActionIcon
 					class="h-3 w-3 hover:text-foreground"
@@ -182,18 +221,6 @@
 					iconSize="h-2.5 w-2.5"
 					onclick={() => modelsStore.toggleFavorite(option.model)}
 					tooltip="Add to favorites"
-					tooltipAsTitle
-				/>
-			{/if}
-
-			<!-- info button: only shown when model is loaded and callback is provided -->
-			{#if isLoaded && onInfoClick}
-				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
-					icon={Info}
-					iconSize="h-2.5 w-2.5"
-					onclick={() => onInfoClick(option.model)}
-					tooltip="Model information"
 					tooltipAsTitle
 				/>
 			{/if}
