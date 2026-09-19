@@ -1,9 +1,22 @@
 #include "common.cuh"
 #include "fwht.cuh"
 
-template <int N>
+// wide FWHT blocks use one row per thread block with this many threads
+#define GGML_CUDA_FWHT_BLOCK_NT 256
+
+template <typename T>
+static __device__ __forceinline__ float fwht_load(const T value) {
+    return value;
+}
+
+template <>
+__device__ __forceinline__ float fwht_load<half>(const half value) {
+    return __half2float(value);
+}
+
+template <int N, typename T>
 __launch_bounds__(4*ggml_cuda_get_physical_warp_size(), 1)
-__global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, const float scale) {
+__global__ void fwht_cuda(const T * src, float * dst, const int64_t n_rows, const float scale) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     const int64_t r = (int64_t) blockIdx.x * blockDim.y + threadIdx.y;
@@ -22,7 +35,7 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
     ggml_cuda_pdl_sync();
 #pragma unroll
     for (int i = 0; i < el_w; ++i) {
-        reg[i] = src[i * warp_size + lane] * scale;
+        reg[i] = fwht_load(src[i * warp_size + lane]) * scale;
     }
 
 #pragma unroll
@@ -58,15 +71,93 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
     }
 }
 
-bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
-    GGML_ASSERT(ggml_are_same_shape(src, dst));
-    if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
-        return false;
+// Wide blocks: one row per thread block instead of per warp, so each thread keeps N/NT
+// values rather than N/32. Stages below the warp width still shuffle, those up to the
+// block width go through shared memory, and the rest stay in registers.
+template <int N, int NT, typename T>
+__launch_bounds__(NT, 1)
+__global__ void fwht_cuda_block(const T * src, float * dst, const int64_t n_rows, const float scale) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int NE        = N / NT;
+    static_assert(NE >= 1 && N % NT == 0 && NT % warp_size == 0, "bad FWHT block shape");
+
+    __shared__ float s[N];
+
+    const int64_t r = blockIdx.x;
+    if (r >= n_rows) {
+        return;
     }
+
+    src += r * N;
+    dst += r * N;
+
+    const int tid  = threadIdx.x;
+    const int lane = tid % warp_size;
+
+    ggml_cuda_pdl_sync();
+
+    float reg[NE];
+#pragma unroll
+    for (int i = 0; i < NE; ++i) {
+        reg[i] = fwht_load(src[i * NT + tid]) * scale;
+    }
+
+    // stages within a warp: partner differs in the lane bits
+#pragma unroll
+    for (int h = 1; h < warp_size; h *= 2) {
+#pragma unroll
+        for (int j = 0; j < NE; j++) {
+            const float val  = reg[j];
+            const float val2 = __shfl_xor_sync(0xFFFFFFFF, val, h, warp_size);
+            reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
+        }
+    }
+
+    // stages across warps: partner differs in the thread-index bits above the lane
+#pragma unroll
+    for (int h = warp_size; h < NT; h *= 2) {
+#pragma unroll
+        for (int j = 0; j < NE; j++) {
+            s[j * NT + tid] = reg[j];
+        }
+        __syncthreads();
+#pragma unroll
+        for (int j = 0; j < NE; j++) {
+            const float val  = reg[j];
+            const float val2 = s[j * NT + (tid ^ h)];
+            reg[j] = (tid & h) == 0 ? val + val2 : val2 - val;
+        }
+        __syncthreads();
+    }
+
+    // stages above the block width: partner is another register of the same thread
+#pragma unroll
+    for (int h = NT; h < N; h *= 2) {
+        const int step = h / NT;
+#pragma unroll
+        for (int j = 0; j < NE; j += 2 * step) {
+#pragma unroll
+            for (int k = 0; k < step; k++) {
+                const float x = reg[j + k];
+                const float y = reg[j + k + step];
+                reg[j + k]        = x + y;
+                reg[j + k + step] = x - y;
+            }
+        }
+    }
+
+#pragma unroll
+    for (int i = 0; i < NE; ++i) {
+        dst[i * NT + tid] = reg[i];
+    }
+}
+
+template <typename T>
+static bool ggml_cuda_op_fwht_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
     const int     n    = src->ne[0];
     const int64_t rows = ggml_nrows(src);
 
-    const float * src_d = (const float *) src->data;
+    const T *     src_d = (const T *) src->data;
     float *       dst_d = (float *) dst->data;
 
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
@@ -84,17 +175,63 @@ bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src,
 
     switch (n) {
         case 64:
-            ggml_cuda_kernel_launch(fwht_cuda<64>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<64, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 128:
-            ggml_cuda_kernel_launch(fwht_cuda<128>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<128, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 256:
-            ggml_cuda_kernel_launch(fwht_cuda<256>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<256, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
         case 512:
-            ggml_cuda_kernel_launch(fwht_cuda<512>, launch_params, src_d, dst_d, rows, scale);
+            ggml_cuda_kernel_launch(fwht_cuda<512, T>, launch_params, src_d, dst_d, rows, scale);
             return true;
+        default:
+            break;
+    }
+
+    // wide blocks: one row per thread block
+    {
+        constexpr int nt = GGML_CUDA_FWHT_BLOCK_NT;
+
+        dim3 grid_dims_w(rows, 1, 1);
+        dim3 block_dims_w(nt, 1, 1);
+        const ggml_cuda_kernel_launch_params launch_params_w =
+            ggml_cuda_kernel_launch_params(grid_dims_w, block_dims_w, 0, stream);
+
+        switch (n) {
+            case 1024:
+                ggml_cuda_kernel_launch(fwht_cuda_block<1024, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
+                return true;
+            case 2048:
+                ggml_cuda_kernel_launch(fwht_cuda_block<2048, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
+                return true;
+            case 4096:
+                ggml_cuda_kernel_launch(fwht_cuda_block<4096, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
+                return true;
+            case 8192:
+                ggml_cuda_kernel_launch(fwht_cuda_block<8192, nt, T>, launch_params_w, src_d, dst_d, rows, scale);
+                return true;
+            default:
+                return false;
+        }
+    }
+}
+
+bool ggml_cuda_op_fwht(ggml_backend_cuda_context & ctx, const ggml_tensor * src, ggml_tensor * dst) {
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+    if (!ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    switch (src->type) {
+        case GGML_TYPE_F32:
+            return ggml_cuda_op_fwht_impl<float>(ctx, src, dst);
+        case GGML_TYPE_F16:
+            return ggml_cuda_op_fwht_impl<half>(ctx, src, dst);
         default:
             return false;
     }
