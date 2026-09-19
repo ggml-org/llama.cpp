@@ -922,6 +922,8 @@ struct llm_tokenizer_ugm : llm_tokenizer {
             prefix_replacements_size = precompiled_charsmap.size() - charsmap_offset;
         }
 
+        uint32_t n_byte_tokens = 0;
+
         for (uint32_t id = 0; id < vocab.n_tokens(); ++id) {
             const auto & token_data = vocab.get_token_data(id);
 
@@ -939,7 +941,14 @@ struct llm_tokenizer_ugm : llm_tokenizer {
             if (vocab.is_user_defined(id)) {
                 user_defined_token_matcher.insert(token_data.text.data(), token_data.text.size());
             }
+
+            if (vocab.is_byte(id)) {
+                n_byte_tokens++;
+            }
         }
+
+        // require the full <0x00>..<0xFF> set so byte_to_token() never misses
+        has_byte_fallback = n_byte_tokens == 256;
 
         unknown_token_score = min_score - unknown_token_score_penalty;
     }
@@ -960,6 +969,8 @@ struct llm_tokenizer_ugm : llm_tokenizer {
 
     float unknown_token_score_penalty = 10.0;
     float unknown_token_score;
+
+    bool has_byte_fallback = false;
 
     struct naive_trie token_matcher;
 };
@@ -1049,17 +1060,24 @@ struct llm_tokenizer_ugm_session {
         }
 
         // now backtrack from the end to gather token ids of the best tokenization
-        // merge sequences of consecutive unknown tokens into single unknown tokens
+        // with byte fallback, emit byte tokens for unknown spans,
+        // otherwise merge sequences of consecutive unknown tokens into single unknown tokens
+        size_t span_end = input_len;
         bool is_prev_unknown = false;
         for (struct best_tokenization & tokenization = tokenization_results[input_len]; ; tokenization = tokenization_results[tokenization.input_offset]) {
             bool is_unknown = tokenization.token_id == vocab.token_unk();
-            if (!(is_prev_unknown && is_unknown)) {
+            if (is_unknown && tokenizer.has_byte_fallback) {
+                for (size_t i = span_end; i > tokenization.input_offset; --i) {
+                    output.push_back(vocab.byte_to_token((uint8_t) normalized[i - 1]));
+                }
+            } else if (!(is_prev_unknown && is_unknown)) {
                 output.push_back(tokenization.token_id);
             }
             if (tokenization.input_offset == 0) {
                 break;
             }
             is_prev_unknown = is_unknown;
+            span_end = tokenization.input_offset;
         }
 
         // reverse the output since we added tokens starting from the end of the input
