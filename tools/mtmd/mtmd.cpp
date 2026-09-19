@@ -2167,6 +2167,14 @@ float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * 
     return nullptr; // not found
 }
 
+void mtmd_batch_set_ctx(mtmd_batch * batch, mtmd_context * ctx) {
+    GGML_ASSERT(batch != nullptr);
+    GGML_ASSERT(ctx   != nullptr);
+    GGML_ASSERT(batch->ctx->n_embd_out() == ctx->n_embd_out() &&
+            "mtmd_batch_set_ctx: contexts disagree on the embedding width");
+    batch->ctx = ctx;
+}
+
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     auto proj_type = ctx->proj_type_v();
     if (chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
