@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common.cuh"
+#include "cp-async.cuh"
+#include "unary.cuh"
 
 #include <climits>
 #include <cstdint>
@@ -527,6 +529,78 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     }
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+static constexpr int GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX = 64;
+static constexpr int GGML_CUDA_MMQ_GATE_UP_SWIGLU_I     = 64;
+
+#if defined(TURING_MMA_AVAILABLE) && defined(CP_ASYNC_AVAILABLE)
+#define GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
+#endif // defined(TURING_MMA_AVAILABLE) && defined(CP_ASYNC_AVAILABLE)
+
+// Half the rows and threads of the stock Q4_K configuration so that two blocks per SM overlap their loads and MMAs.
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_gate_up_swiglu_get_config(const ggml_cuda_mmq_config & config) {
+    if (config.type == GGML_TYPE_COUNT) {
+        return config;
+    }
+    return ggml_cuda_mmq_config(config.type, 128, 2, GGML_CUDA_MMQ_GATE_UP_SWIGLU_I, config.J, config.sram_layout, config.K_vram, false, config.fallback);
+}
+
+static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_gate_up_swiglu_get_config(
+        const ggml_type type, const int J, const bool fallback, const int cc) {
+    GGML_ASSERT(turing_mma_available(cc) && cp_async_available(cc));
+    return ggml_cuda_mmq_gate_up_swiglu_get_config(ggml_cuda_mmq_get_config(type, J, fallback, cc));
+}
+
+static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_gate_up_swiglu_get_config(ggml_type type, int J, bool fallback) {
+    return ggml_cuda_mmq_gate_up_swiglu_get_config(ggml_cuda_mmq_get_config(type, J, fallback));
+}
+
+static constexpr __device__ int ggml_cuda_mmq_gate_up_swiglu_get_nthreads(ggml_type type, int J, bool fallback) {
+    return ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback).nthreads;
+}
+
+static constexpr __device__ int ggml_cuda_mmq_gate_up_swiglu_get_occupancy(ggml_type type, int J, bool fallback) {
+    return ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback).occupancy;
+}
+
+static constexpr __device__ int ggml_cuda_mmq_gate_up_swiglu_get_I(ggml_type type, int J, bool fallback) {
+    return ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback).I;
+}
+
+template<ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void ggml_cuda_mmq_write_back_swiglu_mma(
+        const float * __restrict__ up, const float * __restrict__ gate,
+        float * __restrict__ dst, const int stride, const int i_max, const int j_max) {
+    typedef tile<16,  8, int> tile_C;
+
+    constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
+    constexpr int ntx           = rows_per_warp/tile_C::I;
+    const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
+
+#pragma unroll
+    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                const int j = j0 + (threadIdx.y % ntx) * tile_C::J + tile_C::get_j(l);
+                if (j > j_max) {
+                    continue;
+                }
+
+                const int i = i0 + n*tile_C::I + tile_C::get_i(l);
+                if (fallback && i > i_max) {
+                    continue;
+                }
+
+                const int sum_index = (j0/tile_C::J + n)*tile_C::ne + l;
+                dst[j*stride + i] = up[sum_index] * ggml_cuda_op_silu_single(gate[sum_index]);
+            }
+        }
+    }
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
 // -------------------------------------------------------------------------------------------------------------------------------------
 
 // TODO remove this struct and use ggml_cuda_mmq_sram_layout instead.
@@ -947,6 +1021,197 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     }
 }
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#ifdef GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void mmq_gate_up_swiglu_load_x(
+        const char * __restrict__ x, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
+    constexpr int warp_size     = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps        = ggml_cuda_mmq_gate_up_swiglu_get_nthreads(type, J, fallback) / warp_size;
+    constexpr int I             = ggml_cuda_mmq_gate_up_swiglu_get_I(type, J, fallback);
+    constexpr int rows_per_warp = I / nwarps;
+    constexpr int ngroups       = rows_per_warp / 4;
+    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+
+    static_assert(type == GGML_TYPE_Q4_K, "Gate/up MMQ fusion currently supports Q4_K only");
+    static_assert(warp_size == 32 && rows_per_warp == warp_size/2, "bad fused Q4_K tile mapping");
+
+    int   * x_qs = x_tile;
+    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
+
+    const int warp_row0 = threadIdx.y * rows_per_warp;
+    const int row_off   = (threadIdx.x / 16) + 2*((threadIdx.x / 8) % 2);
+    const int q         = threadIdx.x % 8;
+
+    // Same placement as ggml_cuda_mmq_load_tiles_q4_K:
+    // low nibbles:  x_qs[16*(txi/8) + txi%8]
+    // high nibbles: x_qs[16*(txi/8) + txi%8 + 8]
+#pragma unroll
+    for (int g = 0; g < ngroups; ++g) {
+        const int i  = warp_row0 + 4*g + row_off;
+        const int il = fallback ? min(i, i_max) : i;
+        const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + il*stride;
+        const int2 * qs = (const int2 *) bxi->qs;
+        const int2 v0 = qs[q];
+        const int2 v1 = qs[q + 8];
+        int * row = x_qs + i*sram_stride + 16*(q/4) + 2*(q%4);
+        *(int2 *) (row +  0) = make_int2((v0.x >> 0) & 0x0F0F0F0F, (v0.y >> 0) & 0x0F0F0F0F);
+        *(int2 *) (row +  8) = make_int2((v0.x >> 4) & 0x0F0F0F0F, (v0.y >> 4) & 0x0F0F0F0F);
+        *(int2 *) (row + 32) = make_int2((v1.x >> 0) & 0x0F0F0F0F, (v1.y >> 0) & 0x0F0F0F0F);
+        *(int2 *) (row + 40) = make_int2((v1.x >> 4) & 0x0F0F0F0F, (v1.y >> 4) & 0x0F0F0F0F);
+    }
+
+    const int i  = warp_row0 + threadIdx.x/2;
+    const int il = fallback ? min(i, i_max) : i;
+    const block_q4_K * bxi = (const block_q4_K *) x + kbx0 + il*stride;
+    const int4 hdr = *(const int4 *) bxi;
+
+    const int ksc = threadIdx.x % 2;
+    const int s0  = hdr.y;
+    const int s1  = hdr.z;
+    const int s2  = hdr.w;
+    const int sc32 = ( (ksc ? s2 : s0)              & 0x0F0F0F0F) | ((s0 >> (2*ksc)) & 0x30303030);
+    const int  m32 = (((ksc ? s2 : s1) >> (4*ksc)) & 0x0F0F0F0F) | ((s1 >> (2*ksc)) & 0x30303030);
+
+    const uint8_t * sc8 = (const uint8_t *) &sc32;
+    const uint8_t *  m8 = (const uint8_t *)  &m32;
+
+    const half2 dm = reinterpret_cast<const half2 &>(hdr.x) * make_half2(1.0f, -1.0f);
+
+#pragma unroll
+    for (int l = 0; l < 4; ++l) {
+        x_dm[i*sram_stride + 4*ksc + l] = dm*make_half2(sc8[l], m8[l]);
+    }
+}
+
+template <int J, int nwarps, int warp_size>
+static __device__ __forceinline__ void mmq_gate_up_swiglu_copy_y(
+        const int * __restrict__ by0, const int ncols_y, int * __restrict__ tile_y0) {
+    constexpr int sz            = sizeof(block_q8_1_mmq) / sizeof(int);
+    constexpr int tile_y_stride = GGML_PAD(J * MMQ_TILE_Y_K, nwarps * warp_size);
+    constexpr int copy_stride   = nwarps * warp_size * 4;
+    constexpr int copy_rounds   = (J * MMQ_TILE_Y_K + copy_stride - 1) / copy_stride;
+
+    int l = (threadIdx.y * warp_size + threadIdx.x) * 4;
+    unsigned int dst_y0 = ggml_cuda_cvta_generic_to_shared(tile_y0 + l);
+    unsigned int dst_y1 = ggml_cuda_cvta_generic_to_shared(tile_y0 + tile_y_stride + l);
+    const int * src_y0 = by0 + l;
+    const int * src_y1 = by0 + ncols_y * sz + l;
+#pragma unroll
+    for (int round = 0; round < copy_rounds; ++round) {
+        if (l < J * MMQ_TILE_Y_K) {
+            cp_async_cg_16<0>(dst_y0, src_y0);
+            cp_async_cg_16<0>(dst_y1, src_y1);
+        }
+        l += copy_stride;
+        dst_y0 += copy_stride * sizeof(int);
+        dst_y1 += copy_stride * sizeof(int);
+        src_y0 += copy_stride;
+        src_y1 += copy_stride;
+    }
+}
+
+template <ggml_type type, int J, bool fallback>
+static __device__ __forceinline__ void mul_mat_q_gate_up_swiglu_process_tile(
+        const char * __restrict__ x_up, const char * __restrict__ x_gate, const int offset_x,
+        const int * __restrict__ y, float * __restrict__ dst,
+        const int stride_row_x, const int ncols_y, const int stride_col_dst,
+        const int tile_x_max_i, const int tile_y_max_j, const int kb0_stop) {
+    static_assert(type == GGML_TYPE_Q4_K, "Gate/up MMQ fusion currently supports Q4_K only");
+
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_gate_up_swiglu_get_nthreads(type, J, fallback) / warp_size;
+    constexpr int qk        = ggml_cuda_type_traits<type>::qk;
+    constexpr int I         = ggml_cuda_mmq_gate_up_swiglu_get_I(type, J, fallback);
+
+    extern __shared__ int data_mul_mat_q[];
+    constexpr int tile_y_stride = GGML_PAD(J * MMQ_TILE_Y_K, nwarps * warp_size);
+    int * tile_y0 = data_mul_mat_q + J;
+    int * tile_y1 = tile_y0 + tile_y_stride;
+    int * tile_x  = tile_y1 + tile_y_stride;
+
+    constexpr int ITER_K          = ggml_cuda_mmq_get_K_vram(type, J, fallback);
+    constexpr int blocks_per_iter = ITER_K / qk;
+    constexpr int sum_size        = J * I / (nwarps * warp_size);
+    constexpr int sz              = sizeof(block_q8_1_mmq) / sizeof(int);
+
+    float sum_up[sum_size]   = {0.0f};
+    float sum_gate[sum_size] = {0.0f};
+
+    for (int kb0 = 0; kb0 < kb0_stop; kb0 += blocks_per_iter) {
+        mmq_gate_up_swiglu_copy_y<J, nwarps, warp_size>(y + ncols_y * (kb0 * qk / QK8_1_MMQ) * sz, ncols_y, tile_y0);
+
+        mmq_gate_up_swiglu_load_x<type, J, fallback>(x_up, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+        cp_async_wait_all();
+        __syncthreads();
+
+        ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(tile_x, tile_y0, sum_up, 0);
+        ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(tile_x, tile_y1, sum_up, MMQ_TILE_NE_K);
+        __syncthreads();
+
+        mmq_gate_up_swiglu_load_x<type, J, fallback>(x_gate, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
+        __syncthreads();
+
+        ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(tile_x, tile_y0, sum_gate, 0);
+        ggml_cuda_mmq_vec_dot_q8_1_q8_1_mma<type, J, fallback>(tile_x, tile_y1, sum_gate, MMQ_TILE_NE_K);
+        __syncthreads();
+    }
+
+    ggml_cuda_mmq_write_back_swiglu_mma<type, J, fallback>(
+        sum_up, sum_gate, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
+}
+#endif // GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
+
+template <ggml_type type, int J, bool fallback>
+__launch_bounds__(ggml_cuda_mmq_gate_up_swiglu_get_nthreads(type, J, fallback), ggml_cuda_mmq_gate_up_swiglu_get_occupancy(type, J, fallback))
+static __global__ void mul_mat_q_gate_up_swiglu(
+        const char * __restrict__ x_up, const char * __restrict__ x_gate, const int * __restrict__ y,
+        float * __restrict__ dst, const int blocks_per_ne00, const int nrows_x, const int ncols_dst,
+        const int stride_row_x, const int ncols_y, const int stride_col_dst,
+        const uint3 channel_ratio, const uint3 nchannels_y, const int stride_channel_x,
+        const int stride_channel_y, const int stride_channel_dst, const uint3 sample_ratio,
+        const uint3 nsamples_y, const int stride_sample_x, const int stride_sample_y,
+        const int stride_sample_dst, const uint3 ntx) {
+#ifdef GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
+    if (ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback).type == GGML_TYPE_COUNT) {
+        NO_DEVICE_CODE;
+        return;
+    }
+
+    constexpr int I = ggml_cuda_mmq_gate_up_swiglu_get_I(type, J, fallback);
+
+    // Each block does one complete K reduction: the SwiGLU epilogue is nonlinear so K cannot be split.
+    int tmp = blockIdx.x;
+    uint2 tmp2 = fast_div_modulo(tmp, ntx);
+    const int jt = tmp2.y;
+    tmp = tmp2.x;
+    tmp2 = fast_div_modulo(tmp, nchannels_y);
+    const int zt = tmp2.y;
+    tmp = tmp2.x;
+    tmp2 = fast_div_modulo(tmp, nsamples_y);
+    const int wt = tmp2.y;
+    const int it = tmp2.x;
+
+    const int offset_y = wt * stride_sample_y + zt * stride_channel_y +
+        jt * J * (sizeof(block_q8_1_mmq) / sizeof(int));
+    const int offset_x = fastdiv(wt, sample_ratio) * stride_sample_x +
+        fastdiv(zt, channel_ratio) * stride_channel_x + it * I * stride_row_x;
+    const int offset_dst = wt * stride_sample_dst + zt * stride_channel_dst + jt * J * stride_col_dst + it * I;
+
+    const int tile_x_max_i = nrows_x - it * I - 1;
+    const int tile_y_max_j = ncols_dst - jt * J - 1;
+
+    mul_mat_q_gate_up_swiglu_process_tile<type, J, fallback>(
+        x_up, x_gate, offset_x, y + offset_y, dst + offset_dst,
+        stride_row_x, ncols_y, stride_col_dst, tile_x_max_i, tile_y_max_j, blocks_per_ne00);
+#else
+    GGML_UNUSED_VARS(x_up, x_gate, y, dst, blocks_per_ne00, nrows_x, ncols_dst, stride_row_x, ncols_y, stride_col_dst,
+        channel_ratio, nchannels_y, stride_channel_x, stride_channel_y, stride_channel_dst, sample_ratio,
+        nsamples_y, stride_sample_x, stride_sample_y, stride_sample_dst, ntx);
+    NO_DEVICE_CODE;
+#endif // GGML_CUDA_MMQ_GATE_UP_SWIGLU_AVAILABLE
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
@@ -1383,6 +1648,7 @@ struct mmq_args {
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
     int64_t ncols_max;
     int64_t ncols_opt; // value to optimize the tile size against, launch grid still uses ncols_max
+    const char * x_gate = nullptr;
 };
 
 static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
@@ -1391,6 +1657,112 @@ static size_t mmq_get_nbytes_shared(const ggml_cuda_mmq_config & config, const i
     const size_t nbs_y = config.J * (sizeof(block_q8_1_mmq));
     return nbs_ids + nbs_x + GGML_PAD(nbs_y, config.nthreads*sizeof(int));
 }
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+// The stock layout plus a second Y half tile.
+static size_t mmq_gate_up_swiglu_get_nbytes_shared(const ggml_cuda_mmq_config & config, const int cc) {
+    const size_t nbs_y = config.J * sizeof(block_q8_1_mmq);
+    return mmq_get_nbytes_shared(config, cc) + GGML_PAD(nbs_y, config.nthreads * sizeof(int));
+}
+
+template <ggml_type type, int J, bool fallback>
+static void launch_mul_mat_q_gate_up_swiglu(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    static_assert(type == GGML_TYPE_Q4_K, "Gate/up MMQ fusion currently supports Q4_K only");
+    static_assert(J <= GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX, "J exceeds the reserved Q8_1 tail, bump GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX");
+    GGML_ASSERT(args.x_gate != nullptr);
+    GGML_ASSERT(args.ids_dst == nullptr && args.expert_bounds == nullptr);
+
+    const int id        = ggml_cuda_get_device();
+    const int cc        = ggml_cuda_info().devices[id].cc;
+    const int warp_size = ggml_cuda_info().devices[id].warp_size;
+
+    const ggml_cuda_mmq_config config = ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback, cc);
+    GGML_ASSERT(config.use_mma_data_layout(cc));
+    GGML_ASSERT(config.nthreads % warp_size == 0);
+    const int nwarps = config.nthreads / warp_size;
+    const size_t nbytes_shared = mmq_gate_up_swiglu_get_nbytes_shared(config, cc);
+    GGML_ASSERT(nbytes_shared <= ggml_cuda_info().devices[id].smpbo);
+
+    const dim3 block_dims(warp_size, nwarps, 1);
+    const int nty  = (args.nrows_x   + config.I - 1) / config.I;
+    const int ntx  = (args.ncols_max + config.J - 1) / config.J;
+    const int ntzw = args.nchannels_y * args.nsamples_y;
+    const int ntiles_dst = nty * ntx * ntzw;
+    const dim3 block_nums(ntiles_dst, 1, 1);
+
+    GGML_ASSERT(args.nchannels_y % args.nchannels_x == 0);
+    GGML_ASSERT(args.nsamples_y  % args.nsamples_x  == 0);
+    const int channel_ratio = args.nchannels_y / args.nchannels_x;
+    const int sample_ratio  = args.nsamples_y  / args.nsamples_x;
+
+    const int   blocks_per_ne00    = args.ncols_x / ggml_cuda_type_traits<type>::qk;
+    const uint3 ntx_fd             = init_fastdiv_values(ntx);
+    const uint3 nchannels_y_fd     = init_fastdiv_values(args.nchannels_y);
+    const uint3 nsamples_y_fd      = init_fastdiv_values(args.nsamples_y);
+    const uint3 channel_ratio_fd   = init_fastdiv_values(channel_ratio);
+    const uint3 sample_ratio_fd    = init_fastdiv_values(sample_ratio);
+
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q_gate_up_swiglu<type, J, fallback>), nbytes_shared);
+    mul_mat_q_gate_up_swiglu<type, J, fallback><<<block_nums, block_dims, nbytes_shared, stream>>>(
+        args.x, args.x_gate, args.y, args.dst, blocks_per_ne00, args.nrows_x, args.ncols_dst,
+        args.stride_row_x, args.ncols_y, args.nrows_dst, channel_ratio_fd, nchannels_y_fd,
+        args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst, sample_ratio_fd,
+        nsamples_y_fd, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst, ntx_fd);
+}
+
+template <ggml_type type, bool fallback>
+static void mul_mat_q_gate_up_swiglu_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    const int id       = ggml_cuda_get_device();
+    const int cc       = ggml_cuda_info().devices[id].cc;
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+
+    // Sparse set of J values to limit the number of template instances.
+    int J_best        = 0;
+    int ntiles_J_best = INT_MAX;
+    for (const int J : {8, 16, 32, GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX}) {
+        const ggml_cuda_mmq_config config = ggml_cuda_mmq_gate_up_swiglu_get_config(type, J, fallback, cc);
+        if (config.type == GGML_TYPE_COUNT || mmq_gate_up_swiglu_get_nbytes_shared(config, cc) > smpbo) {
+            continue;
+        }
+
+        const int ntiles_x = (args.ncols_max + J - 1) / J;
+        if (ntiles_x < ntiles_J_best) {
+            J_best = J;
+            ntiles_J_best = ntiles_x;
+        }
+        if (ntiles_J_best == 1) {
+            break;
+        }
+    }
+
+    switch (J_best) {
+        case 8:
+            launch_mul_mat_q_gate_up_swiglu<type, 8, fallback>(ctx, args, stream);
+            break;
+        case 16:
+            launch_mul_mat_q_gate_up_swiglu<type, 16, fallback>(ctx, args, stream);
+            break;
+        case 32:
+            launch_mul_mat_q_gate_up_swiglu<type, 32, fallback>(ctx, args, stream);
+            break;
+        case 64:
+            launch_mul_mat_q_gate_up_swiglu<type, 64, fallback>(ctx, args, stream);
+            break;
+        default:
+            GGML_ABORT("No valid Q4_K gate/up MMQ configuration");
+    }
+}
+
+template <ggml_type type>
+void mul_mat_q_gate_up_swiglu_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+    static_assert(type == GGML_TYPE_Q4_K, "Gate/up MMQ fusion currently supports Q4_K only");
+    if (args.nrows_x % GGML_CUDA_MMQ_GATE_UP_SWIGLU_I == 0) {
+        mul_mat_q_gate_up_swiglu_switch_J<type, false>(ctx, args, stream);
+    } else {
+        mul_mat_q_gate_up_swiglu_switch_J<type, true>(ctx, args, stream);
+    }
+}
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 template <ggml_type type, int J, bool fallback>
 static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
@@ -1571,6 +1943,12 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 #define DECL_MMQ_CASE(type)                                                        \
     template void mul_mat_q_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#define DECL_MMQ_GATE_UP_SWIGLU_CASE(type)                                         \
+    template void mul_mat_q_gate_up_swiglu_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
+
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
 extern DECL_MMQ_CASE(GGML_TYPE_Q1_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q2_0);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_0);
@@ -1597,9 +1975,20 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
 extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
 extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+extern DECL_MMQ_GATE_UP_SWIGLU_CASE(GGML_TYPE_Q4_K);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
 // -------------------------------------------------------------------------------------------------------------------------
 
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst);
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+        const ggml_tensor * ids, ggml_tensor * dst);
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+void ggml_cuda_mul_mat_q_gate_up_swiglu(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
+        const ggml_tensor * src, ggml_tensor * dst);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);
