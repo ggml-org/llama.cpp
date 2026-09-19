@@ -122,6 +122,9 @@ LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
 
+// returns how the model is split across devices
+LLAMA_API enum llama_split_mode llama_model_get_split_mode(const struct llama_model * model);
+
 // returns pointer to the target-model layer indices
 LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
 // returns the number of extracted layers from target model
