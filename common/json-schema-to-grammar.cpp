@@ -321,7 +321,8 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
         case 'x': n_hex = 2; break;
         case 'u': n_hex = 4; break;
         case 'U': n_hex = 8; break;
-        case 't': case 'r': case 'n': case '\\': case '"': case '[': case ']':
+        // keep in sync with parse_char() in src/llama-grammar.cpp
+        case 't': case 'r': case 'n': case '\\': case '"': case '[': case ']': case '-':
             return 2;
         default:
             return 0;
