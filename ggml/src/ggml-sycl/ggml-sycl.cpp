@@ -89,6 +89,8 @@
 #define MEM_SIZE_2M	0x00200000
 #define MEM_SIZE_1G	0x40000000
 
+#define SYCL_HOST_MALLOC_DEVICE 0
+
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
 int g_ggml_sycl_dev_debug = 0;
@@ -740,6 +742,14 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 }
 #endif
 
+void memcpy_host_forward(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
+                         const void *ptr_src, size_t size) {
+    char *host_buf = (char *)malloc(size);
+    q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
+    q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
+    free(host_buf);
+}
+
 static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 
@@ -783,10 +793,7 @@ static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, s
     } else {
         GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by host forward for SYCL/L0 fallback\n");
     }
-    char *host_buf = (char *)malloc(size);
-    q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
-    q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
-    free(host_buf);
+    memcpy_host_forward(q_dst, q_src, ptr_dst, ptr_src, size);
 }
 
 static bool
@@ -1553,6 +1560,9 @@ static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_
     GGML_UNUSED(buft);
 }
 
+sycl::queue & get_sycl_host_malloc_queue() {
+    return dpct::dev_mgr::instance().get_device(SYCL_HOST_MALLOC_DEVICE).default_queue();
+}
 //host pinned memory
 static void * ggml_backend_sycl_host_malloc(size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_host_malloc\n");
@@ -1560,7 +1570,7 @@ static void * ggml_backend_sycl_host_malloc(size_t size) {
     try {
         ggml_check_sycl();
         // USM host memory is page-locked and device-accessible by construction
-        auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+        auto & q = get_sycl_host_malloc_queue();
         ptr = sycl::malloc_host(size, q, sycl::property_list{});
     } catch (...) {
         ptr = nullptr;
@@ -1578,7 +1588,7 @@ static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buff
         return;
     }
     if (g_ggml_sycl_enable_host_pinned_mem) {
-        auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+        auto & q = get_sycl_host_malloc_queue();
         SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(buffer->context, q)));
     } else {
         free_aligned_mem_host((void *) buffer->context);
@@ -5824,8 +5834,19 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
 
     GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        (stream)->memcpy((char *)tensor->data + offset, data, size)));
+
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        auto & ptr_q = get_sycl_host_malloc_queue();
+        if (ptr_q.get_context() == stream->get_context()) {
+            SYCL_CHECK(CHECK_TRY_ERROR(
+                (stream)->memcpy((char *)tensor->data + offset, data, size)));
+        } else {
+            memcpy_host_forward(*stream, ptr_q, (char *)tensor->data + offset , data, size);
+        }
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (stream)->memcpy((char *)tensor->data + offset, data, size)));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -5845,8 +5866,17 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
 
     GGML_ASSERT(buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) && "unsupported buffer type");
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
-        data, (const char *)tensor->data + offset, size)));
+
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        auto & ptr_q = get_sycl_host_malloc_queue();
+        if (ptr_q.get_context() == stream->get_context()) {
+            SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(data, (const char *) tensor->data + offset, size)));
+        } else {
+            memcpy_host_forward(ptr_q, *stream, data, (const char *) tensor->data + offset, size);
+        }
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(data, (const char *) tensor->data + offset, size)));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
