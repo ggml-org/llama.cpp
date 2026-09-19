@@ -165,6 +165,7 @@ int op_get_rows(struct htp_ops_context * octx);
 int op_cpy(struct htp_ops_context * octx);
 int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
+int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
@@ -175,5 +176,6 @@ int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 int op_im2col(struct htp_ops_context * octx);
 int op_allreduce(struct htp_ops_context * octx);
+int op_roll(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

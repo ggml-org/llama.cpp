@@ -1,3 +1,4 @@
+#include "ggml-backend.h"
 #include "ggml-rpc.h"
 #ifdef _WIN32
 #  define NOMINMAX
@@ -270,7 +271,8 @@ static std::vector<ggml_backend_dev_t> get_devices(const rpc_server_params & par
     if (devices.empty()) {
         for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);
-            if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
+            if (dev_type != GGML_BACKEND_DEVICE_TYPE_CPU && dev_type != GGML_BACKEND_DEVICE_TYPE_ACCEL) {
                 devices.push_back(dev);
             }
         }

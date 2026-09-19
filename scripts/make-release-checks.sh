@@ -165,6 +165,23 @@ else
     fi
 fi
 
+echo "Checking API/ABI compatibility..."
+set +e
+bash "$SCRIPT_DIR/check-release-apiabi.sh"
+APIABI_RESULT=$?
+set -e
+if [[ $APIABI_RESULT -ne 0 ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Warning: API/ABI check found backwards-incompatible changes (dry run, continuing)."
+        CHECKS_PASSED=false
+    else
+        echo "Error: API/ABI check found backwards-incompatible changes."
+        exit 1
+    fi
+else
+    echo "API/ABI compatibility check passed - OK"
+fi
+
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "checks_passed=${CHECKS_PASSED}" >> "$GITHUB_OUTPUT"
 fi
