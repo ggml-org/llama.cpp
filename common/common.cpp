@@ -149,6 +149,16 @@ int32_t common_cpu_get_num_physical_cores() {
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
 #include <pthread.h>
 
+#if defined(__MUSL__)
+#include <sched.h>
+// musl-based libcs (e.g. OpenHarmony) do not provide pthread_*affinity_np
+#define ggml_pin_setaffinity(t, s, set) sched_setaffinity(0, (s), (set))
+#define ggml_pin_getaffinity(t, s, set) sched_getaffinity(0, (s), (set))
+#else
+#define ggml_pin_setaffinity(t, s, set) pthread_setaffinity_np((t), (s), (set))
+#define ggml_pin_getaffinity(t, s, set) pthread_getaffinity_np((t), (s), (set))
+#endif
+
 static void cpuid(unsigned leaf, unsigned subleaf,
                   unsigned *eax, unsigned *ebx, unsigned *ecx, unsigned *edx) {
     __asm__("movq\t%%rbx,%%rsi\n\t"
@@ -162,7 +172,7 @@ static int pin_cpu(int cpu) {
     cpu_set_t mask;
     CPU_ZERO(&mask);
     CPU_SET(cpu, &mask);
-    return pthread_setaffinity_np(pthread_self(), sizeof(mask), &mask);
+    return ggml_pin_setaffinity(pthread_self(), sizeof(mask), &mask);
 }
 
 static bool is_hybrid_cpu(void) {
@@ -207,9 +217,9 @@ int32_t common_cpu_get_num_math() {
     }
     if (is_hybrid_cpu()) {
         cpu_set_t affinity;
-        if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
+        if (!ggml_pin_getaffinity(pthread_self(), sizeof(affinity), &affinity)) {
             int result = cpu_count_math_cpus(n_cpu);
-            pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
+            ggml_pin_setaffinity(pthread_self(), sizeof(affinity), &affinity);
             if (result > 0) {
                 return result;
             }
