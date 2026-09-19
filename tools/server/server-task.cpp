@@ -499,19 +499,17 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         {"object",             "chat.completion.chunk"},
     });
 
-    if (include_usage) {
-        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
-        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
-        deltas.push_back({
-            {"choices", json::array()},
-            {"created",            t},
-            {"id",                 oaicompat_cmpl_id},
-            {"model",              oaicompat_model},
-            {"system_fingerprint", std::string(llama_build_info())},
-            {"object",             "chat.completion.chunk"},
-            {"usage",              usage_json_oaicompat()},
-        });
-    }
+    // Always include usage in the final chunk (per OpenAI spec, empty choices array for usage-only chunk)
+    // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+    deltas.push_back({
+        {"choices", json::array()},
+        {"created",            t},
+        {"id",                 oaicompat_cmpl_id},
+        {"model",              oaicompat_model},
+        {"system_fingerprint", std::string(llama_build_info())},
+        {"object",             "chat.completion.chunk"},
+        {"usage",              usage_json_oaicompat()},
+    });
 
     if (stats.is_set()) {
         deltas.back()["timings"] = stats.to_json();
@@ -1105,6 +1103,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
         res["prompt_progress"] = progress.to_json();
     }
 
+    // Always include usage for OpenAI-compatible clients
+    res.push_back({"usage", usage_json_oaicompat()});
+
     return res;
 }
 
@@ -1158,6 +1159,9 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
         if (is_progress) {
             last_json["prompt_progress"] = progress.to_json();
         }
+
+        // Always include usage for OpenAI-compatible clients
+        last_json.push_back({"usage", usage_json_oaicompat()});
     }
 
     return deltas;
