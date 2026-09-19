@@ -35,6 +35,23 @@ export function backendModelsUrl(backend: Backend): string {
 }
 
 /**
+ * Favicon of a backend's root domain, for endpoints with no bundled mark. API
+ * hosts rarely serve one, so the subdomain is dropped: `api.z.ai` -> `z.ai`.
+ * Returns null when the URL carries no usable host.
+ */
+export function backendFaviconUrl(baseUrl: string): string | null {
+	try {
+		const { hostname, protocol } = new URL(baseUrl);
+		const labels = hostname.split('.');
+		const root = labels.length > 2 ? labels.slice(-2).join('.') : hostname;
+
+		return `${protocol}//${root}/favicon.ico`;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Preset a backend was created from, matched on origin and path so a saved
  * backend keeps its branding. Returns undefined for edited or custom URLs.
  */
