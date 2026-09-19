@@ -175,10 +175,10 @@ std::string common_peg_ast_node::sanitized_text() const {
     out.reserve(text.size() + 2 * invalid_utf8.size());
 
     size_t seg_start = start;
-    for (size_t pos : invalid_utf8) {
-        out.append(text.data() + (seg_start - start), pos - seg_start);
+    for (const auto & invalid : invalid_utf8) {
+        out.append(text.data() + (seg_start - start), invalid.pos - seg_start);
         out.append("\xEF\xBF\xBD");
-        seg_start = pos + 1;
+        seg_start = invalid.pos + invalid.len;
     }
     out.append(text.data() + (seg_start - start), end - seg_start);
 
@@ -301,7 +301,7 @@ struct parser_executor {
 
         auto pos = start_pos;
         std::vector<common_peg_ast_id> nodes;
-        std::vector<size_t> invalid_utf8;
+        std::vector<common_peg_invalid_utf8> invalid_utf8;
 
         for (size_t i = 0; i < p.children.size(); i++) {
             const auto & child_id = p.children[i];
@@ -391,7 +391,7 @@ struct parser_executor {
         auto pos = start_pos;
         int match_count = 0;
         std::vector<common_peg_ast_id> nodes;
-        std::vector<size_t> invalid_utf8;
+        std::vector<common_peg_invalid_utf8> invalid_utf8;
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
@@ -688,7 +688,7 @@ struct parser_executor {
         // Scan input and check for delimiters
         size_t pos = start_pos;
         size_t last_valid_pos = start_pos;
-        std::vector<size_t> invalid_utf8;
+        std::vector<common_peg_invalid_utf8> invalid_utf8;
 
         while (pos < ctx.input.size()) {
             auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
@@ -703,9 +703,9 @@ struct parser_executor {
                 if (p.strict) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
-                // A delimiter cannot start on a byte that fails to decode, so consume it and move on
-                invalid_utf8.push_back(pos);
-                pos += 1;
+                // A delimiter cannot start inside bytes that fail to decode, so consume them and move on
+                invalid_utf8.push_back({pos, utf8_result.bytes_consumed});
+                pos += utf8_result.bytes_consumed;
                 last_valid_pos = pos;
                 continue;
             }

@@ -72,6 +72,12 @@ enum common_peg_parse_result_type {
 
 const char * common_peg_parse_result_type_name(common_peg_parse_result_type type);
 
+// A run of input bytes that does not decode as UTF-8
+struct common_peg_invalid_utf8 {
+    size_t pos;
+    size_t len;
+};
+
 struct common_peg_ast_node {
     common_peg_ast_id id;
     std::string rule;
@@ -83,10 +89,10 @@ struct common_peg_ast_node {
 
     bool is_partial = false;
 
-    // Offsets of input bytes inside the node that do not decode as UTF-8, in ascending order
-    std::vector<size_t> invalid_utf8;
+    // Invalid UTF-8 inside the node, in ascending order
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
 
-    // Returns the text with every invalid byte replaced by U+FFFD
+    // Returns the text with every invalid run replaced by U+FFFD
     std::string sanitized_text() const;
 };
 
@@ -105,7 +111,7 @@ class common_peg_ast_arena {
         std::string_view text,
         std::vector<common_peg_ast_id> children,
         bool is_partial = false,
-        std::vector<size_t> invalid_utf8 = {}
+        std::vector<common_peg_invalid_utf8> invalid_utf8 = {}
     ) {
         common_peg_ast_id id = nodes_.size();
         nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial, std::move(invalid_utf8)});
@@ -134,8 +140,8 @@ struct common_peg_parse_result {
 
     std::vector<common_peg_ast_id> nodes;
 
-    // Offsets of invalid UTF-8 bytes consumed by this result, carried up to the enclosing AST nodes
-    std::vector<size_t> invalid_utf8;
+    // Invalid UTF-8 consumed by this result, carried up to the enclosing AST nodes
+    std::vector<common_peg_invalid_utf8> invalid_utf8;
 
     common_peg_parse_result() = default;
 
@@ -145,7 +151,7 @@ struct common_peg_parse_result {
     common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes, std::vector<size_t> invalid_utf8 = {})
+    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes, std::vector<common_peg_invalid_utf8> invalid_utf8 = {})
         : type(type), start(start), end(end), nodes(std::move(nodes)), invalid_utf8(std::move(invalid_utf8)) {}
 
     bool fail() const { return type == COMMON_PEG_PARSE_RESULT_FAIL; }
@@ -443,7 +449,7 @@ class common_peg_parser_builder {
     common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
-    // Invalid UTF-8 is consumed byte by byte and recorded on the AST nodes unless strict is set, in which case it fails the parse.
+    // Invalid UTF-8 is consumed and recorded on the AST nodes unless strict is set, in which case it fails the parse.
     //   S -> (!delim .)*
     common_peg_parser until(const std::string & delimiter, bool strict = false) { return add(common_peg_until_parser{{delimiter}, strict}); }
 

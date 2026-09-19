@@ -321,8 +321,12 @@ void test_unicode(testing &t) {
                 // Invalid continuation byte, the lead byte is dropped and '(' survives
                 {std::string("\xC3\x28</tag>"), std::string("\xC3\x28"), "\xEF\xBF\xBD("},
 
-                // Truncated sequence in a complete input, every leftover byte is replaced
-                {std::string("Hello\xE4\xB8"), std::string("Hello\xE4\xB8"), "Hello\xEF\xBF\xBD\xEF\xBF\xBD"},
+                // Two good bytes of a 3-byte sequence then a bad third byte, the prefix is replaced once and the third byte is kept
+                {std::string("\xE4\xB8" "A</tag>"), std::string("\xE4\xB8" "A"), "\xEF\xBF\xBD" "A"},
+                {std::string("\xE4\xB8</tag>"), std::string("\xE4\xB8"), "\xEF\xBF\xBD"},
+
+                // Truncated sequence in a complete input, the leftover prefix is replaced once
+                {std::string("Hello\xE4\xB8"), std::string("Hello\xE4\xB8"), "Hello\xEF\xBF\xBD"},
 
                 // Valid multi-byte content around the bad byte is left alone
                 {std::string("\xE4\xBD\xA0\xFF\xE5\xA5\xBD</tag>"), std::string("\xE4\xBD\xA0\xFF\xE5\xA5\xBD"), "\xE4\xBD\xA0\xEF\xBF\xBD\xE5\xA5\xBD"},
@@ -360,7 +364,7 @@ void test_unicode(testing &t) {
 
             assert_result_equal(t, COMMON_PEG_PARSE_RESULT_SUCCESS, result.type);
             t.assert_equal("invalid count", 1u, result.invalid_utf8.size());
-            t.assert_equal("invalid offset", 1u, result.invalid_utf8[0]);
+            t.assert_equal("invalid offset", 1u, result.invalid_utf8[0].pos);
         });
     });
 
