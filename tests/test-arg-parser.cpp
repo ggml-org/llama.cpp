@@ -2,6 +2,7 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "ngram-map.h"
 #include "speculative.h"
 
 #include <cmath>
@@ -99,6 +100,17 @@ static void test(void) {
         const auto draft = common_base_params_to_speculative(base);
         assert(draft.n_outputs_max == 4);
         assert(draft.n_outputs_max_per_seq == 1);
+    }
+
+    // The most frequent continuation differs from the latest match in both histories.
+    for (const llama_tokens & tokens : std::vector<llama_tokens>{
+            {0, 1, 10, 11, 1, 10, 11, 1, 10, 11, 1, 20, 21, 99, 99},
+            {0, 1, 20, 21, 1, 10, 11, 1, 10, 11, 1, 10, 11, 1, 10, 11, 1, 20, 21, 99, 99}}) {
+        common_ngram_map map(1, 2, false, 1);
+        common_ngram_map_begin(map, tokens);
+        llama_tokens draft;
+        common_ngram_map_draft(map, tokens, 1, draft);
+        assert(draft == llama_tokens({10, 11}));
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
