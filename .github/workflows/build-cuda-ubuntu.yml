@@ -177,7 +177,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build -S . \
-            -DGGML_MUSA=ON
+            -DGGML_MUSA=ON \
+            -DMUSA_ARCHITECTURES=21
           time cmake --build build --config Release -j $(nproc)
 
       - name: ccache-buckets-save

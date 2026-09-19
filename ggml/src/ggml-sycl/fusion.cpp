@@ -208,5 +208,53 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         return true;
     }
 
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_SSM_CONV && ops.begin()[1] == GGML_OP_UNARY &&
+        unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * ssm_conv = cgraph->nodes[node_idx];
+        const ggml_tensor * silu     = cgraph->nodes[node_idx + 1];
+
+        if (ggml_get_unary_op(silu) != unary_ops.begin()[0]) {
+            return false;
+        }
+        if (ssm_conv->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+        // the fused kernel writes the SiLU output with dense strides, so it must be contiguous
+        if (!ggml_is_contiguous(silu)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_SSM_CONV && ops.begin()[1] == GGML_OP_ADD &&
+        ops.begin()[2] == GGML_OP_UNARY && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * ssm_conv = cgraph->nodes[node_idx];
+        const ggml_tensor * add      = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * silu     = cgraph->nodes[node_idx + 2];
+
+        if (ggml_get_unary_op(silu) != unary_ops.begin()[0]) {
+            return false;
+        }
+        if (ssm_conv->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+        // the fused kernel writes the SiLU output with dense strides, so it must be contiguous
+        if (!ggml_is_contiguous(silu)) {
+            return false;
+        }
+
+        // ADD must consume ssm_conv's output and broadcast a 1-D channel-wise bias
+        const ggml_tensor * bias = (add->src[0] == ssm_conv) ? add->src[1] : add->src[0];
+        if (bias->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias)) {
+            return false;
+        }
+        if (ggml_nelements(bias) != ssm_conv->ne[0] || bias->ne[0] != ssm_conv->ne[0]) {
+            return false;
+        }
+
+        return true;
+    }
+
     return false;
 }

@@ -196,7 +196,7 @@ static OutputVector translate_gated_delta_net_ref(const NodeContext & context) {
     }
 
     // Merge batch and head dims: [B*H_v, T, S_v]
-    auto merge_bh = [&](ov::Output<ov::Node> x, int64_t last_dim) {
+    auto merge_bh = [&](const ov::Output<ov::Node> & x, int64_t last_dim) {
         auto shape = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{B * H_v, T, last_dim});
         return std::make_shared<ov::op::v1::Reshape>(x, shape, false);
     };

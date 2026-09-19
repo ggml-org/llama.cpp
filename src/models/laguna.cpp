@@ -36,9 +36,7 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
-        uint32_t swa_period = 4;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-        hparams.set_swa_pattern(swa_period, /*dense_first=*/true);  // XS.2: FULL at il%4==0
+        load_swa_pattern(ml, 4, /*dense_first=*/true);  // XS.2: FULL at il%4==0
 
         // Per-layer-type RoPE: full layers use YaRN θ=500000 over 64 dims;
         // SWA layers use default RoPE θ=10000 over 128 dims. Base load_hparams

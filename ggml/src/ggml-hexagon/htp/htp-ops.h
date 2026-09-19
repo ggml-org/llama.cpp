@@ -22,6 +22,8 @@ enum htp_data_type {
     HTP_TYPE_Q4_0   = 2,
     HTP_TYPE_Q4_1   = 3,
     HTP_TYPE_Q8_0   = 8,
+    HTP_TYPE_Q4_K   = 12,
+    HTP_TYPE_Q6_K   = 14,
     HTP_TYPE_IQ4_NL = 20,
     HTP_TYPE_I32    = 26,
     HTP_TYPE_I64    = 27,
@@ -69,6 +71,7 @@ enum htp_op_code {
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
+    HTP_OP_GLU_GEGLU_QUICK,
     HTP_OP_SOFTMAX,
     HTP_OP_ADD_ID,
     HTP_OP_ROPE,
@@ -79,6 +82,7 @@ enum htp_op_code {
     HTP_OP_CPY,
     HTP_OP_CPY_FENCE,
     HTP_OP_ARGSORT,
+    HTP_OP_TOP_K,
     HTP_OP_SQR,
     HTP_OP_SQRT,
     HTP_OP_SUM_ROWS,
@@ -102,6 +106,7 @@ enum htp_op_code {
     HTP_OP_ALLREDUCE_ADD,
     HTP_OP_GLU_SWIGLU_CLAMP,
     HTP_OP_MDEV_GROUP,
+    HTP_OP_ROLL,
 
     HTP_OP_INVALID
 };

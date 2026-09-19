@@ -222,38 +222,63 @@ struct node_info {
     void add_fused(ggml_tensor * t) {
         fused.push_back(t);
     }
+
+    bool is_output(const ggml_tensor * t) const {
+        if (t == node) {
+            return true;
+        }
+        for (const auto * f : fused) {
+            if (t == f) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
     // helper to add node src and dst ranges
     const auto & h_add = [](ggml_mem_ranges_t mrs, const node_info & node) {
+        // only external sources matter: sources produced by the fused group are internal
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_add_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_add_src(mrs, src)) {
                     return false;
                 }
             }
         }
 
-        // keep track of the sources of the fused nodes as well
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_add_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_add_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_add_dst(mrs, node.dst());
+        // all fused tensors are produced by the fused kernel
+        if (!ggml_mem_ranges_add_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_add_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // helper to check if a node can run concurrently with the existing set of nodes
     const auto & h_check = [](ggml_mem_ranges_t mrs, const node_info & node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_check_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_check_src(mrs, src)) {
                     return false;
                 }
             }
@@ -261,15 +286,25 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_check_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_check_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_check_dst(mrs, node.dst());
+        if (!ggml_mem_ranges_check_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_check_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // perform reorders only across these types of ops

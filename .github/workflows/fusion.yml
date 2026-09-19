@@ -9,7 +9,9 @@ on:
       '.github/workflows/fusion.yml',
       'ggml/**',
       'tests/fusion/**',
-      'tests/test-fusion.cpp'
+      'tests/test-fusion.cpp',
+      'tests/test-llama-archs.cpp',
+      'src/models/**'
     ]
 
   pull_request:
@@ -18,7 +20,9 @@ on:
       '.github/workflows/fusion.yml',
       'ggml/**',
       'tests/fusion/**',
-      'tests/test-fusion.cpp'
+      'tests/test-fusion.cpp',
+      'tests/test-llama-archs.cpp',
+      'src/models/**'
     ]
 
 concurrency:

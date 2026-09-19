@@ -828,6 +828,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_OAI:
         case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
+        case HTP_OP_GLU_GEGLU_QUICK:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
@@ -858,6 +859,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ARGSORT:
             return op_argsort(octx);
 
+        case HTP_OP_TOP_K:
+            return op_top_k(octx);
+
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);
 
@@ -878,6 +882,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_IM2COL:
             return op_im2col(octx);
+
+        case HTP_OP_ROLL:
+            return op_roll(octx);
 
         case HTP_OP_CONCAT:
             return op_concat(octx);
