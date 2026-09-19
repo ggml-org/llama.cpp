@@ -791,7 +791,14 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 gguf_free(ctx);
                 return nullptr;
             }
-            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            const size_t nbytes = ggml_nbytes(&ti.t);
+            if (nbytes > SIZE_MAX - (ctx->alignment - 1)) {
+                GGML_LOG_ERROR("%s: tensor '%s' size %zu too large for alignment padding (alignment %zu)\n",
+                    __func__, ti.t.name, nbytes, ctx->alignment);
+                gguf_free(ctx);
+                return nullptr;
+            }
+            size_t padded_size = GGML_PAD(nbytes, ctx->alignment);
             if (SIZE_MAX - ctx->size < padded_size) {
                 GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);
