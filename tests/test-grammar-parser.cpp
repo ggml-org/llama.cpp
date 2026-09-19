@@ -141,6 +141,15 @@ static void verify_failure(const char * grammar_bytes) {
 
 int main()
 {
+    // regression: deeply nested (...) groups must be rejected cleanly,
+    // not crash the parser with a stack overflow
+    {
+        std::string deep = "root ::= ";
+        for (int i = 0; i < 60000; i++) { deep += "("; }
+        deep += "\"a\"";
+        for (int i = 0; i < 60000; i++) { deep += ")"; }
+        verify_failure(deep.c_str());
+    }
     verify_failure(R"""(
         root ::= "a"{,}"
     )""");
