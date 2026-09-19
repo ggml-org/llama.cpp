@@ -68,6 +68,7 @@ struct task_params {
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
     std::map<int, float> lora; // mapping adapter ID -> scale
+    bool lora_specified = false; // true if the request included a "lora" field (including [])
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
