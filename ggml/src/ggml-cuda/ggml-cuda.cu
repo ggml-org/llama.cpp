@@ -5129,7 +5129,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     return false; // TODO this could in principle be implemented though currently there is no use case.
                 }
                 if (b->type == GGML_TYPE_F16 && a->type != GGML_TYPE_F16) {
-                    return false;
+                    // the FWHT kernels read an F16 source directly
+                    if (!(op->op == GGML_OP_MUL_MAT &&
+                          ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+                          a->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32)) {
+                        return false;
+                    }
                 }
 #ifdef GGML_USE_MUSA
                 const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
