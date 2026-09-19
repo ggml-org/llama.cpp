@@ -1,6 +1,5 @@
 #pragma once
 
-#include "ggml-metal-device.h"  // enum ggml_metal_device_id
 #include "ggml.h"
 
 #include <cstdint>
@@ -32,7 +31,7 @@ constexpr int8_t FA_VEC_DOMAIN_DECODE = 0;  // ne01 == 1
 constexpr int8_t FA_VEC_DOMAIN_BATCH  = 1;  // ne01 >= 2
 
 struct fa_vec_key_t {
-    int8_t  device_id;
+    int8_t  family;
     int8_t  dtype;
     int16_t dk;
     int16_t dv;
@@ -70,8 +69,12 @@ void         fa_vec_set_override(fa_vec_cfg_t cfg);
 void         fa_vec_clear_override();
 fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 
-// device_id selects a per-SKU row; on a miss, gpu_family (0 if unknown) maps to a representative
-// SKU and the table is retried. No match -> baseline.
-fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
+constexpr int FA_VEC_FAMILY_MIN = 7;
+constexpr int FA_VEC_FAMILY_MAX = 10;
+
+// Rows are keyed by Apple GPU family rather than by SKU: repeated runs on one device differ by a
+// few percent, and the coarser model measured no worse while dropping most of the table.
+// A family above the tuned range takes the highest tuned one; below it, or unknown (0), baseline.
+fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
 }  // namespace ggml_metal_tuning
