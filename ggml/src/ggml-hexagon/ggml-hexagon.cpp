@@ -5382,6 +5382,30 @@ static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * s
     GGML_UNUSED(sess);
 }
 
+static bool ggml_hexagon_supported_top_k(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // values
+    const struct ggml_tensor * dst  = op;         // indices
+
+    if (src0->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_I32) {
+        return false;
+    }
+
+    // Single row uses the threaded chunk+merge path. Multi-row uses one full
+    // buffer per thread, so it keeps the tighter 64K cap.
+    const bool single_row = (src0->ne[1] == 1 && src0->ne[2] == 1 && src0->ne[3] == 1);
+    const int64_t max_ne00 = single_row ? (256*1024) : (64*1024);
+
+    if (src0->ne[0] > max_ne00) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
@@ -5677,6 +5701,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SET_ROWS:        return HTP_OP_SET_ROWS;
         case GGML_OP_SUM_ROWS:        return HTP_OP_SUM_ROWS;
         case GGML_OP_ARGSORT:         return HTP_OP_ARGSORT;
+        case GGML_OP_TOP_K:           return HTP_OP_TOP_K;
         case GGML_OP_NORM:            return HTP_OP_NORM;
         case GGML_OP_L2_NORM:         return HTP_OP_L2_NORM;
         case GGML_OP_RMS_NORM:        return HTP_OP_RMS_NORM;
@@ -6782,6 +6807,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_ARGSORT:
             supp = ggml_hexagon_supported_argsort(sess, op);
+            break;
+
+        case GGML_OP_TOP_K:
+            supp = ggml_hexagon_supported_top_k(sess, op);
             break;
 
         case GGML_OP_SSM_CONV:

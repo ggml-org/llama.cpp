@@ -81,6 +81,7 @@ enum htp_op_code {
     HTP_OP_CPY,
     HTP_OP_CPY_FENCE,
     HTP_OP_ARGSORT,
+    HTP_OP_TOP_K,
     HTP_OP_SQR,
     HTP_OP_SQRT,
     HTP_OP_SUM_ROWS,
