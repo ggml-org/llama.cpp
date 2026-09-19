@@ -12,6 +12,7 @@
 #include <set>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 struct ggml_cgraph;
 struct ggml_context;
@@ -769,6 +770,22 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// Maps a folded model weight to the activation-side transform applied immediately
+// before its matmul: an optional sign flip, then the normalized blockwise Hadamard
+// rotation. Weights folded this way are stored in a rotated basis, so the transform
+// is part of the model function and not an optimization.
+struct llama_hadamard_transform {
+    ggml_tensor * rot;
+    ggml_tensor * signs; // nullptr for identity sign mode
+    // when perm_rep > 1 the activation arrives with its feature axis in tiled head
+    // order [hd, nk, rep] and must be permuted to the grouped order [hd, rep, nk]
+    // the fold was computed in, before signs and rotation
+    int64_t perm_hd  = 0;
+    int64_t perm_nk  = 0;
+    int64_t perm_rep = 0;
+};
+using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -786,6 +803,8 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_hadamard_rotations * hadamard_rotations;
+    const llama_hadamard_rotations * hadamard_inverses;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1026,8 +1045,14 @@ struct llm_graph_context {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    const llama_hadamard_rotations * hadamard_rotations;
+    const llama_hadamard_rotations * hadamard_inverses;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
+
+    // Folded weights on the same activation share one transform; the key is
+    // (input, rotation) and both must match. Valid for one graph build only.
+    mutable std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hadamard_memo;
 
     const llm_graph_cb & cb_func;
 

@@ -430,7 +430,13 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        // Prism ML ternary types, used by the published Ternary-Bonsai GGUFs. The
+        // ids are deliberately high so they cannot collide with upstream's range,
+        // and they match the values already written into those files, which are
+        // the only artifacts carrying them.
+        GGML_TYPE_PQ2_0   = 142, // ternary group 128 packed in 2-bit slots, 2.125 bpw
+        GGML_TYPE_PTQ1_0  = 143, // ternary group 128, dense base-3 trits, 1.75 bpw
+        GGML_TYPE_COUNT   = 144,
     };
 
     // [TAG_GGML_PREC]
