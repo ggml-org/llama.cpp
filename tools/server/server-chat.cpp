@@ -575,8 +575,10 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         oai_body["max_tokens"] = 4096;
     }
 
-    // Pass through common params
-    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs"}) {
+    // Pass through common params. id_slot: explicit slot pin, honoured by the
+    // completion handler on every other endpoint; a proxy pinning a session
+    // to the slot holding its KV cache needs it to survive the conversion.
+    for (const auto & key : {"temperature", "top_p", "top_k", "stream", "chat_template_kwargs", "id_slot"}) {
         if (body.contains(key)) {
             oai_body[key] = body.at(key);
         }
