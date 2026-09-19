@@ -2455,6 +2455,66 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     const int16_t r2 = ne12/ne02;
     const int16_t r3 = ne13/ne03;
 
+    // multi-column mat-vec for Q4_0/Q8_0 with 2..8 columns: each thread keeps R1 columns of src1 in registers and reuses each weight block across them
+    if (op->src[1]->type == GGML_TYPE_F32 && (ne00 % 32 == 0) &&
+        (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+        (ne11 >= 2 && ne11 <= 8)) {
+        int r1 = 4;
+        switch (ne11) {
+            case 2: r1 = 2; break;
+            case 3: r1 = 3; break;
+            case 4: r1 = 4; break;
+            case 5: r1 = 3; break; // 3 + 2
+            case 6: r1 = 3; break; // 3 + 3
+            case 7: r1 = 4; break; // 4 + 3
+            case 8: r1 = 4; break; // 4 + 4
+        }
+        auto pipeline = ggml_metal_library_get_pipeline_mul_mv_r1(lib, op, r1);
+
+        const int nr0 = pipeline.nr0;
+        const int nsg = pipeline.nsg;
+
+        ggml_metal_kargs_mul_mv args = {
+            /*.ne00 =*/ ne00,
+            /*.ne01 =*/ ne01,
+            /*.ne02 =*/ ne02,
+            /*.nb00 =*/ nb00,
+            /*.nb01 =*/ nb01,
+            /*.nb02 =*/ nb02,
+            /*.nb03 =*/ nb03,
+            /*.ne10 =*/ ne10,
+            /*.ne11 =*/ ne11,
+            /*.ne12 =*/ ne12,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+            /*.ne0  =*/ ne0,
+            /*.ne1  =*/ ne1,
+            /*.nr0  =*/ nr0,
+            /*.r2   =*/ r2,
+            /*.r3   =*/ r3,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+
+        if (op->src[0]->type == GGML_TYPE_Q8_0) {
+            // simdgroups split the K dimension, one threadgroup covers nr0 rows
+            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nr0 - 1)/nr0), ((ne11 + r1 - 1)/r1), ne12*ne13, 32, nsg, 1);
+        } else {
+            // each simdgroup covers nr0 rows
+            ggml_metal_encoder_dispatch_threadgroups(enc, ((ne01 + nr0*nsg - 1)/(nr0*nsg)), ((ne11 + r1 - 1)/r1), ne12*ne13, 32, nsg, 1);
+        }
+
+        return 1;
+    }
+
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
     if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
