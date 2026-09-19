@@ -4,9 +4,13 @@ export const IMAGE_NOT_ERROR_BOUND_SELECTOR = 'img:not([data-error-bound])';
 export const MARKDOWN_DATA_ATTRS = {
 	BLOCK_ID: 'data-block-id',
 	CODE_ID: 'data-code-id',
+	// position of the raw markdown data of this code block (points to ```)
+	CODE_RAW_POS: 'data-code-raw-pos',
 	ERROR_BOUND: 'data-error-bound',
 	ERROR_HANDLED: 'data-error-handled',
+	FILE_NAME: 'data-filename',
 	LISTENER_BOUND: 'data-listener-bound',
+	META_DATA: 'data-meta',
 	ORIGINAL_SRC: 'data-original-src'
 } as const;
 
