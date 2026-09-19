@@ -383,6 +383,7 @@ extern "C" {
         //   - most tensors have n_segments == 1 and a contiguous slice of the tensor data
         //   - some tensors have an inhomogenenous data layout along the split axis,
         //     those tensors are divided into segments which are each individually split across devices
+        //     (this usually happens when multiple tensors are fused into a single one)
         //   - ne has one entry per segment and device and that segment repeats nr times,
         //     in total when accounting for repetitions the segments add up to ggml_tensor::ne for that axis,
         //     the outer/inner loops are over segments/devices like [seg0_dev0_r0, seg0_dev1_r0, seg0_dev0_r1, seg0_dev1_r1, seg1_dev0_r0, seg1_dev1_r0],
