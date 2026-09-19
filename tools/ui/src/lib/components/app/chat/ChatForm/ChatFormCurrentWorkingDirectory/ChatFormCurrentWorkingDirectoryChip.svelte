@@ -29,8 +29,8 @@
 </script>
 
 <span
-	class="text-muted-foreground inline-flex items-center gap-1 text-xs group"
 	class:text-foreground={directory}
+	class="text-muted-foreground inline-flex items-center gap-1 text-xs group"
 >
 	<div class="flex min-w-0 items-center gap-1 cursor-pointer">
 		<Folder class="w-3.5 h-3.5" />
@@ -42,6 +42,7 @@
 						<span {...props} class="max-w-64 truncate">{displayLabel}</span>
 					{/snippet}
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>{displayLabelTitle}</p>
 				</Tooltip.Content>
@@ -56,14 +57,14 @@
 			class="w-0 overflow-hidden opacity-0 transition-[width,opacity] duration-200 ease-out group-hover:w-auto group-hover:opacity-100"
 		>
 			<ActionIcon
-				icon={X}
-				tooltip="Reset working directory"
 				ariaLabel="Reset working directory"
-				{disabled}
-				onclick={onClear}
-				iconSize="h-3 w-3"
-				stopPropagationOnClick
 				class="!h-4 !w-4 shrink-0 text-muted-foreground hover:text-foreground"
+				{disabled}
+				icon={X}
+				iconSize="h-3 w-3"
+				onclick={onClear}
+				stopPropagationOnClick
+				tooltip="Reset working directory"
 			/>
 		</div>
 	{/if}

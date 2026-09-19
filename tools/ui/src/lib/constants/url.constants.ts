@@ -1,3 +1,5 @@
+import { UrlProtocol } from '$lib/enums';
+
 const STD = ['com', 'net', 'org', 'gov', 'edu'] as const;
 const STD_MIL = [...STD, 'mil'] as const;
 const ccTLD_PREFIXES: Record<string, readonly string[]> = {
@@ -184,3 +186,7 @@ export const WILDCARD_PUBLIC_SUFFIXES = buildSuffixSet(WILDCARD_BASES);
 
 // Matches one or more trailing "/" characters at the end of a URL/path.
 export const TRAILING_SLASHES_REGEX = /\/+$/;
+
+// Protocols that apiFetch treats as absolute and passes through untouched.
+// Add a protocol here when a caller needs to fetch an absolute URL with it.
+export const API_ABSOLUTE_URL_PROTOCOLS = [UrlProtocol.HTTP, UrlProtocol.HTTPS] as const;

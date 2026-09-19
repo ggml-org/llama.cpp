@@ -13,16 +13,27 @@ on:
         required: true
         type: boolean
         default: true
+      skip_apiabi_check:
+        description: 'Skip API/ABI compatibility check'
+        required: false
+        type: boolean
+        default: false
+      apiabi_compare_tag:
+        description: 'Tag to compare against for API/ABI check (default: latest release)'
+        required: false
+        type: string
+        default: ''
 
 env:
   GH_TOKEN: ${{ github.token }}
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
   make-release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     steps:
       - name: Checkout
@@ -32,12 +43,18 @@ jobs:
           ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
           fetch-depth: 0
 
+      - name: Install API/ABI check tools
+        if: ${{ github.event.inputs.skip_apiabi_check != 'true' }}
+        run: sudo apt-get install -y abi-compliance-checker abigail-tools
+
       - name: Run release checks
         id: checks
         run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
           RELEASE_BRANCH: ${{ github.ref_name }}
+          SKIP_APIABI_CHECK: ${{ github.event.inputs.skip_apiabi_check }}
+          APIABI_COMPARE_TAG: ${{ github.event.inputs.apiabi_compare_tag }}
 
       - name: Create release tag
         if: ${{ github.event.inputs.dry_run == 'false' }}
@@ -55,26 +72,86 @@ jobs:
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
 
+      - name: Create nightly-tag.txt
+        id: nightly_tag_file
+        run: |
+          NIGHTLY_TAG="${{ steps.desc.outputs.nightly_tag }}"
+          if [[ -z "${NIGHTLY_TAG}" ]]; then
+            echo "Warning: no nightly tag found for the release commit - nightly-tag.txt will not be created"
+            echo "create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "${NIGHTLY_TAG}" > nightly-tag.txt
+          echo "create=true" >> "$GITHUB_OUTPUT"
+          echo "nightly-tag.txt:"
+          cat nightly-tag.txt
+
       - name: Create release
+        id: create_release
         if: ${{ github.event.inputs.dry_run == 'false' }}
         uses: ggml-org/action-create-release@v1
         env:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tag_name: ${{ steps.checks.outputs.version }}
-          # TODO: remove the prerelease flag once the semantic versioning workflow is ready
-          # ref: https://github.com/ggml-org/ggml/discussions/1579
-          prerelease: true
+          prerelease: false
+          # TODO: enrich the body of the release with more information
           body: |
-            > [!NOTE]
-            > Semantic versioning is still work in progress.
-            > More info can be found in https://github.com/ggml-org/ggml/discussions/1579
+            ## Overview
+
+            New version has been released.
+
+            ## Assets
 
             ${{ steps.desc.outputs.nightly }}
+
+            ## More info
+
+            - [Releases and versioning of `ggml-org` projects](https://github.com/ggml-org/ggml/discussions/1579)
 
             ## ${{ steps.desc.outputs.changelog_title }}
 
             ${{ steps.desc.outputs.changelog }}
+
+      - name: Upload nightly-tag.txt
+        if: ${{ github.event.inputs.dry_run == 'false' && steps.nightly_tag_file.outputs.create == 'true' }}
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            console.log('uploadReleaseAsset', 'nightly-tag.txt');
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release_id,
+              name: 'nightly-tag.txt',
+              data: await fs.readFileSync('./nightly-tag.txt')
+            });
+
+      - name: Re-tag container images with release version
+        if: ${{ github.event.inputs.dry_run == 'false' && steps.desc.outputs.nightly_tag != '' }}
+        env:
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          NIGHTLY_TAG="${{ steps.desc.outputs.nightly_tag }}"
+          REPO_OWNER="${GITHUB_REPOSITORY_OWNER,,}"
+          IMAGE_REPO="ghcr.io/${REPO_OWNER}/${{ github.event.repository.name }}"
+
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+          VARIANTS=("" "-cuda" "-cuda13" "-vulkan" "-rocm" "-intel" "-musa" "-openvino")
+          TYPES=("full" "light" "server")
+          for type in "${TYPES[@]}"; do
+            for variant in "${VARIANTS[@]}"; do
+              src="${IMAGE_REPO}:${type}${variant}-${NIGHTLY_TAG}"
+              dst="${IMAGE_REPO}:${type}${variant}-${VERSION}"
+              echo "Tagging ${src} -> ${dst}"
+              docker buildx imagetools create --tag "${dst}" "${src}"
+            done
+          done
 
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == 'true' }}
@@ -82,6 +159,9 @@ jobs:
           if [[ "${{ steps.checks.outputs.checks_passed }}" == "true" ]]; then
             echo "Dry run complete - all checks passed."
             echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+            if [[ -n "${{ steps.desc.outputs.nightly_tag }}" ]]; then
+              echo "Would have uploaded nightly-tag.txt: ${{ steps.desc.outputs.nightly_tag }}"
+            fi
           else
             echo "::error::Dry run found release check failures. A release tag would not be created."
             exit 1

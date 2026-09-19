@@ -15,6 +15,23 @@
 #include <limits>
 #include <cstring>
 #include <type_traits>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+// windows.h defines min and max as macros, which breaks std::min and std::max
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#include <io.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -910,12 +927,17 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+server_tokens process_mtmd_prompt(
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
     // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder, init_opt);
         if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
@@ -956,7 +978,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -979,7 +1001,7 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
                 files.push_back(base64_decode(entry));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files, init_opt);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
@@ -990,15 +1012,15 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
    }
 }
 
-std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     std::vector<server_tokens> result;
     if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
         result.reserve(json_prompt.size());
         for (const auto & p : json_prompt) {
-            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, add_special, parse_special, init_opt));
         }
     } else {
-        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special, init_opt));
     }
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
@@ -1057,8 +1079,7 @@ json oaicompat_completion_params_parse(const json & body) {
 static void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
-        const std::string & media_path,
-        bool accept_base64_uri) {
+        const std::string & media_path) {
     if (!media_path.empty()) {
         // should already be enforced by arg.cpp, but checking just in case
         GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
@@ -1099,15 +1120,17 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
-        // try to decode base64 image
+    } else if (string_starts_with(url, "data:")) {
+        // try to decode base64 image, video, or audio
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid uri-encoded base64 value");
-        } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid uri format: " + parts[0]);
+            throw std::invalid_argument("Invalid uri-encoded base64 value");
+        } else if (!string_starts_with(parts[0], "data:image/")
+                && !string_starts_with(parts[0], "data:video/")
+                && !string_starts_with(parts[0], "data:audio/")) {
+            throw std::invalid_argument("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("uri must be base64 encoded");
+            throw std::invalid_argument("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
@@ -1175,6 +1198,11 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // an absent or empty schema means any object
+    if (json_schema.is_object() && json_schema.empty()) {
+        json_schema["type"] = "object";
+    }
+
     // get input files
     if (!body.contains("messages")) {
         throw std::invalid_argument("'messages' is required");
@@ -1214,7 +1242,7 @@ json oaicompat_chat_params_parse(
 
                 json image_url = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path, true);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1229,7 +1257,7 @@ json oaicompat_chat_params_parse(
                 json input_audio = json_value(p, "input_audio", json::object());
                 std::string url  = json_value(input_audio, "data",
                                         json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1243,7 +1271,7 @@ json oaicompat_chat_params_parse(
                 json input_video = json_value(p, "input_video", json::object());
                 std::string url  = json_value(input_video, "data",
                                         json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1279,6 +1307,12 @@ json oaicompat_chat_params_parse(
     }
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
         throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
     }
     inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
@@ -1540,7 +1574,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize
@@ -1781,7 +1815,8 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc) {
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
@@ -1790,12 +1825,12 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
         result.push_back(tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);
@@ -1818,4 +1853,134 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// server_subproc
+//
+
+bool server_subproc::has_output() {
+    if (out_handle >= 0) {
+        return true;
+    }
+    FILE * f = sproc.stdout_file(); // combined stdout/stderr
+    if (!f) {
+        return false;
+    }
+#ifdef _WIN32
+    HANDLE h = (HANDLE) _get_osfhandle(_fileno(f));
+    if (h != INVALID_HANDLE_VALUE) {
+        out_handle = (intptr_t) h;
+    }
+#else
+    int fd = fileno(f);
+    if (fd >= 0) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        out_handle = fd;
+    }
+#endif
+    return out_handle >= 0;
+}
+
+int server_subproc::read_output(char * buf, size_t len) {
+    if (!has_output()) {
+        return -1;
+    }
+#ifdef _WIN32
+    HANDLE h     = (HANDLE) out_handle;
+    DWORD  avail = 0;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+        return -1; // pipe broken, child gone
+    }
+    if (avail == 0) {
+        return 0;
+    }
+    DWORD to_read = avail < (DWORD) len ? avail : (DWORD) len;
+    DWORD got     = 0;
+    if (!ReadFile(h, buf, to_read, &got, NULL) || got == 0) {
+        return -1;
+    }
+    return (int) got;
+#else
+    while (true) {
+        ssize_t r = read((int) out_handle, buf, len);
+        if (r > 0) {
+            return (int) r;
+        }
+        if (r == 0) {
+            return -1; // EOF
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
+        return -1;
+    }
+#endif
+}
+
+server_subproc::waiter::waiter() {
+#ifndef _WIN32
+    int fds[2];
+    GGML_ASSERT(pipe(fds) == 0);
+    for (int fd : fds) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    }
+    wake_fd[0] = fds[0];
+    wake_fd[1] = fds[1];
+#endif
+}
+
+server_subproc::waiter::~waiter() {
+#ifndef _WIN32
+    close((int) wake_fd[0]);
+    close((int) wake_fd[1]);
+#endif
+}
+
+void server_subproc::waiter::wake() {
+#ifndef _WIN32
+    char c = 1;
+    (void) !write((int) wake_fd[1], &c, 1);
+#endif
+}
+
+void server_subproc::waiter::wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms) {
+    ready.assign(procs.size(), false);
+#ifdef _WIN32
+    // no waitable wait exists for anonymous pipes, so poll them in 50 ms steps
+    bool any = false;
+    for (size_t i = 0; i < procs.size(); i++) {
+        DWORD avail = 0;
+        if (!procs[i]->has_output() || !PeekNamedPipe((HANDLE) procs[i]->out_handle, NULL, 0, NULL, &avail, NULL) || avail > 0) {
+            ready[i] = true; // data or broken pipe, read_output() tells which
+            any = true;
+        }
+    }
+    if (!any) {
+        int64_t step = timeout_ms < 0 ? 50 : std::min<int64_t>(timeout_ms, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(step));
+    }
+#else
+    std::vector<pollfd> pfds;
+    pfds.reserve(procs.size() + 1);
+    pfds.push_back({ (int) wake_fd[0], POLLIN, 0 });
+    for (auto * p : procs) {
+        pfds.push_back({ p->has_output() ? (int) p->out_handle : -1, POLLIN, 0 }); // poll() skips negative fds
+    }
+    int timeout = timeout_ms < 0 ? -1 : (int) std::min<int64_t>(timeout_ms, std::numeric_limits<int>::max());
+    int r = poll(pfds.data(), pfds.size(), timeout);
+    if (r < 0 && errno != EINTR) {
+        LOG_ERR("%s: poll() failed: %s\n", __func__, strerror(errno));
+    }
+    if (pfds[0].revents) {
+        char buf[64];
+        while (read((int) wake_fd[0], buf, sizeof(buf)) > 0) {}
+    }
+    for (size_t i = 0; i < procs.size(); i++) {
+        ready[i] = pfds[i + 1].fd < 0 || pfds[i + 1].revents != 0;
+    }
+#endif
 }

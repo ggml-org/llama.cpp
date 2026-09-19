@@ -1,0 +1,78 @@
+#version 450
+
+#include "generic_head.glsl"
+#include "types.glsl"
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 32;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+shared FLOAT_TYPE tmp[BLOCK_SIZE];
+
+FLOAT_TYPE wg_reduce_max(FLOAT_TYPE v) {
+    const uint tid = gl_LocalInvocationID.x;
+    tmp[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            tmp[tid] = max(tmp[tid], tmp[tid + s]);
+        }
+        barrier();
+    }
+    v = tmp[0];
+    barrier();
+    return v;
+}
+
+FLOAT_TYPE wg_reduce_sum(FLOAT_TYPE v) {
+    const uint tid = gl_LocalInvocationID.x;
+    tmp[tid] = v;
+    barrier();
+    [[unroll]] for (uint s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            tmp[tid] += tmp[tid + s];
+        }
+        barrier();
+    }
+    v = tmp[0];
+    barrier();
+    return v;
+}
+
+void main() {
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint tid = gl_LocalInvocationID.x;
+
+    if (row >= p.KY) {
+        return;
+    }
+
+    const uint off = row * p.KX;
+
+    FLOAT_TYPE max_logit = FLOAT_TYPE(uintBitsToFloat(0xFF800000));
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        max_logit = max(max_logit, FLOAT_TYPE(data_a[off + i]));
+    }
+    max_logit = wg_reduce_max(max_logit);
+
+    FLOAT_TYPE sum_exp = FLOAT_TYPE(0.0f);
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        sum_exp += exp(FLOAT_TYPE(data_a[off + i]) - max_logit);
+    }
+    const FLOAT_TYPE log_sum = log(wg_reduce_sum(sum_exp));
+
+    FLOAT_TYPE loss = FLOAT_TYPE(0.0f);
+    for (uint i = tid; i < p.KX; i += BLOCK_SIZE) {
+        loss += (FLOAT_TYPE(data_a[off + i]) - max_logit - log_sum) * FLOAT_TYPE(data_b[off + i]);
+    }
+    loss = -wg_reduce_sum(loss) / FLOAT_TYPE(p.KY);
+
+    if (tid == 0) {
+        data_d[row] = D_TYPE(loss);
+    }
+}

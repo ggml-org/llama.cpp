@@ -1,4 +1,4 @@
-import { modelsStore } from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 
 /**

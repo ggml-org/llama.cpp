@@ -4,7 +4,7 @@
 	// toolMessages array) rather than a single message subtree.
 	import ChatMessages from '$lib/components/app/chat/ChatMessages/ChatMessages.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 </script>
 
 <Tooltip.Provider>

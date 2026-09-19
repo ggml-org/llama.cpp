@@ -31,7 +31,7 @@
 				pendingModel = modelId;
 
 				try {
-					await modelsStore.loadModel(modelId);
+					await modelsStore.status.load(modelId);
 				} finally {
 					pendingModel = null;
 				}

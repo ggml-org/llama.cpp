@@ -1,25 +1,17 @@
 /**
- * Migration Service - Unified data migration hook
+ * MigrationService - Unified data migration hook
  *
- * Centralizes all data migrations (localStorage, IndexedDB, legacy formats) into a single
- * initialization point. Each migration copies data to new format WITHOUT deleting the old.
- *
- * **Architecture:**
- * - Migrations are defined as objects with `id` and `run()` methods
- * - Migration state is tracked in localStorage to avoid re-running
- * - `runAllMigrations()` should be called once at app startup
- * - All migrations are NON-DESTRUCTIVE - legacy data is preserved for downgrade compatibility
- *
- * **Current Migrations:**
- * 1. localStorage prefix: Copy LlamaCppWebui.* → LlamaUi.* (both preserved)
- * 2. IndexedDB database: Copy LlamacppWebui → LlamaUi (both preserved)
- * 3. Legacy message format: Transform in-place (preserves structure, migrates markers)
- * 4. Theme key: Copy standalone `theme` → config object (both preserved)
+ * Centralizes all data migrations (localStorage, IndexedDB, legacy formats)
+ * into a single initialization point. Each migration copies data to the new
+ * format WITHOUT deleting the old, and state is tracked in localStorage so
+ * `runAllMigrations()` (called once at startup) never re-runs a completed
+ * migration. All migrations are non-destructive for downgrade compatibility.
  */
 
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	DB_APP_NAME_DEPRECATED,
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	IDXDB_STORES,
 	IDXDB_TABLES,
 	LEGACY_AGENTIC_REGEX,
@@ -30,6 +22,7 @@ import {
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
 import { BooleanString, MessageRole } from '$lib/enums';
+import type { McpServerOverride } from '$lib/types/database';
 import Dexie from 'dexie';
 
 // Types
@@ -746,6 +739,61 @@ const mcpDefaultOverridesMergeMigration: Migration = {
 			);
 	}
 };
+const MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID = 'mcp-server-overrides-to-tool-policy-v1';
+const mcpServerOverridesToToolPolicyMigration: Migration = {
+	description:
+		'Seed per-conversation disabled tool keys from the global defaults and legacy per-conversation MCP server overrides (legacy field preserved)',
+	id: MCP_SERVER_OVERRIDES_TO_TOOL_POLICY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// The global disabled set used to apply to every conversation; it is now
+		// the defaults seeded into newly created conversations, so existing rows
+		// are seeded with it to keep their behavior unchanged.
+		let defaults: string[] = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+
+			if (raw) {
+				const parsed: unknown = JSON.parse(raw);
+
+				if (Array.isArray(parsed)) {
+					defaults = parsed.filter((k): k is string => typeof k === 'string');
+				}
+			}
+		} catch {
+			// fall through with empty defaults so legacy overrides still migrate
+		}
+
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		let migratedCount = 0;
+
+		for (const conv of conversations) {
+			// re-run safety: a row that already has a policy is left alone
+			if (conv.disabledTools !== undefined) continue;
+
+			// A legacy per-conversation server disable becomes a server-scoped tool
+			// key (same format as toolsStore.getMcpServerToolsKey). Per-conversation
+			// enables are dropped: the global server flag governs now.
+			const serverGroupKeys = (conv.mcpServerOverrides ?? [])
+				.filter((o: McpServerOverride) => !o.enabled)
+				.map((o: McpServerOverride) => `mcp:${o.serverId}`);
+			const disabledTools = [...new Set([...defaults, ...serverGroupKeys])];
+
+			if (disabledTools.length === 0) continue;
+
+			await db.updateConversation(conv.id, { disabledTools });
+			migratedCount++;
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP server overrides -> tool policy: updated ${migratedCount} conversations`
+			);
+	}
+};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -755,7 +803,8 @@ const migrations: Migration[] = [
 	mcpDefaultEnabledMigration,
 	mcpDefaultOverridesMergeMigration,
 	configTypesMigration,
-	renderKeysMigration
+	renderKeysMigration,
+	mcpServerOverridesToToolPolicyMigration
 ];
 
 export const MigrationService = {

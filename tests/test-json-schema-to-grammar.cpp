@@ -6,11 +6,9 @@
 
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
-#include <fstream>
-#include <sstream>
 #include <regex>
 
 static std::string trim(const std::string & source) {
@@ -64,21 +62,8 @@ struct TestCase {
     }
 };
 
-static void write(const std::string & file, const std::string & content) {
-    std::ofstream f;
-    f.open(file.c_str());
-    f << content.c_str();
-    f.close();
-}
-
-static std::string read(const std::string & file) {
-    std::ostringstream actuals;
-    actuals << std::ifstream(file.c_str()).rdbuf();
-    return actuals.str();
-}
-
-static void test_all(const std::string & lang, std::function<void(const TestCase &)> runner) {
-    fprintf(stderr, "#\n# Testing JSON schema conversion (%s)\n#\n", lang.c_str());
+static void test_all(const std::string & title, std::function<void(const TestCase &)> runner) {
+    fprintf(stderr, "#\n# %s\n#\n", title.c_str());
     auto test = [&](const TestCase & tc) {
         fprintf(stderr, "- %s%s\n", tc.name.c_str(), tc.expected_status == FAILURE ? " (failure expected)" : "");
         runner(tc);
@@ -330,7 +315,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
 
     test({
         SUCCESS,
-        "empty schema (object)",
+        "empty schema (any value)",
         "{}",
         R"""(
             array ::= "[" space ( value ("," space value)* )? space "]"
@@ -341,7 +326,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             null ::= "null"
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
             object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
-            root ::= object
+            root ::= value
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
@@ -569,6 +554,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
         )"""
     });
 
+    // items {} constrains nothing, the same as no items at all
     test({
         SUCCESS,
         "array with empty items",
@@ -582,11 +568,10 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            item ::= object
             null ::= "null"
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
             object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
-            root ::= "[" space (item ("," space item)*)? space "]"
+            root ::= "[" space ( value ("," space value)* )? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
@@ -607,11 +592,10 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
             decimal-part ::= [0-9]{1,16}
             integral-part ::= [0] | [1-9] [0-9]{0,15}
-            item ::= object
             null ::= "null"
             number ::= ("-"? integral-part) ("." decimal-part)? ([eE] [-+]? integral-part)?
             object ::= "{" space ( string ":" space value ("," space string ":" space value)* )? space "}"
-            root ::= "[" space (item ("," space item)*)? space "]"
+            root ::= "[" space ( value ("," space value)* )? space "]"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
             string ::= "\"" char* "\""
             value ::= object | array | string | number | boolean | null
@@ -994,7 +978,7 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             "additionalProperties": false
         })""",
         R"""(
-            root ::= "{" space  space "}"
+            root ::= "{" space "}"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
@@ -1434,90 +1418,102 @@ static void test_all(const std::string & lang, std::function<void(const TestCase
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )"""
     });
-}
 
-static void test_resolves_to_string() {
-    fprintf(stderr, "#\n# Testing resolves_to_string\n#\n");
+    test({
+        SUCCESS,
+        "regexp with non-capturing group",
+        R"""({
+            "type": "string",
+            "pattern": "^(?:foo|bar)baz$"
+        })""",
+        R"""(
+            root ::= "\"" (("foo" | "bar") "baz") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
 
-    auto test = [](const std::string & name, const std::string & schema_str, bool expected) {
-        fprintf(stderr, "- %s\n", name.c_str());
-        common_schema_info info;
-        auto schema = nlohmann::ordered_json::parse(schema_str);
-        info.resolve_refs(schema);
-        bool result = info.resolves_to_string(schema);
-        if (result != expected) {
-            fprintf(stderr, "#\n# Test '%s' failed.\n#\n", name.c_str());
-            fprintf(stderr, "Schema: %s\n", schema_str.c_str());
-            fprintf(stderr, "Expected: %s, Got: %s\n", expected ? "true" : "false", result ? "true" : "false");
-            assert(false);
-        }
-    };
+    test({
+        SUCCESS,
+        "regexp with nested non-capturing groups",
+        R"""({
+            "type": "string",
+            "pattern": "^(?:(?:ab)+c)?d$"
+        })""",
+        R"""(
+            root ::= "\"" ((("ab")+ "c")? "d") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
 
-    // Basic type checks
-    test("type string", R"({"type": "string"})", true);
-    test("type integer", R"({"type": "integer"})", false);
-    test("type number", R"({"type": "number"})", false);
-    test("type boolean", R"({"type": "boolean"})", false);
-    test("type object", R"({"type": "object"})", false);
-    test("type array", R"({"type": "array"})", false);
+    test({
+        SUCCESS,
+        "unanchored regexp",
+        R"""({
+            "type": "string",
+            "pattern": "[0-9]+"
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= string
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+        )"""
+    });
 
-    // Type array (nullable string)
-    test("type array with string", R"({"type": ["string", "null"]})", true);
-    test("type array without string", R"({"type": ["integer", "null"]})", false);
+    // the rules of the partial conversion (here "root-0") must not leak into the grammar
+    test({
+        SUCCESS,
+        "regexp with unsupported shorthand",
+        R"""({
+            "type": "string",
+            "pattern": "^[0-9]{3}\\w$"
+        })""",
+        R"""(
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= string
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+        )"""
+    });
 
-    // String-specific keywords
-    test("minLength implies string", R"({"minLength": 1})", true);
-    test("maxLength implies string", R"({"maxLength": 10})", true);
-    test("pattern implies string", R"({"pattern": "^[a-z]+$"})", true);
+    // a regexp that is invalid under any flavor is still an error
+    test({
+        FAILURE,
+        "regexp with unbalanced parentheses",
+        R"""({
+            "type": "string",
+            "pattern": "^(a$"
+        })""",
+        ""
+    });
 
-    // Format
-    test("format date", R"({"format": "date"})", true);
-    test("format uuid", R"({"format": "uuid"})", true);
-    test("format email", R"({"format": "email"})", true);
-
-    // Const
-    test("const string", R"({"const": "hello"})", true);
-    test("const number", R"({"const": 123})", false);
-
-    // Enum
-    test("enum with strings", R"({"enum": ["a", "b", "c"]})", true);
-    test("enum with numbers", R"({"enum": [1, 2, 3]})", false);
-    test("enum mixed with string", R"({"enum": [1, "a", null]})", true);
-
-    // anyOf
-    test("anyOf with string", R"({"anyOf": [{"type": "string"}, {"type": "integer"}]})", true);
-    test("anyOf without string", R"({"anyOf": [{"type": "integer"}, {"type": "boolean"}]})", false);
-
-    // oneOf
-    test("oneOf with string", R"({"oneOf": [{"type": "string"}, {"type": "number"}]})", true);
-    test("oneOf without string", R"({"oneOf": [{"type": "object"}, {"type": "array"}]})", false);
-
-    // allOf - all must be strings
-    test("allOf all strings", R"({"allOf": [{"type": "string"}, {"minLength": 1}]})", true);
-    test("allOf mixed types", R"({"allOf": [{"type": "string"}, {"type": "integer"}]})", false);
-
-    // $ref
-    test("$ref to string",
-        R"({"$ref": "#/$defs/str", "$defs": {"str": {"type": "string"}}})", true);
-    test("$ref to integer",
-        R"({"$ref": "#/$defs/num", "$defs": {"num": {"type": "integer"}}})", false);
-
-    // Nested
-    test("nested anyOf with string",
-        R"({"anyOf": [{"anyOf": [{"type": "integer"}, {"type": "string"}]}, {"type": "boolean"}]})", true);
-
-    fprintf(stderr, "All resolves_to_string tests passed!\n");
+    // only the property with the bad pattern degrades
+    test({
+        SUCCESS,
+        "unsupported regexp in a property",
+        R"""({
+            "type": "object",
+            "properties": {
+                "a": { "type": "string", "pattern": "^[a-z\\-]+$" }
+            },
+            "required": ["a"],
+            "additionalProperties": false
+        })""",
+        R"""(
+            a ::= string
+            a-kv ::= "\"a\"" space ":" space a
+            char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+            root ::= "{" space a-kv space "}"
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            string ::= "\"" char* "\""
+        )"""
+    });
 }
 
 int main() {
-    fprintf(stderr, "LLAMA_NODE_AVAILABLE = %s\n", getenv("LLAMA_NODE_AVAILABLE") ? "true" : "false");
-    fprintf(stderr, "LLAMA_PYTHON_AVAILABLE = %s\n", getenv("LLAMA_PYTHON_AVAILABLE") ? "true" : "false");
-
-    test_resolves_to_string();
-
-    test_all("C++", [](const TestCase & tc) {
+    test_all("JSON schema conversion", [](const TestCase & tc) {
         try {
-            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+            tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
         } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
@@ -1525,63 +1521,58 @@ int main() {
         }
     });
 
-    // C++ only tests (features not yet supported in JS/Python implementations)
+    // a document parsed up front gives the same grammar as the JSON, recursion included
     {
-        fprintf(stderr, "#\n# Testing C++ only features\n#\n");
-        auto run = [](const TestCase & tc) {
-            fprintf(stderr, "- %s\n", tc.name.c_str());
-            try {
-                tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
-                tc.verify_status(SUCCESS);
-            } catch (const std::invalid_argument & ex) {
-                fprintf(stderr, "Error: %s\n", ex.what());
-                tc.verify_status(FAILURE);
+        fprintf(stderr, "- parsed document\n");
+        auto schema = common_json::parse(R"""({
+            "$ref": "#/$defs/node",
+            "$defs": {
+                "node": {
+                    "type": "object",
+                    "properties": {"next": {"$ref": "#/$defs/node"}, "leaf": {}},
+                    "additionalProperties": false
+                }
             }
+        })""");
+        assert(json_schema_to_grammar(common_chat_schema_from_json(schema)) == json_schema_to_grammar(schema, true));
+    }
+
+    // a property node carries its $ref target, so its grammar names the ref rule
+    {
+        fprintf(stderr, "- sub-schema $ref\n");
+        auto parameters = common_json::parse(R"""({
+            "type": "object",
+            "properties": {"item": {"$ref": "#/$defs/item"}},
+            "$defs": {
+                "item": {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}},
+                    "required": ["a"],
+                    "additionalProperties": false
+                }
+            }
+        })""");
+        TestCase tc {
+            SUCCESS,
+            "sub-schema $ref",
+            "",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                ref-defs-item ::= "{" space ref-defs-item-a-kv space "}"
+                ref-defs-item-a-kv ::= "\"a\"" space ":" space string
+                root ::= ref-defs-item
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
         };
-
-        run({
-            SUCCESS,
-            "regexp with non-capturing group",
-            R"""({
-                "type": "string",
-                "pattern": "^(?:foo|bar)baz$"
-            })""",
-            R"""(
-                root ::= "\"" (("foo" | "bar") "baz") "\""
-                space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            )""",
-        });
-
-        run({
-            SUCCESS,
-            "regexp with nested non-capturing groups",
-            R"""({
-                "type": "string",
-                "pattern": "^(?:(?:ab)+c)?d$"
-            })""",
-            R"""(
-                root ::= "\"" ((("ab")+ "c")? "d") "\""
-                space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            )""",
-        });
+        auto doc = common_chat_schema_from_json(parameters);
+        tc.verify(build_grammar([&](const common_grammar_builder & builder) {
+            const auto & item = static_cast<const common_chat_schema_object &>(*doc.root).properties.at(0);
+            builder.add_schema("root", *item.schema);
+        }));
     }
 
-    if (getenv("LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR")) {
-        fprintf(stderr, "\033[33mWARNING: Skipping slow tests on emulator.\n\033[0m");
-    } else {
-        if (getenv("LLAMA_PYTHON_AVAILABLE") || (std::system("python -c \"import sys; exit(1) if sys.version_info < (3, 8) else print('Python version is sufficient')\"") == 0)) {
-            test_all("Python", [](const TestCase & tc) {
-                write("test-json-schema-input.tmp", tc.schema);
-                tc.verify_status(std::system(
-                    "python ./examples/json_schema_to_grammar.py test-json-schema-input.tmp > test-grammar-output.tmp") == 0 ? SUCCESS : FAILURE);
-                tc.verify(read("test-grammar-output.tmp"));
-            });
-        } else {
-            fprintf(stderr, "\033[33mWARNING: Python not found (min version required is 3.8), skipping Python JSON schema -> grammar tests.\n\033[0m");
-        }
-    }
-
-    test_all("Check Expectations Validity", [](const TestCase & tc) {
+    test_all("Check the expectations parse", [](const TestCase & tc) {
         if (tc.expected_status == SUCCESS) {
             tc.verify_expectation_parseable();
         }

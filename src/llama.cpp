@@ -1,6 +1,7 @@
 #include "llama.h"
 
 #include "llama-impl.h"
+#include "llama-version.h"
 
 #include "llama-chat.h"
 #include "llama-context.h"
@@ -317,6 +318,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
     try {
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.load_mode,
             params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
+
+        ml.lazy.mode = params.lazy_mode;
 
         ml.print_info();
         std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));

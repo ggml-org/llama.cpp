@@ -6,7 +6,7 @@
 
 <TooltipPrimitive.Trigger
 	bind:ref
-	data-slot="tooltip-trigger"
 	class="cursor-pointer"
+	data-slot="tooltip-trigger"
 	{...restProps}
 />

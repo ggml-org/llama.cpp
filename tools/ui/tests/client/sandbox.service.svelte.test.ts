@@ -10,7 +10,7 @@ const run = (code: string, timeoutMs?: number) =>
 
 describe('sandbox service', () => {
 	beforeEach(async () => {
-		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
 		settingsStore.config = {
 			...settingsStore.config,

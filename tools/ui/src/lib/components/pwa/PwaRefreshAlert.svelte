@@ -17,7 +17,6 @@
 
 			<Button
 				class="justify-self-end-safe"
-				size="sm"
 				onclick={() => {
 					updateServiceWorker();
 
@@ -27,6 +26,7 @@
 
 					needRefresh = false;
 				}}
+				size="sm"
 			>
 				Reload
 			</Button>

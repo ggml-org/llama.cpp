@@ -44,12 +44,14 @@
 					onclick={(e) => e.stopPropagation()}
 				>
 					{@render iconComponent(triggerIcon, 'h-3 w-3')}
+
 					{#if triggerTooltip}
 						<span class="sr-only">{triggerTooltip}</span>
 					{/if}
 				</DropdownMenu.Trigger>
 			{/snippet}
 		</Tooltip.Trigger>
+
 		{#if triggerTooltip}
 			<Tooltip.Content>
 				<p>{triggerTooltip}</p>
@@ -64,10 +66,10 @@
 			{/if}
 
 			<DropdownMenu.Item
+				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+				disabled={action.disabled}
 				onclick={action.onclick}
 				variant={action.variant}
-				disabled={action.disabled}
-				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
 			>
 				<div class="flex items-center gap-2">
 					{@render iconComponent(

@@ -37,11 +37,11 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageUserBubble
-			{content}
 			attachments={extras}
-			textColorClass="text-muted-foreground"
 			cardBgClass="dark:bg-primary/8"
+			{content}
 			maxHeightStyle="overflow-wrap: anywhere; word-break: break-word;"
+			textColorClass="text-muted-foreground"
 		/>
 
 		<div class="max-w-[80%]">
@@ -50,9 +50,11 @@
 					<div
 						class="pointer-events-auto inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:opacity-100"
 					>
-						<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.handleEdit} />
-						<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
-						<ActionIcon icon={ArrowUp} tooltip="Send immediately" onclick={onSendImmediately} />
+						<ActionIcon icon={Edit} onclick={editCtx.handleEdit} tooltip="Edit" />
+
+						<ActionIcon icon={Trash2} onclick={onDelete} tooltip="Delete" />
+
+						<ActionIcon icon={ArrowUp} onclick={onSendImmediately} tooltip="Send immediately" />
 					</div>
 				</div>
 			</div>

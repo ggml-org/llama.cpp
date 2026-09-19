@@ -71,6 +71,31 @@ uint32_t llama_hparams::n_ff(uint32_t il) const {
     GGML_ABORT("fatal error");
 }
 
+uint32_t llama_hparams::n_ff_exp(uint32_t il) const {
+    if (il < n_layer_all) {
+        return n_ff_exp_arr[il];
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_expert_used(uint32_t il) const {
+    if (il < n_layer_all) {
+        return n_expert_used_arr[il];
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+uint32_t llama_hparams::n_expert_used_max() const {
+    uint32_t val = 0;
+    for (uint32_t il = 0; il < n_layer_all; ++il) {
+        val = std::max(val, n_expert_used(il));
+    }
+
+    return val;
+}
+
 uint32_t llama_hparams::n_gqa(uint32_t il) const {
     const uint32_t n_head    = this->n_head(il);
     const uint32_t n_head_kv = this->n_head_kv(il);
@@ -201,7 +226,11 @@ uint32_t llama_hparams::n_embd_r() const {
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+    const uint32_t n_conv = (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
+
+    // PLE conv history needs its own row: Meta splits cache_r_l by head, so a history packed behind the first is unaddressable
+    // it lives in cache_ple_r_l instead, mirrored like the rest of the PLE module
+    return n_conv;
 }
 
 uint32_t llama_hparams::n_embd_s() const {
@@ -231,6 +260,23 @@ uint32_t llama_hparams::n_embd_s() const {
 bool llama_hparams::is_recr(uint32_t il) const {
     if (il < n_layer_all) {
         return is_recr_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
+}
+
+uint32_t llama_hparams::ple_conv_state() const {
+    if (ple_n_heads == 0 || ple_conv_kernel == 0) {
+        return 0;
+    }
+
+    // dilation equals the n-gram size, matching the reference module
+    return (ple_conv_kernel - 1) * ple_ngram_size * dsv4_hc_mult * n_embd;
+}
+
+bool llama_hparams::is_ple(uint32_t il) const {
+    if (il < n_layer_all) {
+        return is_ple_impl[il];
     }
 
     GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);

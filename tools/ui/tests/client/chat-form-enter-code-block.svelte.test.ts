@@ -7,7 +7,7 @@
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';

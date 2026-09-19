@@ -68,16 +68,16 @@
 						}}
 						{depth}
 						isActive={currentChatId === conversation.id}
-						{isSelectionMode}
 						isSelected={selectedIds.has(conversation.id)}
-						{onSelect}
-						{onEdit}
+						{isSelectionMode}
 						{onDelete}
+						{onEdit}
+						{onEnterSelectionMode}
+						{onRowMouseDown}
+						{onSelect}
+						{onSelectionClick}
 						{onStop}
 						{onToggleSelect}
-						{onEnterSelectionMode}
-						{onSelectionClick}
-						{onRowMouseDown}
 					/>
 				</li>
 			{/each}

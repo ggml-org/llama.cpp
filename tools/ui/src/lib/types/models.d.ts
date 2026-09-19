@@ -6,6 +6,10 @@ export interface ModelModalities {
 	video: boolean;
 }
 
+export interface ModelCapabilities {
+	reasoning: boolean;
+}
+
 export interface ModelOption {
 	id: string;
 	name: string;

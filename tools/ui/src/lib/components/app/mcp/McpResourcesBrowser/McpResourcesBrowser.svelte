@@ -2,7 +2,7 @@
 	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
 	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
-	import { mcpResourceStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { parseResourcePath } from '$lib/utils';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -31,8 +31,8 @@
 	let expandedFolders = new SvelteSet<string>();
 	let searchQuery = $state('');
 
-	const resources = $derived(mcpResourceStore.serverResources);
-	const isLoading = $derived(mcpResourceStore.isLoading);
+	const resources = $derived(mcpStore.resources.serverResources);
+	const isLoading = $derived(mcpStore.resources.isLoading);
 
 	const filteredResources = $derived.by(() => {
 		if (!searchQuery.trim()) {
@@ -137,18 +137,18 @@
 		{:else}
 			{#each [...filteredResources.entries()] as [serverName, serverRes] (serverName)}
 				<McpResourcesBrowserServerItem
+					{expandedFolders}
+					isExpanded={expandedServers.has(serverName as string)}
+					{onSelect}
+					{onTemplateSelect}
+					{onToggle}
+					onToggleFolder={toggleFolder}
+					onToggleServer={() => toggleServer(serverName as string)}
+					{searchQuery}
+					{selectedTemplateUri}
+					{selectedUris}
 					serverName={serverName as string}
 					serverRes={serverRes as MCPServerResources}
-					isExpanded={expandedServers.has(serverName as string)}
-					{selectedUris}
-					{selectedTemplateUri}
-					{expandedFolders}
-					onToggleServer={() => toggleServer(serverName as string)}
-					onToggleFolder={toggleFolder}
-					{onSelect}
-					{onToggle}
-					{onTemplateSelect}
-					{searchQuery}
 				/>
 			{/each}
 		{/if}

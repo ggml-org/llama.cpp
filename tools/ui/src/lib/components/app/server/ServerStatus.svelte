@@ -46,21 +46,21 @@
 	</div>
 
 	{#if serverData && !error}
-		<Badge variant="outline" class="text-xs">
+		<Badge class="text-xs" variant="outline">
 			<Server class="mr-1 h-3 w-3" />
 
 			{model || 'Unknown Model'}
 		</Badge>
 
 		{#if serverData?.default_generation_settings?.n_ctx}
-			<Badge variant="secondary" class="text-xs">
+			<Badge class="text-xs" variant="secondary">
 				ctx: {serverData.default_generation_settings.n_ctx.toLocaleString()}
 			</Badge>
 		{/if}
 	{/if}
 
 	{#if showActions && error}
-		<Button variant="outline" size="sm" class="text-destructive">
+		<Button class="text-destructive" size="sm" variant="outline">
 			<AlertTriangle class={ICON_CLASS_DEFAULT} />
 
 			{error}

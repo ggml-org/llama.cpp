@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <vector>
 

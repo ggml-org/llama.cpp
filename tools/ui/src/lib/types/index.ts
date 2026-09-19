@@ -89,6 +89,7 @@ export type {
 
 // Model types
 export type {
+	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
@@ -208,7 +209,16 @@ export type {
 export type { DesktopIconStripItem } from './navigation';
 
 // Tools types
-export type { ToolEntry, ToolGroup, ToolUiEntry } from './tools';
+export type {
+	EditFileEdit,
+	EditFileMeta,
+	EditFileTitleMeta,
+	ToolEntry,
+	ToolGroup,
+	ToolUiEntry,
+	WriteFileMeta,
+	WriteFileTitleMeta
+} from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

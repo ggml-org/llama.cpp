@@ -12,7 +12,7 @@ on:
 
 jobs:
     pre-tokenizer-hashes:
-        runs-on: [self-hosted, fast]
+        runs-on: ubuntu-slim
 
         steps:
         - name: Checkout repository

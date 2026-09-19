@@ -37,7 +37,7 @@
 		{/if}
 
 		{#if showCopyIcon}
-			<ActionIconCopyToClipboard text={model || ''} ariaLabel="Copy model name" />
+			<ActionIconCopyToClipboard ariaLabel="Copy model name" text={model || ''} />
 		{/if}
 	</BadgeInfo>
 {/snippet}

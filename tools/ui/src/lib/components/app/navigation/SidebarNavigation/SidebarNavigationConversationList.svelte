@@ -80,19 +80,19 @@
 	{#if isSearchModeActive}
 		<SidebarNavigationSearchResults
 			class={className}
-			{searchQuery}
-			{filteredConversations}
 			{currentChatId}
-			{onSelect}
-			{onEdit}
-			{onDelete}
-			{onStop}
+			{filteredConversations}
 			{isSelectionMode}
-			{selectedIds}
-			{onToggleSelect}
+			{onDelete}
+			{onEdit}
 			{onEnterSelectionMode}
-			{onSelectionClick}
 			{onRowMouseDown}
+			{onSelect}
+			{onSelectionClick}
+			{onStop}
+			{onToggleSelect}
+			{searchQuery}
+			{selectedIds}
 		/>
 	{:else}
 		{#if pinnedConversations.length > 0}
@@ -120,16 +120,16 @@
 							}}
 							{depth}
 							isActive={currentChatId === conversation.id}
-							{isSelectionMode}
 							isSelected={selectedIds.has(conversation.id)}
-							{onSelect}
-							{onEdit}
+							{isSelectionMode}
 							{onDelete}
+							{onEdit}
+							{onEnterSelectionMode}
+							{onRowMouseDown}
+							{onSelect}
+							{onSelectionClick}
 							{onStop}
 							{onToggleSelect}
-							{onEnterSelectionMode}
-							{onSelectionClick}
-							{onRowMouseDown}
 						/>
 					</li>
 				{/each}
@@ -160,16 +160,16 @@
 								}}
 								{depth}
 								isActive={currentChatId === conversation.id}
-								{isSelectionMode}
 								isSelected={selectedIds.has(conversation.id)}
-								{onSelect}
-								{onEdit}
+								{isSelectionMode}
 								{onDelete}
+								{onEdit}
+								{onEnterSelectionMode}
+								{onRowMouseDown}
+								{onSelect}
+								{onSelectionClick}
 								{onStop}
 								{onToggleSelect}
-								{onEnterSelectionMode}
-								{onSelectionClick}
-								{onRowMouseDown}
 							/>
 						</li>
 					{/each}
@@ -187,18 +187,18 @@
 
 		{#if isSelectionMode}
 			<SidebarNavigationSelectionBar
-				class="sticky top-0 z-10 m-2 mt-0"
-				selectedCount={selectedIds.size}
-				{visibleCount}
 				{allVisibleSelected}
-				{someVisibleSelected}
-				someSelectedPinned={allSelectedArePinned}
-				{pinStateIsMixed}
-				{onSelectAllToggle}
-				{onBulkPinToggle}
-				{onBulkExport}
+				class="sticky top-0 z-10 m-2 mt-0"
 				{onBulkDelete}
+				{onBulkExport}
+				{onBulkPinToggle}
 				onClose={onCloseSelection}
+				{onSelectAllToggle}
+				{pinStateIsMixed}
+				selectedCount={selectedIds.size}
+				someSelectedPinned={allSelectedArePinned}
+				{someVisibleSelected}
+				{visibleCount}
 			/>
 		{/if}
 	{/if}

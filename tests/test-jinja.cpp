@@ -3,7 +3,7 @@
 #include <random>
 #include <cstdlib>
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 #include "subproc.h"
 
 #include "jinja/runtime.h"
@@ -14,7 +14,7 @@
 
 #include "testing.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
 
@@ -240,7 +240,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is undefined key falsy",
         "{{ 'yes' if not y['x'] else 'no' }}",
-        {{"y", {{}}}},
+        {{"y", json::array({nullptr})}},
         "yes"
     );
 
@@ -282,7 +282,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is non-empty object truthy",
         "{{ 'yes' if y else 'no' }}",
-        {{"y", {"x", false}}},
+        {{"y", json::array({"x", false})}},
         "yes"
     );
 
@@ -374,10 +374,40 @@ static void test_expressions(testing & t) {
         "42"
     );
 
+    test_template(t, "none in object",
+        "{{ x in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "False"
+    );
+
+    test_template(t, "none not in object",
+        "{{ x not in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
+    test_template(t, "none in array",
+        "{{ x in [1, none, 3] }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
     test_template(t, "dot notation",
         "{{ user.name }}",
         {{"user", {{"name", "Bob"}}}},
         "Bob"
+    );
+
+    test_template(t, "dot notation (integer property)",
+        "{{ {10: 'Bob'}.10 }}",
+        json::object(),
+        "Bob"
+    );
+
+    test_template(t, "dot notation (array index)",
+        "{{ user.10 }}",
+        {{"user", json::array({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"})}},
+        "k"
     );
 
     test_template(t, "negative float (not dot notation)",

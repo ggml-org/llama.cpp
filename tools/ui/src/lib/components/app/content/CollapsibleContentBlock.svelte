@@ -40,12 +40,12 @@
 </script>
 
 <Collapsible.Root
-	{open}
+	class={cn('group/collapsible', 'my-0!', className)}
 	onOpenChange={(value) => {
 		open = value;
 		onToggle?.();
 	}}
-	class={cn('group/collapsible', 'my-0!', className)}
+	{open}
 >
 	<Collapsible.Trigger
 		class={cn(
@@ -56,10 +56,10 @@
 		<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
 			{#if iconUrl}
 				<img
-					src={iconUrl}
 					alt=""
 					class={cn('shrink-0 rounded-sm  mt-0.75', iconClass)}
 					onerror={hideBrokenIcon}
+					src={iconUrl}
 				/>
 			{:else if IconComponent}
 				<IconComponent class={cn('shrink-0 text-muted-foreground/60 mt-0.75', iconClass)} />
