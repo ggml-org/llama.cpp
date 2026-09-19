@@ -57,3 +57,32 @@ The [upstream repository](https://huggingface.co/kyutai/pocket-tts) holds one co
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --outfile pocket-tts.gguf
 python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --outfile mmproj-pocket-tts.gguf
 ```
+
+## KaniTTS-2
+
+Available params:
+- `--tts-lang` can be `en_us`, `en_nyork`, `en_oakl`, `en_glasg`, `en_bost`, `en_scou`; `en` is an alias for `en_us`
+- `--tts-speaker-file` optionally provides reference audio for voice cloning
+- `-n` limits generated tokens; four audio tokens represent one frame
+
+Example usage:
+
+```sh
+llama-tts -m kani-tts-2.gguf \
+    -mm mmproj-kani-tts-2.gguf \
+    -p "Hello world" \
+    --tts-lang en_us \
+    -c 4096 -n 3000 --temp 1 --top-p 0.95 --top-k 0 \
+    --repeat-penalty 1.1 --repeat-last-n 4096 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+Download [KaniTTS-2 English](https://huggingface.co/nineninesix/kani-tts-2-en), place the [NeMo Nano Codec archive](https://huggingface.co/nvidia/nemo-nano-codec-22khz-0.6kbps-12.5fps) in the same directory, and download the [speaker encoder](https://huggingface.co/nineninesix/speaker-emb-tbr) into its `speaker_encoder` subdirectory:
+
+```sh
+hf download nineninesix/speaker-emb-tbr --local-dir path/to/kani-tts-2-en/speaker_encoder
+python convert_hf_to_gguf.py path/to/kani-tts-2-en --outtype f16 --outfile kani-tts-2.gguf
+python convert_hf_to_gguf.py path/to/kani-tts-2-en --mmproj --outtype f16 --outfile mmproj-kani-tts-2.gguf
+```
