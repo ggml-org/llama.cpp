@@ -5010,6 +5010,42 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_mul_mat_reorder_prefill : public test_case {
+    const ggml_type type_a;
+
+    test_mul_mat_reorder_prefill(ggml_type type_a) : type_a(type_a) {}
+
+    std::string vars() override {
+        return VAR_TO_STR(type_a);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        constexpr int64_t k = 4096;
+        constexpr int64_t m = 16;
+        ggml_tensor * weights = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_tensor * decode_act = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+        ggml_tensor * prefill_act = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 16);
+
+        ggml_tensor * decode = ggml_mul_mat(ctx, weights, decode_act);
+        if (mode == MODE_TEST) {
+            ggml_build_forward_expand(gf, decode);
+        }
+
+        return ggml_mul_mat(ctx, weights, prefill_act);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_REORDER_PREFILL";
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -10014,6 +10050,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : {GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 10, 256, {1, 1}, {1, 1}));
+    }
+    for (ggml_type type_a : {GGML_TYPE_IQ3_XXS, GGML_TYPE_IQ3_S}) {
+        test_cases.emplace_back(new test_mul_mat_reorder_prefill(type_a));
     }
 #else
     // m = a rows
