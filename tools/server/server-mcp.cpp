@@ -544,9 +544,15 @@ static bool mcp_write_all(FILE * f, const std::string & data, std::atomic<bool> 
     HANDLE h      = (HANDLE) _get_osfhandle(_fileno(f));
     DWORD  nowait = PIPE_NOWAIT;
     SetNamedPipeHandleState(h, &nowait, NULL, NULL);
+    // batch large writes into chunks the pipe will accept
+    DWORD chunk = 0;
+    if (!GetNamedPipeInfo(h, NULL, &chunk, NULL, NULL) || chunk == 0) {
+        chunk = 4096;
+    }
     while (total < data.size() && running.load()) {
+        DWORD want    = (DWORD) (data.size() - total);
         DWORD written = 0;
-        BOOL  ok      = WriteFile(h, data.data() + total, (DWORD) (data.size() - total), &written, NULL);
+        BOOL  ok      = WriteFile(h, data.data() + total, want < chunk ? want : chunk, &written, NULL);
         if (ok && written > 0) {
             total += written;
             continue;
@@ -557,8 +563,8 @@ static bool mcp_write_all(FILE * f, const std::string & data, std::atomic<bool> 
                 return false;
             }
         }
-        // backpressure (pipe full) is rare for small JSON-RPC frames; sleep rather than spin.
-        // no writable-wait exists for a PIPE_NOWAIT anonymous pipe, so this polls like the POSIX poll() path.
+        // pipe momentarily full. no writable-wait exists for a PIPE_NOWAIT anonymous pipe,
+        // so poll like the POSIX poll() path.
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 #else
