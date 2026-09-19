@@ -883,7 +883,7 @@ static bool path_glob_match(const std::string & pattern, const std::string & rel
 // read_file: read a file with optional line range and line-number prefix
 //
 
-static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 16 * 1024; // 16 KB
+static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE = 32 * 1024; // 32 KB
 static constexpr size_t SERVER_TOOL_READ_FILE_MAX_SIZE_BASE64 = 32 * 1024 * 1024; // 32 MB
 
 struct server_tool_read_file : server_tool {
@@ -906,7 +906,7 @@ struct server_tool_read_file : server_tool {
                     {"properties", {
                         {"path",       {{"type", "string"},  {"description", "Path to the file"}}},
                         {"start_line", {{"type", "integer"}, {"description", "First line to read, 1-based (default: 1)"}}},
-                        {"end_line",   {{"type", "integer"}, {"description", "Last line to read, 1-based inclusive (default: end of file)"}}},
+                        {"end_line",   {{"type", "integer"}, {"description", "Last line to read, 1-based inclusive (default: end of file, i.e. -1)"}}},
                         {"append_loc", {{"type", "boolean"}, {"description", "Prefix each line with its line number"}}},
                     }},
                     {"required", json::array({"path"})},
