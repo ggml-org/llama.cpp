@@ -106,6 +106,11 @@ struct ggml_webgpu_generic_shader_decisions {
     bool     inplace = false;
 };
 
+struct ggml_webgpu_get_rows_shader_decisions {
+    uint32_t wg_size    = 0;
+    bool     vectorized = false;
+};
+
 struct ggml_webgpu_binary_shader_decisions {
     uint32_t wg_size     = 0;
     bool     inplace     = false;
@@ -1551,8 +1556,8 @@ class ggml_webgpu_shader_lib {
         return argsort_merge_pipelines[order];
     }
 
-    webgpu_pipeline get_get_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool vectorized                 = context.src0->type == GGML_TYPE_F32 && context.dst->ne[0] % 4 == 0;
+    webgpu_pipeline get_get_rows_pipeline(const ggml_webgpu_shader_lib_context & context, bool vec4_aligned) {
+        const bool vectorized = context.src0->type == GGML_TYPE_F32 && context.dst->ne[0] % 4 == 0 && vec4_aligned;
         ggml_webgpu_get_rows_pipeline_key key = {};
         key.src_type                          = context.src0->type;
         key.vectorized                        = (int) vectorized;
@@ -1669,8 +1674,9 @@ class ggml_webgpu_shader_lib {
         defines.push_back("WG_SIZE=" + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_get_rows, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_get_rows_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
+        decisions->vectorized    = vectorized;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = decisions;
         get_rows_pipelines[key]  = pipeline;
@@ -3100,6 +3106,10 @@ class ggml_webgpu_shader_lib {
             case GGML_GLU_OP_GEGLU_QUICK:
                 defines.push_back("OP_GEGLU_QUICK");
                 variant += "_geglu_quick";
+                break;
+            case GGML_GLU_OP_SWIGLU_CLAMP:
+                defines.push_back("OP_SWIGLU_CLAMP");
+                variant += "_swiglu_clamp";
                 break;
             default:
                 GGML_ABORT("Unsupported GLU op");

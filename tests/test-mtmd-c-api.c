@@ -130,6 +130,39 @@ int main(void) {
     }
     printf("Chunk save/load round-trip OK\n");
 
+    // test input validation of mtmd_tokenize_from_parts()
+    // invalid parts are rejected before the ctx is used, so NULL ctx is OK here
+    {
+        mtmd_input_chunks * out = mtmd_input_chunks_init();
+        mtmd_bitmap * bmp = mtmd_bitmap_init(4, 4, NULL); // placeholder bitmap
+        struct mtmd_input_text txt = { "hello", 5, false, false };
+        struct mtmd_input_text txt_null = { NULL, 0, false, false };
+
+        struct mtmd_input_part part_both      = { &txt, bmp };
+        struct mtmd_input_part part_neither   = { NULL, NULL };
+        struct mtmd_input_part part_null_text = { &txt_null, NULL };
+        const mtmd_input_part * parts[1];
+        int32_t rc;
+
+        parts[0] = &part_both;
+        rc = mtmd_tokenize_from_parts(NULL, out, parts, 1, false);
+        printf("tokenize part with both text and bitmap rc = %d (expect 1)\n", rc);
+        assert(rc == 1);
+
+        parts[0] = &part_neither;
+        rc = mtmd_tokenize_from_parts(NULL, out, parts, 1, false);
+        printf("tokenize part with neither text nor bitmap rc = %d (expect 1)\n", rc);
+        assert(rc == 1);
+
+        parts[0] = &part_null_text;
+        rc = mtmd_tokenize_from_parts(NULL, out, parts, 1, false);
+        printf("tokenize part with null text pointer rc = %d (expect 1)\n", rc);
+        assert(rc == 1);
+
+        mtmd_bitmap_free(bmp);
+        mtmd_input_chunks_free(out);
+    }
+
     // Free the chunks
     mtmd_input_chunks_free(chunks);
 

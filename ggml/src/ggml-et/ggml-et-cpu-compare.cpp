@@ -261,7 +261,12 @@ bool ggml_et_cpu_compare_compute_and_check(ggml_et_cpu_compare_ctx *          ct
                     GGML_LOG_ERROR("ET: GLU CPU comparison requires split tensor mode\n");
                     return false;
                 }
-                ctx->cpu_dst = ggml_glu_split(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, glu_op);
+                if (glu_op == GGML_GLU_OP_SWIGLU_CLAMP) {
+                    const float limit = ggml_get_op_params_f32(node, 3);
+                    ctx->cpu_dst      = ggml_swiglu_clamp(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, limit);
+                } else {
+                    ctx->cpu_dst = ggml_glu_split(ctx->ggml_ctx, ctx->cpu_src0, ctx->cpu_src1, glu_op);
+                }
             }
             break;
         case GGML_OP_SOFT_MAX:

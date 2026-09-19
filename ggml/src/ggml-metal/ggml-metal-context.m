@@ -6,6 +6,7 @@
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
 #import "ggml-metal-ops.h"
+#import "ggml-metal-fusion.h"
 
 #import <Foundation/Foundation.h>
 
@@ -36,15 +37,12 @@ struct ggml_metal {
     // additional, inference-time compiled pipelines
     ggml_metal_pipelines_t pipelines_ext;
 
-    bool use_fusion;
     bool use_concurrency;
     bool use_graph_optimize;
 
     int debug_graph;
-    int debug_fusion;
 
-    // how many times a given op was fused
-    uint64_t fuse_cnt[GGML_OP_COUNT];
+    struct ggml_metal_fusion_info * finfo;
 
     // capture state
     int capture_compute;
@@ -68,6 +66,10 @@ struct ggml_metal {
 
     // extra command buffers for things like getting, setting and copying tensors
     NSMutableArray * cmd_bufs_ext;
+
+    // buffers to release after async Metal operations complete
+    // if Metal released them, it would do so on a Metal-internal thread without an autorelease pool, which could cause leaks
+    NSMutableArray * buf_refs;
 
     // the last command buffer queued into the Metal queue with operations relevant to the current Metal backend
     id<MTLCommandBuffer> cmd_buf_last;
@@ -107,6 +109,7 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(dev);
         if (queue == nil) {
             GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+            free(res);
             return NULL;
         }
 
@@ -134,17 +137,11 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
         res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
-        res->use_fusion      = getenv("GGML_METAL_FUSION_DISABLE") == nil;
         res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
         {
             const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
             res->debug_graph = val ? atoi(val) : 0;
-        }
-
-        {
-            const char * val = getenv("GGML_METAL_FUSION_DEBUG");
-            res->debug_fusion = val ? atoi(val) : 0;
         }
 
         res->use_graph_optimize = true;
@@ -153,9 +150,13 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             res->use_graph_optimize = false;
         }
 
-        memset(res->fuse_cnt, 0, sizeof(res->fuse_cnt));
+        res->finfo = ggml_metal_device_get_fusion_info(dev);
+        if (ggml_metal_fusion_info_stats(res->finfo)) {
+            ggml_metal_fusion_info_labels_init(res->finfo);
+            res->n_cb = 0;
+        }
 
-        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, res->use_fusion         ? "true" : "false");
+        GGML_LOG_INFO("%s: use fusion         = %s\n", __func__, ggml_metal_fusion_info_enabled(res->finfo) ? "true" : "false");
         GGML_LOG_INFO("%s: use concurrency    = %s\n", __func__, res->use_concurrency    ? "true" : "false");
         GGML_LOG_INFO("%s: use graph optimize = %s\n", __func__, res->use_graph_optimize ? "true" : "false");
 
@@ -179,6 +180,7 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         }
 
         res->cmd_bufs_ext = [[NSMutableArray alloc] init];
+        res->buf_refs     = [[NSMutableArray alloc] init];
 
         res->cmd_buf_last = nil;
 
@@ -206,20 +208,28 @@ void ggml_metal_free(ggml_metal_t ctx) {
     [ctx->cmd_bufs_ext removeAllObjects];
     [ctx->cmd_bufs_ext release];
 
+    @autoreleasepool {
+        [ctx->buf_refs removeAllObjects];
+        [ctx->buf_refs release];
+    }
+
     if (ctx->pipelines_ext) {
         ggml_metal_pipelines_free(ctx->pipelines_ext);
         ctx->pipelines_ext = nil;
     }
 
-    if (ctx->debug_fusion > 0) {
+    if (ggml_metal_fusion_info_debug(ctx->finfo) > 0) {
         GGML_LOG_DEBUG("%s: fusion stats:\n", __func__);
-        for (int i = 0; i < GGML_OP_COUNT; i++) {
-            if (ctx->fuse_cnt[i] == 0) {
+
+        const int n_fusions = ggml_metal_fusion_info_n_fusions(ctx->finfo);
+        for (int i = 0; i < n_fusions; i++) {
+            const uint64_t count = ggml_metal_fusion_info_count(ctx->finfo, i);
+            if (count == 0) {
                 continue;
             }
 
             // note: cannot use ggml_log here
-            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_op_name((enum ggml_op) i), ctx->fuse_cnt[i]);
+            GGML_LOG_DEBUG("%s: - %s: %" PRIu64 "\n", __func__, ggml_metal_fusion_info_label(ctx->finfo, i), count);
         }
     }
 
@@ -294,6 +304,10 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
 
         [ctx->cmd_bufs_ext removeAllObjects];
     }
+
+    @autoreleasepool {
+        [ctx->buf_refs removeAllObjects];
+    }
 }
 
 static struct ggml_metal_buffer_id ggml_metal_get_buffer_id(const struct ggml_tensor * t) {
@@ -337,6 +351,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
         [encoder endEncoding];
         [cmd_buf commit];
+
+        [ctx->buf_refs addObject:buf_src];
         [buf_src release];
 
         // do not wait here for completion
@@ -381,6 +397,8 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
 
         [encoder endEncoding];
         [cmd_buf commit];
+
+        [ctx->buf_refs addObject:buf_dst];
         [buf_dst release];
 
         // do not wait here for completion
@@ -462,10 +480,17 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
     @autoreleasepool {
         ctx->gf = gf;
 
-        ctx->n_nodes_0 = MIN(n_main, gf->n_nodes);
-        ctx->n_nodes_1 = gf->n_nodes - ctx->n_nodes_0;
+        if (ctx->n_cb == 0) {
+            // single-threaded encoding: the whole graph is encoded by one command buffer
+            ctx->n_nodes_0      = gf->n_nodes;
+            ctx->n_nodes_1      = 0;
+            ctx->n_nodes_per_cb = 0;
+        } else {
+            ctx->n_nodes_0      = MIN(n_main, gf->n_nodes);
+            ctx->n_nodes_1      = gf->n_nodes - ctx->n_nodes_0;
 
-        ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
+            ctx->n_nodes_per_cb = (ctx->n_nodes_1 + ctx->n_cb - 1) / ctx->n_cb;
+        }
 
         if (ctx->capture_compute >= 0) {
             ctx->capture_compute--;
@@ -663,6 +688,12 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx) {
 }
 
 void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+    // when fusion stats are collected the graph must be encoded by a single thread so the
+    // counters are race-free; override whatever the caller requested
+    if (ggml_metal_fusion_info_stats(ctx->finfo)) {
+        n_cb = 0;
+    }
+
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
 
@@ -698,13 +729,12 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             ctx->dev,
             cmd_buf,
             ctx->gf,
+            ctx->finfo,
             idx_start,
             idx_end,
-            ctx->use_fusion,
             ctx->use_concurrency,
             ctx->capture_compute,
-            ctx->debug_graph,
-            ctx->debug_fusion);
+            ctx->debug_graph);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);

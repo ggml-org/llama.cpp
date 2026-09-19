@@ -1,4 +1,5 @@
 #include "fusion.hpp"
+#include "binbcast.hpp"
 
 #include <algorithm>
 
@@ -94,9 +95,14 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         return false;
     }
 
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+    if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+        if (ops.size() == 3 && ops.begin()[2] != GGML_OP_ADD) {
+            return false;
+        }
+
         const ggml_tensor * rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor * mul      = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * add      = ops.size() == 3 ? cgraph->nodes[node_idx + 2] : nullptr;
 
         GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
         GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
@@ -119,6 +125,43 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         }
 
         if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+            return false;
+        }
+
+        if (add != nullptr) {
+            if (add->src[0]->type != GGML_TYPE_F32 ||
+                add->src[1]->type != GGML_TYPE_F32 ||
+                add->type != GGML_TYPE_F32) {
+                return false;
+            }
+
+            // the fused kernel indexes the residual as add[col] and does not broadcast it
+            const ggml_tensor * add_w = (add->src[0] == mul) ? add->src[1] : add->src[0];
+            if (!ggml_are_same_shape(add_w, add)) {
+                return false;
+            }
+
+            if (!ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous_rows(add->src[1])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_ADD) {
+        const ggml_tensor * add0 = cgraph->nodes[node_idx];
+        const ggml_tensor * add1 = cgraph->nodes[node_idx + 1];
+        // ggml_can_fuse already guarantees add1 consumes add0 and that add0 has a single use.
+        // Keep the CUDA association: the running sum is src0 of the next ADD so the fused
+        // float fold matches two sequential add() launches.
+        if (add1->src[0] != add0) {
+            return false;
+        }
+
+        const ggml_tensor * c = add1->src[1];
+        if (!ggml_sycl_add_kernel_supports(add0->src[0]->type, add0->src[1]->type, add0->type) ||
+            !ggml_sycl_add_kernel_supports(add0->type, c->type, add1->type)) {
             return false;
         }
 
@@ -159,6 +202,54 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
 
         // the 32-bit fastdiv is inexact past 2^31; decline, the unfused path handles it
         if (ggml_nelements(mul) >= ((int64_t) 1 << 31)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_SSM_CONV && ops.begin()[1] == GGML_OP_UNARY &&
+        unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * ssm_conv = cgraph->nodes[node_idx];
+        const ggml_tensor * silu     = cgraph->nodes[node_idx + 1];
+
+        if (ggml_get_unary_op(silu) != unary_ops.begin()[0]) {
+            return false;
+        }
+        if (ssm_conv->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+        // the fused kernel writes the SiLU output with dense strides, so it must be contiguous
+        if (!ggml_is_contiguous(silu)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_SSM_CONV && ops.begin()[1] == GGML_OP_ADD &&
+        ops.begin()[2] == GGML_OP_UNARY && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_SILU) {
+        const ggml_tensor * ssm_conv = cgraph->nodes[node_idx];
+        const ggml_tensor * add      = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * silu     = cgraph->nodes[node_idx + 2];
+
+        if (ggml_get_unary_op(silu) != unary_ops.begin()[0]) {
+            return false;
+        }
+        if (ssm_conv->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || silu->type != GGML_TYPE_F32) {
+            return false;
+        }
+        // the fused kernel writes the SiLU output with dense strides, so it must be contiguous
+        if (!ggml_is_contiguous(silu)) {
+            return false;
+        }
+
+        // ADD must consume ssm_conv's output and broadcast a 1-D channel-wise bias
+        const ggml_tensor * bias = (add->src[0] == ssm_conv) ? add->src[1] : add->src[0];
+        if (bias->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias)) {
+            return false;
+        }
+        if (ggml_nelements(bias) != ssm_conv->ne[0] || bias->ne[0] != ssm_conv->ne[0]) {
             return false;
         }
 
