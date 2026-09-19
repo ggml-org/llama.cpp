@@ -18,6 +18,11 @@ from gguf import GGUFReader, GGUFValueType, ReaderTensor  # noqa: E402
 logger = logging.getLogger("gguf-dump")
 
 
+def sanitize_name(name: str) -> str:
+    '''Escape control characters in field/tensor names to prevent terminal injection.'''
+    return repr(name)[1:-1] if any(ord(c) < 32 or ord(c) == 127 for c in name) else name
+
+
 def get_file_host_endian(reader: GGUFReader) -> tuple[str, str]:
     file_endian = reader.endianess.name
     if reader.byte_order == 'S':
@@ -42,7 +47,7 @@ def dump_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
         else:
             pretty_type = str(field.types[-1].name)
 
-        log_message = f'  {n:5}: {pretty_type:10} | {len(field.data):8} | {field.name}'
+        log_message = f'  {n:5}: {pretty_type:10} | {len(field.data):8} | {sanitize_name(field.name)}'
         if field.types:
             curr_type = field.types[0]
             if curr_type == GGUFValueType.STRING:
@@ -63,7 +68,7 @@ def dump_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
     print(f'* Dumping {len(reader.tensors)} tensor(s)')  # noqa: NP100
     for n, tensor in enumerate(reader.tensors, 1):
         prettydims = ', '.join('{0:5}'.format(d) for d in list(tensor.shape) + [1] * (4 - len(tensor.shape)))
-        print(f'  {n:5}: {tensor.n_elements:10} | {prettydims} | {tensor.tensor_type.name:7} | {tensor.name}')  # noqa: NP100
+        print(f'  {n:5}: {tensor.n_elements:10} | {prettydims} | {tensor.tensor_type.name:7} | {sanitize_name(tensor.name)}')  # noqa: NP100
 
 
 def dump_metadata_json(reader: GGUFReader, args: argparse.Namespace) -> None:
