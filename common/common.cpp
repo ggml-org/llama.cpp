@@ -131,12 +131,37 @@ int32_t common_cpu_get_num_physical_cores() {
     }
 
     int32_t num_physical_cores = 0;
+    
+    // First pass: detect if there are heterogeneous cores by finding the max efficiency class
+    BYTE max_efficiency = 0;
+    bool has_hybrid = false;
+    
     PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
-    while (buffer_size > 0) {
+    DWORD temp_size = buffer_size;
+    while (temp_size > 0) {
         if (info->Relationship == RelationProcessorCore) {
-            num_physical_cores += info->Processor.GroupCount;
+            BYTE eff = info->Processor.EfficiencyClass;
+            if (eff > max_efficiency) {
+                max_efficiency = eff;
+            }
+            if (eff > 0) {
+                has_hybrid = true;
+            }
         }
-        buffer_size -= info->Size;
+        temp_size -= info->Size;
+        info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<char*>(info) + info->Size);
+    }
+
+    // Second pass: count cores. If hybrid, only count P-cores (max efficiency class)
+    info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+    temp_size = buffer_size;
+    while (temp_size > 0) {
+        if (info->Relationship == RelationProcessorCore) {
+            if (!has_hybrid || info->Processor.EfficiencyClass == max_efficiency) {
+                num_physical_cores += info->Processor.GroupCount;
+            }
+        }
+        temp_size -= info->Size;
         info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<char*>(info) + info->Size);
     }
 
