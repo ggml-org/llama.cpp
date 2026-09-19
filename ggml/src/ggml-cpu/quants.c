@@ -326,6 +326,39 @@ void ggml_vec_dot_mxfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+void ggml_vec_dot_mxfp8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK_MXFP8 == 0);
+    static_assert(QK_MXFP8_SUB == QK8_0, "QK_MXFP8_SUB and QK8_0 must be the same");
+
+    const block_mxfp8 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_MXFP8;
+    const int n_sub = QK_MXFP8 / QK_MXFP8_SUB;
+
+    float sumf = 0;
+
+    for (int ib = 0; ib < nb; ++ib) {
+        for (int s_idx = 0; s_idx < n_sub; ++s_idx) {
+            const block_q8_0 * yb = &y[ib*n_sub + s_idx];
+            int32_t sumi = 0;
+            for (int j = 0; j < QK_MXFP8_SUB; ++j) {
+                const uint8_t q = x[ib].qs[s_idx][j];
+                const int32_t v = kvalues_mxfp8[q & 0x7F];
+                sumi += (q & 0x80 ? -v : v) * yb->qs[j];
+            }
+            const float d = GGML_CPU_FP16_TO_FP32(yb->d) * GGML_E8M0_TO_FP32(x[ib].e[s_idx]) * (1.0f / 512.0f);
+            sumf += d * sumi;
+        }
+    }
+    *s = sumf;
+}
+
 // NVFP4: super-block of 64 elements = 4 sub-blocks of 16 = 2 q8_0 blocks
 void ggml_vec_dot_nvfp4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);

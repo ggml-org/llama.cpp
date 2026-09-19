@@ -586,6 +586,29 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
     }
 }
 
+void dequantize_row_mxfp8(const block_mxfp8 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_MXFP8;
+    static const int qk_sub = QK_MXFP8_SUB;
+    static const int n_sub = QK_MXFP8 / QK_MXFP8_SUB;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        for (int s = 0; s < n_sub; s++) {
+            const float d = GGML_E8M0_TO_FP32(x[i].e[s]) * (1.0f / 512.0f);
+            float * yb = y + i*qk + s*qk_sub;
+
+            for (int j = 0; j < qk_sub; j++) {
+                const uint8_t q = x[i].qs[s][j];
+                const float v = d * kvalues_mxfp8[q & 0x7F];
+                yb[j] = q & 0x80 ? -v : v;
+            }
+        }
+    }
+}
+
 void dequantize_row_nvfp4(const block_nvfp4 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK_NVFP4;
     static const int qk_sub = QK_NVFP4_SUB;
@@ -5396,6 +5419,16 @@ static bool validate_e_e8m0(uint8_t e, size_t i) {
         } \
     }
 
+#define VALIDATE_ROW_DATA_EVEC_E8M0_IMPL(type, data, nb, nr) \
+    const type * q = (const type *) (data); \
+    for (size_t i = 0; i < (nb); ++i) { \
+        for (size_t j = 0; j < (nr); ++j) { \
+            if (!validate_e_e8m0(q[i].e[j], i)) { \
+                return false; \
+            } \
+        } \
+    }
+
 #define VALIDATE_ROW_DATA_DVEC_F16_IMPL(type, data, nb, nr) \
     const type * q = (const type *) (data); \
     for (size_t i = 0; i < (nb); ++i) { \
@@ -5560,6 +5593,10 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_MXFP4:
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
+            } break;
+        case GGML_TYPE_MXFP8:
+            {
+                VALIDATE_ROW_DATA_EVEC_E8M0_IMPL(block_mxfp8, data, nb, QK_MXFP8 / QK_MXFP8_SUB);
             } break;
         case GGML_TYPE_NVFP4:
             {
