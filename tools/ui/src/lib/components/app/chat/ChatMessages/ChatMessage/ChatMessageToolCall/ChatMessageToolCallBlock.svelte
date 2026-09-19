@@ -48,7 +48,7 @@
 {:else if section.toolName === BuiltInTool.BROWSER_GET_DATETIME}
 	<ChatMessageToolCallBlockGetDatetime {isStreaming} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_GET_INFO}
-	<ChatMessageToolCallBlockGetInfo {isStreaming} {section} />
+	<ChatMessageToolCallBlockGetInfo {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_READ_FILE}
 	<ChatMessageToolCallBlockReadFile {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.BROWSER_READ_MEDIA}
