@@ -828,6 +828,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_OAI:
         case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
+        case HTP_OP_GLU_GEGLU_QUICK:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
