@@ -1,0 +1,177 @@
+name: custom_build_wincuda
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      create_release:
+        description: 'Create new release'
+        required: true
+        type: boolean
+      cuda:
+        description: 'cuda version used to build. For available versions, check https://github.com/Jimver/cuda-toolkit/blob/master/src/links/windows-links.ts'
+        required: false
+        type: string
+        default: '12.6.2'
+      gpu_arch:
+        description: 'nvidia gpu arch numbers'
+        required: false
+        type: string
+        default: '70;75;80;86'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+
+jobs:
+
+
+  windows-latest-cmake-cuda:
+    runs-on: windows-latest
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+
+      - name: Get Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8.10
+
+      - name: Install python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install customtkinter==5.2.0 pyinstaller==5.11.0 psutil==5.9.5
+
+      - name: Download and install win64devkit
+        run: |
+          curl -L https://github.com/skeeto/w64devkit/releases/download/v1.22.0/w64devkit-1.22.0.zip --output w64devkit.zip
+          Expand-Archive w64devkit.zip -DestinationPath .
+
+      - name: Add w64devkit to PATH
+        run: |
+          echo "$(Get-Location)\w64devkit\bin" | Out-File -Append -FilePath $env:GITHUB_PATH -Encoding utf8
+
+      - name: Print System Environment Variables
+        id: printvars
+        run: |
+          echo "Number of processors: ${env:NUMBER_OF_PROCESSORS}"
+          echo "Processor Architecture: ${env:PROCESSOR_ARCHITECTURE}"
+          echo "Computer Name: ${env:COMPUTERNAME}"
+          wmic cpu get name
+          wmic os get TotalVisibleMemorySize, FreePhysicalMemory
+
+      - uses: Jimver/cuda-toolkit@v0.2.19
+        id: cuda-toolkit
+        with:
+          cuda: ${{ github.event.inputs.cuda }}
+
+
+      - name: Install ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-cuda${{ github.event.inputs.cuda }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          mkdir build
+          cd build
+          cmake .. -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="${{ github.event.inputs.gpu_arch }}" -DCMAKE_SYSTEM_VERSION="10.0.19041.0"
+          cmake --build . --config Release -j 2
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          BUILD_NUMBER="$(git rev-list --count HEAD)"
+          SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+          if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+            echo "name=b${BUILD_NUMBER}-${{ github.event.inputs.cuda }}" >> $GITHUB_OUTPUT
+          else
+            SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+            echo "name=WinFull-${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}-${{ github.event.inputs.cuda }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        run: |
+          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+          name: llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+
+      - name: Copy and pack Cuda runtime
+        run: |
+          echo "Cuda install location: ${{ env.CUDA_PATH }}"
+          $dst='.\build\bin\cudart\'
+          robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
+          7z a cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip $dst\*
+
+      - name: Upload Cuda runtime
+        if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          path: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cu${{ github.event.inputs.cuda }}-x64.zip
+
+      - name: Download artifacts
+        id: download-artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifact
+
+      - name: Move artifacts
+        id: move_artifacts
+        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release
+
+      - name: Create release
+        id: create_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: anzz1/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+
+      - name: Upload release
+        id: upload_release
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        uses: actions/github-script@v3
+        with:
+          github-token: ${{secrets.GITHUB_TOKEN}}
+          script: |
+            const path = require('path');
+            const fs = require('fs');
+            const release_id = '${{ steps.create_release.outputs.id }}';
+            for (let file of await fs.readdirSync('./artifact/release')) {
+              if (path.extname(file) === '.zip') {
+                console.log('uploadReleaseAsset', file);
+                await github.repos.uploadReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  release_id: release_id,
+                  name: file,
+                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                });
+              }
+            }
