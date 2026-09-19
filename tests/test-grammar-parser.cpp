@@ -139,6 +139,13 @@ static void verify_failure(const char * grammar_bytes) {
     assert(result.rules.empty() && "should have failed");
 }
 
+static void verify_success(const char * grammar_bytes) {
+    fprintf(stderr, "Testing expected success:%s\n", grammar_bytes);
+    llama_grammar_parser result;
+    result.parse(grammar_bytes);
+    assert(!result.rules.empty() && "should have parsed");
+}
+
 int main()
 {
     verify_failure(R"""(
@@ -163,6 +170,18 @@ int main()
 
     verify_failure(R"""(
         root ::= "a"{5000,6000}
+    )""");
+
+    verify_success(R"""(
+        root ::= "a"{0,2000}
+    )""");
+
+    verify_success(R"""(
+        root ::= "a"{2000}
+    )""");
+
+    verify_failure(R"""(
+        root ::= ("a"{0,50}){0,50}
     )""");
 
     verify_parsing(R"""(
