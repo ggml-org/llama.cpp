@@ -17,6 +17,18 @@ from gguf import GGUFReader, GGUFValueType, ReaderTensor  # noqa: E402
 
 logger = logging.getLogger("gguf-dump")
 
+# GGUF metadata keys, tensor names and string values come straight from the file.
+# Escape C0/C1 control characters so that a crafted GGUF cannot inject terminal
+# escape sequences (e.g. OSC 8 hyperlinks or OSC 52 clipboard writes) into the output.
+_CONTROL_CHAR_MAP = {chr(c): f'\\x{c:02x}' for c in range(0x20)}
+_CONTROL_CHAR_MAP.update({chr(c): f'\\x{c:02x}' for c in [0x7f, *range(0x80, 0xa0)]})
+
+
+def sanitize_control_chars(text: str) -> str:
+    if not any(c in _CONTROL_CHAR_MAP for c in text):
+        return text
+    return ''.join(_CONTROL_CHAR_MAP.get(c, c) for c in text)
+
 
 def get_file_host_endian(reader: GGUFReader) -> tuple[str, str]:
     file_endian = reader.endianess.name
@@ -42,7 +54,7 @@ def dump_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
         else:
             pretty_type = str(field.types[-1].name)
 
-        log_message = f'  {n:5}: {pretty_type:10} | {len(field.data):8} | {field.name}'
+        log_message = f'  {n:5}: {pretty_type:10} | {len(field.data):8} | {sanitize_control_chars(field.name)}'
         if field.types:
             curr_type = field.types[0]
             if curr_type == GGUFValueType.STRING:
@@ -63,7 +75,7 @@ def dump_metadata(reader: GGUFReader, args: argparse.Namespace) -> None:
     print(f'* Dumping {len(reader.tensors)} tensor(s)')  # noqa: NP100
     for n, tensor in enumerate(reader.tensors, 1):
         prettydims = ', '.join('{0:5}'.format(d) for d in list(tensor.shape) + [1] * (4 - len(tensor.shape)))
-        print(f'  {n:5}: {tensor.n_elements:10} | {prettydims} | {tensor.tensor_type.name:7} | {tensor.name}')  # noqa: NP100
+        print(f'  {n:5}: {tensor.n_elements:10} | {prettydims} | {tensor.tensor_type.name:7} | {sanitize_control_chars(tensor.name)}')  # noqa: NP100
 
 
 def dump_metadata_json(reader: GGUFReader, args: argparse.Namespace) -> None:
@@ -248,6 +260,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             pretty_type = str(field.types[-1].name)
 
         def escape_markdown_inline_code(value_string):
+            value_string = sanitize_control_chars(value_string)
             # Find the longest contiguous sequence of backticks in the string then
             # wrap string with appropriate number of backticks required to escape it
             max_backticks = max((len(match.group(0)) for match in re.finditer(r'`+', value_string)), default=0)
@@ -299,7 +312,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
 
                 value = f'[ {", ".join(array_elements).strip()}{", ..." if total_elements > len(array_elements) else ""} ]'
 
-        kv_dump_table.append({"n":n, "pretty_type":pretty_type, "total_elements":total_elements, "field_name":field.name, "value":value})
+        kv_dump_table.append({"n":n, "pretty_type":pretty_type, "total_elements":total_elements, "field_name":sanitize_control_chars(field.name), "value":value})
 
     kv_dump_table_header_map = [
         {'key_name':'n',                'header_name':'POS',      'align':'right'},
@@ -350,7 +363,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
         for group in tensor_prefix_order:
             tensors = tensor_groups[group]
             group_elements = sum(tensor.n_elements for tensor in tensors)
-            markdown_content += f"- [{translate_tensor_name(group)} Tensor Group - {element_count_rounded_notation(group_elements)} Elements](#{group.replace('.', '_')})\n"
+            markdown_content += f"- [{sanitize_control_chars(translate_tensor_name(group))} Tensor Group - {element_count_rounded_notation(group_elements)} Elements](#{sanitize_control_chars(group.replace('.', '_'))})\n"
 
         markdown_content += "\n"
 
@@ -363,7 +376,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
         for key, tensor in enumerate(reader.tensors):
             data_offset_pretty = '{0:#16x}'.format(tensor.data_offset)
             data_size_pretty = '{0:#16x}'.format(tensor.n_bytes)
-            tensor_mapping_table.append({"t_id":key, "layer_name":tensor.name, "data_offset":data_offset_pretty, "data_size":data_size_pretty})
+            tensor_mapping_table.append({"t_id":key, "layer_name":sanitize_control_chars(tensor.name), "data_offset":data_offset_pretty, "data_size":data_size_pretty})
 
         tensors_mapping_table_header_map = [
             {'key_name':'t_id',         'header_name':'T_ID',               'align':'right'},
@@ -381,7 +394,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             group_percentage = group_elements / total_elements * 100
             total_group_bytes = 0
             total_group_elements = 0
-            markdown_content += f"### <a name=\"{group.replace('.', '_')}\">{translate_tensor_name(group)} Tensor Group : {element_count_rounded_notation(group_elements)} Elements</a>\n\n"
+            markdown_content += f"### <a name=\"{sanitize_control_chars(group.replace('.', '_'))}\">{sanitize_control_chars(translate_tensor_name(group))} Tensor Group : {element_count_rounded_notation(group_elements)} Elements</a>\n\n"
 
             # Precalculate column sizing for visual consistency
             prettify_element_est_count_size: int = 1
@@ -396,7 +409,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             # Generate Tensor Layer Table Content
             tensor_dump_table: list[dict[str, str | int]] = []
             for tensor in tensors:
-                human_friendly_name = translate_tensor_name(tensor.name.replace(".weight", ".(W)").replace(".bias", ".(B)"))
+                human_friendly_name = sanitize_control_chars(translate_tensor_name(tensor.name.replace(".weight", ".(W)").replace(".bias", ".(B)")))
                 pretty_dimension = ' x '.join(f'{str(d):>{prettify_dimension_max_widths[i]}}' for i, d in enumerate(list(tensor.shape) + [1] * (4 - len(tensor.shape))))
                 element_count_est = f"({element_count_rounded_notation(tensor.n_elements):>{prettify_element_est_count_size}})"
                 element_count_string = f"{element_count_est} {tensor.n_elements:>{prettify_element_count_size}}"
@@ -405,7 +418,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
                     bpw = (tensor.n_bytes * 8) / tensor.n_elements
                 else:
                     bpw = float('nan')
-                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":tensor.name, "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string, "bpw": f"{bpw:.4f}"})
+                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":sanitize_control_chars(tensor.name), "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string, "bpw": f"{bpw:.4f}"})
                 total_group_bytes += tensor.n_bytes
                 total_group_elements += tensor.n_elements
 
