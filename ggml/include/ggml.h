@@ -586,8 +586,6 @@ extern "C" {
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
         GGML_OP_XING4_0_HC_COMB,
-        GGML_OP_XING4_0_HC_PRE,
-        GGML_OP_XING4_0_HC_POST,
 
         GGML_OP_UNARY,
 
@@ -2743,18 +2741,6 @@ extern "C" {
             struct ggml_tensor  * base,
             float                 eps,
             int32_t               n_iter);
-
-    GGML_API struct ggml_tensor * ggml_xing4_0_hc_pre(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * x,
-            struct ggml_tensor  * weights);
-
-    GGML_API struct ggml_tensor * ggml_xing4_0_hc_post(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * x,
-            struct ggml_tensor  * residual,
-            struct ggml_tensor  * post,
-            struct ggml_tensor  * comb);
 
     // custom operators
 

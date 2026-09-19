@@ -1085,8 +1085,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
     "XING4_0_HC_COMB",
-    "XING4_0_HC_PRE",
-    "XING4_0_HC_POST",
 
     "UNARY",
 
@@ -1104,7 +1102,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1219,7 +1217,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 104, "GGML_OP_COUNT != 104");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6650,81 +6648,6 @@ struct ggml_tensor * ggml_xing4_0_hc_comb(
     result->src[0] = mixes;
     result->src[1] = scale;
     result->src[2] = base;
-
-    return result;
-}
-
-// ggml_xing4_0_hc_pre
-
-struct ggml_tensor * ggml_xing4_0_hc_pre(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * x,
-        struct ggml_tensor  * weights) {
-    GGML_ASSERT(x->type == GGML_TYPE_F32);
-    GGML_ASSERT(weights->type == GGML_TYPE_F32);
-
-    const int64_t n_embd   = x->ne[0];
-    const int64_t hc       = x->ne[1];
-    const int64_t n_tokens = x->ne[2];
-
-    GGML_ASSERT(hc > 0);
-    GGML_ASSERT(x->ne[3] == 1);
-    GGML_ASSERT(weights->ne[0] == hc);
-    GGML_ASSERT(weights->ne[1] == n_tokens);
-    GGML_ASSERT(weights->ne[2] == 1);
-    GGML_ASSERT(weights->ne[3] == 1);
-
-    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
-
-    result->op     = GGML_OP_XING4_0_HC_PRE;
-    result->src[0] = x;
-    result->src[1] = weights;
-
-    return result;
-}
-
-// ggml_xing4_0_hc_post
-
-struct ggml_tensor * ggml_xing4_0_hc_post(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * x,
-        struct ggml_tensor  * residual,
-        struct ggml_tensor  * post,
-        struct ggml_tensor  * comb) {
-    GGML_ASSERT(x->type == GGML_TYPE_F32);
-    GGML_ASSERT(residual->type == GGML_TYPE_F32);
-    GGML_ASSERT(post->type == GGML_TYPE_F32);
-    GGML_ASSERT(comb->type == GGML_TYPE_F32);
-
-    const int64_t n_embd   = x->ne[0];
-    const int64_t n_tokens = x->ne[1];
-    const int64_t hc       = residual->ne[1];
-
-    GGML_ASSERT(hc > 0);
-    GGML_ASSERT(x->ne[2] == 1);
-    GGML_ASSERT(x->ne[3] == 1);
-
-    GGML_ASSERT(residual->ne[0] == n_embd);
-    GGML_ASSERT(residual->ne[2] == n_tokens);
-    GGML_ASSERT(residual->ne[3] == 1);
-
-    GGML_ASSERT(post->ne[0] == hc);
-    GGML_ASSERT(post->ne[1] == n_tokens);
-    GGML_ASSERT(post->ne[2] == 1);
-    GGML_ASSERT(post->ne[3] == 1);
-
-    GGML_ASSERT(comb->ne[0] == hc);
-    GGML_ASSERT(comb->ne[1] == hc);
-    GGML_ASSERT(comb->ne[2] == n_tokens);
-    GGML_ASSERT(comb->ne[3] == 1);
-
-    struct ggml_tensor * result = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
-
-    result->op     = GGML_OP_XING4_0_HC_POST;
-    result->src[0] = x;
-    result->src[1] = residual;
-    result->src[2] = post;
-    result->src[3] = comb;
 
     return result;
 }
