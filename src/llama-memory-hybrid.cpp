@@ -111,7 +111,9 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
         // prepare the attention cache
         auto heads_attn = mem_attn->prepare(ubatches);
         if (heads_attn.empty()) {
-            LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
+            if (!mem_attn->get_has_lazy_quant()) {
+                LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
+            }
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
@@ -128,6 +130,14 @@ llama_memory_context_ptr llama_memory_hybrid::init_full() {
 
 llama_memory_context_ptr llama_memory_hybrid::init_update(llama_context * lctx, bool optimize) {
     return std::make_unique<llama_memory_hybrid_context>(this, lctx, optimize);
+}
+
+bool llama_memory_hybrid::try_lazy_quantize(llama_context * lctx) {
+    return mem_attn->try_lazy_quantize(lctx);
+}
+
+bool llama_memory_hybrid::get_has_lazy_quant() const {
+    return mem_attn->get_has_lazy_quant();
 }
 
 bool llama_memory_hybrid::get_can_shift() const {
