@@ -82,6 +82,12 @@ struct common_peg_ast_node {
     std::vector<common_peg_ast_id> children;
 
     bool is_partial = false;
+
+    // Offsets of input bytes inside the node that do not decode as UTF-8, in ascending order
+    std::vector<size_t> invalid_utf8;
+
+    // Returns the text with every invalid byte replaced by U+FFFD
+    std::string sanitized_text() const;
 };
 
 struct common_peg_parse_result;
@@ -98,10 +104,11 @@ class common_peg_ast_arena {
         size_t end,
         std::string_view text,
         std::vector<common_peg_ast_id> children,
-        bool is_partial = false
+        bool is_partial = false,
+        std::vector<size_t> invalid_utf8 = {}
     ) {
         common_peg_ast_id id = nodes_.size();
-        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial});
+        nodes_.push_back({id, rule, tag, start, end, text, std::move(children), is_partial, std::move(invalid_utf8)});
         return id;
     }
 
@@ -127,6 +134,9 @@ struct common_peg_parse_result {
 
     std::vector<common_peg_ast_id> nodes;
 
+    // Offsets of invalid UTF-8 bytes consumed by this result, carried up to the enclosing AST nodes
+    std::vector<size_t> invalid_utf8;
+
     common_peg_parse_result() = default;
 
     common_peg_parse_result(common_peg_parse_result_type type, size_t start)
@@ -135,8 +145,8 @@ struct common_peg_parse_result {
     common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end)
         : type(type), start(start), end(end) {}
 
-    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes)
-        : type(type), start(start), end(end), nodes(std::move(nodes)) {}
+    common_peg_parse_result(common_peg_parse_result_type type, size_t start, size_t end, std::vector<common_peg_ast_id> nodes, std::vector<size_t> invalid_utf8 = {})
+        : type(type), start(start), end(end), nodes(std::move(nodes)), invalid_utf8(std::move(invalid_utf8)) {}
 
     bool fail() const { return type == COMMON_PEG_PARSE_RESULT_FAIL; }
     bool need_more_input() const { return type == COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT; }
@@ -241,6 +251,9 @@ struct common_peg_string_parser {
 
 struct common_peg_until_parser {
     std::vector<std::string> delimiters;
+
+    // Fail on invalid UTF-8 instead of consuming the offending bytes and recording them on the AST nodes
+    bool strict = false;
 };
 
 struct common_peg_schema_parser {
@@ -430,16 +443,17 @@ class common_peg_parser_builder {
     common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
+    // Invalid UTF-8 is consumed byte by byte and recorded on the AST nodes unless strict is set, in which case it fails the parse.
     //   S -> (!delim .)*
-    common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
+    common_peg_parser until(const std::string & delimiter, bool strict = false) { return add(common_peg_until_parser{{delimiter}, strict}); }
 
     // Matches all characters until one of the delimiters in the list is found (delimiter not consumed).
     //   S -> (!delim .)*
-    common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
+    common_peg_parser until_one_of(const std::vector<std::string> & delimiters, bool strict = false) { return add(common_peg_until_parser{delimiters, strict}); }
 
     // Matches everything
     //   S -> .*
-    common_peg_parser rest() { return until_one_of({}); }
+    common_peg_parser rest(bool strict = false) { return until_one_of({}, strict); }
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
