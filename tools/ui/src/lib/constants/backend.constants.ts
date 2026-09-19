@@ -56,6 +56,9 @@ export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
 	openai: { maxTokensField: 'max_tokens', supportsUsageInStreaming: true }
 };
 
+/** Favicon extract keyed by domain, for backends with no bundled mark. */
+export const FAVICON_SERVICE_URL = 'https://www.google.com/s2/favicons?domain=';
+
 /**
  * Ready-made endpoints offered when adding a backend.
  *
