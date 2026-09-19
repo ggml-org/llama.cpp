@@ -1234,6 +1234,11 @@ typedef struct {
     int32_t  top_k;  // k
 } ggml_metal_kargs_top_k;
 
+// widths at or above this use the threadgroup FWHT kernel, one row per threadgroup
+// with GGML_METAL_FWHT_TG_NT threads, instead of one row per simdgroup
+#define GGML_METAL_FWHT_TG_MIN_N 1024
+#define GGML_METAL_FWHT_TG_NT     256
+
 typedef struct {
     int32_t  ne01;      // n_tokens
     uint64_t nb01;      // logits row stride
