@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   model-naming:
-    runs-on: [self-hosted, fast]
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v6
       - name: Check model naming conventions

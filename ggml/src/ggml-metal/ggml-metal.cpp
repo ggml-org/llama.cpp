@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 
 #include "ggml-metal-device.h"
+#include "ggml-metal-fusion.h"
 #include "ggml-metal-context.h"
 #include "ggml-metal-ops.h"
 #include "ggml-metal-tuning.h"
@@ -225,6 +226,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
                 res += ggml_metal_op_mul_mat_id_extra_ids(tensor);
+                res += ggml_metal_op_mul_mat_id_extra_amax(tensor);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
@@ -232,6 +234,7 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
                 res += ggml_metal_op_flash_attn_ext_extra_blk(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_tmp(tensor);
                 res += ggml_metal_op_flash_attn_ext_extra_kv_f16(tensor);
+                res += ggml_metal_op_flash_attn_ext_extra_idx(tensor);
             } break;
         case GGML_OP_CUMSUM:
         case GGML_OP_ARGSORT:
@@ -559,7 +562,11 @@ static void ggml_backend_metal_event_wait(ggml_backend_t backend, ggml_backend_e
 }
 
 static void ggml_backend_metal_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
-    GGML_UNUSED(params);
+    GGML_ASSERT(params && params->add_alloc_dep);
+
+    // keep the MoE weighted-reduction inputs alive until the fused output so the
+    // allocator cannot reuse them while the fused kernel is still reading them
+    ggml_metal_fusion_add_alloc_deps(params->user_data, params->add_alloc_dep, cgraph);
 
     ggml_metal_t ctx = (ggml_metal_t)backend->context;
 
@@ -905,6 +912,30 @@ static const char * ggml_backend_metal_tuning_device_token(ggml_backend_dev_t de
     return ggml_metal_device_id_token(ggml_metal_device_get_props(ctx_dev)->device_id);
 }
 
+// generic fusion debugging API (ad-hoc proc-address mechanism): the test resolves the device
+// fusion context once and passes that opaque handle to the rest of the functions
+typedef void * ggml_backend_fusion_t;
+
+static ggml_backend_fusion_t ggml_backend_metal_fusion_get(ggml_backend_dev_t dev) {
+    return ggml_metal_device_get_fusion_info((ggml_metal_device_t)dev->context);
+}
+
+static void ggml_backend_metal_fusion_stats_init(ggml_backend_fusion_t finfo) {
+    ggml_metal_fusion_info_stats_init((struct ggml_metal_fusion_info *) finfo);
+}
+
+static void ggml_backend_metal_fusion_stats_reset(ggml_backend_fusion_t finfo) {
+    ggml_metal_fusion_info_stats_reset((struct ggml_metal_fusion_info *) finfo);
+}
+
+static int ggml_backend_metal_fusion_stats_get(ggml_backend_fusion_t finfo, const char ** labels, uint64_t * counts, int n) {
+    return ggml_metal_fusion_info_stats_get((struct ggml_metal_fusion_info *) finfo, labels, counts, n);
+}
+
+static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, bool enabled) {
+    ggml_metal_fusion_info_set_enabled((struct ggml_metal_fusion_info *) finfo, enabled);
+}
+
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
@@ -926,6 +957,23 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_tuning_device_token") == 0) {
         return (void *)ggml_backend_metal_tuning_device_token;
+    }
+    // generic fusion debugging API (ad-hoc proc-address mechanism, not part of the official
+    // ggml backend interface yet; a backend that adopts it exports these exact names)
+    if (strcmp(name, "ggml_backend_fusion_get") == 0) {
+        return (void *)ggml_backend_metal_fusion_get;
+    }
+    if (strcmp(name, "ggml_backend_fusion_stats_init") == 0) {
+        return (void *)ggml_backend_metal_fusion_stats_init;
+    }
+    if (strcmp(name, "ggml_backend_fusion_stats_reset") == 0) {
+        return (void *)ggml_backend_metal_fusion_stats_reset;
+    }
+    if (strcmp(name, "ggml_backend_fusion_stats_get") == 0) {
+        return (void *)ggml_backend_metal_fusion_stats_get;
+    }
+    if (strcmp(name, "ggml_backend_fusion_set_enabled") == 0) {
+        return (void *)ggml_backend_metal_fusion_set_enabled;
     }
 
     return NULL;

@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "traits.h"
+#include "iqp.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
@@ -1328,7 +1329,9 @@ UseGgmlGemm1:;
         const size_t nbw3 = nbw2*ne12;
 
         assert(params->wsize >= ne13*nbw3);
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+        // the F16 path below writes plain floats into wdata, so it needs an F32 vec_dot_type
+        GGML_ASSERT(src1->type == GGML_TYPE_F32 || vec_dot_type == GGML_TYPE_F32);
 
     #if 0
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
@@ -1347,9 +1350,15 @@ UseGgmlGemm1:;
                     size_t bs = ggml_blck_size(vec_dot_type);
                     int64_t ne10_block_start = (ith * ne10/bs) / nth;
                     int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
-                    from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
-                               (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
-                               (ne10_block_end - ne10_block_start) * bs);
+                    const char * src1_block = (const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10;
+                    char * dst_block = wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0;
+                    const int64_t n_block = (ne10_block_end - ne10_block_start) * bs;
+
+                    if (src1->type == GGML_TYPE_F32) {
+                        from_float((const float *) src1_block, dst_block, n_block);
+                    } else {
+                        ggml_cpu_fp16_to_fp32((const ggml_fp16_t *) src1_block, (float *) dst_block, n_block);
+                    }
                 }
             }
         }
@@ -1362,6 +1371,13 @@ UseGgmlGemm1:;
     }
 
     ggml_barrier(params->threadpool);
+
+    // IQ panel gemm (see iqp.h) - must come after the barrier above, it consumes the q8_K rows
+    // of src1 from the work buffer
+    if (ggml_cpu_iqp_supports_mul_mat(dst) && !params->use_ref) {
+        ggml_compute_forward_mul_mat_iqp(params, dst);
+        return;
+    }
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -1580,6 +1596,16 @@ static void ggml_compute_forward_mul_mat_id(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
+    // IQ panel gemm (see iqp.h); per expert eligibility is decided below, but the work buffer is
+    // reserved for the whole node (ggml_graph_plan sizes it without params, use_ref only skips the dispatch)
+    const bool iqp = ggml_cpu_iqp_supports_mul_mat_id(dst) && !params->use_ref;
+
+    char * iqp_panels = NULL;
+
+    if (iqp) {
+        iqp_panels = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
+    }
+
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
 
     if (src1->type != vec_dot_type) {
@@ -1648,6 +1674,13 @@ static void ggml_compute_forward_mul_mat_id(
         const int64_t cne1 = matrix_row_counts[cur_a];
 
         if (cne1 == 0) {
+            continue;
+        }
+
+        if (iqp && ggml_cpu_iqp_mul_mat_id_min_batch(cne1)) {
+            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
+                                                iqp_panels);
+
             continue;
         }
 
@@ -2858,6 +2891,11 @@ struct ggml_cplan ggml_graph_plan(
                         if (node->src[1]->type != vec_dot_type) {
                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                         }
+
+                        // the IQ panel path needs one scratch panel per thread past the q8_K rows
+                        if (ggml_cpu_iqp_supports_mul_mat(node)) {
+                            cur = GGML_PAD(cur, 64) + n_tasks * ggml_cpu_iqp_scratch_size(node);
+                        }
                     } break;
                 case GGML_OP_MUL_MAT_ID:
                     {
@@ -2877,6 +2915,10 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
+                        // the IQ panel path needs one scratch panel per thread on top of that
+                        if (ggml_cpu_iqp_supports_mul_mat_id(node)) {
+                            cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
+                        }
                     } break;
                 case GGML_OP_OUT_PROD:
                     {

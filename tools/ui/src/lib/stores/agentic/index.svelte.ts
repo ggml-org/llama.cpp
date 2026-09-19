@@ -315,8 +315,14 @@ class AgenticStore {
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this.gates.clear(conversationId);
 
-		// Ensure server tools are fetched before checking if agentic is enabled
-		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
+		// Ensure server tools are fetched before checking if agentic is enabled.
+		// A disabled /tools endpoint stays disabled for the life of the server,
+		// so the tools panel is the only place that probes it again.
+		if (
+			toolsStore.serverTools.length === 0 &&
+			!toolsStore.loading &&
+			!toolsStore.isToolsEndpointUnreachable
+		) {
 			await toolsStore.fetchServerTools();
 		}
 
