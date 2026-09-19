@@ -368,6 +368,10 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
             if (w.a->ne[1] != w.b->ne[0]) {
                 throw std::runtime_error("lora_a tensor is not transposed (hint: adapter from \"finetune\" example is no longer supported)");
             }
+            // the expert ids of the base tensor are reused for the lora tensors, see build_lora_mm_id()
+            if (model_tensor->ne[2] != w.a->ne[2] || model_tensor->ne[2] != w.b->ne[2]) {
+                throw std::runtime_error("tensor '" + name + "' has incorrect expert count (hint: maybe wrong base model?)");
+            }
         }
 
         // save tensor to adapter
