@@ -774,14 +774,16 @@ void server_models::load_models() {
     auto log_available_models = [&]() {
         SRV_INF("Available models (%zu):\n", mapping.size());
         if (mapping.empty()) {
-            SRV_INF("%s", "  no models found on the system - visit https://llama.app/models for suggestions\n");
+            SRV_INF("%s", "  no models found on the system (visit https://llama.app/models for suggestions)\n");
         } else {
             for (const auto & [name, inst] : mapping) {
-                std::string source = server_model_source_to_string(inst.meta.source);
+                const std::string source = server_model_source_to_string(inst.meta.source);
+
                 std::string info;
                 if (!inst.meta.aliases.empty()) info += " (aliases: " + join_set(inst.meta.aliases) + ")";
                 if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
-                SRV_INF("  [%s] %s%s\n", source.c_str(), name.c_str(), info.c_str());
+
+                SRV_INF("  [%10s] %s%s\n", source.c_str(), name.c_str(), info.c_str());
             }
         }
     };
