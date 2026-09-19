@@ -293,7 +293,7 @@ struct common_sampler * common_sampler_init(
 
     // Feed generation prompt tokens to the grammar sampler so it advances past
     // tokens the template already placed in the prompt.
-    // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
+    // Only applies to tool-call grammars built by the chat template (see common_grammar_needs_prefill).
     if (grmr && !params.grammar_lazy && common_grammar_needs_prefill(params.grammar)) {
         try {
             for (const auto & token : prefill_tokens) {
@@ -303,7 +303,8 @@ struct common_sampler * common_sampler_init(
         } catch (std::exception &e) {
             LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
                 common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-            throw e;
+            // rethrow the original object: `throw e` slices it to std::exception and loses the message
+            throw;
         }
     }
 
