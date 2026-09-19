@@ -71,7 +71,19 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-d/--stdev stdev] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [options]\n\n", argv[0]);
+    printf("Options:\n");
+    printf("  -a, --arch <arch>    Run only the specified LLM architecture (default: all supported)\n");
+    printf("  -s, --seed <seed>    Set the random seed for tensor initialization and token generation\n");
+    printf("  -d, --stdev <stdev>  Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
+    printf("  -o, --out <dir>      Save generated test models to <dir> instead of running backend tests\n");
+    printf("  -v <N>               Set log verbosity level\n");
+    printf("  -h, --help           Show this help message\n\n");
+    printf("Examples:\n");
+    printf("  %s\n", argv[0]);
+    printf("  %s -a qwen35moe\n", argv[0]);
+    printf("  %s -a deepseek4 -o tests/test-models/\n", argv[0]);
+    printf("  %s -a cohere2moe -v 5\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
