@@ -8,7 +8,7 @@ endif()
 find_path(ZDNN_INCLUDE
             NAMES zdnn.h
             HINTS ${ZDNN_HINT} /usr /usr/local
-            PATH_SUFFIXES include)
+            PATH_SUFFIXES include zdnn)
 if (ZDNN_INCLUDE)
     message(STATUS "zdnn: found include: ${ZDNN_INCLUDE}")
 else()
@@ -18,7 +18,7 @@ endif()
 find_library(ZDNN_LIB
                 NAMES zdnn
                 HINTS ${ZDNN_HINT} /usr /usr/local
-                PATH_SUFFIXES lib lib64)
+                PATH_SUFFIXES lib lib64 zdnn/lib)
 if (ZDNN_LIB)
     message(STATUS "zdnn: found library: ${ZDNN_LIB}")
 else()
