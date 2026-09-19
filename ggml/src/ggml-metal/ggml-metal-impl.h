@@ -1283,8 +1283,10 @@ typedef struct {
     uint64_t nb_x2;
     uint64_t nb_w0;
     uint64_t nb_w1;
+    uint64_t nb_w2;
     uint64_t nb_d0;
     uint64_t nb_d1;
+    float    scale;
 } ggml_metal_kargs_dsv4_hc_pre;
 
 typedef struct {
