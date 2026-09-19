@@ -71,19 +71,19 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [options]\n\n", argv[0]);
-    printf("Options:\n");
-    printf("  -a, --arch <arch>    Run only the specified LLM architecture (default: all supported)\n");
-    printf("  -s, --seed <seed>    Set the random seed for tensor initialization and token generation\n");
-    printf("  -d, --stdev <stdev>  Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
-    printf("  -o, --out <dir>      Save generated test models to <dir> instead of running backend tests\n");
-    printf("  -v <N>               Set log verbosity level\n");
-    printf("  -h, --help           Show this help message\n\n");
-    printf("Examples:\n");
-    printf("  %s\n", argv[0]);
-    printf("  %s -a qwen35moe\n", argv[0]);
-    printf("  %s -a deepseek4 -o tests/test-models/\n", argv[0]);
-    printf("  %s -a cohere2moe -v 5\n", argv[0]);
+    LOG("Usage: %s [options]\n\n", argv[0]);
+    LOG("Options:\n");
+    LOG("  -a, --arch <arch>    Run only the specified LLM architecture (default: all supported)\n");
+    LOG("  -s, --seed <seed>    Set the random seed for tensor initialization and token generation\n");
+    LOG("  -d, --stdev <stdev>  Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
+    LOG("  -o, --out <dir>      Save generated test models to <dir> instead of running backend tests\n");
+    LOG("  -v <N>               Set log verbosity level\n");
+    LOG("  -h, --help           Show this help message\n\n");
+    LOG("Examples:\n");
+    LOG("  %s\n", argv[0]);
+    LOG("  %s -a qwen35moe\n", argv[0]);
+    LOG("  %s -a deepseek4 -o tests/test-models/\n", argv[0]);
+    LOG("  %s -a cohere2moe -v 5\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -874,8 +874,7 @@ int main(int argc, char ** argv) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             usage(argv);
             return 0;
-        }
-        if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
+        } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
                 const std::string arch_name = argv[++i];
                 arch = llm_arch_from_string(arch_name);
@@ -887,38 +886,38 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
+        } else if (strcmp(argv[i], "-s") == 0 || strcmp(argv[i], "--seed") == 0) {
             if (i + 1 < argc) {
                 seed = std::stoull(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--stdev") == 0) {
+        } else if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--stdev") == 0) {
             if (i + 1 < argc) {
                 stdev = std::stof(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-v") == 0) {
+        } else if (strcmp(argv[i], "-v") == 0) {
             if (i + 1 < argc) {
                 verbosity = std::stoull(argv[++i]);
             } else {
                 usage(argv);
                 return 1;
             }
-        }
-        if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
+        } else if (strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--out") == 0) {
             if (i + 1 < argc) {
                 out = argv[++i];
             } else {
                 usage(argv);
                 return 1;
             }
+        } else {
+            LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
+            usage(argv);
+            return 1;
         }
     }
     if (stdev <= 0.0f) {
