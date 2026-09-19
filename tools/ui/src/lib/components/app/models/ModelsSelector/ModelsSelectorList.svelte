@@ -43,6 +43,8 @@
 		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
+	// a local-only install is one list: favorites first, then the rest, no headings
+	let localOnly = $derived(groups.providers.length === 0);
 	// section headers stick right below the search/tabs block of the dropdown
 	// scrollport; `--dropdown-sticky-height` is set by DropdownMenuSearchable
 	// and falls back to 0 in surfaces without one (the mobile sheet)
@@ -84,22 +86,28 @@
 {/snippet}
 
 {#if favorites.length > 0}
-	<!-- Favorites come first; the sections below skip them -->
-	<CollapsibleSection
-		revealChevronOnHover
-		triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
-		triggerStyle={headerStyle}
-	>
-		{#snippet trigger()}
-			<Heart class="h-3.5 w-3.5 shrink-0" />
-
-			Favorites
-		{/snippet}
-
+	{#if localOnly}
 		{#each favorites as item (`fav-${item.option.id}`)}
 			{@render render(item, !showOrgName)}
 		{/each}
-	</CollapsibleSection>
+	{:else}
+		<!-- Favorites come first; the sections below skip them -->
+		<CollapsibleSection
+			revealChevronOnHover
+			triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
+			triggerStyle={headerStyle}
+		>
+			{#snippet trigger()}
+				<Heart class="h-3.5 w-3.5 shrink-0" />
+
+				Favorites
+			{/snippet}
+
+			{#each favorites as item (`fav-${item.option.id}`)}
+				{@render render(item, !showOrgName)}
+			{/each}
+		</CollapsibleSection>
+	{/if}
 {/if}
 
 {#if getDownloadEntries.length > 0}
@@ -110,29 +118,37 @@
 	{/each}
 {/if}
 
-{#if groups.loaded.length > 0 || groups.available.length > 0}
-	<!-- Local models: one list, the loaded ones first. -->
-	<CollapsibleSection
-		revealChevronOnHover
-		triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
-		triggerStyle={headerStyle}
-	>
-		{#snippet trigger()}
-			<Logo class="shrink-0" style="--size: 0.875rem" />
+{#snippet localRows()}
+	<!-- the loaded models first -->
+	{#each groups.loaded as item (`loaded-${item.option.id}`)}
+		{@render render(item, !showOrgName)}
+	{/each}
 
-			Local models
-		{/snippet}
-
-		{#each groups.loaded as item (`loaded-${item.option.id}`)}
+	{#each groups.available as group (group.orgName)}
+		{#each group.items as item (item.option.id)}
 			{@render render(item, !showOrgName)}
 		{/each}
+	{/each}
+{/snippet}
 
-		{#each groups.available as group (group.orgName)}
-			{#each group.items as item (item.option.id)}
-				{@render render(item, !showOrgName)}
-			{/each}
-		{/each}
-	</CollapsibleSection>
+{#if groups.loaded.length > 0 || groups.available.length > 0}
+	{#if localOnly}
+		{@render localRows()}
+	{:else}
+		<CollapsibleSection
+			revealChevronOnHover
+			triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
+			triggerStyle={headerStyle}
+		>
+			{#snippet trigger()}
+				<Logo class="shrink-0" style="--size: 0.875rem" />
+
+				Local models
+			{/snippet}
+
+			{@render localRows()}
+		</CollapsibleSection>
+	{/if}
 {/if}
 
 <!-- One section per remote provider. -->
