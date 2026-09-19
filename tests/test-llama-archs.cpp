@@ -39,12 +39,18 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
     return mse_a_b / mse_a_0;
 }
 
+struct tensor_data_params {
+    size_t seed;
+    float  stdev;
+};
+
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
-    size_t seed = *(const size_t *) userdata;
+    const tensor_data_params & params = *(const tensor_data_params *) userdata;
+    size_t seed = params.seed;
     std::hash<std::string> hasher;
     seed ^= hasher(tensor->name);
     std::mt19937 gen(seed);
-    std::normal_distribution<float> dis(0.0f, 1.0e-2f);
+    std::normal_distribution<float> dis(0.0f, params.stdev);
 
     const int64_t ne = ggml_nelements(tensor);
     if (tensor->type == GGML_TYPE_F32) {
@@ -65,7 +71,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-d/--stdev stdev] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -416,7 +422,8 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 }
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
-        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
+        struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
+        const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
@@ -434,9 +441,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         ctx_params.n_ubatch = 64;
     }
 
-    size_t tmp = seed;
+    tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
-        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params) :
+        llama_model_init_from_user(gguf_ctx, set_tensor_data, &tensor_params, model_params) :
         llama_model_load_from_file_ptr(file, model_params));
     if (!model) {
         throw std::runtime_error("failed to create llama model");
@@ -608,7 +615,7 @@ static bool arch_supported(const llm_arch arch) {
     return true;
 }
 
-static int save_models(const llm_arch target_arch, const size_t seed, const int verbosity, const std::string & dir) {
+static int save_models(const llm_arch target_arch, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -656,7 +663,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {});
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
@@ -666,7 +673,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
     return 0;
 }
 
-static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
+static int test_backends(const llm_arch target_arch, const size_t seed, const float stdev, const int verbosity) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -786,11 +793,11 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 if (!skip) {
                     if (logits_cpu.empty()) {
-                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+                        model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -812,7 +819,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const in
                         ms.save(file);
                         rewind(file);
 
-                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, dc.devs, dc.split_mode, encode);
+                        auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode);
                         const std::vector<float> logits_roundtrip = get_logits(
                             model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
                         status_roundtrip = "\033[1;32mOK\033[0m";
@@ -846,6 +853,7 @@ int main(int argc, char ** argv) {
 
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
+    float stdev = 0.1f;
     std::string out;
 
     int verbosity = LOG_LEVEL_ERROR;
@@ -876,6 +884,14 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+        if (strcmp(argv[i], "-d") == 0 || strcmp(argv[i], "--stdev") == 0) {
+            if (i + 1 < argc) {
+                stdev = std::stof(argv[++i]);
+            } else {
+                usage(argv);
+                return 1;
+            }
+        }
         if (strcmp(argv[i], "-v") == 0) {
             if (i + 1 < argc) {
                 verbosity = std::stoull(argv[++i]);
@@ -893,13 +909,17 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    printf("%s: using seed %zu\n", __func__, seed);
+    if (stdev <= 0.0f) {
+        LOG_ERR("%s: stdev must be > 0\n", __func__);
+        return 1;
+    }
+    LOG_INF("%s: using seed %zu, stdev %f\n", __func__, seed, stdev);
 
     try {
         if (!out.empty()) {
-            return save_models(arch, seed, verbosity, out);
+            return save_models(arch, seed, stdev, verbosity, out);
         }
-        return test_backends(arch, seed, verbosity);
+        return test_backends(arch, seed, stdev, verbosity);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;
