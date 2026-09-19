@@ -2653,12 +2653,6 @@ static void test_tagged_array_object_param(testing & t) {
         auto grammar_parser              = analysis.build_parser(grammar_inputs, "");
         try {
             const std::string grammar_str = build_grammar([&](const common_grammar_builder & builder) {
-                for (const auto & tool : grammar_inputs.tools) {
-                    if (!tool.contains("function")) { continue; }
-                    const auto & function = tool.at("function");
-                    auto schema = function.contains("parameters") ? function.at("parameters") : json::object();
-                    builder.resolve_refs(schema);
-                }
                 grammar_parser.build_grammar(builder, /* lazy */ false);
             });
             t.assert_true("grammar builds without exceeding repetition threshold", true);
