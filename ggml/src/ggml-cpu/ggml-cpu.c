@@ -1490,7 +1490,8 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const struct mmid_row_mapping * matrix_rows,
     const size_t row_size,
     const bool src1_cont,
-    const void * wdata) {
+    const void * wdata,
+    const struct mmid_row_mapping * direct_rows) { // optional: row mapping for [ir1_start, ir1_end) instead of matrix_rows
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -1509,7 +1510,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
             for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ++ir1) {
                 const int64_t _i12 = ir1; // logical row index for this expert
 
-                struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, _i12);
+                struct mmid_row_mapping row_mapping = direct_rows ? direct_rows[_i12 - ir1_start] : MMID_MATRIX_ROW(cur_a, _i12);
                 const int id       = row_mapping.i1; // selected expert index
 
                 const int64_t  i11 = id % ne11;
@@ -1606,7 +1607,45 @@ static void ggml_compute_forward_mul_mat_id(
         iqp_panels = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
     }
 
+    // single-token (decode) shape: one row of ids, src1 is [ne10, ne11, 1, 1]
+    const bool single_token = ids->ne[1] == 1 && ne12 == 1 && ne13 == 1;
+
+    // per-thread src1 conversion buffer for the single-token fast path (reserved by ggml_graph_plan)
+    char * src1_priv = NULL;
+    if (single_token && src1->type != vec_dot_type) {
+        src1_priv = incr_ptr_aligned(&wdata_cur, (size_t) nth * ne11 * ggml_row_size(vec_dot_type, ne10), 64);
+    }
+
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
+
+    // single-token fast path: each thread converts src1 for itself and computes a static slice of every used expert's rows, so no shared row buffer and no barrier is needed
+    if (single_token && !iqp) {
+        const size_t row_size = ggml_row_size(vec_dot_type, ne10);
+        const void * src1_q = src1->data;
+        if (src1_priv) {
+            char * priv = src1_priv + (size_t) ith * ne11 * row_size;
+            for (int64_t i11 = 0; i11 < ne11; ++i11) {
+                from_float((const float *) ((const char *) src1->data + i11*nb11), priv + i11*row_size, ne10);
+            }
+            src1_q = priv;
+        }
+
+        const int64_t dr0 = (ne01 + nth - 1) / nth;
+        const int64_t ir0_start = dr0 * ith;
+        const int64_t ir0_end   = MIN(ir0_start + dr0, ne01);
+        if (ir0_start < ir0_end) {
+            for (int id = 0; id < n_ids; ++id) {
+                const int32_t cur_a = *(const int32_t *) ((const char *) ids->data + id*ids->nb[0]);
+                GGML_ASSERT(cur_a >= 0 && cur_a < n_as);
+                const struct mmid_row_mapping direct = { id, 0 };
+                ggml_compute_forward_mul_mat_id_one_chunk(
+                    dst, src0, src1, ids, cur_a,
+                    ir0_start, ir0_end, 0, 1,
+                    (const char *) src0->data + cur_a*nb02, NULL, row_size, src1_cont, src1_q, &direct);
+            }
+        }
+        return;
+    }
 
     if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
@@ -1727,7 +1766,7 @@ static void ggml_compute_forward_mul_mat_id(
             ggml_compute_forward_mul_mat_id_one_chunk(
                 dst, src0, src1, ids, cur_a,
                 ir0_start, ir0_end, ir1_start, ir1_end,
-                src0_cur, matrix_rows, row_size, src1_cont, wdata
+                src0_cur, matrix_rows, row_size, src1_cont, wdata, NULL
             );
 
             if (nth >= nchunk0 * nchunk1) {
@@ -2918,6 +2957,10 @@ struct ggml_cplan ggml_graph_plan(
                         // the IQ panel path needs one scratch panel per thread on top of that
                         if (ggml_cpu_iqp_supports_mul_mat_id(node)) {
                             cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
+                        }
+                        // single-token fast path: private per-thread copy of the converted src1
+                        if (src1->type != vec_dot_type && ids->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1) {
+                            cur += (size_t) n_tasks * src1->ne[1] * ggml_row_size(vec_dot_type, src1->ne[0]) + 64;
                         }
                     } break;
                 case GGML_OP_OUT_PROD:
