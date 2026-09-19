@@ -1,0 +1,336 @@
+// Co-scheduled Qwen Q/K/V projections from one GGML Q8_1 x4 activation row.
+//
+// Query and key weights use their native GGUF Q4_K rows. Value weights are
+// selected at JIT time between Q4_K and Q6_K because the checkpoint uses both
+// layer contracts. One wave owns one output row, while a 256-workitem
+// workgroup carries eight rows drawn from the concatenated Q/K/V output
+// domain. The three logical outputs remain distinct bindings and layouts.
+//
+// This kernel intentionally starts after activation packing and ends at raw
+// F32 projections. The adjacent preparation producer owns RMSNorm and Q8_1
+// packing; the following attention postprocess owns per-head normalization,
+// RoPE, and K/V cache publication.
+amdgpu.target<gfx11-generic> @qwen3_moe_attention_qkv_gfx11_wave32 {subgroup_size = 32}
+
+config.decl @qwen3_moe.model.hidden_size : %value: index where [range(%value, 128, 32768), mul(%value, 128)]
+
+config.decl @qwen3_moe.attention.query_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.attention.key_value_size : %value: index where [range(%value, 1, 262144)]
+
+config.decl @qwen3_moe.workload.token_capacity : %value: index where [range(%value, 1, 2048)]
+
+// Selects Q4_K (0) or Q6_K (1) storage for the value projection.
+config.decl @qwen3_moe.attention.value_uses_q6 : %value: index where [range(%value, 0, 1)]
+
+// Paired-nibble Q4_K row contraction provider linked from the dense quantized
+// library.
+func.decl @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+// Q6_K row contraction provider linked from the GGML quantized library.
+func.decl @ggml_q6k_q8_1_x4_row_lane(%input_size: index, %weight: buffer, %weight_row_byte_base: offset, %q8_input: buffer, %q8_row_byte_base: offset, %lane: index) -> (f32)
+
+// Fused RMSNorm and Q8_1 x4 producer linked from attention preparation.
+kernel.decl @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4(%token_count: index) launch(%token_count: index, %input: buffer, %weight: buffer, %q8_output: buffer)
+
+// Reference entry points used only by differential cases.
+kernel.decl @ggml_quantize_q8_1_x4_f32(%token_count: index, %input_size: index) launch(%token_count: index, %input_size: index, %input: buffer, %output: buffer)
+
+kernel.decl @qwen3_moe_dense_linear_q4k_q8_1_x4(%token_count: index) launch(%token_count: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+
+kernel.decl @ggml_linear_q6k_q8_1_x4(%token_count: index, %input_size: index, %output_size: index) launch(%token_count: index, %input_size: index, %output_size: index, %q8_input: buffer, %weight: buffer, %output: buffer)
+
+// Device body shared by the ordinary projection and completion-fused
+// postprocess exports. Each caller owns its boundary after the raw row stores.
+func.template<qwen3_moe.attention.qkv_quantized.body> device @qwen3_moe_attention_qkv_quantized_body(%value_uses_q6_index: index, %publish_output: i1, %token_count: index, %token0: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer) {
+  %hidden_size0 = config.get @qwen3_moe.model.hidden_size : index
+  %query_size0 = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size0 = config.get @qwen3_moe.attention.key_value_size : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048)] : index
+  %hidden_size = index.assume %hidden_size0 [range(%hidden_size0, 128, 32768), mul(%hidden_size0, 128)] : index
+  %query_size, %key_value_size = index.assume %query_size0, %key_value_size0 [range(%query_size0, 1, 262144), range(%key_value_size0, 1, 262144), mul(%query_size0, %key_value_size0)] : index, index
+  %channel_tile = kernel.workgroup.id<x> : index
+  %subgroup0 = kernel.subgroup.id : index
+  %lane = kernel.subgroup.lane.id : index
+  %c0 = index.constant 0 : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c128 = index.constant 128 : index
+  %c144_bytes = index.constant 144 : offset
+  %c210_bytes = index.constant 210 : offset
+  %c256 = index.constant 256 : index
+  %c0_i32 = scalar.constant 0 : i32
+  %c0_f32 = scalar.constant 0.0 : f32
+  %c0_offset = index.constant 0 : offset
+  %token, %launch_token_count = index.assume %token0, %bounded_token_count [lt(%token0, %bounded_token_count)] : index, index
+  %subgroup = index.assume %subgroup0 [range(%subgroup0, 0, 7)] : index
+  %channel_base = index.mul %channel_tile, %c8 : index
+  %global_channel = index.add %channel_base, %subgroup : index
+  %key_value_end = index.add %query_size, %key_value_size : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %total_output_size = index.add %query_size, %key_value_output_size : index
+  %valid_channel = index.cmp ult, %global_channel, %total_output_size : index
+  %is_query = index.cmp ult, %global_channel, %query_size : index
+  %is_key = index.cmp ult, %global_channel, %key_value_end : index
+  %key_value_channel = index.rem %global_channel, %key_value_size : index
+  %value_uses_q6 = index.cmp eq, %value_uses_q6_index, %c1 : index
+  %lane_i32 = index.cast %lane : index to i32
+  %is_lane_zero = scalar.cmpi eq, %lane_i32, %c0_i32 : i32
+  %quant_block_count = index.div %hidden_size, %c256 : index
+  %q4_row_bytes = index.scale %quant_block_count, %c144_bytes : index, offset -> offset
+  %q6_row_bytes = index.scale %quant_block_count, %c210_bytes : index, offset -> offset
+  %q8_group_count = index.div %hidden_size, %c128 : index
+  %q8_row_bytes = index.scale %q8_group_count, %c144_bytes : index, offset -> offset
+  %q8_row_byte_base = index.scale %token, %q8_row_bytes : index, offset -> offset
+  %q8_noalias, %query_weight_noalias, %key_weight_noalias, %value_weight_noalias, %query_output_noalias, %key_output_noalias, %value_output_noalias = buffer.assume.noalias %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output : buffer, buffer, buffer, buffer, buffer, buffer, buffer
+  %lane_sum = scf.if %publish_output -> (f32) {
+    %channel_sum = scf.if %valid_channel -> (f32) {
+      %projection_sum = scf.if %is_query -> (f32) {
+        %row_byte_base = index.scale %global_channel, %q4_row_bytes : index, offset -> offset
+        %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%hidden_size, %query_weight_noalias, %row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+        scf.yield %sum : f32
+      } else {
+        %key_or_value_sum = scf.if %is_key -> (f32) {
+          %row_byte_base = index.scale %key_value_channel, %q4_row_bytes : index, offset -> offset
+          %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%hidden_size, %key_weight_noalias, %row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+          scf.yield %sum : f32
+        } else {
+          %value_sum = scf.if %value_uses_q6 -> (f32) {
+            %row_byte_base = index.scale %key_value_channel, %q6_row_bytes : index, offset -> offset
+            %sum = func.call @ggml_q6k_q8_1_x4_row_lane(%hidden_size, %value_weight_noalias, %row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+            scf.yield %sum : f32
+          } else {
+            %row_byte_base = index.scale %key_value_channel, %q4_row_bytes : index, offset -> offset
+            %sum = func.call @qwen3_moe_q4k_q8_1_x4_paired_row_lane(%hidden_size, %value_weight_noalias, %row_byte_base, %q8_noalias, %q8_row_byte_base, %lane) : (index, buffer, offset, buffer, offset, index) -> (f32)
+            scf.yield %sum : f32
+          }
+          scf.yield %value_sum : f32
+        }
+        scf.yield %key_or_value_sum : f32
+      }
+      scf.yield %projection_sum : f32
+    } else {
+      scf.yield %c0_f32 : f32
+    }
+    scf.yield %channel_sum : f32
+  } else {
+    scf.yield %c0_f32 : f32
+  }
+  %dot = kernel.subgroup.reduce<addf> %lane_sum : f32
+  %query_output_view = buffer.view %query_output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%query_size]xf32>
+  %key_output_view = buffer.view %key_output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%key_value_size]xf32>
+  %value_output_view = buffer.view %value_output_noalias[%c0_offset] : buffer -> view<[%launch_token_count]x[%key_value_size]xf32>
+  scf.if %publish_output {
+    scf.if %valid_channel {
+      scf.if %is_lane_zero {
+        scf.if %is_query {
+          view.store %dot, %query_output_view[%token, %global_channel] : f32, view<[%launch_token_count]x[%query_size]xf32>
+        } else {
+          scf.if %is_key {
+            view.store %dot, %key_output_view[%token, %key_value_channel] : f32, view<[%launch_token_count]x[%key_value_size]xf32>
+          } else {
+            view.store %dot, %value_output_view[%token, %key_value_channel] : f32, view<[%launch_token_count]x[%key_value_size]xf32>
+          }
+        }
+      }
+    }
+  }
+  func.return
+}
+
+kernel.def target(@qwen3_moe_attention_qkv_gfx11_wave32) @qwen3_moe_attention_qkv_quantized(%token_count: index) {
+  %query_size = config.get @qwen3_moe.attention.query_size : index
+  %key_value_size = config.get @qwen3_moe.attention.key_value_size : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c7 = index.constant 7 : index
+  %c8 = index.constant 8 : index
+  %c256 = index.constant 256 : index
+  %key_value_output_size = index.mul %key_value_size, %c2 : index
+  %output_size = index.add %query_size, %key_value_output_size : index
+  %padded_output_size = index.add %output_size, %c7 : index
+  %output_tiles = index.div %padded_output_size, %c8 : index
+  kernel.launch.config workgroups(%output_tiles, %token_capacity, %c1) workgroup_size(%c256, %c1, %c1) : index
+} launch(%token_count: index, %q8_input: buffer, %query_weight: buffer, %key_weight: buffer, %value_weight: buffer, %query_output: buffer, %key_output: buffer, %value_output: buffer) {
+  %value_uses_q6_index = config.get @qwen3_moe.attention.value_uses_q6 : index
+  %token_capacity = config.get @qwen3_moe.workload.token_capacity : index
+  %bounded_token_count = index.assume %token_count [range(%token_count, 1, 2048), le(%token_count, %token_capacity)] : index
+  %token0 = kernel.workgroup.id<y> : index
+  %c0 = index.constant 0 : index
+  %valid_token = index.cmp ult, %token0, %bounded_token_count : index
+  %safe_token = scf.select %valid_token, %token0, %c0 : index
+  func.apply<qwen3_moe.attention.qkv_quantized.body>(%value_uses_q6_index, %valid_token, %bounded_token_count, %safe_token, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : (index, i1, index, index, buffer, buffer, buffer, buffer, buffer, buffer, buffer)
+  kernel.return
+}
+
+// Distinct token rows and Q/K/V byte patterns make row ownership and
+// binding-domain mistakes observable. Equal synthetic output widths let the
+// two Q4_K references share the config-specialized direct provider while still
+// crossing every domain edge.
+check.case public @qwen3_moe_attention_qkv_q6_differential_case {
+  %token_count = check.literal value(14) : index
+  %hidden_size = check.literal value(512) : index
+  %output_size = check.literal value(65) : index
+  %input_seed = check.param.seed base(0x514d4f45514b5636) count(1) : i64
+  %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x512xf32>
+  %q8_input = check.generate.fill value(0) : tensor<14x576xi8>
+  %query_weight = check.generate.fill value(34) : tensor<65x2x144xi8>
+  %key_weight = check.generate.fill value(35) : tensor<65x2x144xi8>
+  %value_weight = check.generate.fill value(-86) : tensor<65x2x210xi8>
+  %expected_query = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %actual_query = check.generate.fill value(1.0) : tensor<14x65xf32>
+  %actual_key = check.generate.fill value(1.0) : tensor<14x65xf32>
+  %actual_value = check.generate.fill value(1.0) : tensor<14x65xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %input, %q8_input) : [index, index](index, index, tensor<14x512xf32>, tensor<14x576xi8>)
+  kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %query_weight, %expected_query) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>)
+  kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %key_weight, %expected_key) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>)
+  kernel.launch @ggml_linear_q6k_q8_1_x4[%token_count, %hidden_size, %output_size](%token_count, %hidden_size, %output_size, %q8_input, %value_weight, %expected_value) : [index, index, index](index, index, index, tensor<14x576xi8>, tensor<65x2x210xi8>, tensor<14x65xf32>)
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %actual_query, %actual_key, %actual_value) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<65x2x144xi8>, tensor<65x2x210xi8>, tensor<14x65xf32>, tensor<14x65xf32>, tensor<14x65xf32>)
+  check.expect.close actual(%actual_query) expected(%expected_query) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.expect.close actual(%actual_key) expected(%expected_key) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.expect.close actual(%actual_value) expected(%expected_value) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_q4_differential_case {
+  %token_count = check.literal value(14) : index
+  %hidden_size = check.literal value(512) : index
+  %input_seed = check.param.seed base(0x514d4f45514b5634) count(1) : i64
+  %input = check.generate.random.uniform seed(%input_seed) range(-1.0 to 1.0) : tensor<14x512xf32>
+  %q8_input = check.generate.fill value(0) : tensor<14x576xi8>
+  %query_weight = check.generate.fill value(34) : tensor<65x2x144xi8>
+  %key_weight = check.generate.fill value(35) : tensor<65x2x144xi8>
+  %value_weight = check.generate.fill value(36) : tensor<65x2x144xi8>
+  %expected_query = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<14x65xf32>
+  %actual_query = check.generate.fill value(1.0) : tensor<14x65xf32>
+  %actual_key = check.generate.fill value(1.0) : tensor<14x65xf32>
+  %actual_value = check.generate.fill value(1.0) : tensor<14x65xf32>
+  kernel.launch @ggml_quantize_q8_1_x4_f32[%token_count, %hidden_size](%token_count, %hidden_size, %input, %q8_input) : [index, index](index, index, tensor<14x512xf32>, tensor<14x576xi8>)
+  kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %query_weight, %expected_query) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>)
+  kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %key_weight, %expected_key) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>)
+  kernel.launch @qwen3_moe_dense_linear_q4k_q8_1_x4[%token_count](%token_count, %q8_input, %value_weight, %expected_value) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>)
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %actual_query, %actual_key, %actual_value) : [index](index, tensor<14x576xi8>, tensor<65x2x144xi8>, tensor<65x2x144xi8>, tensor<65x2x144xi8>, tensor<14x65xf32>, tensor<14x65xf32>, tensor<14x65xf32>)
+  check.expect.close actual(%actual_query) expected(%expected_query) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.expect.close actual(%actual_key) expected(%expected_key) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.expect.close actual(%actual_value) expected(%expected_value) atol(0.25) rtol(0.01) nan(same) : tensor<14x65xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_q6_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %q8_input = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  %query_weight = check.generate.fill value(0) : tensor<4096x8x144xi8>
+  %key_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %value_weight = check.generate.fill value(0) : tensor<512x8x210xi8>
+  %query_output = check.generate.fill value(1.0) : tensor<[%token_count]x4096xf32>
+  %key_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %value_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %expected_query = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<4096x8x144xi8>, tensor<512x8x144xi8>, tensor<512x8x210xi8>, tensor<[%token_count]x4096xf32>, tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.close actual(%key_output) expected(%expected_key) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.close actual(%value_output) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_q4_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32, 128, 512]) name("token_count") : index
+  %q8_input = check.generate.fill value(0) : tensor<[%token_count]x2304xi8>
+  %query_weight = check.generate.fill value(0) : tensor<4096x8x144xi8>
+  %key_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %value_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %query_output = check.generate.fill value(1.0) : tensor<[%token_count]x4096xf32>
+  %key_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %value_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %expected_query = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<4096x8x144xi8>, tensor<512x8x144xi8>, tensor<512x8x144xi8>, tensor<[%token_count]x4096xf32>, tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.close actual(%key_output) expected(%expected_key) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.close actual(%value_output) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.return
+}
+
+// Production decode and small-prefill boundary. The two calls become two
+// serialized dispatches in one reusable command buffer: the first publishes
+// the only Q8_1 activation row and the second consumes it for all projections.
+check.case public @qwen3_moe_attention_qkv_full_q6_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32]) name("token_count") : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %q8_input = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %query_weight = check.generate.fill value(0) : tensor<4096x8x144xi8>
+  %key_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %value_weight = check.generate.fill value(0) : tensor<512x8x210xi8>
+  %query_output = check.generate.fill value(1.0) : tensor<[%token_count]x4096xf32>
+  %key_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %value_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %expected_query = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %norm_weight, %q8_input) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2304xi8>)
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<4096x8x144xi8>, tensor<512x8x144xi8>, tensor<512x8x210xi8>, tensor<[%token_count]x4096xf32>, tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.close actual(%key_output) expected(%expected_key) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.close actual(%value_output) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.return
+}
+
+check.case public @qwen3_moe_attention_qkv_full_q4_benchmark_case {
+  %token_count = check.param.choice values([1, 8, 32]) name("token_count") : index
+  %input = check.generate.fill value(0.0) : tensor<[%token_count]x2048xf32>
+  %norm_weight = check.generate.fill value(1.0) : tensor<2048xf32>
+  %q8_input = check.generate.fill value(1) : tensor<[%token_count]x2304xi8>
+  %query_weight = check.generate.fill value(0) : tensor<4096x8x144xi8>
+  %key_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %value_weight = check.generate.fill value(0) : tensor<512x8x144xi8>
+  %query_output = check.generate.fill value(1.0) : tensor<[%token_count]x4096xf32>
+  %key_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %value_output = check.generate.fill value(1.0) : tensor<[%token_count]x512xf32>
+  %expected_query = check.generate.fill value(0.0) : tensor<[%token_count]x4096xf32>
+  %expected_key = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  %expected_value = check.generate.fill value(0.0) : tensor<[%token_count]x512xf32>
+  kernel.launch @qwen3_moe_attention_rmsnorm_quantize_q8_1_x4[%token_count](%token_count, %input, %norm_weight, %q8_input) : [index](index, tensor<[%token_count]x2048xf32>, tensor<2048xf32>, tensor<[%token_count]x2304xi8>)
+  kernel.launch @qwen3_moe_attention_qkv_quantized[%token_count](%token_count, %q8_input, %query_weight, %key_weight, %value_weight, %query_output, %key_output, %value_output) : [index](index, tensor<[%token_count]x2304xi8>, tensor<4096x8x144xi8>, tensor<512x8x144xi8>, tensor<512x8x144xi8>, tensor<[%token_count]x4096xf32>, tensor<[%token_count]x512xf32>, tensor<[%token_count]x512xf32>)
+  check.expect.close actual(%query_output) expected(%expected_query) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x4096xf32>
+  check.expect.close actual(%key_output) expected(%expected_key) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.expect.close actual(%value_output) expected(%expected_value) atol(0.0) rtol(0.0) nan(same) : tensor<[%token_count]x512xf32>
+  check.return
+}
+
+check.benchmark<@qwen3_moe_attention_qkv_q6_differential_case> @qwen3_moe_attention_qkv_q6_differential
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_differential_case> @qwen3_moe_attention_qkv_q4_differential
+
+check.benchmark<@qwen3_moe_attention_qkv_q6_benchmark_case> @qwen3_moe_attention_qkv_q6_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_qkv_q6_benchmark_case> @qwen3_moe_attention_qkv_q6_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_qkv_q6_benchmark_case> @qwen3_moe_attention_qkv_q6_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_qkv_q6_benchmark_case> @qwen3_moe_attention_qkv_q6_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_benchmark_case> @qwen3_moe_attention_qkv_q4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_benchmark_case> @qwen3_moe_attention_qkv_q4_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_benchmark_case> @qwen3_moe_attention_qkv_q4_prefill_128 {token_count = 128}
+
+check.benchmark<@qwen3_moe_attention_qkv_q4_benchmark_case> @qwen3_moe_attention_qkv_q4_prefill_512 {token_count = 512}
+
+check.benchmark<@qwen3_moe_attention_qkv_full_q6_benchmark_case> @qwen3_moe_attention_qkv_full_q6_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_qkv_full_q6_benchmark_case> @qwen3_moe_attention_qkv_full_q6_prefill_32 {token_count = 32}
+
+check.benchmark<@qwen3_moe_attention_qkv_full_q4_benchmark_case> @qwen3_moe_attention_qkv_full_q4_decode {token_count = 1}
+
+check.benchmark<@qwen3_moe_attention_qkv_full_q4_benchmark_case> @qwen3_moe_attention_qkv_full_q4_prefill_32 {token_count = 32}
