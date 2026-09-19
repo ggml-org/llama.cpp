@@ -152,6 +152,9 @@
 		.collapsible-region {
 			display: grid;
 			grid-template-rows: 0fr;
+			/* the row owns the height here: leaving height: 0 in place would snap
+			   the region shut before the row could interpolate */
+			height: auto;
 			transition:
 				grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1),
 				visibility 200ms;
