@@ -4,6 +4,7 @@
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
 	import { ExternalLink } from '@lucide/svelte';
+	import { base } from '$app/paths';
 	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
@@ -79,7 +80,7 @@
 			rel="noopener noreferrer"
 			target="_blank"
 		>
-			<img alt="" class="h-3.5 w-3.5" src="/recommended-mcp/huggingface.ico" />
+			<img alt="" class="h-3.5 w-3.5" src="{base}/recommended-mcp/huggingface.ico" />
 
 			View on Hugging Face
 
