@@ -240,7 +240,7 @@ qwen3vl             ,0   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,MUL+ADD                     ,      4
 qwen3vlmoe          ,1   ,any     ,RMS_NORM+MUL                ,      9
 qwen3vlmoe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
-qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      5
+qwen4exp            ,0   ,any     ,ADD+ADD+ADD                 ,      1
 qwen4exp            ,0   ,any     ,ADD+ADD+ADD+ADD+ADD+ADD+ADD ,      9
 qwen4exp            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 qwen4exp            ,0   ,any     ,MUL+ADD                     ,      4
