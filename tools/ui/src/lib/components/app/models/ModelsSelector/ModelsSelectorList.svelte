@@ -16,8 +16,8 @@
 		sectionHeaderClass?: string;
 		onSelect: (modelId: string) => void;
 		onInfoClick: (modelName: string) => void;
-		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
-		/** Favorite models of every backend; shown on the favorites tab. */
+		renderOption?: import('svelte').Snippet<[ModelItem, boolean, boolean]>;
+		/** Favorite models of every backend, listed in their own section. */
 		favorites?: ModelItem[];
 		/** Show the organization name in every model id of the list. */
 		showOrgName?: boolean;
@@ -62,7 +62,7 @@
 	}
 </script>
 
-{#snippet defaultOption(item: ModelItem, hideOrgName: boolean)}
+{#snippet defaultOption(item: ModelItem, hideOrgName: boolean, showFavIndicator: boolean)}
 	{@const { option } = item}
 	{@const isSelected = currentModel === option.model || activeId === option.id}
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
@@ -78,6 +78,7 @@
 		{onSelect}
 		{option}
 		showBaseModelAvatar
+		{showFavIndicator}
 	/>
 {/snippet}
 
@@ -89,7 +90,7 @@
 	</p>
 
 	{#each favorites as item (`fav-${item.option.id}`)}
-		{@render render(item, !showOrgName)}
+		{@render render(item, !showOrgName, false)}
 	{/each}
 {/if}
 
@@ -111,12 +112,12 @@
 
 <!-- Local models: one list, the loaded ones first. -->
 {#each groups.loaded as item (`loaded-${item.option.id}`)}
-	{@render render(item, !showOrgName)}
+	{@render render(item, !showOrgName, true)}
 {/each}
 
 {#each groups.available as group (group.orgName)}
 	{#each group.items as item (item.option.id)}
-		{@render render(item, !showOrgName)}
+		{@render render(item, !showOrgName, true)}
 	{/each}
 {/each}
 
@@ -149,7 +150,7 @@
 
 	{#if provider.items.length > 0}
 		{#each provider.items as item (`${provider.backendId}-${item.option.id}`)}
-			{@render render(item, !showOrgName)}
+			{@render render(item, !showOrgName, true)}
 		{/each}
 
 		{#if onProviderOpen && provider.matched > provider.items.length}

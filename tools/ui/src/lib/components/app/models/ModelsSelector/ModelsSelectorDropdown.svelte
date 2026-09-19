@@ -323,7 +323,11 @@
 								<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
 							{/if}
 
-							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
+							{#snippet modelOption(
+								item: ModelItem,
+								hideOrgName: boolean,
+								showFavIndicator: boolean
+							)}
 								{@const { option } = item}
 								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
 								{@const isHighlighted = option.id === highlightedId}
@@ -345,6 +349,7 @@
 									onSelect={ms.handleSelect}
 									{option}
 									showBaseModelAvatar
+									{showFavIndicator}
 								/>
 							{/snippet}
 
@@ -358,7 +363,7 @@
 								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								renderOption={modelOption}
-								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground select-none"
+								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
 								{showOrgName}
 							/>
 						</div>
