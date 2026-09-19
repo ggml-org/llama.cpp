@@ -4551,7 +4551,7 @@ static json get_res_model_info(const server_context_meta & meta) {
         {"created",  std::time(0)},
         {"owned_by", "llamacpp"},
         {"meta",     {
-            {"vocab_type",  meta.model_vocab_type},
+            {"vocab_type",  static_cast<int>(meta.model_vocab_type)},
             {"n_vocab",     meta.model_vocab_n_tokens},
             {"n_ctx",       meta.slot_n_ctx},
             {"n_ctx_train", meta.model_n_ctx_train},
