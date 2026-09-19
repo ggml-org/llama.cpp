@@ -284,7 +284,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
             k = build_gdn_l2_norm(ctx0, k, hparams.f_norm_rms_eps);
 
             ggml_tensor * states_all = mctx_cur->get_s_l(il);
-            ggml_tensor * state = build_rs(inp_rs, states_all, hparams.n_embd_s(), n_seqs);
+            ggml_tensor * state = build_rs_state(inp_rs, states_all, n_seqs, model.dev_layer(il));
             state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
 
             ggml_tensor * out = ggml_cont(ctx0, build_recurrent_attn(

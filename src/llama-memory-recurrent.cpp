@@ -1322,3 +1322,33 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
     }
     return (int32_t)(idx * mem->size) + src0;
 }
+
+bool llama_memory_recurrent_context::rs_inplace_ok(uint32_t n_seqs) const {
+    // the full (reserve) context spans the whole cache
+    if (is_full) {
+        return false;
+    }
+
+    // with rollback snapshots the live row is not the only row that has to be written
+    if (mem->n_rs_seq > 0) {
+        return false;
+    }
+
+    // the extra rows [head + n_seqs, head + n_rs) that build_rs relocates must not exist
+    if (mem->n != n_seqs) {
+        return false;
+    }
+
+    // every cell of the ubatch has to read its own state. after find_slot this holds for every
+    // cell that already owned its state and for a single fresh sequence whose cell is rs_z (the
+    // graph zeroes that row before reading it). it does not hold after seq_cp, after a cell
+    // reorder or when two fresh sequences share rs_z - those ubatches take the gathered path
+    for (uint32_t i = 0; i < n_seqs; ++i) {
+        const uint32_t cell_idx = mem->head + i;
+        if (mem->cells[cell_idx].src0 != (int32_t) cell_idx) {
+            return false;
+        }
+    }
+
+    return true;
+}

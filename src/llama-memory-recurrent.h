@@ -177,6 +177,13 @@ public:
 
     int32_t s_copy(int i) const;
 
+    // true when the cache rows [head, head + n_seqs) can be updated in place by the graph of
+    // this ubatch: not the full (reserve) context, no rollback snapshots, no extra rows to
+    // relocate (n_rs == n_seqs) and every cell reads its own state (s_copy(i) == head + i).
+    // side-effect free on purpose: unlike s_copy() it never resets the per-seq rollback index,
+    // so it can be evaluated at graph build and again in can_reuse
+    bool rs_inplace_ok(uint32_t n_seqs) const;
+
 private:
     const llama_memory_status status;
 
