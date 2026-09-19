@@ -608,7 +608,8 @@ static size_t ggml_backend_openvino_buffer_type_get_alignment(ggml_backend_buffe
 
 static size_t ggml_backend_openvino_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
-    return SIZE_MAX;
+    // A GPU caps a single memory object, so let ggml split a large buffer into parts that fit
+    return ggml_openvino_max_alloc_size();
 }
 
 static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
