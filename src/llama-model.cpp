@@ -2819,7 +2819,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr),
-                            /* streaming         */ params.kv_stream_pool_bytes ? &params : nullptr);
+                            /* streaming         */ (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) ? &params : nullptr);
                     }
                 } else {
                     llama_kv_cache::layer_filter_cb filter = nullptr;

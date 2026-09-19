@@ -15,6 +15,10 @@ struct llama_cparams {
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
     size_t kv_stream_pool_bytes = 0;
+    size_t shared_device_memory_bytes = 0;
+    bool kv_streaming() const noexcept {
+        return kv_stream_pool_bytes || shared_device_memory_bytes;
+    }
     bool kv_stream_decode = false;
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;

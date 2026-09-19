@@ -351,6 +351,7 @@ bool llama_kv_stream_model::memory_requirements(
         impl->host->layout().bytes,
         impl->decode_bytes,
         std::max(size_t(128),ggml_backend_buft_get_alignment(type)),
+        impl->config.shared_device_memory_bytes,
     };
     return true;
 }
@@ -399,12 +400,15 @@ bool llama_kv_stream_model::attach_shared_memory(
 
     const size_t attention_bytes = std::max(
         requirements.attention_prefill_bytes,requirements.attention_decode_bytes);
+    auto * pool_buffer = ggml_backend_memory_lease_buffer(binding.pool);
+    const size_t pool_bytes = pool_buffer ? ggml_backend_buffer_get_size(pool_buffer) : 0;
+    if (pool_bytes < requirements.pool_bytes) return false;
     const std::array<ggml_backend_memory_lease_t,3> supplied{
         binding.pool,binding.writer,binding.attention};
     const std::array<uint64_t,3> ids{
         binding.pool_resource,binding.writer_resource,binding.attention_resource};
     const std::array<size_t,3> sizes{
-        requirements.pool_bytes,requirements.writer_bytes,attention_bytes};
+        pool_bytes,requirements.writer_bytes,attention_bytes};
     std::array<ggml_backend_memory_region,3> regions{};
     std::array<uintptr_t,3> addresses{};
     const auto parent_base = uintptr_t(ggml_backend_buffer_get_base(binding.parent));
@@ -497,4 +501,19 @@ size_t llama_kv_stream_model::writer_grant_bytes() const noexcept {
 
 size_t llama_kv_stream_model::attention_grant_bytes() const noexcept {
     return impl->session ? impl->session->attention_workspace_bytes() : 0;
+}
+
+bool llama_kv_stream_model::runtime_diagnostics(
+        llama_kv_stream_runtime_diagnostics & output) const noexcept {
+    if (!impl->session) return false;
+    const auto & policy = impl->session->policy();
+    const auto copies = impl->session->sequence_stats();
+    const auto timing = impl->session->copy_feedback();
+    output = {
+        impl->session->layout_revision(),
+        pool_grant_bytes(),writer_grant_bytes(),attention_grant_bytes(),
+        policy.resident_pages_per_layer,policy.ring_slots,policy.decode_active_pages,
+        copies.copy_bytes,copies.copy_calls,timing.copy_ms,timing.elapsed_ms,policy.decode_active_pages != 0,
+    };
+    return true;
 }

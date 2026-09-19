@@ -425,8 +425,11 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
-        // Experimental serial CUDA KV pool; excludes producer and attention workspace. Zero disables streaming.
+        // Legacy serial CUDA KV pool; excludes compute, producer and attention workspaces. Zero disables this option.
         size_t kv_stream_pool_bytes;
+        // Exact device-local parent shared by phase compute and participating memory consumers.
+        // Mutually exclusive with kv_stream_pool_bytes; zero disables the shared-budget path.
+        size_t shared_device_memory_bytes;
     };
 
     struct llama_model_tensor_override {

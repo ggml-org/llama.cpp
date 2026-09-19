@@ -28,6 +28,19 @@
 // llama_context
 //
 
+static void llama_log_memory_phase(const llama_context_memory * memory) {
+    llama_context_memory_diagnostics d;
+    if (!memory || !memory->diagnostics(d)) return;
+    const char * phase = d.phase == llama_memory_text_phase::decode ? "decode" : "prefill";
+    LLAMA_LOG_WARN("memory_phase: phase=%s parent=%zu compute=%zu kv_pool=%zu writer=%zu attention=%zu unused=%zu reclaimed_compute=%zu capture=external transition_us=%" PRIu64 " arena_gen=%" PRIu64 " kv_revision=%" PRIu64 " resident_pages=%u ring_slots=%u active_pages=%u streaming=%d last_h2d_bytes=%zu last_h2d_calls=%zu copy_ms=%.3f elapsed_ms=%.3f\n",
+        phase,d.parent_bytes,d.workspace_bytes,d.kv_pool_bytes,d.kv_writer_bytes,
+        d.kv_attention_bytes,d.unused_bytes,d.reclaimed_workspace_bytes,
+        d.last_transition_us,d.arena_generation,d.layout_revision,
+        d.resident_pages_per_layer,d.ring_slots,d.active_pages,
+        int(d.streaming_active),d.last_copy_bytes,d.last_copy_calls,
+        d.last_copy_ms,d.last_elapsed_ms);
+}
+
 static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     switch (ctx_type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
@@ -252,7 +265,11 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
-    if (params.kv_stream_pool_bytes) {
+    cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
+    if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
+        throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
+    }
+    if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
         if (model.arch != LLM_ARCH_QWEN35 || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
                 hparams.no_alloc || hparams.vocab_only || model.devices.size() != 1 || cparams.n_seq_max != 1 ||
                 cparams.n_rs_seq || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
@@ -411,8 +428,9 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
-        if (params.kv_stream_pool_bytes) {
+        if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
+            params_mem.shared_device_memory_bytes = params.shared_device_memory_bytes;
             params_mem.kv_stream_max_rows = cparams.n_ubatch;
             for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 params_mem.kv_stream_backend = backend.get(); break;
@@ -444,7 +462,7 @@ llama_context::llama_context(
                 }
             }
 
-            if (cparams.kv_stream_pool_bytes &&
+            if (cparams.kv_streaming() &&
                     ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 buft = llama_kv_stream_device_buffer_type(model.devices.front().dev);
                 if (!buft) throw std::runtime_error("missing device-local KV/compute buffer type");
@@ -663,7 +681,7 @@ bool llama_context::prepare_compute_arenas(
     }
 
     llama_kv_stream_model * stream = nullptr;
-    if (cparams.kv_stream_pool_bytes && memory) {
+    if (cparams.kv_streaming() && memory) {
         stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
         if (!stream) return false;
     }
@@ -679,7 +697,7 @@ bool llama_context::prepare_compute_arenas(
 }
 
 void llama_context::release_kv_workspaces(bool retiring) {
-    if (!cparams.kv_stream_pool_bytes || !memory) return;
+    if (!cparams.kv_streaming() || !memory) return;
     auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
     if (!stream) return;
     if (retiring) stream->abort();
@@ -761,6 +779,7 @@ void llama_context::sched_reserve() {
     if (!model.hparams.no_alloc && !prepare_arenas()) {
         throw std::runtime_error("failed to prepare compute arenas");
     }
+    llama_log_memory_phase(compute_memory.get());
 
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
@@ -1518,7 +1537,7 @@ llm_graph_result * llama_context::process_ubatch(
         const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx,
         llama_memory_text_phase phase, ggml_status & ret) {
     llama_kv_stream_model * stream = nullptr;
-    if (cparams.kv_stream_pool_bytes) {
+    if (cparams.kv_streaming()) {
         static const std::vector<ggml_backend_memory_lease_t> empty;
         stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
         if (!stream || !stream->set_workspaces(compute_memory ? compute_memory->workspace_leases() : empty)) {
@@ -1873,9 +1892,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         LLAMA_LOG_ERROR("%s: embd row width %zu does not match the decoder input %zu\n",
                 __func__, batch_inp.n_embd, batch_inp.n_embd_inp);
         return -1;
-}
+    }
 
-    if (cparams.kv_stream_pool_bytes) {
+    if (cparams.kv_streaming()) {
         auto * stream = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->get_kv_stream();
         if (!stream || !stream->complete() || batch_inp.n_tokens < 0 || batch_inp.embd) {
             LLAMA_LOG_ERROR("%s: KV streaming requires an idle text-token append\n",__func__); return -1;
@@ -1940,7 +1959,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
 
-    const auto text_phase = cparams.kv_stream_pool_bytes ?
+    const auto text_phase = cparams.kv_streaming() ?
         (cparams.kv_stream_decode ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
         llama_memory_text_phase::unspecified;
 
@@ -1974,7 +1993,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     sched_reserve();
 
-    if (cparams.kv_stream_pool_bytes && compute_memory) {
+    if (cparams.kv_streaming() && compute_memory) {
         const auto transitions = compute_memory->phase_transition_count();
         const auto phase_result = compute_memory->signal_text_phase({
             text_phase,
@@ -2001,6 +2020,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 LLAMA_LOG_ERROR("%s: failed to reserve graph after text phase transition\n",__func__);
                 return -2;
             }
+            llama_log_memory_phase(compute_memory.get());
         }
     }
 
@@ -3472,7 +3492,7 @@ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
 static constexpr uint32_t io_magic = 0xaf143cd8;
 
 size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+    if (cparams.kv_streaming() && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
@@ -3488,7 +3508,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
 }
 
 size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
-    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+    if (cparams.kv_streaming() && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
     std::unique_ptr<llama_io_write_i> io;
@@ -3510,7 +3530,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
-    if (cparams.kv_stream_pool_bytes && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
+    if (cparams.kv_streaming() && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
         LLAMA_LOG_ERROR("%s: KV streaming does not support device-native snapshots\n",__func__); return 0;
     }
     std::unique_ptr<llama_io_read_i> io;
@@ -4092,6 +4112,7 @@ llama_context_params llama_context_default_params() {
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
         /*.kv_stream_pool_bytes        =*/ 0,
+        /*.shared_device_memory_bytes   =*/ 0,
     };
 
     return result;

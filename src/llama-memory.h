@@ -27,6 +27,7 @@ struct llama_memory_params {
     llama_memory_t mem_other;
     ggml_backend_t kv_stream_backend = nullptr;
     size_t kv_stream_pool_bytes = 0;
+    size_t shared_device_memory_bytes = 0;
     uint32_t kv_stream_max_rows = 0;
 };
 

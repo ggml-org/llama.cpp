@@ -582,6 +582,7 @@ struct common_params {
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
     size_t kv_stream_pool_bytes = 0; // experimental serial CUDA consumer
+    size_t shared_device_memory_bytes = 0; // exact shared device-local phase budget; mutually exclusive with kv_stream_pool_bytes
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
     bool no_op_offload     = false; // globally disable offload host tensor operations to device

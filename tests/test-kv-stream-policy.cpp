@@ -49,6 +49,36 @@ static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active
 
 int main() {
     testing t;
+    t.test("minimum_pool_is_exact_and_transactional", [](testing & t) {
+        for (const auto & types : {
+                std::pair{GGML_TYPE_F16,GGML_TYPE_F16},
+                std::pair{GGML_TYPE_Q8_0,GGML_TYPE_Q4_0},
+                std::pair{GGML_TYPE_Q5_0,GGML_TYPE_Q5_0}}) {
+            auto c = config(5,4);
+            c.shape.type_k = types.first;
+            c.shape.type_v = types.second;
+            c.capabilities.k.type = types.first;
+            c.capabilities.v.type = types.second;
+            c.pool_bytes = 0;
+            size_t minimum = 77;
+            if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(
+                    c,minimum).status == status::success)) return;
+            c.pool_bytes = minimum;
+            llama_kv_stream_policy_state state;
+            if (!t.assert_true(llama_kv_stream_policy_initialize(
+                    c,state).status == status::success)) return;
+            t.assert_equal(uint32_t(5),state.budget.pages);
+            t.assert_equal(uint32_t(1),state.ring_slots);
+            t.assert_equal(uint32_t(1),state.resident_pages_per_layer);
+        }
+        auto invalid = config(5,4);
+        invalid.layers = 0;
+        size_t unchanged = 91;
+        t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(
+            invalid,unchanged).status != status::success);
+        t.assert_equal(size_t(91),unchanged);
+    });
+
     t.test("runtime_feedback_units_continuity_and_policy_hysteresis", [](testing & t) {
         llama_kv_stream_feedback_window window;
         ggml_kv_stream_copy_feedback sample;

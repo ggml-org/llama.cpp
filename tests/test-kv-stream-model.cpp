@@ -180,6 +180,97 @@ int main(int argc,char ** argv) {
         t.assert_true(model->shared_parent() == nullptr);
     });
 
+    t.test("shared_budget_finds_exact_fit_and_validates_all_phases", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
+        llama_kv_stream_policy_config bootstrap = f.policy;
+        bootstrap.pool_bytes = 0;
+        size_t minimum_pool = 0;
+        if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(
+                bootstrap,minimum_pool).status ==
+                llama_kv_stream_policy_status::success)) return;
+        auto * device_type = llama_kv_stream_device_buffer_type(dev);
+        auto * cpu_type = ggml_backend_cpu_buffer_type();
+        const size_t alignment = ggml_backend_buft_get_alignment(device_type);
+        llama_compute_workspace_plan plan;
+        plan.groups = {
+            {device_type,2*1048576,alignment,0},
+            {cpu_type,8192,ggml_backend_buft_get_alignment(cpu_type),1},
+        };
+        plan.phase_sizes = {{2*1048576,8192},{1048576,4096}};
+
+        const auto attempt = [&](size_t budget,bool exercise) {
+            llama_kv_stream_model_config config{
+                backend.get(),f.host->config(),minimum_pool,256,4};
+            config.shared_device_memory_bytes = budget;
+            auto model = llama_kv_stream_model::create(config);
+            if (!model) return false;
+            std::vector<ggml_backend_t> backends{backend.get(),cpu.get()};
+            std::vector<ggml_backend_buffer_type_t> types{device_type,cpu_type};
+            ggml_backend_sched_ptr sched(ggml_backend_sched_new(
+                backends.data(),types.data(),types.size(),256,false,true));
+            auto owner = llama_context_memory::create(
+                sched.get(),backends,plan,model.get());
+            if (!owner) return false;
+            if (!exercise) return true;
+            t.assert_equal(budget,owner->shared_parent_capacity());
+            t.assert_equal(budget,
+                ggml_backend_buffer_get_size(owner->shared_parent()));
+            const auto prefill_pool = model->pool_grant_bytes();
+            t.assert_true(prefill_pool >= minimum_pool);
+            llama_context_memory_diagnostics prefill;
+            t.assert_true(owner->diagnostics(prefill));
+            t.assert_true(prefill.phase == llama_memory_text_phase::prefill);
+            t.assert_equal(budget,prefill.parent_bytes);
+            t.assert_equal(plan.phase_sizes[0][0],prefill.workspace_bytes);
+            t.assert_equal(prefill_pool,prefill.kv_pool_bytes);
+            t.assert_equal(budget,prefill.workspace_bytes+prefill.kv_pool_bytes+
+                prefill.kv_writer_bytes+prefill.kv_attention_bytes+prefill.unused_bytes);
+            t.assert_equal(size_t(0),prefill.reclaimed_workspace_bytes);
+            t.assert_true(prefill.executable_storage_external);
+            auto * base = ggml_backend_buffer_get_base(owner->shared_parent());
+            t.assert_true(owner->signal_text_phase({
+                llama_memory_text_phase::prefill,513,true,true,false}).status ==
+                llama_memory_text_phase_status::changed);
+            t.assert_true(owner->signal_text_phase({
+                llama_memory_text_phase::decode,1,true,true,false}).status ==
+                llama_memory_text_phase_status::changed);
+            t.assert_true(model->pool_grant_bytes() > prefill_pool);
+            llama_context_memory_diagnostics decode;
+            t.assert_true(owner->diagnostics(decode));
+            t.assert_true(decode.phase == llama_memory_text_phase::decode);
+            t.assert_equal(plan.phase_sizes[1][0],decode.workspace_bytes);
+            t.assert_equal(plan.groups[0].size-plan.phase_sizes[1][0],
+                decode.reclaimed_workspace_bytes);
+            t.assert_equal(model->pool_grant_bytes(),decode.kv_pool_bytes);
+            t.assert_equal(uint64_t(1),decode.transition_count);
+            t.assert_true(decode.last_transition_us > 0);
+            t.assert_true(base ==
+                ggml_backend_buffer_get_base(owner->shared_parent()));
+            t.assert_true(owner->signal_text_phase({
+                llama_memory_text_phase::prefill,7,true,true,false}).status ==
+                llama_memory_text_phase_status::changed);
+            t.assert_equal(prefill_pool,model->pool_grant_bytes());
+            return true;
+
+        };
+
+        size_t low = plan.groups[0].size-alignment;
+        size_t high = 4*1048576;
+        if (!t.assert_true(attempt(high,false))) return;
+        while (high-low > alignment) {
+            size_t middle = low+(high-low)/2;
+            middle -= middle%alignment;
+            if (middle <= low) middle = low+alignment;
+            if (attempt(middle,false)) high = middle;
+            else low = middle;
+        }
+        t.assert_equal(alignment,high-low);
+        t.assert_true(!attempt(low,false));
+        t.assert_true(attempt(high,true));
+        t.out << "minimum shared parent bytes=" << high
+              << ", rejected previous granule=" << low << '\n';
+    });
+
     t.test("interrupted_phase_transition_recovers_and_retries", [&](testing & t) {
         {
             fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
@@ -349,6 +440,13 @@ int main(int argc,char ** argv) {
             if (!t.assert_true(ggml_backend_supports_op(backend.get(),k_write) && ggml_backend_supports_op(backend.get(),v_write))) return;
             if (!t.assert_true(ggml_backend_sched_alloc_graph(sched.get(),graph))) return;
             if (!t.assert_true(model->begin(active,rows,rows == 1))) return;
+            if (rows == 1) {
+                llama_kv_stream_runtime_diagnostics onset;
+                t.assert_true(model->runtime_diagnostics(onset));
+                t.assert_true(onset.streaming_active);
+                t.assert_true(onset.active_pages > onset.resident_pages_per_layer);
+                t.assert_true(onset.ring_slots > 0);
+            }
             if (rows == 1) t.assert_true(model->granted_bytes() < prefill_grants);
             if (!t.assert_true(ggml_backend_sched_graph_compute(sched.get(),graph) == GGML_STATUS_SUCCESS)) return;
             t.assert_true(model->complete()); t.assert_equal(active,model->tokens());

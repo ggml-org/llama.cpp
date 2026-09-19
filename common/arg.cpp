@@ -893,6 +893,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if (params.mmproj_use_gpu && params.mmproj_device == nullptr && !params.devices.empty()) {
         params.mmproj_device = params.devices.front();
         params.mmproj_use_gpu = params.mmproj_device != nullptr;
+}
+
+    if (params.kv_stream_pool_bytes && params.shared_device_memory_bytes) {
+        throw std::invalid_argument("error: --kv-stream-pool-mib and --shared-device-memory-mib are mutually exclusive\n");
     }
 
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
@@ -2423,12 +2427,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
         {"--kv-stream-pool-mib"}, "N",
-        "experimental serial CUDA KV pool in MiB; excludes workspaces (requires -fa on, --fit off)",
+        "legacy serial CUDA KV pool in MiB; excludes compute workspaces and is mutually exclusive with --shared-device-memory-mib (requires -fa on, --fit off)",
         [](common_params & params, int value) {
             if (value < 0 || size_t(value) > SIZE_MAX/1048576) throw std::invalid_argument("invalid KV stream pool size");
             params.kv_stream_pool_bytes = size_t(value)*1048576;
         }
     ));
+    add_opt(common_arg(
+        {"--kv-stream-arena-mib", "--shared-device-memory-mib"}, "N",
+        "exact shared device-local phase budget in MiB for compute workspace and streaming KV grants; mutually exclusive with --kv-stream-pool-mib (requires -fa on, --fit off)",
+        [](common_params & params, int value) {
+            if (value < 0 || size_t(value) > SIZE_MAX/1048576) throw std::invalid_argument("invalid shared device memory size");
+            params.shared_device_memory_bytes = size_t(value)*1048576;
+        }
+    ).set_env("LLAMA_ARG_SHARED_DEVICE_MEMORY_MIB"));
     add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},

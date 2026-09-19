@@ -85,6 +85,10 @@ struct llama_kv_stream_policy_result {
     ggml_kv_stream_result geometry;
 };
 
+// Return the smallest complete pool containing one resident page per layer, one ring page, and conversion scratch.
+// The input pool_bytes is ignored; failure leaves output unchanged.
+llama_kv_stream_policy_result llama_kv_stream_policy_minimum_pool_bytes(
+        const llama_kv_stream_policy_config & config, size_t & output);
 // Recompute a larger pool at an existing committed frontier. This does not retain or move storage.
 // Failure leaves output unchanged.
 llama_kv_stream_policy_result llama_kv_stream_policy_grow(

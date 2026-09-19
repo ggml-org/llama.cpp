@@ -10,7 +10,7 @@
 
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
-static bool f16_control = false;
+static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
 
 struct recurrent_snapshot : llama_io_write_i {
@@ -42,7 +42,9 @@ static run_result evaluate(testing & t,llama_model * model,const std::vector<lla
     params.n_threads = params.n_threads_batch = 8; params.n_seq_max = 1;
     params.type_k = f16_control ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
     params.type_v = f16_control ? GGML_TYPE_F16 : GGML_TYPE_Q4_0;
-    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED; params.kv_stream_pool_bytes = pool;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    if (shared_budget_control) params.shared_device_memory_bytes = pool;
+    else params.kv_stream_pool_bytes = pool;
     if (trace_control) {
         params.cb_eval_user_data = &result;
         params.cb_eval = [](ggml_tensor * tensor,bool ask,void * opaque) {
@@ -175,7 +177,8 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
     params.n_threads = params.n_threads_batch = 8; params.n_seq_max = 1;
     params.type_k = GGML_TYPE_Q8_0; params.type_v = GGML_TYPE_Q4_0;
     params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
-    params.kv_stream_pool_bytes = pool;
+    if (shared_budget_control) params.shared_device_memory_bytes = pool;
+    else params.kv_stream_pool_bytes = pool;
     context_ptr context(llama_init_from_model(model,params),llama_free);
     if (!t.assert_true(bool(context))) return result;
     auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(context.get()));
@@ -304,11 +307,18 @@ static serial_phase_result evaluate_serial_phases(testing & t, llama_model * mod
 
 int main(int argc,char ** argv) {
     testing t;
-    t.test("streaming_is_disabled_by_default", [&](testing & t) { t.assert_equal(size_t(0),llama_context_default_params().kv_stream_pool_bytes); });
+    t.test("streaming_is_disabled_by_default", [&](testing & t) {
+        const auto defaults = llama_context_default_params();
+        t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
+        t.assert_equal(size_t(0),defaults.shared_device_memory_bytes);
+    });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
-    f16_control = argc > 3 && !std::strcmp(argv[3],"--f16");
-    resident_control = argc > 3 && !std::strcmp(argv[3],"--resident");
-    trace_control = argc > 3 && !std::strcmp(argv[argc-1],"--trace");
+    for (int i = 3; i < argc; ++i) {
+        f16_control = f16_control || !std::strcmp(argv[i],"--f16");
+        resident_control = resident_control || !std::strcmp(argv[i],"--resident");
+        shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
+        trace_control = trace_control || !std::strcmp(argv[i],"--trace");
+    }
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
@@ -322,19 +332,20 @@ int main(int argc,char ** argv) {
     if (!t.assert_true(tokens >= 640)) return t.summary();
     prompt.resize(640);
     t.test("invalid_streaming_context_modes_fail_before_execution", [&](testing & t) {
-        for (int mode = 0; mode < 5; ++mode) {
+        for (int mode = 0; mode < 6; ++mode) {
             auto p = llama_context_default_params(); p.kv_stream_pool_bytes = 16*1048576; p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             if (mode == 0) p.n_seq_max = 2;
             if (mode == 1) p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
             if (mode == 2) p.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
             if (mode == 3) p.offload_kqv = false;
             if (mode == 4) p.n_rs_seq = 1;
+            if (mode == 5) p.shared_device_memory_bytes = 640*1048576;
             context_ptr context(llama_init_from_model(model.get(),p),llama_free); t.assert_true(!context);
         }
     });
     t.test("serial_phase_alternation_and_boundary_cancellation_match_stock", [&](testing & t) {
         const auto baseline = evaluate_serial_phases(t,model.get(),prompt,0);
-        const auto streamed = evaluate_serial_phases(t,model.get(),prompt,16*1048576);
+        const auto streamed = evaluate_serial_phases(t,model.get(),prompt,(shared_budget_control ? 640 : 16)*1048576);
         if (!t.assert_equal(baseline.logits.size(),streamed.logits.size()) ||
                 !t.assert_equal(size_t(14),streamed.logits.size()) ||
                 !t.assert_equal(streamed.logits.size(),streamed.pool_grants.size()) ||
@@ -384,7 +395,7 @@ int main(int argc,char ** argv) {
     for (uint32_t ubatch : {256u,512u}) t.test("hybrid_prefill_decode_and_recurrent_state_match_ub_"+std::to_string(ubatch), [&](testing & t) {
         const auto baseline = evaluate(t,model.get(),prompt,ubatch,0,{});
         if (!t.assert_equal(size_t(32),baseline.continuation.size())) return;
-        const auto streamed = evaluate(t,model.get(),prompt,ubatch,(f16_control || resident_control ? 64 : 16)*1048576,baseline.continuation);
+        const auto streamed = evaluate(t,model.get(),prompt,ubatch,(shared_budget_control ? 640 : (f16_control || resident_control ? 64 : 16))*1048576,baseline.continuation);
         if (trace_control && baseline.trace.size() == streamed.trace.size()) for (size_t n = 0; n < baseline.trace.size(); ++n) {
             const auto & a = baseline.trace[n]; const auto & b = streamed.trace[n];
             if (a.first != b.first || a.second.size() != b.second.size()) continue;

@@ -172,6 +172,52 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
+    {
+        common_params shared;
+        argv = {"binary_name","--shared-device-memory-mib","4096"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),shared,LLAMA_EXAMPLE_SERVER));
+        assert(shared.shared_device_memory_bytes == size_t(4096)*1024*1024);
+        assert(shared.kv_stream_pool_bytes == 0);
+
+        common_params alias;
+        argv = {"binary_name","--kv-stream-arena-mib","3072"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),alias,LLAMA_EXAMPLE_SERVER));
+        assert(alias.shared_device_memory_bytes == size_t(3072)*1024*1024);
+        assert(alias.kv_stream_pool_bytes == 0);
+
+        common_params legacy;
+        argv = {"binary_name","--kv-stream-pool-mib","64"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),legacy,LLAMA_EXAMPLE_SERVER));
+        assert(legacy.kv_stream_pool_bytes == size_t(64)*1024*1024);
+        assert(legacy.shared_device_memory_bytes == 0);
+
+        for (const std::vector<std::string> & conflicting : {
+                std::vector<std::string>{"binary_name","--kv-stream-pool-mib","64",
+                    "--shared-device-memory-mib","3072"},
+                std::vector<std::string>{"binary_name","--kv-stream-arena-mib","3072",
+                    "--kv-stream-pool-mib","64"}}) {
+            common_params rejected;
+            argv = conflicting;
+            assert(!common_params_parse(
+                argv.size(),list_str_to_char(argv).data(),rejected,LLAMA_EXAMPLE_SERVER));
+            assert(rejected.kv_stream_pool_bytes == 0);
+            assert(rejected.shared_device_memory_bytes == 0);
+        }
+
+        common_params disabled;
+        argv = {"binary_name","--kv-stream-pool-mib","0",
+            "--shared-device-memory-mib","0"};
+        assert(common_params_parse(
+            argv.size(),list_str_to_char(argv).data(),disabled,LLAMA_EXAMPLE_SERVER));
+        assert(disabled.kv_stream_pool_bytes == 0);
+        assert(disabled.shared_device_memory_bytes == 0);
+
+        common_params invalid;
+        argv = {"binary_name","--shared-device-memory-mib","-1"};
+        assert(!common_params_parse(
+            argv.size(),list_str_to_char(argv).data(),invalid,LLAMA_EXAMPLE_SERVER));
+    }
+
     printf("test-arg-parser: test invalid usage\n\n");
 
     // missing value

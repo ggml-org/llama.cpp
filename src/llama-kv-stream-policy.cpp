@@ -48,6 +48,30 @@ static llama_kv_stream_policy_result budget_make(
     return {};
 }
 
+llama_kv_stream_policy_result llama_kv_stream_policy_minimum_pool_bytes(
+        const llama_kv_stream_policy_config & config, size_t & output) {
+    ggml_kv_stream_execution execution;
+    const auto geometry = ggml_kv_stream_resolve(
+        config.shape,config.capabilities,size_t(config.shape.page_tokens),execution);
+    if (geometry.status != ggml_kv_stream_status::success) {
+        return {status::geometry_error,geometry};
+    }
+    if (!config.layers) return {status::invalid_config,{}};
+    if (config.layers == UINT32_MAX || !execution.storage.bytes ||
+            size_t(config.layers)+1 >
+                (SIZE_MAX-execution.conversion.bytes)/execution.storage.bytes) {
+        return {status::overflow,{}};
+    }
+    llama_kv_stream_policy_config minimum = config;
+    minimum.pool_bytes = (size_t(config.layers)+1)*execution.storage.bytes +
+        execution.conversion.bytes;
+    llama_kv_stream_policy_budget budget;
+    const auto result = budget_make(minimum,budget);
+    if (result.status != status::success) return result;
+    output = minimum.pool_bytes;
+    return {};
+}
+
 // Preserve the fixed pool's encoding and page geometry across proposals.
 static bool same_shape(const ggml_kv_stream_shape & a, const ggml_kv_stream_shape & b) {
     return a.type_k == b.type_k && a.type_v == b.type_v && a.head_dim_k == b.head_dim_k &&

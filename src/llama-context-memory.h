@@ -6,6 +6,20 @@
 
 class llama_kv_stream_model;
 
+struct llama_context_memory_diagnostics {
+    llama_memory_text_phase phase = llama_memory_text_phase::unspecified;
+    size_t parent_bytes = 0, workspace_bytes = 0, kv_pool_bytes = 0;
+    size_t kv_writer_bytes = 0, kv_attention_bytes = 0, unused_bytes = 0;
+    size_t reclaimed_workspace_bytes = 0;
+    uint64_t arena_generation = 0, transition_count = 0, layout_revision = 0;
+    uint64_t last_transition_us = 0;
+    uint32_t resident_pages_per_layer = 0, ring_slots = 0, active_pages = 0;
+    size_t last_copy_bytes = 0, last_copy_calls = 0;
+    double last_copy_ms = 0, last_elapsed_ms = 0;
+    bool streaming_active = false;
+    bool executable_storage_external = true;
+};
+
 // One serial scheduler lifetime; native caches and arena leases retire before scheduler destruction.
 // The caller owns the scheduler/backends and must not submit or mutate their graph caches concurrently.
 class llama_context_memory {
@@ -43,6 +57,7 @@ public:
     size_t shared_parent_capacity() const noexcept;
     uint64_t shared_arena_generation() const noexcept;
     uint64_t phase_transition_count() const noexcept;
+    bool diagnostics(llama_context_memory_diagnostics & output) const noexcept;
 
 private:
     struct implementation;

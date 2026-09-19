@@ -53,10 +53,13 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     ggml_backend_buffer_t kv_parent = nullptr;
     size_t kv_parent_capacity = 0;
     size_t kv_arena = std::numeric_limits<size_t>::max();
+    llama_memory_resource_id kv_workspace_resource = 0;
+    size_t kv_workspace_max = 0;
     llama_memory_transition_target phase_target;
     std::vector<llama_memory_transition_arena> supplied;
     llama_memory_stage_id active_stage = 0, prefill_stage = 0, decode_stage = 0;
     uint64_t transition_count = 0, executor_revision = 0;
+    uint64_t last_transition_us = 0;
 
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
@@ -95,6 +98,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     bool activate_stage(llama_memory_stage_id stage) {
         if (!transition || !stage) return false;
         if (stage == active_stage) return true;
+        const int64_t started = ggml_time_us();
         auto target = phase_target;
         target.stage = stage;
         try {
@@ -115,6 +119,7 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
             if (!capture_execution()) return false;
             active_stage = stage;
             ++transition_count;
+            last_transition_us = uint64_t(ggml_time_us()-started);
             return true;
         } catch (...) {
             return false;
@@ -234,10 +239,15 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (carries_kv && kv_group != std::numeric_limits<size_t>::max()) return {};
             size_t capacity = group.size;
             if (carries_kv) {
-                for (size_t bytes : {kv.pool_bytes,kv.writer_bytes,kv_attention}) {
-                    if (!align_up(capacity,group.alignment,capacity) ||
-                            bytes > SIZE_MAX-capacity) return {};
-                    capacity += bytes;
+                if (kv.shared_device_memory_bytes) {
+                    if (kv.shared_device_memory_bytes < group.size) return {};
+                    capacity = kv.shared_device_memory_bytes;
+                } else {
+                    for (size_t bytes : {kv.pool_bytes,kv.writer_bytes,kv_attention}) {
+                        if (!align_up(capacity,group.alignment,capacity) ||
+                                bytes > SIZE_MAX-capacity) return {};
+                        capacity += bytes;
+                    }
                 }
             }
             ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(group.buft,capacity));
@@ -280,6 +290,8 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 kv_domain = id;
                 state->kv_parent = ggml_backend_memory_arena_parent(state->arenas.back().arena.get());
                 state->kv_parent_capacity = capacity;
+                state->kv_workspace_resource = id;
+                state->kv_workspace_max = group.size;
             }
         }
         if (stream && kv_group == std::numeric_limits<size_t>::max()) return {};
@@ -310,7 +322,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 const size_t attention = i == 0 ? kv_attention :
                     (i == 1 ? kv.attention_prefill_bytes : kv.attention_decode_bytes);
                 auto & requirements = target.plan.stages[i].requirements;
-                const size_t pool_preferred = i == 2 ?
+                const size_t pool_preferred = (kv.shared_device_memory_bytes || i == 2) ?
                     target.budgets[kv_arena].capacity : kv.pool_bytes;
                 requirements.push_back({
                     pool_id,kv.pool_bytes,pool_preferred,
@@ -328,6 +340,12 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             target.plan.inputs.push_back(pool_id);
             target.plan.outputs.push_back(pool_id);
             if (llama_memory_plan_validate(target.plan).status != llama_memory_plan_status::success) return {};
+            for (const auto & stage : target.plan.stages) {
+                llama_memory_layout candidate;
+                if (llama_memory_layout_elastic(
+                        target.plan,stage.id,target.budgets,target.fixed,candidate).status !=
+                        llama_memory_layout_status::success) return {};
+            }
         }
 
         if (stream) {
@@ -445,6 +463,40 @@ uint64_t llama_context_memory::shared_arena_generation() const noexcept {
 }
 uint64_t llama_context_memory::phase_transition_count() const noexcept {
     return impl->transition_count;
+}
+
+bool llama_context_memory::diagnostics(
+        llama_context_memory_diagnostics & output) const noexcept {
+    if (!impl->shared_stream || !impl->kv_parent || !impl->kv_workspace_resource) return false;
+    llama_kv_stream_runtime_diagnostics stream;
+    if (!impl->shared_stream->runtime_diagnostics(stream)) return false;
+    size_t workspace_bytes = 0;
+    for (auto * lease : impl->workspace->leases()) {
+        ggml_backend_memory_region region;
+        if (lease && ggml_backend_memory_lease_get_region(lease,&region) &&
+                region.id == impl->kv_workspace_resource) {
+            if (workspace_bytes) return false;
+            workspace_bytes = region.size;
+        }
+    }
+    size_t used = workspace_bytes;
+    for (size_t bytes : {stream.pool_bytes,stream.writer_bytes,stream.attention_bytes}) {
+        if (bytes > SIZE_MAX-used) return false;
+        used += bytes;
+    }
+    if (used > impl->kv_parent_capacity || workspace_bytes > impl->kv_workspace_max) return false;
+    output = {
+        impl->active_stage == impl->decode_stage ?
+            llama_memory_text_phase::decode : llama_memory_text_phase::prefill,
+        impl->kv_parent_capacity,workspace_bytes,stream.pool_bytes,
+        stream.writer_bytes,stream.attention_bytes,impl->kv_parent_capacity-used,
+        impl->kv_workspace_max-workspace_bytes,
+        shared_arena_generation(),impl->transition_count,stream.layout_revision,
+        impl->last_transition_us,
+        stream.resident_pages_per_layer,stream.ring_slots,stream.active_pages,
+        stream.last_copy_bytes,stream.last_copy_calls,stream.last_copy_ms,stream.last_elapsed_ms,stream.streaming_active,true,
+    };
+    return true;
 }
 
 llama_memory_text_phase_result llama_context_memory::signal_text_phase(

@@ -1122,10 +1122,10 @@ private:
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         const bool has_spec = has_draft || spec_mtp;
-        if (params.kv_stream_pool_bytes && (has_mmproj || params.fit_params ||
+        if ((params.kv_stream_pool_bytes || params.shared_device_memory_bytes) && (has_mmproj || params.fit_params ||
                 std::any_of(params.speculative.types.begin(),params.speculative.types.end(),
                     [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE; }))) {
-            SRV_ERR("%s", "KV streaming currently requires text-only non-speculative execution and --fit off\n");
+            SRV_ERR("%s", "KV streaming shared memory currently requires text-only non-speculative execution and --fit off\n");
             return false;
         }
 
@@ -4170,7 +4170,7 @@ private:
         // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
-            if (params_base.kv_stream_pool_bytes) {
+            if (params_base.kv_stream_pool_bytes || params_base.shared_device_memory_bytes) {
                 const bool decoding = slots.size() == 1 && slots.front().state == SLOT_STATE_GENERATING;
                 llama_set_kv_stream_decode(ctx_tgt,decoding);
             }

@@ -7,6 +7,7 @@ struct llama_kv_stream_memory_requirements {
     size_t pool_bytes = 0, writer_bytes = 0;
     size_t attention_prefill_bytes = 0, attention_decode_bytes = 0;
     size_t alignment = 1;
+    size_t shared_device_memory_bytes = 0;
 };
 
 // Borrowed candidate leases; the model retains them only after complete session reconstruction.
@@ -17,6 +18,15 @@ struct llama_kv_stream_memory_binding {
     llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
 };
 
+struct llama_kv_stream_runtime_diagnostics {
+    uint64_t layout_revision = 0;
+    size_t pool_bytes = 0, writer_bytes = 0, attention_bytes = 0;
+    uint32_t resident_pages_per_layer = 0, ring_slots = 0, active_pages = 0;
+    size_t last_copy_bytes = 0, last_copy_calls = 0;
+    double last_copy_ms = 0, last_elapsed_ms = 0;
+    bool streaming_active = false;
+};
+
 struct llama_kv_stream_model_config {
     ggml_backend_t backend = nullptr;
     llama_kv_stream_host_config host;
@@ -24,6 +34,7 @@ struct llama_kv_stream_model_config {
     uint32_t max_batch_rows = 0, query_heads = 0;
     bool measure = false;
     bool resume_decode = true;
+    size_t shared_device_memory_bytes = 0;
 };
 
 // Own the host-KV execution buffer and a serial session; proxy-buffer references retain the runtime state.
@@ -58,6 +69,7 @@ public:
     size_t pool_grant_bytes() const noexcept;
     size_t writer_grant_bytes() const noexcept;
     size_t attention_grant_bytes() const noexcept;
+    bool runtime_diagnostics(llama_kv_stream_runtime_diagnostics & output) const noexcept;
 private:
     llama_kv_stream_model() = default;
     struct implementation;

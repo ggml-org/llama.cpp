@@ -8,7 +8,7 @@ Last source review: 2026-09-17, against the checkpoint commits below.
 
 Milestone 4 is committed at `2b3b27bc8` and checkpointed as `feature/device-memory-manager-milestone-4`. Development continues on `feature/device-memory-consumers`. Substages **5.1a** and **5.1b** are committed at `fe2189418` and `74b400abb`. Substage **5.2a** is committed at `4717474c3`; **5.2b** is committed at `0e3d5a0c0`. Stage **5.3a** is committed at `7bfc17ac3`; **5.3b** is committed at `15d47eb72`; **5.4a** is committed at `ff4d3bdef`. Stage **5.3c** is committed at `6c724dee1`; **5.4b** is committed at `6db00070d`; **5.4c** is committed at `28e7999a0`; **5.4d** is committed at `59591b6da`; **5.4e** is committed at `a92107200`; **5.4f** is committed at `d48a1faa8`; **5.4g** is committed at `f069590ef`; **5.4h** is committed at `5887c18a0`; **5.4i** is committed at `6f98b1276`; **5.4j** is committed at `17b92d321`. The combined **5.4j.1-5.4j.4 optimization bundle** is committed at `5ee09b7e1`; **5.4k** is committed at `6879fe81a`; **5.5a** is committed at `b72bcc9e6`; **5.5b** is committed at `10ec8902d`; **5.5c** is committed at `123e76b44`. Backend-neutral publication through stage **5.6f** completes the milestone 5 checkpoint. Stages **5.7-5.9** retain their identifiers as non-gating follow-ups after milestone 6 establishes the final phase-sharing lifecycle.
 
-Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`, and **6.3c** at `7ad14ee86`, and **6.4a** at `5eb1088d2`; **6.4b** is implemented and qualified for user review.
+Stage **5.6a** is committed at `eff245203`, **5.6b** at `04917421f`, **5.6c** at `a53e3bf81`, **5.6d** at `9f2fe3aff`, **5.6e** at `d57288807`, and **5.6f** at `dbd47c686`. Milestone 5 is checkpointed as `feature/device-memory-consumers-milestone-5`. Stages 5.7-5.9 remain named, non-gating optimization/documentation follow-ups. Stage **6.1a** is committed at `37b8ec387`, **6.1b** at `f1db07796`, **6.2a** at `546fdf67b`, **6.2b** at `18dfa8f4d`, **6.2c** at `51444315c`, and **6.3a** at `4b576eec7`, and **6.3b** at `4bf33a5e3`, and **6.3c** at `7ad14ee86`, and **6.4a** at `5eb1088d2`, and **6.4b** at `73a30439c`; stages **6.5a-6.5c** are implemented and qualified together for user review.
 
 Read this file before continuing implementation. Keep milestone and stage identifiers stable. Parent stage IDs retain their original scope; lettered substages below are the commit units, each containing the implementation and its tests. Stage 8.5 remains a single commit unit. Update the progress ledger after completing a substage, recording its actual commit, validation, and any remaining limitations. A parent stage is complete only when all its required substages pass. Add explicitly named extensions if work expands; do not renumber or retroactively redefine completed stages.
 
@@ -419,8 +419,10 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.3b | Committed | 4bf33a5e3 | One physical device-local parent holds fixed compute, KV pool, writer, and maximum attention grants; private-to-shared handoff preserves host KV and scheduler rebuilds. |
 | 6.3c | Committed | 7ad14ee86 | Prefill-to-decode transition shrinks compute and attention grants into a larger decode KV pool under the same parent; execution is retired and recaptured once per real phase change. |
 | 6.4a | Committed | 5eb1088d2 | Populated-cache decode-to-prefill shrink, lazy resident reload, repeated alternation, and cleared short/long serial requests are qualified against stock execution. |
-| 6.4b | Ready for review | - | Prompt reuse, whole-cache restoration, cancellation at both phase boundaries, recoverable coordinator interruption, retry, and explicit terminal invalidation are qualified. |
-| 6.5a-6.5c | Planned | - | See revised substage dependencies and milestone acceptance gate. |
+| 6.4b | Committed | 73a30439c | Prompt reuse, whole-cache restoration, cancellation at both phase boundaries, recoverable coordinator interruption, retry, and explicit terminal invalidation are qualified. |
+| 6.5a | Ready for review (combined) | - | Exact shared-device parent API/CLI, phase-arena compatibility alias, legacy fixed-pool preservation, and order-independent conflict rejection. |
+| 6.5b | Ready for review (combined) | - | Exact minimum KV bootstrap, all-phase startup validation, next-granule rejection, and phase-safe maximum-budget execution probing. |
+| 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
 | 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3439,3 +3441,53 @@ TDD and validation evidence:
 - Focused ASan/leak and UBSan builds/tests pass. The broader CUDA memory/KV matrix passes all 18 tests.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.
+
+### Stages 6.5a-6.5c implementation and validation
+
+The user requested the complete 6.5 sequence as one review bundle. The substage boundaries remain explicit below, but their implementation, tests, diagnostics, and qualification are staged together.
+
+#### Stage 6.5a: generalized shared-device budget
+
+The public `llama_context_params` and common parameter layer now expose `shared_device_memory_bytes`. `--shared-device-memory-mib` sets it from the CLI, while `--kv-stream-arena-mib` is a compatibility alias for the historical phase-arena command line. The value is the exact device-local parent allocation shared by phase compute workspace and the participating KV pool, writer scratch, attention scratch, and alignment gaps.
+
+The legacy `--kv-stream-pool-mib` remains available with unchanged semantics: it fixes the initial/prefill KV pool and excludes compute and scratch from the value. Setting both nonzero options is rejected after environment/config/CLI processing, independent of argument order. Direct C API callers receive the same conflict rejection during context construction. Zero for both keeps stock behavior.
+
+The shared budget deliberately excludes model weights, authoritative host KV, output buffers, backend-owned `ctx.pool()` capacity, executable/CUDA graph storage, driver/runtime allocations, and other inexact external components. KV graph workspaces alias scheduler workspace and are not charged twice. The existing single-CUDA, serial text-only, no-speculation/mmproj, Flash-Attention, and `--fit off` restrictions remain explicit.
+
+#### Stage 6.5b: exact fitting and phase-safe probing
+
+Budget-only startup derives the smallest feasible KV bootstrap from quant geometry: one resident page per attention layer, one shared ring page, and conversion storage. The calculation is pure and transactional, and is validated for F16/F16, Q8_0/Q4_0, and Q5_0/Q5_0 geometry. The temporary bootstrap device grants are released before the exact shared parent is allocated, so probing does not require simultaneous old/new full budgets.
+
+Context-memory construction uses the requested byte count exactly. Before publishing any arena, it verifies the conservative transition layout, prefill layout, and decode layout against the same parent. Under a total budget, both steady phases give every remaining usable byte to KV after their exact compute/writer/attention requirements; the legacy pool path remains fixed. Shared attachment accepts the resulting pool only when it is at least the validated bootstrap minimum and still enforces exact lease identity, type, region size, containment, alignment, and non-overlap.
+
+The synthetic CUDA allocator search found the first valid parent at 3,194,880 bytes and rejected the immediately preceding 3,194,752-byte granule. The successful boundary completed prefill-to-decode growth and decode-to-prefill shrink around one unchanged parent.
+
+The existing sweep harness works unchanged through the `--kv-stream-arena-mib` alias. At 8K it estimated 2724 MiB from free memory; real phase execution rejected 2724 through 2719 MiB and accepted 2718 MiB. Thus 2719 MiB is the measured rejected next granule and 2718 MiB is the maximum phase-safe result, with no arbitrary reserve. At 106K the minimum startup probe grew from 640 to 704 MiB and real execution selected 2688 MiB after 2720 MiB failed. At 147K, startup rejected 640 through 896 MiB, first accepted 960 MiB, and real execution selected 2688 MiB.
+
+#### Stage 6.5c: diagnostics and qualification
+
+Low-frequency `memory_phase` logs are visible at server verbosity 3 and are machine-parseable. They report phase, exact parent bytes, compute/KV/writer/attention grants, unused/alignment bytes, reclaimed compute, external capture ownership, coordinator transition microseconds, arena and KV revisions, resident/ring/active pages, streaming state, last H2D bytes/calls, and sampled copy versus elapsed milliseconds. Layout-acceptance logs separately report total copied MiB/calls, peak ring pages, and sampled copy time, keeping coordinator transition cost and transfer cost distinct from aggregate token speed.
+
+The full IQ4_XS Qwen3.8-27B shared-budget test uses an exact 640 MiB parent. Both UVM-disabled and UVM-enabled runs pass 5 cases / 560 assertions with zero maximum logit error, zero recurrent relative L2 error, 14/14 exact serial phase boundaries, and 32/32 matching continuation tokens at ubatch 256 and 512. A representative 1024-context diagnostic shows the decode compute grant falling from about 506.3 MiB to 6.65 MiB while the KV pool grows from about 132 MiB to 632.8 MiB under the same parent; executable storage remains explicitly external.
+
+A matched Release IQ4_XS comparison used batch/ubatch 256, Q8_0/Q4_0 KV, 256 decode tokens, UVM disabled, and the largest phase-safe budget selected by the harness:
+
+| Context | Budget | New prefill tok/s | Phase-arena prefill | Change | New decode tok/s | Phase-arena decode | Change |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8K | 2718 MiB | 1697.28 | 1808.87 | -6.17% | 46.77 | 47.60 | -1.74% |
+| 106K | 2688 MiB | 926.23 | 1041.50 | -11.07% | 29.58 | 29.91 | -1.12% |
+| 147K | 2688 MiB | 741.18 | 946.74 | -21.71% | 23.09 | 24.31 | -5.01% |
+
+The older phase-arena rows are historical single-sample results, so the table is qualification rather than a claim of controlled statistical significance. A same-branch 8K legacy-pool control measured 1702.89 prefill and 46.86 decode tok/s; the new exact-budget path differs by only -0.33% and -0.18%, respectively. The larger gap to the older reference is therefore not caused by the new budget option itself. It is consistent with the already recorded common-implementation costs—especially strict prefill gathering and graph segmentation—left to deferred stages 5.7 and 5.8. Decode remains much closer to the reference, while the 147K point still shows optimization headroom.
+
+A subsequent full context-matched IQ4_XS sweep covers every 8 Ki-token point from 8K through 192K, with 256 decoded tokens at each point and 32 MiB phase-safe budget granularity. Both implementations begin streaming at 104K. The new decode path is 0.65-2.42% behind through 112K, 4.58-6.17% behind from 120K through 152K, and 12.85-15.97% behind from 160K through 192K; the mean across all 24 points is -4.80%. The effective new decode KV grant averages 15.48 MiB below the old reference because the early-context phase-safe total budget is 2688 rather than 2720 MiB. Peak effective H2D utilization at 192K is 73.86% for the new implementation versus 84.53% for the old reference, reflecting both one fewer resident page and lower decode throughput. The reproducible plot, joined CSV, source sweep, and plotting script are under `benchmarks/results/milestone6-vs-phase-arena-iq4-20260917`; the requested figure is `iq4-phase-arena-vs-memory-infra.png`.
+
+TDD and validation evidence:
+
+- Parser tests cover the new option, compatibility alias, legacy option, zero values, negative input, and both conflict orders. Direct API defaults and conflicts are covered in the real context test.
+- The policy suite passes 25 cases / 139,966 assertions. The CUDA model suite passes 7 cases / 159 assertions, including exact fit, previous-granule rejection, full grant conservation, transition timing, streaming onset, and nonzero transfer telemetry.
+- Compute Sanitizer reports 159/159 assertions, zero errors, and zero leaked bytes. Focused ASan/leak and UBSan suites pass.
+- The broader CUDA parser/memory/KV matrix passes all 20 tests. Complete Debug and Release `llama-server` targets build successfully.
+- Production-verbosity diagnostics were verified in `/tmp/kv-65-logcheck`. Maximum-budget and representative results are in `/tmp/kv-65-shared-8k`, `/tmp/kv-65-legacy-8k`, and `/tmp/kv-65-shared-representative`; historical reference rows come from `benchmarks/results/phase-arena-vs-base-q3-iq4-20260901`.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and the untracked benchmark tree remain untouched. No assistant commit or push was made.

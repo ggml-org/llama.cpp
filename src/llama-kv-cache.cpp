@@ -187,15 +187,29 @@ llama_kv_cache::llama_kv_cache(
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
         if (!get || !get() || get()->version < 3) throw std::runtime_error("missing CUDA KV streaming capabilities");
         llama_kv_stream_model_config config;
-        config.backend = stream->kv_stream_backend; config.pool_bytes = stream->kv_stream_pool_bytes;
+        config.backend = stream->kv_stream_backend;
+        config.pool_bytes = stream->kv_stream_pool_bytes;
+        config.shared_device_memory_bytes = stream->shared_device_memory_bytes;
         config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
         config.measure = true;
         config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
             get()->capabilities(config.backend,type_k,type_v),requested_kv_size,uint32_t(ids.size())};
+        if (!config.pool_bytes) {
+            llama_kv_stream_policy_config bootstrap;
+            bootstrap.shape = config.host.shape;
+            bootstrap.capabilities = config.host.capabilities;
+            bootstrap.layers = config.host.layers;
+            if (llama_kv_stream_policy_minimum_pool_bytes(
+                    bootstrap,config.pool_bytes).status !=
+                    llama_kv_stream_policy_status::success) {
+                throw std::runtime_error("failed to derive minimum KV streaming pool");
+            }
+        }
         kv_stream = llama_kv_stream_model::create(config);
         if (!kv_stream) throw std::runtime_error("failed to allocate or bind the CUDA KV streaming grants");
-        LLAMA_LOG_INFO("%s: KV stream pool %.2f MiB, total device grants %.2f MiB, authoritative host %.2f MiB\n",__func__,
-            config.pool_bytes/1048576.0,kv_stream->granted_bytes()/1048576.0,kv_stream->host()->bytes()/1048576.0);
+        LLAMA_LOG_INFO("%s: KV stream bootstrap pool %.2f MiB, shared budget %.2f MiB, temporary device grants %.2f MiB, authoritative host %.2f MiB\n",__func__,
+            config.pool_bytes/1048576.0,config.shared_device_memory_bytes/1048576.0,
+            kv_stream->granted_bytes()/1048576.0,kv_stream->host()->bytes()/1048576.0);
     }
 
     for (uint32_t il = 0; il < n_layer; il++) {

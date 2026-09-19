@@ -1,6 +1,7 @@
 #pragma once
 #include "llama-kv-stream-resident.h"
 #include "llama-kv-stream-publication.h"
+#include "../ggml/src/ggml-kv-stream-copy.h"
 #include "llama-memory-transition.h"
 
 struct llama_kv_stream_session_config {
@@ -46,6 +47,8 @@ public:
     // Snapshot only; callers must not use it as a lifetime guard.
     llama_kv_stream_binding_view binding_view() const noexcept;
     const llama_kv_stream_policy_state & policy() const noexcept;
+    llama_kv_stream_prefetch_stats sequence_stats() const noexcept;
+    ggml_kv_stream_copy_feedback copy_feedback() const noexcept;
     llama_kv_stream_publication_frontiers publication_frontiers() const noexcept;
     bool set_workspaces(const std::vector<ggml_backend_memory_lease_t> & leases);
     // Scratch is reconstructible; detach only while idle, and attach a disjoint grant before beginning work.

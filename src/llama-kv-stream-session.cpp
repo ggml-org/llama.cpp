@@ -694,8 +694,10 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
             s.publication_pairs.clear();
             if (s.report_layout) {
                 const auto stats=s.resident->sequence_stats();
-                LLAMA_LOG_WARN("%s: accepted KV layout copied %.2f MiB in %zu H2D calls, peak ring pages %zu\n",
-                    __func__,stats.copy_bytes/1048576.0,stats.copy_calls,stats.peak_pages);
+                const auto timing=s.resident->copy_feedback();
+                LLAMA_LOG_WARN("%s: accepted KV layout copied %.2f MiB in %zu H2D calls, peak ring pages %zu, sampled copy %.3f ms over %.3f ms\n",
+                    __func__,stats.copy_bytes/1048576.0,stats.copy_calls,stats.peak_pages,
+                    timing.copy_ms,timing.elapsed_ms);
                 s.report_layout = false;
             }
             if (!s.publication.retire()) {
@@ -905,6 +907,12 @@ llama_kv_stream_binding_view llama_kv_stream_session::binding_view() const noexc
     return view ? *view : llama_kv_stream_binding_view{};
 }
 const llama_kv_stream_policy_state & llama_kv_stream_session::policy() const noexcept { return impl->state; }
+llama_kv_stream_prefetch_stats llama_kv_stream_session::sequence_stats() const noexcept {
+    return impl->resident ? impl->resident->sequence_stats() : llama_kv_stream_prefetch_stats{};
+}
+ggml_kv_stream_copy_feedback llama_kv_stream_session::copy_feedback() const noexcept {
+    return impl->resident ? impl->resident->copy_feedback() : ggml_kv_stream_copy_feedback{};
+}
 
 llama_kv_stream_publication_frontiers llama_kv_stream_session::publication_frontiers() const noexcept {
     return impl->publications ? impl->publications->frontiers() : llama_kv_stream_publication_frontiers{};
