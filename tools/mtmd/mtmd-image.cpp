@@ -1735,3 +1735,102 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const cl
     output.append(hparams, resized_image, true);
     return output;
 }
+
+
+// for a still image the reference's temporal_factor cancels out, leaving pixel area vs min/max
+clip_image_size mtmd_image_preprocessor_glm5next::smart_resize(const clip_hparams & hparams, const clip_image_size & size) {
+    const int factor = hparams.patch_size * hparams.n_merge;
+    GGML_ASSERT(factor > 0);
+    GGML_ASSERT(hparams.image_min_pixels > 0 && hparams.image_max_pixels > 0);
+
+    const int height = size.height;
+    const int width  = size.width;
+    if (height <= 0 || width <= 0) {
+        // an empty bitmap is reachable through the public API
+        return { 0, 0 };
+    }
+
+    const int64_t min_pixels = hparams.image_min_pixels;
+    const int64_t max_pixels = hparams.image_max_pixels;
+
+    auto align = [factor](int64_t value) {
+        return (int) (((value + factor - 1) / factor) * factor);
+    };
+
+    int aligned_height = align(height);
+    int aligned_width  = align(width);
+
+    if ((int64_t) aligned_height * aligned_width < min_pixels) {
+        const double scale = std::sqrt((double) min_pixels / ((double) height * (double) width));
+        aligned_height = align(std::max<int64_t>(1, (int64_t) std::ceil(height * scale)));
+        aligned_width  = align(std::max<int64_t>(1, (int64_t) std::ceil(width  * scale)));
+    }
+
+    if ((int64_t) aligned_height * aligned_width > max_pixels) {
+        // aligning both edges is not monotone in the Qwen sqrt(area / max_pixels) scale, so search
+        int low  = 1;
+        int high = height;
+        aligned_height = factor;
+        aligned_width  = factor;
+        while (low <= high) {
+            const int content_height = (low + high) / 2;
+            // the reference divides in float64 before flooring, keep it bit-identical
+            const int content_width  = std::max(1, (int) std::floor((double) width * content_height / (double) height));
+            const int cand_height    = align(content_height);
+            const int cand_width     = align(content_width);
+
+            if ((int64_t) cand_height * cand_width <= max_pixels) {
+                aligned_height = cand_height;
+                aligned_width  = cand_width;
+                low  = content_height + 1;
+            } else {
+                high = content_height - 1;
+            }
+        }
+    }
+
+    return { aligned_width, aligned_height };
+}
+
+mtmd_image_preprocessor_glm5next::geometry mtmd_image_preprocessor_glm5next::get_geometry(const clip_hparams & hparams, const clip_image_size & size) {
+    const clip_image_size canvas = smart_resize(hparams, size);
+
+    const int height = size.height;
+    const int width  = size.width;
+    if (canvas.width == 0 || canvas.height == 0) {
+        return { canvas, canvas };
+    }
+
+    double scale = std::min((double) canvas.height / height, (double) canvas.width / width);
+    if ((int64_t) height * (int64_t) width >= hparams.image_min_pixels) {
+        // already spending the minimum budget, so shrink only, never upscale to fill the canvas
+        scale = std::min(1.0, scale);
+    }
+
+    geometry geo;
+    geo.canvas  = canvas;
+    geo.content = {
+        std::max(1, std::min(canvas.width,  (int) std::floor(width  * scale))),
+        std::max(1, std::min(canvas.height, (int) std::floor(height * scale))),
+    };
+    return geo;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_glm5next::preprocess(const clip_image_u8 & img) const {
+    const geometry geo = get_geometry(hparams, img.get_size());
+
+    clip_image_u8 content;
+    img_tool::resize(img, content, geo.content, hparams.image_resize_algo, PAD_NONE);
+
+    // the reference pads bottom/right, not centred like img_tool::resize would
+    clip_image_u8 canvas;
+    canvas.set_size(geo.canvas, img.is_placeholder());
+    if (!img.is_placeholder()) {
+        img_tool::fill(canvas, hparams.image_pad_color);
+        img_tool::composite(canvas, content, 0, 0);
+    }
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, canvas, true);
+    return output;
+}
