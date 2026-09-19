@@ -55,7 +55,8 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     uint32_t next = 0, queries = 0;
     uint64_t revision = 0, expected_generation = 0;
     bool running = false, produced = false, poisoned = false, busy = false;
-    bool direct_mode = false, report_layout = false;
+    bool direct_mode = false, report_layout = false, primed = false;
+    size_t primed_active = 0;
     pool_rebind * transition = nullptr;
     bool transition_closed = false;
 
@@ -71,10 +72,28 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
     // End copy use before releasing the execution pin that owns native metadata.
     bool drain() override {
         if (resident) resident->cancel_sequence();
+        primed = false; primed_active = 0;
         ggml_backend_synchronize(backend);
         const bool retired = retire_publication();
         pin.reset();
         return retired;
+    }
+
+    // Start only a layout-stable next-token decode; failure is an optimization miss, not session failure.
+    bool prime_next() {
+        if (!config.cross_token_prefetch || !config.resume_decode || primed || poisoned || !resident || !binding ||
+                committed >= content->host()->config().context_tokens || !state.ring_slots) return false;
+        const size_t active=committed+1;
+        llama_kv_stream_policy_decision decision;
+        if (!resident->recommend_policy(state,active,1,decision,true,false) || decision.layout_changed ||
+                decision.next.decode_active_pages <= decision.next.resident_pages_per_layer) return false;
+        const size_t next_span=std::max(size_t(1),resident->suggested_span_pages());
+        if (!pin) pin=binding->acquire();
+        if (!pin || !resident->prime_sequence(order,active,next_span,committed,{1,true})) {
+            pin.reset(); return false;
+        }
+        state=decision.next; span=next_span; primed=true; primed_active=active;
+        return true;
     }
     bool attention_bytes(bool decode, size_t & bytes) const {
         bytes = content->host()->layout().bytes;
@@ -562,32 +581,49 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
             !queries || queries > s.config.max_batch_rows || (decode && queries != 1) ||
             active < s.committed || active-s.committed != queries || active > s.content->host()->config().context_tokens) return false;
     session_operation guard(s.busy);
-    if (s.content->generation() != s.expected_generation) { s.poisoned = true; return false; }
-    llama_kv_stream_policy_decision decision;
-    if (!s.resident->recommend_policy(s.state,active,queries,decision,decode,!decode)) return false;
+    if (s.content->generation() != s.expected_generation) { s.drain(); s.poisoned = true; return false; }
     try {
-        if (decision.layout_changed) {
-            if (!s.install(decision.next)) return false;
-        } else s.state = decision.next;
-        if (decision.layout_changed) {
-            const size_t page_tokens=size_t(s.state.budget.shape.page_tokens);
-            const size_t active_pages=(active-1)/page_tokens+1;
-            const size_t streamed=active_pages > s.state.resident_pages_per_layer ?
-                (active_pages-s.state.resident_pages_per_layer)*s.state.budget.layers : 0;
-            const double mib=double(streamed)*s.state.budget.page.storage.bytes/1048576.0;
-            LLAMA_LOG_WARN("%s: KV layout revision %llu, resident pages/layer %u, ring slots %u, active pages %zu, padded H2D %.2f MiB/eval\n",
-                __func__,(unsigned long long)s.revision,s.state.resident_pages_per_layer,s.state.ring_slots,active_pages,mib);
-            s.report_layout = true;
+        bool adopted=false;
+        if (s.primed) {
+            adopted=decode && queries == 1 && active == s.primed_active && bool(s.pin) &&
+                s.resident->adopt_sequence(s.order,active,s.span,s.committed,{queries,decode});
+            if (!adopted) {
+                s.resident->cancel_sequence(); s.pin.reset();
+            }
+            s.primed=false; s.primed_active=0;
         }
-        s.span = std::max(size_t(1),s.resident->suggested_span_pages());
-        s.pin = s.binding->acquire();
-        llama_kv_stream_capture_stamp stamp;
-        s.direct_mode = queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
-            s.resident->capture_state(s.backend,active,stamp);
+        if (!adopted) {
+            llama_kv_stream_policy_decision decision;
+            if (!s.resident->recommend_policy(s.state,active,queries,decision,decode,!decode)) return false;
+            if (decision.layout_changed) {
+                if (!s.install(decision.next)) return false;
+            } else s.state = decision.next;
+            if (decision.layout_changed) {
+                const size_t page_tokens=size_t(s.state.budget.shape.page_tokens);
+                const size_t active_pages=(active-1)/page_tokens+1;
+                const size_t streamed=active_pages > s.state.resident_pages_per_layer ?
+                    (active_pages-s.state.resident_pages_per_layer)*s.state.budget.layers : 0;
+                const double mib=double(streamed)*s.state.budget.page.storage.bytes/1048576.0;
+                LLAMA_LOG_WARN("%s: KV layout revision %llu, resident pages/layer %u, ring slots %u, active pages %zu, padded H2D %.2f MiB/eval\n",
+                    __func__,(unsigned long long)s.revision,s.state.resident_pages_per_layer,s.state.ring_slots,active_pages,mib);
+                s.report_layout = true;
+            }
+            s.span = std::max(size_t(1),s.resident->suggested_span_pages());
+            s.pin = s.binding->acquire();
+            llama_kv_stream_capture_stamp stamp;
+            s.direct_mode = queries == 1 && s.config.native_graph_attention && !s.graph_bindings.empty() &&
+                s.resident->capture_state(s.backend,active,stamp);
+            if (s.direct_mode) {
+                if (!s.pin || !s.resident->synchronize(active)) {
+                    s.drain(); s.poisoned = true; return false;
+                }
+            } else if (!s.pin || !s.resident->begin_sequence(s.order,active,s.span,s.committed,{queries,decode})) {
+                s.drain(); s.poisoned = true; return false;
+            }
+        } else {
+            s.direct_mode=false;
+        }
         if (!s.direct_mode) s.graphs.clear();
-        if (!s.pin || !(s.direct_mode ? s.resident->synchronize(active) : s.resident->begin_sequence(s.order,active,s.span,s.committed,{queries,decode}))) {
-            s.drain(); s.poisoned = true; return false;
-        }
         s.publication_pairs.clear();
         s.publication_pairs.reserve(s.order.size());
         llama_kv_stream_publication_ticket publication;
@@ -704,7 +740,7 @@ bool llama_kv_stream_session::attention(uint32_t layer, ggml_tensor * q, ggml_te
                 s.drain(); s.running = false; s.poisoned = true; return false;
             }
             s.committed = s.target; s.expected_generation = s.content->generation(); s.running = false;
-            s.pin.reset();
+            if (!s.prime_next()) s.pin.reset();
         }
         return true;
     } catch (...) { s.drain(); s.running = false; s.poisoned = true; throw; }
@@ -721,6 +757,7 @@ bool llama_kv_stream_session::failed() const noexcept { return impl->poisoned; }
 size_t llama_kv_stream_session::tokens() const noexcept { return impl->committed; }
 size_t llama_kv_stream_session::granted_bytes() const noexcept { return impl->grant; }
 uint64_t llama_kv_stream_session::layout_revision() const noexcept { return impl->revision; }
+bool llama_kv_stream_session::prefetch_primed() const noexcept { return impl->primed; }
 
 bool llama_kv_stream_session::grow_pool(
         ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode) {
@@ -930,6 +967,7 @@ bool llama_kv_stream_session::set_workspaces(const std::vector<ggml_backend_memo
         retained.emplace_back(ggml_backend_memory_lease_retain(lease),ggml_backend_memory_lease_free);
     }
     auto bindings = workspaces;
+    if (!s.drain()) { s.poisoned=true; return false; }
     s.graphs.clear();
     s.resident->release_write_workspace();
     if (!bindings.empty()) {

@@ -3491,3 +3491,34 @@ TDD and validation evidence:
 - Production-verbosity diagnostics were verified in `/tmp/kv-65-logcheck`. Maximum-budget and representative results are in `/tmp/kv-65-shared-8k`, `/tmp/kv-65-legacy-8k`, and `/tmp/kv-65-shared-representative`; historical reference rows come from `benchmarks/results/phase-arena-vs-base-q3-iq4-20260901`.
 
 Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and the untracked benchmark tree remain untouched. No assistant commit or push was made.
+
+
+### Stage 6.6: backend-neutral cross-token KV prefetch
+
+Stage 6.6 retains one layout-stable next-token prefetch window across the serial decode boundary. After a successful append commits every device/host publication frontier, the session proposes the next one-token decode policy. It primes only when the current device layout remains valid, streaming is still required, resumable decode is enabled, and another context token is available. A repartition boundary deliberately skips priming and follows the ordinary transactional begin path on the next call.
+
+The retained state contains only common ownership and scheduling objects: the authoritative host-content generation and mirror epoch, ordered layer list, active/stable token frontiers, span ceiling, query/decode intent, opaque copy-ops handle, and the existing memory-execution pin. No CUDA stream, event, pointer, or kernel type enters the session or policy APIs. CUDA continues to implement the already-existing backend-neutral copy-ops contract; another backend can receive the same optimization by implementing that contract without changing this lifecycle.
+
+A matching next decode adopts the running sequence without resubmitting historical H2D work. Adoption requires exact layer order, active/stable frontiers, span, query count, decode intent, content generation, and mirror epoch. A different prefill/decode request, cache mutation, workspace replacement, phase transition, pool rebind, cancellation, reconstruction, or teardown drains the speculative sequence through the ordinary backend adapter before releasing its execution pin. Speculative failure is an optimization miss and never poisons an otherwise valid committed token.
+
+Cross-token prefetch is explicit in the internal session configuration and enabled by default by the KV-stream model bridge only when resumable decode is available. All-resident execution and layout-changing boundaries retain their previous paths. Prefetch/adoption state is exposed in internal sequence diagnostics for tests; it does not change public llama.cpp inference semantics.
+
+TDD and qualification evidence:
+
+- The first focused build failed on the intentionally missing `prime_sequence`, `adopt_sequence`, and session diagnostic symbols.
+- The CUDA prefetch suite passes **16 cases / 3,101 assertions**. It verifies ready historical pages before adoption, unchanged copy submission count on adoption, exact logical-identity matching, numerical correctness, and generation-mismatch cancellation.
+- The CUDA session suite passes **9 cases / 481 assertions**. Its synchronized control-versus-carry A/B produces zero maximum output difference across all four tested layers, while workspace replacement and a following two-token prefill drain retained work and fall back successfully.
+- The CUDA model suite passes **7 cases / 159 assertions**. The full IQ4_XS Qwen3.8-27B suite passes **5 cases / 560 assertions** with both the exact 640 MiB shared budget and the legacy 16 MiB input budget: zero maximum logit error, zero recurrent relative L2 error, 14/14 matching serial phase boundaries, and 32/32 matching continuation tokens at ubatch 256 and 512.
+- Compute Sanitizer memcheck passes the complete prefetch and session suites with zero errors and zero leaked bytes. The synchronized carried-versus-control decode remains bit-identical under instrumentation. Focused CPU/common builds and ASan/leak-checking and UBSan suites pass; the common implementation introduces no CUDA dependency.
+
+Matched Release IQ4_XS measurement used context 139,264, prompt 138,752, 512 decoded tokens, batch/ubatch 256, Q8_0/Q4_0 KV, UVM disabled, and the same 2,688 MiB shared-device budget:
+
+| Implementation | Prefill tok/s | Decode tok/s | Decode ms/token |
+| --- | ---: | ---: | ---: |
+| Stage 6.5 baseline (`ad8229436`) | 778.00 | 23.734 | 42.133 |
+| Cross-token carry | 775.96 | 24.270 | 41.203 |
+| Change | -0.26% | **+2.26%** | **-0.930 ms** |
+
+Artifacts are under `/tmp/cross-token-base-139k` and `/tmp/cross-token-current-139k`. The measured gain is intentionally smaller than the full 5.8 ms exposed-H2D estimate: this stage removes the token-boundary startup portion, while intra-token ring turnover remains. Deadline-driven span/lookahead tuning and selective ring headroom remain separate follow-up work.
+
+Task files and this roadmap are staged for user review. Unrelated README, infrastructure documentation, and benchmark-tree changes remain untouched. No assistant commit or push was made.

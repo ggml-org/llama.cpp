@@ -13,7 +13,7 @@ struct llama_kv_stream_prefetch_stats {
     size_t pending_pages = 0, peak_pages = 0, max_layer_distance = 0;
     size_t copy_bytes = 0, copy_calls = 0;
     size_t ready_pages = 0;
-    bool demand_ready = false;
+    bool demand_ready = false, primed = false, adopted = false;
 };
 struct ggml_kv_stream_copy_feedback;
 struct llama_kv_stream_feedback_context {
@@ -63,6 +63,12 @@ public:
     // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
     bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
             size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {});
+    // Speculatively start the next append while idle; adoption validates the complete logical identity.
+    // Both operations are backend-neutral and retain the existing opaque copy queue until adoption or cancellation.
+    bool prime_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,
+            size_t stable_tokens, llama_kv_stream_feedback_context feedback);
+    bool adopt_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,
+            size_t stable_tokens, llama_kv_stream_feedback_context feedback);
     bool publish_sequence_tail(const std::vector<llama_kv_stream_write_span> & spans);
     // An invalid or failed layer call cancels outstanding prefetch; the final valid layer ends the sequence.
     void cancel_sequence();

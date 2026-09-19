@@ -151,6 +151,56 @@ int main(int argc, char ** argv) {
         t.assert_true(!session->produce(0,input.k,input.v));
     });
 
+    if (cuda) t.test("matching_decode_adopts_cross_token_prefetch_and_mismatch_drains_it", [&](testing & t) {
+        const auto run=[&](bool carry) {
+            std::vector<std::vector<float>> outputs;
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
+            ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+            f.policy.pool_bytes=8*page.bytes; f.policy.initial_ring_slots=4;
+            block_workspace writer(f,32768,19),partial(f,f.host->layout().bytes,29);
+            llama_kv_stream_session_config config{f.policy,256,4,false,true,true};
+            config.cross_token_prefetch=carry;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+                f.lease.get(),writer.lease.get(),partial.lease.get());
+            if (!t.assert_true(bool(session)) || !t.assert_true(session->restore(513))) return outputs;
+            for (size_t active : {size_t(514),size_t(515)}) {
+                const bool had_prime=session->prefetch_primed();
+                const auto before=session->sequence_stats();
+                session_inputs kv(backend.get(),1); block_inputs attn(f,active,1);
+                if (!t.assert_true(session->begin(active,1,true))) return std::vector<std::vector<float>>{};
+                if (carry && active == 515) {
+                    t.assert_true(had_prime && before.primed && before.copy_calls>0);
+                    const auto adopted=session->sequence_stats();
+                    t.assert_true(adopted.adopted && adopted.copy_calls==before.copy_calls);
+                } else t.assert_true(!had_prime);
+                for (uint32_t layer=0;layer<4;++layer) {
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v)) ||
+                            !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16)))
+                        return std::vector<std::vector<float>>{};
+                    ggml_backend_synchronize(backend.get());
+                    if (active == 515) outputs.push_back(attn.read());
+                }
+                t.assert_equal(carry,session->prefetch_primed());
+            }
+            if (carry) {
+                t.assert_true(session->set_attention_workspace(partial.lease.get(),true));
+                t.assert_true(!session->prefetch_primed());
+                session_inputs kv(backend.get(),2); block_inputs attn(f,517,2);
+                if (!t.assert_true(session->begin(517,2,false))) return std::vector<std::vector<float>>{};
+                for (uint32_t layer=0;layer<4;++layer) {
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v)) ||
+                            !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16)))
+                        return std::vector<std::vector<float>>{};
+                }
+                t.assert_true(!session->prefetch_primed());
+            }
+            return outputs;
+        };
+        const auto control=run(false),carried=run(true);
+        if (!t.assert_equal(control.size(),carried.size()) || !t.assert_equal(size_t(4),control.size())) return;
+        for (size_t layer=0;layer<control.size();++layer) close_values(t,control[layer],carried[layer],1e-6f);
+    });
+
     if (cuda) t.test("external_growth_rebinds_and_lazily_restores_host", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,4);
         block_workspace writer(f,32768,19), partial(f,f.host->layout().bytes,29);

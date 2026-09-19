@@ -34,6 +34,7 @@ struct llama_kv_stream_model_config {
     uint32_t max_batch_rows = 0, query_heads = 0;
     bool measure = false;
     bool resume_decode = true;
+    bool cross_token_prefetch = true;
     size_t shared_device_memory_bytes = 0;
 };
 

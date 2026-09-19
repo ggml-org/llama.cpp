@@ -11,6 +11,7 @@ struct llama_kv_stream_session_config {
     bool native_graph_attention = false;
     bool resume_decode = false;
     bool initial_decode = false;
+    bool cross_token_prefetch = false;
     llama_memory_resource_id pool_resource = 0;
     llama_memory_resource_id writer_resource = 0;
     llama_memory_resource_id attention_resource = 0;
@@ -40,6 +41,7 @@ public:
     size_t tokens() const noexcept;
     size_t granted_bytes() const noexcept;
     uint64_t layout_revision() const noexcept;
+    bool prefetch_primed() const noexcept;
 
     // Resize into a disjoint caller-owned pool while idle. Host contents and token frontier remain authoritative.
     bool grow_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode);

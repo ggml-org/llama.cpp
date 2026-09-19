@@ -54,6 +54,7 @@ struct llama_kv_stream_model::implementation {
         session_config.initial_decode = config.resume_decode &&
             (policy.pool_bytes > config.pool_bytes ||
              ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
+        session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode;
         session_config.pool_resource = pool_id;
         session_config.writer_resource = writer_id;
         session_config.attention_resource = attention_id;

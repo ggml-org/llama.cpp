@@ -53,7 +53,7 @@ struct llama_kv_stream_resident::implementation {
         std::vector<uint8_t> resident_dirty;
         size_t active = 0, padded = 0, span = 0, stable = 0, next = 0;
         uint64_t generation = 0, epoch = 0;
-        bool started = false, feedback_valid = true;
+        bool started = false, feedback_valid = true, primed = false;
         uint32_t queries = 0;
         bool profile = false;
         bool decode = false;
@@ -386,6 +386,30 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
         if (!s.fill_sequence()) { s.stop_sequence(); return false; }
         return true;
     } catch (const std::bad_alloc &) { s.stop_sequence(); return false; }
+}
+
+bool llama_kv_stream_resident::prime_sequence(const std::vector<uint32_t> & layers, size_t active,
+        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context) {
+    if (!begin_sequence(layers,active,span,stable,feedback_context)) return false;
+    impl->sequence->primed = true;
+    impl->sequence->stats.primed = true;
+    return true;
+}
+
+bool llama_kv_stream_resident::adopt_sequence(const std::vector<uint32_t> & layers, size_t active,
+        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context) {
+    auto & s=*impl;
+    if (stable == SIZE_MAX) stable=active;
+    if (s.busy || s.capturing() || s.poisoned || !s.sequence || !s.sequence->primed) return false;
+    if (!s.sequence_valid()) { s.stop_sequence(); return false; }
+    auto & seq=*s.sequence;
+    if (seq.next || seq.layers != layers || seq.active != active || seq.span != span || seq.stable != stable ||
+            seq.queries != feedback_context.query_tokens || seq.decode != feedback_context.decode) return false;
+    seq.primed = false;
+    seq.stats.primed = false;
+    seq.stats.adopted = true;
+    if (s.measuring) s.run_started=std::chrono::steady_clock::now();
+    return true;
 }
 
 // Only unconsumed tail rows may change while stable historical spans are in flight.

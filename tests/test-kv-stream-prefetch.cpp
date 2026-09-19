@@ -428,6 +428,44 @@ int main(int argc, char ** argv) {
         }
         t.assert_true(!f.resident->sequence_active());
     });
+    if (cuda) t.test("cross_token_prime_is_adopted_without_resubmitting_history", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_F16,GGML_TYPE_F16,769,false,4);
+        f.policy.initial_ring_slots = 8;
+        llama_kv_stream_policy_state placement; llama_kv_stream_policy_initialize(f.policy,placement);
+        placement.decode_active_pages = 3;
+        if (!t.assert_true(f.attach(&placement))) return;
+        auto pin = f.binding->acquire();
+        const std::vector<uint32_t> layers{0,1,2,3};
+        if (!t.assert_true(f.resident->prime_sequence(layers,514,2,513,{1,true}))) return;
+        const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while (!f.resident->sequence_stats().ready_pages && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+        const auto primed = f.resident->sequence_stats();
+        t.assert_true(primed.primed && !primed.adopted && primed.ready_pages > 0 && primed.copy_calls > 0);
+        t.assert_true(!f.resident->adopt_sequence(layers,515,2,514,{1,true}));
+        t.assert_true(f.resident->sequence_active() && f.resident->sequence_stats().primed);
+        if (!t.assert_true(f.resident->adopt_sequence(layers,514,2,513,{1,true}))) return;
+        const auto adopted = f.resident->sequence_stats();
+        t.assert_true(!adopted.primed && adopted.adopted);
+        t.assert_equal(primed.copy_calls,adopted.copy_calls);
+
+        block_inputs input(f,514,1);
+        ggml_kv_stream_block_layout layout; ggml_kv_stream_block_layout_make(4,256,layout);
+        block_workspace workspace(f,layout.bytes);
+        const size_t key=f.host->layout().k_token_bytes,value=f.host->layout().v_token_bytes;
+        std::vector<uint8_t> encoded(key+value,0);
+        for (uint32_t layer : layers) {
+            t.assert_true(f.resident->publish_sequence_tail({
+                {layer,ggml_kv_stream_operand::k,513*key,encoded.data(),key},
+                {layer,ggml_kv_stream_operand::v,513*value,encoded.data()+key,value}}));
+            if (t.assert_true(f.resident->compute_streamed(layer,input.q,input.mask,input.output,514,1.0f/16,workspace.lease.get(),true,2)))
+                close_values(t,oracle(f,layer,514,1,input.qdata),input.read(),1e-3f);
+        }
+        t.assert_true(!f.resident->sequence_active());
+        t.assert_true(f.resident->prime_sequence(layers,515,2,514,{1,true}));
+        t.assert_true(f.content->invalidate());
+        t.assert_true(!f.resident->adopt_sequence(layers,515,2,514,{1,true}));
+        t.assert_true(!f.resident->sequence_active());
+    });
     if (cuda) t.test("all_pairs_cross_layer_wrap_and_partial_reuse_match_controls", [&](testing & t) {
         const ggml_type types[] = {GGML_TYPE_F16,GGML_TYPE_BF16,GGML_TYPE_Q4_0,GGML_TYPE_Q4_1,GGML_TYPE_Q5_0,GGML_TYPE_Q5_1,GGML_TYPE_Q8_0,GGML_TYPE_F32,GGML_TYPE_IQ4_NL};
         for (auto key : types) for (auto value : types) {
