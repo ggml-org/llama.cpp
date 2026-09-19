@@ -34,6 +34,9 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
+    rs_epoch_end.assign(n_seq_max, -1);
+    rs_epoch_planes.assign(n_seq_max, 0);
+    rs_epoch_lo.assign(n_seq_max, 0);
 
     cells.clear();
     cells.resize(mem_size);
@@ -156,6 +159,21 @@ void llama_memory_recurrent::clear(bool data) {
     }
 
     std::fill(rs_idx.begin(), rs_idx.end(), 0);
+    std::fill(rs_epoch_end.begin(), rs_epoch_end.end(), -1);
+    std::fill(rs_epoch_planes.begin(), rs_epoch_planes.end(), 0);
+    std::fill(rs_epoch_lo.begin(), rs_epoch_lo.end(), 0);
+}
+
+void llama_memory_recurrent::reset_epoch(llama_seq_id seq_id) {
+    if (seq_id < 0) {
+        std::fill(rs_epoch_end.begin(), rs_epoch_end.end(), -1);
+        std::fill(rs_epoch_planes.begin(), rs_epoch_planes.end(), 0);
+        std::fill(rs_epoch_lo.begin(), rs_epoch_lo.end(), 0);
+        return;
+    }
+    rs_epoch_end[seq_id]    = -1;
+    rs_epoch_planes[seq_id] = 0;
+    rs_epoch_lo[seq_id]     = 0;
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -177,6 +195,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
         set_rs_idx(seq_id, 0);
+        reset_epoch(seq_id);
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -190,21 +209,49 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         if (tail_id >= 0) {
             auto & cell = cells[tail_id];
 
-            // partial rollback via per-token snapshot index (bounded by n_rs_seq)
+            // partial rollback via per-token snapshot planes.
+            // Plane p of the last multi-token ubatch holds the state as of position
+            // (rs_epoch_end - p); single-token steps that followed overwrite plane 0 in
+            // place (rs_epoch_end itself stays pinned — states above it were never
+            // materialized in the planes). The state wanted at p0 - 1 therefore lives at
+            // plane (rs_epoch_end - (p0 - 1)) — an exact index, not a heuristic —
+            // provided that plane was written by the epoch (idx < rs_epoch_planes) and
+            // is not plane 0 (overwritten by any single-token step). If the wanted state
+            // is gone, the only honest answer is to refuse the rollback (the caller
+            // re-prefills) instead of silently restoring a stale state.
+            //
+            // No epoch (fresh, cleared, or checkpoint-loaded — a state blob carries a single
+            // plane) means nothing can be rolled back into: refuse.
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
+                const llama_pos want_idx = rs_epoch_end[seq_id] - (p0 - 1);
+                const llama_pos e_end    = rs_epoch_end[seq_id];
+                const uint32_t  e_pl     = rs_epoch_planes[seq_id];
+                const uint32_t  e_lo     = rs_epoch_lo[seq_id];
+
+                // the bound is on the plane index, not the depth: the single-token steps
+                // above the epoch were never in the planes and need no plane to be dropped
+                const bool allowed = e_pl > 0 && e_end >= 0 &&
+                                     want_idx >= std::max<llama_pos>(1, (llama_pos) e_lo) &&
+                                     want_idx < (llama_pos) e_pl;
+
                 // pending rollback is single-use
                 const bool pending = rs_idx[seq_id] != 0;
-                if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
-                    set_rs_idx(seq_id, (uint32_t) rollback);
+                if (!pending && rollback >= 1 && allowed) {
+                    set_rs_idx(seq_id, (uint32_t) want_idx);
+                    // planes below the restored one belong to the discarded continuation
+                    rs_epoch_lo[seq_id] = (uint32_t) want_idx;
                     cell.pos = p0 - 1;
                     return true;
                 }
+                LLAMA_LOG_DEBUG("%s: rollback refused: seq=%d depth=%d pending=%d want_idx=%d epoch_end=%d epoch_planes=%u epoch_lo=%u\n",
+                        __func__, (int) seq_id, (int) rollback, (int) pending, (int) want_idx, (int) e_end, e_pl, e_lo);
                 return false;
             }
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
                 tail_id = -1;
+                reset_epoch(seq_id);
             }
         }
     } else {
@@ -279,6 +326,11 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 
             cell_src.seq_id.insert(seq_id_dst);
             tail_dst.tail = tail_src.tail;
+
+            // dst now shares the src state content: it inherits its snapshot epoch
+            rs_epoch_end[seq_id_dst]    = rs_epoch_end[seq_id_src];
+            rs_epoch_planes[seq_id_dst] = rs_epoch_planes[seq_id_src];
+            rs_epoch_lo[seq_id_dst]     = rs_epoch_lo[seq_id_src];
         }
     }
 }
@@ -340,6 +392,15 @@ void llama_memory_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_po
             auto & cell = cells[tail_id];
             if (cell.has_seq_id(seq_id) && p0 <= cell.pos && cell.pos < p1) {
                 cell.pos += shift;
+
+                // keep the snapshot bookkeeping aligned with the shifted positions; only a
+                // shift covering the whole tracked window keeps the plane algebra affine
+                const llama_pos oldest = rs_epoch_end[seq_id] - (llama_pos) rs_epoch_planes[seq_id] + 1;
+                if (rs_epoch_planes[seq_id] > 0 && p0 <= oldest && rs_epoch_end[seq_id] < p1) {
+                    rs_epoch_end[seq_id] += shift;
+                } else {
+                    rs_epoch_planes[seq_id] = 0;
+                }
             }
         }
     }
@@ -370,6 +431,9 @@ void llama_memory_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_po
             auto & cell = cells[tail_id];
             if (cell.has_seq_id(seq_id) && p0 <= cell.pos && cell.pos < p1) {
                 cell.pos /= d;
+
+                // division is not an affine position map: the plane algebra cannot track it
+                rs_epoch_planes[seq_id] = 0;
             }
         }
     }
@@ -484,6 +548,9 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     auto org_cells = cells;
     auto org_used = used;
     auto org_head = head;
+    auto org_epoch_end    = rs_epoch_end;
+    auto org_epoch_planes = rs_epoch_planes;
+    auto org_epoch_lo     = rs_epoch_lo;
 
     bool success = true;
 
@@ -498,6 +565,9 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     cells = std::move(org_cells);
     used = org_used;
     head = org_head;
+    rs_epoch_end    = std::move(org_epoch_end);
+    rs_epoch_planes = std::move(org_epoch_planes);
+    rs_epoch_lo     = std::move(org_epoch_lo);
 
     return success;
 }
@@ -662,12 +732,33 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
             LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d with %u new tokens\n",
                 __func__, last_pos, cell.pos, ubatch.seq_id[i][0], n_seq_tokens);
         }
+        if (cell.pos < 0) {
+            // a sequence starting over must not inherit the epoch of its previous life
+            for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+                reset_epoch(ubatch.seq_id[i][j]);
+            }
+        }
         cell.pos = last_pos;
         cell.seq_id.clear();
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
             const llama_seq_id seq_id = ubatch.seq_id[i][j];
             cell.seq_id.insert(seq_id);
             cells[seq_id].tail = cell_id;
+        }
+
+        // this ubatch overwrites snapshot planes [0, min(n_seq_tokens, n_rs_seq + 1)) of
+        // every seq it touches (the GDN op writes slot n_tokens-1-t for t < n_tokens, the
+        // conv paths write min(n_seq_tokens, K) slots) and leaves the higher planes as the
+        // previous multi-token ubatch left them. Single-token ubatches rewrite only plane 0,
+        // in place, so they do not open a new epoch.
+        if (n_seq_tokens > 1) {
+            const uint32_t planes = std::min(n_seq_tokens, n_rs_seq + 1);
+            for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+                const llama_seq_id seq_id = ubatch.seq_id[i][j];
+                rs_epoch_end[seq_id]    = last_pos;
+                rs_epoch_planes[seq_id] = planes;
+                rs_epoch_lo[seq_id]     = 0;
+            }
         }
     }
 
@@ -1074,6 +1165,10 @@ bool llama_memory_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell
 
         head = 0;
         used = cell_count;
+
+        // a state blob carries one plane per cell (the logical current state): no epoch
+        // exists to roll back into until the next multi-token ubatch
+        reset_epoch(-1);
     }
 
     for (uint32_t i = 0; i < cell_count; ++i) {

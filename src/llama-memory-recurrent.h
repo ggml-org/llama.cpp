@@ -78,6 +78,27 @@ public:
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
+    // forget the snapshot epoch of one seq (or all seqs when seq_id < 0)
+    void reset_epoch(llama_seq_id seq_id);
+
+    // snapshot-plane bookkeeping, per seq (see seq_rm for how the index is derived):
+    //   rs_epoch_end    - highest position whose state exists in the snapshot planes (the
+    //                     last multi-token ubatch's last position; single-token steps
+    //                     rewrite plane 0 in place and do NOT advance it)
+    //   rs_epoch_planes - snapshot planes written by that ubatch: min(n_seq_tokens, n_rs_seq + 1);
+    //                     0 = no epoch tracked (fresh, cleared, invalidated or checkpoint-loaded:
+    //                     a state blob carries a single plane, so nothing can be rolled back into
+    //                     until the next multi-token ubatch)
+    //   rs_epoch_lo     - lowest plane still on the current timeline: after a rollback to plane
+    //                     i followed by single-token steps, planes 1..i-1 hold states of the
+    //                     discarded continuation and must not be restored
+    // The state for position p exists in the planes iff 1 <= epoch_end - p < epoch_planes and
+    // epoch_end - p >= epoch_lo. Positions above epoch_end were never materialized; positions
+    // below were overwritten by later ubatches.
+    std::vector<llama_pos> rs_epoch_end;
+    std::vector<uint32_t>  rs_epoch_planes;
+    std::vector<uint32_t>  rs_epoch_lo;
+
     // computed before each graph build
     uint32_t n = 0;
 

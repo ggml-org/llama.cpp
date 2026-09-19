@@ -499,11 +499,18 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
         //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
 
-        const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+        // slot p holds the conv state as of p tokens before this ubatch's end. Slots
+        // p >= n_seq_tokens are left untouched: they still hold the previous multi-token
+        // ubatch's states, which is what a partial rollback deeper than this ubatch reads
+        // (single-token steps must refresh only slot 0). Clamping them to the pre-ubatch
+        // state instead would desynchronize them from the GDN state planes, which the
+        // kernel never writes beyond n_tokens. Mirrors the write in lfm2.cpp.
+        const int64_t K            = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t n_seq_tokens = conv_input->ne[0] - conv_states->ne[0];
+        const int64_t n_written    = std::min<int64_t>(n_seq_tokens, K);
 
-        for (int64_t t = 1; t <= K; ++t) {
-            const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
-            const int64_t s_slot = K - t;
+        for (int64_t s_slot = 0; s_slot < n_written; ++s_slot) {
+            const int64_t s_idx = n_seq_tokens - s_slot;
 
             ggml_tensor * conv_state_last =
                 ggml_view_3d(ctx0, conv_input,
