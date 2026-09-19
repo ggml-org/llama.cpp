@@ -76,7 +76,15 @@ typedef sycl::half2 ggml_half2;
 #ifndef __cplusplus
 #ifndef static_assert
 #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201100L)
+#ifdef __clang__
+// newer Clang recognizes static_assert as a keyword in C mode.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wkeyword-macro"
+#endif
 #define static_assert(cond, msg) _Static_assert(cond, msg)
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
 #else
 #define static_assert(cond, msg) struct global_scope_noop_trick
 #endif
