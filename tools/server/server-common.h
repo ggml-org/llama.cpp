@@ -267,6 +267,10 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 
 // return the last index of character that can form a valid string
 // if the last character is potentially cut in half, return the index before the cut
+// Replace invalid UTF-8 sequences in text[from..] with U+FFFD; a trailing
+// incomplete multi-byte sequence is preserved unless finalize is set.
+void sanitize_invalid_utf8(std::string & text, size_t from, bool finalize);
+
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
