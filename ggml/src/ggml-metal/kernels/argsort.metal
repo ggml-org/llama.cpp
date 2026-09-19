@@ -1,5 +1,11 @@
 #include "common.h"
 
+constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
+constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
+constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
+
+constant int  FC_moe_reduce_n_expert_used [[function_constant(FC_MOE_REDUCE + 0)]];
+
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
@@ -334,4 +340,140 @@ kernel void kernel_top_k_f32_i32(
             }
         }
     }
+}
+
+// fused SOFT_MAX + top-k + GET_ROWS (+ optional norm/scale) for MoE routing.
+// One SIMDgroup handles one token row; n_expert is limited to 1024 by the host.
+kernel void kernel_topk_moe_f32(
+        constant   ggml_metal_kargs_topk_moe & args,
+        device const char * src0,
+        device       float * weights,
+        device      int32_t * ids,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]]) {
+    const int row = (int) tgpig.x;
+    if (row >= args.ne01) {
+        return;
+    }
+
+    const int n_expert   = FC_topk_moe_n_expert;
+    const int top_k      = FC_topk_moe_top_k;
+    const int lane       = (int) tiisg;
+    const int n_per_lane = (n_expert + 31) / 32;
+
+    device const float * logits_row = (device const float *) (src0 + row * args.nb01);
+    device       float * weights_row = weights + row * top_k;
+    device      int32_t * ids_row   = ids + row * (args.nb1_ids / sizeof(int32_t));
+
+    float wt[32];
+    float output_weights[32];
+    FOR_UNROLL (int i = 0; i < 32; ++i) {
+        wt[i]            = -INFINITY;
+        output_weights[i] = 0.0f;
+    }
+
+    for (int i = lane; i < n_expert; i += 32) {
+        const float v = logits_row[i];
+        wt[i / 32] = isnan(v) ? -FLT_MAX : v;
+    }
+
+    // softmax over the expert logits
+    float max_val = -INFINITY;
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+        max_val = max(max_val, wt[i]);
+    }
+    max_val = simd_max(max_val);
+
+    float sum_val = 0.0f;
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+        wt[i] = exp(wt[i] - max_val);
+        sum_val += wt[i];
+    }
+    sum_val = simd_sum(sum_val);
+
+    const float inv_sum = 1.0f / sum_val;
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+        wt[i] *= inv_sum;
+    }
+
+    float wt_sum = 0.0f;
+
+    for (int k = 0; k < top_k; ++k) {
+        float best_val = -INFINITY;
+        int   best_expert = -1;
+
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            const int expert = lane + i * 32;
+            if (expert < n_expert && (wt[i] > best_val || (wt[i] == best_val && expert < best_expert))) {
+                best_val    = wt[i];
+                best_expert = expert;
+            }
+        }
+
+        FOR_UNROLL (int mask = 16; mask > 0; mask >>= 1) {
+            const float val    = simd_shuffle_xor(best_val, mask);
+            const int   expert = simd_shuffle_xor(best_expert, mask);
+            if (val > best_val || (val == best_val && expert < best_expert)) {
+                best_val    = val;
+                best_expert = expert;
+            }
+        }
+
+        if ((best_expert & 31) == lane) {
+            wt[best_expert / 32] = -INFINITY;
+        }
+
+        if ((k & 31) == lane) {
+            output_weights[k / 32] = best_val;
+        }
+
+        if ((best_expert & 31) == lane) {
+            ids_row[k] = best_expert;
+            if (FC_topk_moe_with_norm) {
+                wt_sum += best_val;
+            }
+        }
+    }
+
+    if (FC_topk_moe_with_norm) {
+        wt_sum = simd_sum(wt_sum);
+        wt_sum = max(wt_sum, args.clamp);
+        const float inv = 1.0f / wt_sum;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            output_weights[i] *= inv;
+        }
+    }
+
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+        const int idx = i * 32 + lane;
+        if (idx < top_k) {
+            weights_row[idx] = output_weights[i] * args.scale;
+        }
+    }
+}
+
+// fused MoE expert weighting + reduction: weighted = sum(experts[e] * weights[e]).
+// The host guarantees all tensors are contiguous F32.
+kernel void kernel_moe_reduce_f32(
+        constant   ggml_metal_kargs_moe_reduce & args,
+        device const float * experts,
+        device const float * weights,
+        device       float * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t token = tgpig.x;
+    const int64_t col   = (int64_t) tgpig.y * ntg.x + tpitg.x;
+    if (token >= args.ne02 || col >= args.ne00) {
+        return;
+    }
+
+    const int n_expert_used = FC_moe_reduce_n_expert_used;
+
+    const int64_t base = token * (int64_t) n_expert_used * args.ne00 + col;
+    float sum = 0.0f;
+    FOR_UNROLL (int e = 0; e < n_expert_used; ++e) {
+        sum += experts[base + e * args.ne00] * weights[token * n_expert_used + e];
+    }
+    dst[token * args.ne00 + col] = sum;
 }

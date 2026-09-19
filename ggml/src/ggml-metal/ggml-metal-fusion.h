@@ -32,33 +32,27 @@ typedef enum ggml_metal_fusion_id {
     GGML_METAL_FUSION_NONE = 0,
     GGML_METAL_FUSION_NORM_MUL,     // NORM/RMS_NORM + MUL
     GGML_METAL_FUSION_NORM_MUL_ADD, // NORM/RMS_NORM + MUL + ADD
+    GGML_METAL_FUSION_NORM_SCALE,   // NORM/RMS_NORM + SCALE
     GGML_METAL_FUSION_ADD_CHAIN,    // ADD x N (N in [2, 7])
     GGML_METAL_FUSION_SNAKE,        // MUL + SIN + SQR + MUL + ADD
     GGML_METAL_FUSION_GDN_CACHE,    // GATED_DELTA_NET + CPY (write snapshots into the recurrent cache)
+    GGML_METAL_FUSION_TOPK_MOE,     // SOFT_MAX + ARGSORT + GET_ROWS + norm/scale (MoE routing)
+    GGML_METAL_FUSION_MOE_REDUCE,   // MUL + expert VIEWs + ADD chain (MoE output reduction)
+    GGML_METAL_FUSION_SSM_CONV_SILU, // SSM_CONV + UNARY (silu)
 } ggml_metal_fusion_id;
 
-struct ggml_metal_fusion {
-    ggml_metal_fusion_id id;
-
-    const enum ggml_op * ops;        // op sequence (fixed length)
-    int                  n_ops;      // number of ops
-
-    // if unsafe: the generic chain/shape + ggml_can_fuse_subgraph checks are skipped and the
-    // check callback below is the sole validator (used for patterns that are not elision chains,
-    // e.g. the gdn + cache-cpy write-through fusion)
-    bool unsafe;
-
-    // extra backend constraints on top of ggml_can_fuse_subgraph
-    // nodes[j] is the j-th node of the pattern
-    bool (*check)(const struct ggml_metal_fusion   * fusion,
-                  const struct ggml_tensor * const * nodes,
-                        ggml_metal_fusion_mode       mode);
-};
+struct ggml_metal_fusion; // defined in ggml-metal-fusion.cpp
 
 typedef struct ggml_metal_fusion ggml_metal_fusion;
 
-// the single table of all fusions supported by the Metal backend
-const ggml_metal_fusion * ggml_metal_fusion_all(int * n);
+// access the fusion identifier without exposing the full pattern definition
+ggml_metal_fusion_id ggml_metal_fusion_get_id(const struct ggml_metal_fusion * fusion);
+
+// apply any alloc-dependencies required by the fused kernels during graph optimize
+void ggml_metal_fusion_add_alloc_deps(
+        void * user_data,
+        void (*add_alloc_dep)(void *, struct ggml_tensor *, struct ggml_tensor *),
+        struct ggml_cgraph * gf);
 
 // ---- shared fusion info ---------------------------------------------------
 
