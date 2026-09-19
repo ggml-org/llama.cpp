@@ -12,6 +12,7 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -52,17 +53,21 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     std::mt19937 gen(seed);
     std::normal_distribution<float> dis(0.0f, params.stdev);
 
+    // note: Mamba A must be negative (state decay)
+    const bool is_ssm_a = strstr(tensor->name, "ssm_a") != nullptr;
     const int64_t ne = ggml_nelements(tensor);
     if (tensor->type == GGML_TYPE_F32) {
         std::vector<float> tmp(ne);
         for (int64_t i = 0; i < ne; i++) {
-            tmp[i] = dis(gen);
+            float val = dis(gen);
+            tmp[i] = is_ssm_a ? -fabsf(val) : val;
         }
         ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
     } else if (tensor->type == GGML_TYPE_F16) {
         std::vector<ggml_fp16_t> tmp(ne);
         for (int64_t i = 0; i < ne; i++) {
-            tmp[i] = ggml_fp32_to_fp16(dis(gen));
+            float val = dis(gen);
+            tmp[i] = ggml_fp32_to_fp16(is_ssm_a ? -fabsf(val) : val);
         }
         ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
     } else {
