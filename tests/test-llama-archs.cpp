@@ -750,6 +750,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
     const std::string template_row_res = "%15s %10s|%20s|\n";
 
     bool all_ok = true;
+    size_t n_tests = 0;
+    size_t n_failed = 0;
     common_log_flush(common_log_main());
     printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
     printf("|");
@@ -803,19 +805,22 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
                 char nmse_str[12] = {0};
 
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
+                bool test_executed = false;
+                bool test_ok = true;
                 if (!skip) {
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
+                        test_executed = true;
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
                         if (nmse_val > 1e-4) {
-                            all_ok = false;
+                            test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
                     }
@@ -824,6 +829,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
                     // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                     //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                     if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                        test_executed = true;
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
                         llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
                         ms.add_kv_from_model();
@@ -838,11 +844,19 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
                         GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                         for (size_t i = 0; i < logits_roundtrip.size(); i++) {
                             if (logits_roundtrip[i] != logits_dev[i]) {
-                                all_ok = false;
+                                test_ok = false;
                                 status_roundtrip = "\033[1;31mFAIL\033[0m";
                                 break;
                             }
                         }
+                    }
+                }
+
+                if (test_executed) {
+                    n_tests++;
+                    if (!test_ok) {
+                        n_failed++;
+                        all_ok = false;
                     }
                 }
 
@@ -852,6 +866,15 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
             }
         }
     }
+
+    if (n_tests == 0) {
+        printf("Summary: no tests executed\n");
+    } else if (n_failed == 0) {
+        printf("Summary: all %zu test(s) passed\n", n_tests);
+    } else {
+        printf("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
+    }
+
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
     return all_ok ? 0 : 1;
 }
