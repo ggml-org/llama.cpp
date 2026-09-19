@@ -137,6 +137,7 @@
 					suppressCloseAutoFocus = true;
 					chatFormActions.onSystemPromptClick?.();
 				}}
+				disabled={Boolean(serverStore.props?.system_prompt)}
 			>
 				<MessageSquare class={ICON_CLASS_DEFAULT} />
 
