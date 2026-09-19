@@ -1126,8 +1126,7 @@ static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(
 
     const block_iq2_s * bq2 = (const block_iq2_s *) vbq + kbx;
 
-    const int       qs_packed = get_int_b2(bq2->qs, iqs/2);
-    const uint8_t * qs        = (const uint8_t *) &qs_packed;
+    const int qs_packed = get_int_b2(bq2->qs, iqs/2);
 
     const int qh = bq2->qh[iqs/2];
 
@@ -1141,7 +1140,8 @@ static __device__ __forceinline__ float vec_dot_iq2_s_q8_1(
     int sumi1 = 0;
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
-        const int * grid_pos = (const int *)(iq2s_grid + (qs[l0/2] | ((qh << (8-l0)) & 0x300)));
+        // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+        const int * grid_pos = (const int *)(iq2s_grid + (__byte_perm(qs_packed, 0, 0x4440 | (l0/2)) | ((qh << (8-l0)) & 0x300)));
 
         const int signs0 = __vcmpne4(((signs_packed_8[l0/2] & 0x03) << 7) | ((signs_packed_8[l0/2] & 0x0C) << 21), 0x00000000);
         const int signs1 = __vcmpne4(((signs_packed_8[l0/2] & 0x30) << 3) | ((signs_packed_8[l0/2] & 0xC0) << 17), 0x00000000);
@@ -1213,8 +1213,7 @@ static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(
 
     const block_iq3_s * bq3 = (const block_iq3_s *) vbq + kbx;
 
-    const int2      qs_packed = make_int2(get_int_b2(bq3->qs, iqs + 0), get_int_b2(bq3->qs, iqs + 1));
-    const uint8_t * qs        = (const uint8_t *) &qs_packed;
+    const int2 qs_packed = make_int2(get_int_b2(bq3->qs, iqs + 0), get_int_b2(bq3->qs, iqs + 1));
 
     const int qh = bq3->qh[iqs/2];
 
@@ -1224,9 +1223,11 @@ static __device__ __forceinline__ float vec_dot_iq3_s_q8_1(
     int sumi = 0;
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
+        // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+        const int qsw = l0 < 4 ? qs_packed.x : qs_packed.y;
         const int2 grid_pos = make_int2(
-            iq3s_grid[qs[l0 + 0] | ((qh << (8 - l0)) & 0x100)],
-            iq3s_grid[qs[l0 + 1] | ((qh << (7 - l0)) & 0x100)]);
+            iq3s_grid[__byte_perm(qsw, 0, 0x4440 | ((l0 & 3) + 0)) | ((qh << (8 - l0)) & 0x100)],
+            iq3s_grid[__byte_perm(qsw, 0, 0x4440 | ((l0 & 3) + 1)) | ((qh << (7 - l0)) & 0x100)]);
 
         const int signs0 = __vcmpne4(((signs_packed_8[l0/2] & 0x03) << 7) | ((signs_packed_8[l0/2] & 0x0C) << 21), 0x00000000);
         const int signs1 = __vcmpne4(((signs_packed_8[l0/2] & 0x30) << 3) | ((signs_packed_8[l0/2] & 0xC0) << 17), 0x00000000);
@@ -1254,15 +1255,15 @@ static __device__ __forceinline__ float vec_dot_iq1_s_q8_1(
     const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
     const block_iq1_s * bq1 = (const block_iq1_s *) vbq + kbx;
 
-    const int       qs_packed = get_int_b2(bq1->qs, iqs);
-    const uint8_t * qs        = (const uint8_t *) &qs_packed;
+    const int qs_packed = get_int_b2(bq1->qs, iqs);
 
     const int qh = bq1->qh[iqs];
 
     int sumi = 0;
 #pragma unroll
     for (int l0 = 0; l0 < 8; l0 += 2) {
-        const int grid = iq1s_grid_gpu[qs[l0/2] | (((qh >> 3*(l0/2)) & 0x07) << 8)];
+        // extract the byte via __byte_perm: nvcc 13.2 drops a plain byte mask here and the grid index runs out of range
+        const int grid = iq1s_grid_gpu[__byte_perm(qs_packed, 0, 0x4440 | (l0/2)) | (((qh >> 3*(l0/2)) & 0x07) << 8)];
 
         const int grid0 = (grid >> 0) & 0x0F0F0F0F;
         const int grid1 = (grid >> 4) & 0x0F0F0F0F;
