@@ -23,6 +23,8 @@ struct dummy_backend_context {
     ggml_backend                       backend;
     std::vector<ggml_backend_buffer_t> buffers;
 
+    bool custom_alloc_buffer_n_called = false;
+
     size_t allocated_total() const {
         size_t n = 0;
         for (ggml_backend_buffer_t buf : buffers) {
@@ -53,6 +55,22 @@ static size_t dummy_backend_buffer_type_get_alignment(ggml_backend_buffer_type_t
 static size_t dummy_backend_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     dummy_backend_context * ctx = (dummy_backend_context *) buft->context;
     return ctx->max_buffer_size;
+}
+
+static ggml_backend_buffer_t dummy_backend_buffer_type_alloc_buffer_n_custom(
+        ggml_backend_buffer_type_t buft, ggml_tensor ** tensors, int n_tensors) {
+    dummy_backend_context * ctx = (dummy_backend_context *) buft->context;
+    ctx->custom_alloc_buffer_n_called = true;
+
+    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, 64);
+    if (buffer == nullptr) {
+        return nullptr;
+    }
+    for (int i = 0; i < n_tensors; i++) {
+        tensors[i]->buffer = buffer;
+        tensors[i]->data   = (char *) ggml_backend_buffer_get_base(buffer);
+    }
+    return buffer;
 }
 
 static bool dummy_backend_buffer_type_is_host(ggml_backend_buffer_type_t) {
@@ -650,6 +668,208 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
+    const size_t expected_size = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, buft);
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft));
+    GGML_ASSERT((buffer != nullptr) == (expected_size != 0));
+    if (buffer) {
+        GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == expected_size);
+    }
+    return buffer;
+}
+
+static void test_buft_alloc_buffer_n_single_buffer() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[3];
+    x[0] = make_input_with_size(ctx, 8);
+    x[1] = make_input_with_size(ctx, 8);
+    x[2] = ggml_add(ctx, x[0], x[1]);
+    assign_names(ctx);
+
+    ggml_tensor * tensors[3] = { x[0], x[1], x[2] };
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 3));
+    GGML_ASSERT(buffer != nullptr);
+    GGML_ASSERT(!ggml_backend_buffer_is_multi_buffer(buffer.get()));
+    GGML_ASSERT(backend.context->buffers.size() == 1);
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == 24);
+    for (ggml_tensor * t : tensors) {
+        GGML_ASSERT(t->buffer == buffer.get());
+        GGML_ASSERT(t->data != nullptr);
+    }
+    for (int i = 0; i < 3; i++) {
+        for (int j = i + 1; j < 3; j++) {
+            GGML_ASSERT(!memory_overlap(tensors[i], tensors[j]));
+        }
+    }
+}
+
+static void test_buft_alloc_buffer_n_multi_buffer() {
+    dummy_backend backend      = dummy_backend_init(16);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[4];
+    x[0] = make_input_with_size(ctx, 8);
+    x[1] = make_input_with_size(ctx, 8);
+    x[2] = make_input_with_size(ctx, 8);
+    x[3] = make_input_with_size(ctx, 8);
+    assign_names(ctx);
+
+    ggml_tensor * tensors[4] = { x[0], x[1], x[2], x[3] };
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 4));
+    GGML_ASSERT(buffer != nullptr);
+    GGML_ASSERT(ggml_backend_buffer_is_multi_buffer(buffer.get()));
+    GGML_ASSERT(backend.context->buffers.size() == 2);
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == 32);
+    for (ggml_tensor * t : tensors) {
+        GGML_ASSERT(t->buffer != nullptr);
+        GGML_ASSERT(t->data != nullptr);
+    }
+    for (int i = 0; i < 4; i++) {
+        for (int j = i + 1; j < 4; j++) {
+            GGML_ASSERT(!memory_overlap(tensors[i], tensors[j]));
+        }
+    }
+}
+
+static void test_buft_alloc_buffer_n_zero_size() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[2];
+    x[0] = make_input_1d(ctx, 0);
+    x[1] = make_input_1d(ctx, 0);
+    assign_names(ctx);
+
+    ggml_tensor * tensors[2] = { x[0], x[1] };
+    GGML_ASSERT(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 2) == nullptr);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type) == nullptr);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, &backend.buffer_type) == 0);
+}
+
+static void test_buft_alloc_buffer_n_already_allocated() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * a[2];
+    a[0] = make_input_with_size(ctx, 8);
+    a[1] = make_input_with_size(ctx, 8);
+    assign_names(ctx, "a");
+
+    ggml_backend_buffer_ptr buf_a(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type));
+    GGML_ASSERT(buf_a != nullptr);
+
+    ggml_tensor * b = make_input_with_size(ctx, 8);
+    assign_names(ctx, "b");
+
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, &backend.buffer_type) == 8);
+    GGML_ASSERT(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, a, 2) == nullptr);
+
+    ggml_tensor * tensors[3] = { a[0], a[1], b };
+    ggml_backend_buffer_ptr buf_b(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 3));
+    GGML_ASSERT(buf_b != nullptr);
+    GGML_ASSERT(backend.context->buffers.size() == 2);
+    GGML_ASSERT(a[0]->buffer == buf_a.get());
+    GGML_ASSERT(a[1]->buffer == buf_a.get());
+    GGML_ASSERT(b->buffer == buf_b.get());
+    GGML_ASSERT(ggml_backend_buffer_get_size(buf_b.get()) == 8);
+    GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type) == nullptr);
+}
+
+static void test_buft_alloc_buffer_n_views() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * base  = make_input_1d(ctx, 4);
+    ggml_tensor * view  = ggml_view_1d(ctx, base, 2, 0);
+    ggml_tensor * extra = make_input_1d(ctx, 2);
+    assign_names(ctx);
+
+    ggml_tensor * tensors[3] = { base, view, extra };
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 3));
+    GGML_ASSERT(buffer != nullptr);
+    GGML_ASSERT(backend.context->buffers.size() == 1);
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == 24);
+    GGML_ASSERT(base->buffer == buffer.get());
+    GGML_ASSERT(view->buffer == buffer.get());
+    GGML_ASSERT(extra->buffer == buffer.get());
+    GGML_ASSERT(view->data == base->data);
+}
+
+static void test_alloc_ctx_tensors_from_buft_size_matches() {
+    {
+        dummy_backend backend      = dummy_backend_init(SIZE_MAX, 8);
+        auto [ctx, graph, ctx_ptr] = make_context();
+
+        ggml_tensor * x[3];
+        x[0] = make_input_with_size(ctx, 4);
+        x[1] = make_input_with_size(ctx, 4);
+        x[2] = make_input_with_size(ctx, 8);
+        assign_names(ctx);
+
+        GGML_UNUSED(x);
+
+        ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
+        GGML_ASSERT(buffer != nullptr);
+        GGML_ASSERT(backend.context->allocated_total() == 24);
+    }
+    {
+        dummy_backend backend      = dummy_backend_init(16);
+        auto [ctx, graph, ctx_ptr] = make_context();
+
+        ggml_tensor * x[4];
+        x[0] = make_input_with_size(ctx, 8);
+        x[1] = make_input_with_size(ctx, 8);
+        x[2] = make_input_with_size(ctx, 8);
+        x[3] = make_input_with_size(ctx, 8);
+        assign_names(ctx);
+
+        GGML_UNUSED(x);
+
+        ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
+        GGML_ASSERT(buffer != nullptr);
+        GGML_ASSERT(backend.context->allocated_total() == 32);
+    }
+    {
+        dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+        auto [ctx, graph, ctx_ptr] = make_context();
+
+        ggml_tensor * base  = make_input_1d(ctx, 4);
+        ggml_tensor * view  = ggml_view_1d(ctx, base, 2, 0);
+        ggml_tensor * extra = make_input_1d(ctx, 2);
+        assign_names(ctx);
+
+        GGML_UNUSED(view);
+        GGML_UNUSED(extra);
+
+        ggml_backend_buffer_ptr buffer = check_size_matches(&backend.buffer_type, ctx);
+        GGML_ASSERT(buffer != nullptr);
+        GGML_ASSERT(backend.context->allocated_total() == 24);
+    }
+}
+
+static void test_buft_alloc_buffer_n_custom_override() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.buffer_type.iface.alloc_buffer_n = dummy_backend_buffer_type_alloc_buffer_n_custom;
+
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[2];
+    x[0] = make_input_with_size(ctx, 8);
+    x[1] = make_input_with_size(ctx, 8);
+    assign_names(ctx);
+
+    ggml_tensor * tensors[2] = { x[0], x[1] };
+    ggml_backend_buffer_ptr buffer(ggml_backend_buft_alloc_buffer_n(&backend.buffer_type, tensors, 2));
+    GGML_ASSERT(buffer != nullptr);
+    GGML_ASSERT(backend.context->custom_alloc_buffer_n_called);
+    GGML_ASSERT(backend.context->buffers.size() == 1);
+    GGML_ASSERT(ggml_backend_buffer_get_size(buffer.get()) == 64);
+    GGML_ASSERT(x[0]->buffer == buffer.get());
+    GGML_ASSERT(x[1]->buffer == buffer.get());
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -672,5 +892,12 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+    run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
+    run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
+    run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);
+    run("test_buft_alloc_buffer_n_already_allocated", test_buft_alloc_buffer_n_already_allocated);
+    run("test_buft_alloc_buffer_n_views", test_buft_alloc_buffer_n_views);
+    run("test_alloc_ctx_tensors_from_buft_size_matches", test_alloc_ctx_tensors_from_buft_size_matches);
+    run("test_buft_alloc_buffer_n_custom_override", test_buft_alloc_buffer_n_custom_override);
     return 0;
 }
