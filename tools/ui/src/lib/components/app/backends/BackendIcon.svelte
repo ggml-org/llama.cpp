@@ -2,6 +2,7 @@
 	import BackendPresetIcon from './BackendPresetIcon.svelte';
 	import type { Backend } from '$lib/types';
 	import { backendFaviconUrl, findBackendPreset } from '$lib/utils';
+	import type { Snippet } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	/** Favicons that failed to load, so a row remount does not ask again. */
@@ -10,9 +11,11 @@
 	interface Props {
 		backend?: Backend;
 		class?: string;
+		/** Rendered when the backend has neither a bundled mark nor a favicon. */
+		fallback?: Snippet;
 	}
 
-	let { backend, class: className = 'h-4 w-4' }: Props = $props();
+	let { backend, class: className = 'h-4 w-4', fallback }: Props = $props();
 
 	let preset = $derived(backend ? findBackendPreset(backend.baseUrl) : undefined);
 	let faviconUrl = $derived(preset || !backend ? null : backendFaviconUrl(backend.baseUrl));
@@ -29,4 +32,6 @@
 		onerror={() => failedFavicons.add(faviconUrl)}
 		src={faviconUrl}
 	/>
+{:else}
+	{@render fallback?.()}
 {/if}

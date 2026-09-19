@@ -1,5 +1,4 @@
 import { ModelModality } from '$lib/enums';
-import type { BackendPreset } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 import { SvelteMap } from 'svelte/reactivity';
 
@@ -25,8 +24,6 @@ export interface ProviderGroup {
 	/** Rows left after the search filter, before the cap. */
 	matched: number;
 	name: string;
-	/** Brand mark of the endpoint the backend was created from, when known. */
-	preset?: BackendPreset;
 }
 
 export interface GroupedModelOptions {
@@ -139,7 +136,6 @@ export function groupProviderOptions(
 		error: string | null;
 		loading: boolean;
 		name: string;
-		preset?: BackendPreset;
 	}[],
 	limit = Infinity
 ): ProviderGroup[] {

@@ -12,7 +12,6 @@ import {
 } from '$lib/constants';
 import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
-import { findBackendPreset } from '$lib/utils/backend';
 import { rawModelId } from '$lib/utils/model-option-id';
 import { onMount } from 'svelte';
 
@@ -140,8 +139,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 					catalog: state.models.length,
 					error: state.error,
 					loading: state.loading,
-					name: backend.name,
-					preset: findBackendPreset(backend.baseUrl)
+					name: backend.name
 				};
 			})
 	);

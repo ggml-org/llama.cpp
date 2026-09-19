@@ -1,13 +1,13 @@
 <script lang="ts">
-	import BackendPresetIcon from './BackendPresetIcon.svelte';
+	import BackendIcon from './BackendIcon.svelte';
 	import { Pencil, Server, Trash2 } from '@lucide/svelte';
 	import { DialogConfirmation } from '$lib/components/app/dialogs';
+	import Logo from '$lib/components/app/misc/Logo.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { Switch } from '$lib/components/ui/switch';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Backend, BackendProtocol } from '$lib/types';
-	import { findBackendPreset } from '$lib/utils';
 
 	const PROTOCOL_LABELS: Record<BackendProtocol, string> = {
 		'llama.cpp': 'llama.cpp',
@@ -27,17 +27,20 @@
 	let showDelete = $state(false);
 	let protocolLabel = $derived(PROTOCOL_LABELS[backend.protocol]);
 	let displayUrl = $derived(backend.baseUrl || 'This server');
-	let preset = $derived(findBackendPreset(backend.baseUrl));
 </script>
 
 <Card.Root class="!gap-3 bg-muted/30 p-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			{#if preset}
-				<BackendPresetIcon class={ICON_CLASS_DEFAULT} {preset} />
-			{:else}
-				<Server class={ICON_CLASS_DEFAULT} />
-			{/if}
+			<BackendIcon {backend} class={ICON_CLASS_DEFAULT}>
+				{#snippet fallback()}
+					{#if isLocal}
+						<Logo class={ICON_CLASS_DEFAULT} style="--size: 1rem" />
+					{:else}
+						<Server class={ICON_CLASS_DEFAULT} />
+					{/if}
+				{/snippet}
+			</BackendIcon>
 
 			<div class="min-w-0">
 				<p class="truncate text-sm font-medium">{backend.name}</p>
