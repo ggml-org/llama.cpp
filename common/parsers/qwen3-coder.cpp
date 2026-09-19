@@ -109,7 +109,12 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
                     auto arg_value = p.eps();
                     if (!types.has(common_chat_schema::TYPE_STRING)) {
-                        arg_value = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+                        // Non-string args (array<object>, object, number, bool): capture raw text up to
+                        // the closing tag and normalize to JSON at extraction time
+                        // (normalize_container_value). Constraining this branch with p.schema(...)
+                        // aborts matching on nested array<object> values inside <parameter> tags
+                        // (#21771); raw capture sidesteps that coupling.
+                        arg_value = p.ac(p.tool_arg_json_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n");
                     } else if (types.is_only(common_chat_schema::TYPE_STRING)) {
                         arg_value = arg_string;
                     } else {
