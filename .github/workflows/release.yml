@@ -106,6 +106,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -190,6 +191,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -275,6 +277,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-vulkan
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -310,11 +313,150 @@ jobs:
         with:
           key: release-${{ matrix.os }}-vulkan
 
+  ubuntu-cuda:
+    name: ubuntu-cuda (${{ matrix.label }}, ${{ matrix.build }})
+    needs: [check-release, ui-build]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    strategy:
+      matrix:
+        include:
+          # label = short version used in artifact names / release body
+          # cuda  = full container image tag
+          - build: 'x64'
+            os: ubuntu-24.04
+            cuda: '12.8.2'
+            label: '12.8'
+            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+          - build: 'x64'
+            os: ubuntu-24.04
+            cuda: '13.3.1'
+            label: '13.3'
+            defines: ''
+          - build: 'arm64'
+            os: ubuntu-24.04-arm
+            cuda: '13.3.1'
+            label: '13.3'
+            defines: ''
+
+    runs-on: ${{ matrix.os }}
+    container: nvidia/cuda:${{ matrix.cuda }}-devel-ubuntu24.04
+
+    permissions:
+      actions: write
+
+    steps:
+      # the container has no git; install it before checkout so that a real git
+      # repository is created (the get-tag-name action and the build both need it)
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # checkout runs as the host user; in-container steps run as root, so git
+      # refuses to touch a repo it does not own. Mark the workspace as safe.
+      # use the env var: the github.workspace context holds the HOST path,
+      # GITHUB_WORKSPACE the container path
+      - name: Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
+
+      - name: Dependencies
+        id: depends
+        # container jobs default to sh (dash); need bash for the [[ ]] below
+        shell: bash
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential cmake ninja-build libssl-dev jq python3-venv
+          # the container ships GCC 13, which does not know the 'sme' march
+          # feature used by the armv9.2 CPU variant of GGML_CPU_ALL_VARIANTS
+          if [[ "${{ matrix.build }}" == "arm64" ]]; then
+            apt-get install -y --no-install-recommends gcc-14 g++-14
+            echo "CC=gcc-14" >> "$GITHUB_ENV"
+            echo "CXX=g++-14" >> "$GITHUB_ENV"
+          fi
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          key: release-ubuntu-${{ matrix.os }}-cuda-${{ matrix.label }}-${{ matrix.build }}
+          evict-old-files: 1d
+          max-size: "1G"
+
+      - name: Build
+        id: cmake_build
+        # no CMAKE_CUDA_ARCHITECTURES: use the broad default arch set from
+        # ggml/src/ggml-cuda/CMakeLists.txt so the release binary covers many GPUs
+        run: |
+          cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_CUDA=ON \
+            -DGGML_CUDA_NCCL=OFF \
+            ${{ env.CMAKE_ARGS }} ${{ matrix.defines }}
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+
+      # ship the CUDA runtime libraries the backend links against, mirroring
+      # the windows-cuda cudart zip - extract next to the binaries ($ORIGIN rpath)
+      - name: Pack CUDA runtime
+        id: pack_cuda_runtime
+        run: |
+          major="${{ matrix.label }}"
+          major="${major%%.*}"
+          mkdir -p ./cudart
+          # cp -L dereferences the SONAME symlinks into plain files, so the
+          # tarball holds exactly 3 files with no versioned duplicates
+          cp -L /usr/local/cuda/lib64/libcudart.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublas.so.${major} ./cudart/
+          cp -L /usr/local/cuda/lib64/libcublasLt.so.${major} ./cudart/
+          tar -czvf cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz --transform "s,^\.,cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}," -C ./cudart .
+
+      - name: Upload CUDA runtime
+        uses: actions/upload-artifact@v6
+        with:
+          path: cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+          name: cudart-llama-bin-ubuntu-cuda-${{ matrix.label }}-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-${{ matrix.os }}-cuda-${{ matrix.label }}-${{ matrix.build }}
+
   android-arm64:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     #permissions:
     #  actions: write
@@ -342,7 +484,7 @@ jobs:
           distribution: temurin
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           log-accepted-android-sdk-licenses: false
 
@@ -361,6 +503,7 @@ jobs:
       #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-android-arm64
+      #    evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -415,8 +558,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3.1"
-      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
+      OPENVINO_VERSION_MAJOR: "2026.4"
+      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
 
     steps:
       - name: Set OpenVINO version output
@@ -439,6 +582,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
+          evict-old-files: 1d
 
       - name: Dependencies
         run: |
@@ -529,8 +673,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3.1"
-      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
+      OPENVINO_VERSION_MAJOR: "2026.4"
+      OPENVINO_VERSION_FULL: "2026.4.0.22959.99c81491cc3"
 
     steps:
       - name: Set OpenVINO version output
@@ -682,6 +826,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
+          evict-old-files: 1d
 
       - name: Build
         shell: cmd
@@ -926,6 +1071,7 @@ jobs:
       #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      #    evict-old-files: 1d
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -987,7 +1133,7 @@ jobs:
           - cuda: '12.4'
             arch: x64
             defines: '-DGGML_CUDA_CUB_3DOT2=ON'
-          - cuda: '13.3'
+          - cuda: '13.4'
             arch: x64
             defines: ''
           - cuda: '13.4'
@@ -1014,6 +1160,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -1110,6 +1257,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-x64-sycl
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -1228,6 +1376,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-sycl-${{ matrix.build }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -1280,7 +1429,7 @@ jobs:
       matrix:
         include:
           - ROCM_VERSION: "10.0.0"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
             build: 'x64'
 
     steps:
@@ -1572,6 +1721,7 @@ jobs:
       - ubuntu-24-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
+      - ubuntu-cuda
       - ubuntu-24-openvino
       - ubuntu-24-sycl
       - android-arm64
@@ -1703,6 +1853,9 @@ jobs:
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
+            - [Ubuntu x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz) - [CUDA 12.8 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz)
+            - [Ubuntu x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz)
+            - [Ubuntu arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-10.0-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
@@ -1716,8 +1869,8 @@ jobs:
             - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
             - [Windows arm64 (OpenCL Adreno)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-opencl-adreno-arm64.zip)
             - [Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
-            - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.3-x64.zip) - [CUDA 13.3 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.3-x64.zip)
-            - [Windows arm64 (CUDA 13) (preview)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-arm64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-arm64.zip)
+            - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-x64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-x64.zip)
+            - [Windows arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-arm64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-arm64.zip)
             - [Windows x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-vulkan-x64.zip)
             - [Windows x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ needs.windows-openvino.outputs.openvino_version }}-x64.zip)
             - [Windows x64 (SYCL)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip)

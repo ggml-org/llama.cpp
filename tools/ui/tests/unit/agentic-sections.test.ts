@@ -290,3 +290,114 @@ describe('hasAgenticContent', () => {
 		expect(hasAgenticContent(msg)).toBe(false);
 	});
 });
+
+// The turn-section cache: completed turns are immutable, so repeated
+// derivations return the same section objects - which is what keeps tool
+// block props stable while another turn streams. Every field the cache
+// compares must invalidate it; a miss here renders stale content.
+
+describe('completed turn section reuse', () => {
+	const toolCallsJson = JSON.stringify([
+		{ function: { arguments: '{"path":"/a"}', name: 'test' }, id: 'call_1', type: 'function' }
+	]);
+
+	function makeSession() {
+		return {
+			anchor: makeAssistant({
+				content: 'answer',
+				reasoningContent: 'thinking',
+				toolCalls: toolCallsJson
+			}),
+			tools: [makeToolMsg({ content: 'tool result', extra: [{ type: 'file' } as never] })]
+		};
+	}
+
+	it('returns the same section objects for unchanged inputs', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], false);
+		const second = deriveAgenticSections(anchor, tools, [], false);
+
+		expect(second[0]).toBe(first[0]);
+		expect(second[1]).toBe(first[1]);
+	});
+
+	it('recomputes when the assistant content changes', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], false);
+
+		anchor.content = 'edited';
+		const second = deriveAgenticSections(anchor, tools, [], false);
+
+		expect(second).not.toBe(first);
+		expect(second.some((s) => s.type === AgenticSectionType.TEXT && s.content === 'edited')).toBe(
+			true
+		);
+	});
+
+	it('recomputes when reasoning content changes', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], false);
+
+		anchor.reasoningContent = 'new thinking';
+		const second = deriveAgenticSections(anchor, tools, [], false);
+
+		expect(second).not.toBe(first);
+	});
+
+	it('recomputes when toolCalls change', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], false);
+
+		anchor.toolCalls = '[]';
+		const second = deriveAgenticSections(anchor, tools, [], false);
+
+		expect(second).not.toBe(first);
+	});
+
+	it('recomputes when a tool result or its extras change', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], false);
+
+		tools[0].content = 'new tool result';
+		expect(deriveAgenticSections(anchor, tools, [], false)).not.toBe(first);
+
+		const firstAfterContent = deriveAgenticSections(anchor, tools, [], false);
+
+		tools[0].extra = [{ type: 'image' } as never];
+		expect(deriveAgenticSections(anchor, tools, [], false)).not.toBe(firstAfterContent);
+	});
+
+	it('never reuses the streaming turn', () => {
+		const { anchor, tools } = makeSession();
+		const first = deriveAgenticSections(anchor, tools, [], true);
+		const second = deriveAgenticSections(anchor, tools, [], true);
+
+		expect(second).not.toBe(first);
+	});
+
+	it('keeps completed turns stable while the last turn streams', () => {
+		const anchor = makeAssistant({
+			content: 'turn one',
+			id: 'ast-1',
+			toolCalls: JSON.stringify([
+				{ function: { arguments: '{}', name: 'test' }, id: 'call_1', type: 'function' }
+			])
+		});
+		const continuation = makeAssistant({ content: 'turn two', id: 'ast-2' });
+		const tools = [
+			makeToolMsg({ content: 'r1', id: 'tool-1', toolCallId: 'call_1' }),
+			continuation,
+			makeToolMsg({ content: 'r2', id: 'tool-2', toolCallId: 'call_2' })
+		];
+		const first = deriveAgenticSections(anchor, tools, [], true);
+		const second = deriveAgenticSections(anchor, tools, [], true);
+
+		// turn one is complete: identical section objects across derivations
+		expect(second.slice(0, 2)).toEqual(first.slice(0, 2));
+		expect(second[0]).toBe(first[0]);
+		expect(second[1]).toBe(first[1]);
+
+		// the streaming last turn recomputed: fresh section objects
+		expect(second[second.length - 1]).not.toBe(first[first.length - 1]);
+	});
+});

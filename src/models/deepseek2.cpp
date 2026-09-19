@@ -475,20 +475,11 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
             const int ocr_rope_type = GGML_ROPE_TYPE_NEOX;
             GGML_ASSERT(n_embed_head == n_embd_head_k && n_embed_head == n_embd_head_v);
 
-            ggml_tensor * Qcur = NULL;
-            ggml_tensor * Kcur = NULL;
-            ggml_tensor * Vcur = NULL;
-
-            Qcur = ggml_mul_mat(ctx0, model.layers[il].wq, cur);
-            Kcur = ggml_mul_mat(ctx0, model.layers[il].wk, cur);
-            Vcur = ggml_mul_mat(ctx0, model.layers[il].wv, cur);
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embed_head, n_head, n_head, il);
             cb(Qcur, "q", il);
             cb(Kcur, "k", il);
             cb(Vcur, "v", il);
-
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embed_head, n_head, n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embed_head, n_head, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embed_head, n_head, n_tokens);
 
             GGML_ASSERT(fabs(freq_base - 10000.0) < 1e-4);
             Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_embed_head, ocr_rope_type, 0, freq_base, 1, 0, 1, 0, 0);
