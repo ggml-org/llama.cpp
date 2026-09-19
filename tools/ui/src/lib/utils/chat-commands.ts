@@ -30,6 +30,13 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			description: 'Select model',
 			disabled: !options.showModelSelector,
 			name: 'model'
+		},
+		{
+			action: ChatFormCommandAction.COMPACT,
+			description: 'Summarize the conversation to free up context',
+			disabled: !options.canCompact(),
+			keywords: ['summarize', 'context'],
+			name: 'compact'
 		}
 	];
 }

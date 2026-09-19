@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FolderOpen, Sparkles } from '@lucide/svelte';
+	import { FolderOpen, FoldVertical, Sparkles } from '@lucide/svelte';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
@@ -27,6 +27,7 @@
 	let { class: className = '', commands, isOpen, onClose, onSelect, query }: Props = $props();
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
+		[ChatFormCommandAction.COMPACT]: FoldVertical,
 		[ChatFormCommandAction.CWD]: FolderOpen,
 		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
 		[ChatFormCommandAction.PROMPT]: Sparkles
