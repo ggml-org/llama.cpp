@@ -12,6 +12,7 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
+	import { BackendIcon } from '$lib/components/app/backends';
 	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
@@ -222,7 +223,13 @@
 		</div>
 
 		{#if !canLoad}
-			<!-- remote rows have no load state, the column stays out of the way -->
+			<!-- external providers carry no load state: the row shows the provider
+			     mark instead, which is what identifies it in a flat list -->
+			{#if rowBackend}
+				<div class="flex w-5 items-center justify-center">
+					<BackendIcon backend={rowBackend} class="h-3.5 w-3.5" />
+				</div>
+			{/if}
 		{:else if isLoading}
 			<div class="flex w-5 items-center justify-center">
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />

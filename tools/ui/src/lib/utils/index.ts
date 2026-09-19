@@ -26,6 +26,7 @@ export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './ap
 export { validateApiKey } from './api-key-validation';
 export {
 	backendChatUrl,
+	backendFaviconUrl,
 	backendModelsUrl,
 	createLocalBackend,
 	findBackendPreset,
