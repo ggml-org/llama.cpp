@@ -363,7 +363,7 @@
 								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								renderOption={modelOption}
-								sectionHeaderClass="[&:not(:first-child)]:mt-3 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
+								sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
 								{showOrgName}
 							/>
 						</div>

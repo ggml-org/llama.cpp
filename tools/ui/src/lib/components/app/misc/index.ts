@@ -59,3 +59,12 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  * `class` and `style` props and inherits color via `currentColor`.
  */
 export { default as Logo } from './Logo.svelte';
+
+/**
+ * **CollapsibleSection** - Section with a trigger that expands in place
+ *
+ * The trigger can sit above or below the content, and the chevron can stay out
+ * of sight while the section is open. Collapsed content unmounts after the
+ * transition, so hidden rows never reach menu keyboard navigation.
+ */
+export { default as CollapsibleSection } from './CollapsibleSection.svelte';
