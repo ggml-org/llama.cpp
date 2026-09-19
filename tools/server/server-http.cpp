@@ -18,14 +18,37 @@
 
 class server_http_context::Impl {
 public:
-    std::unique_ptr<httplib::Server> srv;
+    std::vector<std::unique_ptr<httplib::Server>> servers;
+    std::vector<std::string> hosts;
+    std::vector<std::thread> threads; // one thread per listener
+    std::unique_ptr<httplib::ThreadPool> pool; // single pool shared among all listeners
+    int n_threads_http = 0;
+};
+
+class server_http_task_queue : public httplib::TaskQueue {
+    httplib::ThreadPool & pool;
+public:
+    explicit server_http_task_queue(httplib::ThreadPool & pool) : pool(pool) {}
+    bool enqueue(std::function<void()> fn) override { return pool.enqueue(std::move(fn)); }
+    // note: must call join() to drain the pool
+    void shutdown() override { /* no-op */ }
 };
 
 server_http_context::server_http_context()
     : pimpl(std::make_unique<Impl>())
 {}
 
-server_http_context::~server_http_context() = default;
+server_http_context::~server_http_context() {
+    // just in case any exit paths that forget to call join()
+    try {
+        stop();
+        join();
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to stop HTTP server: %s\n", e.what());
+    } catch (...) {
+        SRV_ERR("%s", "failed to stop HTTP server\n");
+    }
+}
 
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
@@ -90,7 +113,6 @@ bool server_http_context::init(const common_params & params) {
 
     path_prefix = params.api_prefix;
     port = params.port;
-    hostname = params.hostname;
 
     if (gcp.enabled) {
         SRV_TRC("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
@@ -102,7 +124,39 @@ bool server_http_context::init(const common_params & params) {
         port = gcp.port;
     }
 
-    auto & srv = pimpl->srv;
+    pimpl->hosts = params.hostnames;
+    size_t n_tcp_hosts = 0;
+    for (const auto & host : pimpl->hosts) {
+        if (!string_ends_with(host, ".sock")) {
+            n_tcp_hosts++;
+        }
+    }
+    if (port == 0 && n_tcp_hosts > 1) {
+        SRV_ERR("%s", "--port 0 is not supported with multiple TCP addresses\n");
+        return false;
+    }
+    for (size_t i = 0; i < pimpl->hosts.size(); ++i) {
+        pimpl->servers.emplace_back();
+        if (!init_listener(params)) {
+            return false;
+        }
+        // with multiple TCP addresses, [::] must not also claim 0.0.0.0
+        if (n_tcp_hosts > 1) {
+            pimpl->servers.back()->set_ipv6_v6only(true);
+        }
+    }
+
+    pimpl->n_threads_http = params.n_threads_http;
+    if (pimpl->n_threads_http < 1) {
+        // +4 threads for monitoring, health and MCP.
+        pimpl->n_threads_http = std::max(params.n_parallel + 4, static_cast<int32_t>(std::thread::hardware_concurrency() - 1));
+    }
+    SRV_TRC("using %d threads for HTTP server\n", pimpl->n_threads_http);
+    return true;
+}
+
+bool server_http_context::init_listener(const common_params & params) {
+    auto & srv = pimpl->servers.back();
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (!params.ssl_file_key.empty() && !params.ssl_file_cert.empty()) {
@@ -306,18 +360,8 @@ bool server_http_context::init(const common_params & params) {
         return httplib::Server::HandlerResponse::Unhandled;
     });
 
-    auto n_threads_http = params.n_threads_http;
-    if (n_threads_http < 1) {
-        // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
-        n_threads_http = std::max(params.n_parallel + 4, static_cast<int32_t>(std::thread::hardware_concurrency() - 1));
-    }
-    SRV_TRC("using %d threads for HTTP server\n", n_threads_http);
-    srv->new_task_queue = [n_threads_http] {
-        // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible additional threads
-        // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
-        // ref: https://github.com/yhirose/cpp-httplib/pull/2368
-        const auto max_threads = static_cast<size_t>(n_threads_http + 1024);
-        return new httplib::ThreadPool(n_threads_http, max_threads);
+    srv->new_task_queue = [this] {
+        return new server_http_task_queue(*pimpl->pool);
     };
 
     //
@@ -432,47 +476,75 @@ bool server_http_context::init(const common_params & params) {
 bool server_http_context::start() {
     // Bind and listen
 
-    const auto & srv = pimpl->srv;
-    auto was_bound = false;
-    auto is_sock = false;
-    if (string_ends_with(std::string(hostname), ".sock")) {
-        is_sock = true;
-        SRV_TRC("%s", "setting address family to AF_UNIX\n");
-        srv->set_address_family(AF_UNIX);
-        // bind_to_port requires a second arg, any value other than 0 should
-        // simply get ignored
-        was_bound = srv->bind_to_port(hostname, 8080);
-    } else {
-        SRV_TRC("%s", "binding port with default address family\n");
-        // bind HTTP listen port
-        if (port == 0) {
-            const auto bound_port = srv->bind_to_any_port(hostname);
-            was_bound = (bound_port >= 0);
+    listening_addresses.clear();
+    for (size_t i = 0; i < pimpl->servers.size(); ++i) {
+        const auto & srv = pimpl->servers[i];
+        const auto & host = pimpl->hosts[i];
+        const bool is_sock = string_ends_with(host, ".sock");
+        bool was_bound;
+        if (is_sock) {
+            SRV_TRC("%s", "setting address family to AF_UNIX\n");
+            srv->set_address_family(AF_UNIX);
+            // AF_UNIX ignores the port, but bind_to_port requires a nonzero value.
+            was_bound = srv->bind_to_port(host, 8080);
+        } else if (port == 0) {
+            const auto bound_port = srv->bind_to_any_port(host);
+            was_bound = bound_port >= 0;
             if (was_bound) {
+                // All TCP listeners use the port selected by the first bind.
                 port = bound_port;
             }
         } else {
-            was_bound = srv->bind_to_port(hostname, port);
+            was_bound = srv->bind_to_port(host, port);
+        }
+        if (!was_bound) {
+            SRV_ERR("couldn't bind HTTP server socket, hostname: %s, port: %d\n", host.c_str(), port);
+            stop();
+            listening_addresses.clear();
+            return false;
+        }
+        listening_addresses.push_back(is_sock ? string_format("unix://%s", host.c_str())
+                                              : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(host).c_str(), port));
+    }
+
+    // n_threads_http fixed threads (always alive), plus up to 1024 dynamic threads destroyed after each request
+    // ref: https://github.com/yhirose/cpp-httplib/pull/2368
+    pimpl->pool = std::make_unique<httplib::ThreadPool>(pimpl->n_threads_http, pimpl->n_threads_http + 1024);
+    for (size_t i = 0; i < pimpl->servers.size(); ++i) {
+        const auto & srv = pimpl->servers[i];
+        pimpl->threads.emplace_back([srv = srv.get()] {
+            srv->listen_after_bind();
+        });
+        srv->wait_until_ready();
+        if (!srv->is_running()) {
+            SRV_ERR("couldn't start HTTP listener on %s\n", listening_addresses[i].c_str());
+            stop();
+            join();
+            listening_addresses.clear();
+            return false;
         }
     }
-
-    if (!was_bound) {
-        SRV_ERR("couldn't bind HTTP server socket, hostname: %s, port: %d\n", hostname.c_str(), port);
-        return false;
-    }
-
-    // run the HTTP server in a thread
-    thread = std::thread([this] { pimpl->srv->listen_after_bind(); });
-    srv->wait_until_ready();
-
-    listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
-                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(hostname).c_str(), port);
     return true;
 }
 
 void server_http_context::stop() const {
-    if (pimpl->srv) {
-        pimpl->srv->stop();
+    for (const auto & srv : pimpl->servers) {
+        if (srv) {
+            srv->stop();
+        }
+    }
+}
+
+void server_http_context::join() {
+    for (auto & thread : pimpl->threads) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    // Queued requests still refer to their servers until the workers finish.
+    if (pimpl->pool) {
+        pimpl->pool->shutdown();
+        pimpl->pool.reset();
     }
 }
 
@@ -584,7 +656,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
 
 void server_http_context::get(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Get(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    auto callback = [handler](const httplib::Request & req, httplib::Response & res) {
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -596,12 +668,15 @@ void server_http_context::get(const std::string & path, const server_http_contex
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
-    });
+    };
+    for (const auto & srv : pimpl->servers) {
+        srv->Get(path_prefix + path, callback);
+    }
 }
 
 void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    auto callback = [handler](const httplib::Request & req, httplib::Response & res) {
         std::string body = req.body;
         std::map<std::string, uploaded_file> files;
 
@@ -643,12 +718,15 @@ void server_http_context::post(const std::string & path, const server_http_conte
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
-    });
+    };
+    for (const auto & srv : pimpl->servers) {
+        srv->Post(path_prefix + path, callback);
+    }
 }
 
 void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    auto callback = [handler](const httplib::Request & req, httplib::Response & res) {
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
             get_headers(req),
@@ -660,7 +738,10 @@ void server_http_context::del(const std::string & path, const server_http_contex
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
-    });
+    };
+    for (const auto & srv : pimpl->servers) {
+        srv->Delete(path_prefix + path, callback);
+    }
 }
 
 //

@@ -109,7 +109,9 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    return llama_server(params, argc, argv);
+    const int result = llama_server(params, argc, argv);
+    common_log_flush(common_log_main());
+    return result;
 }
 
 int llama_server(common_params & params, int argc, char ** argv) {
@@ -441,9 +443,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         } catch (const std::exception & e) {
             SRV_ERR("failed to load models on startup: %s\n", e.what());
             ctx_http.stop();
-            if (ctx_http.thread.joinable()) {
-                ctx_http.thread.join();
-            }
+            ctx_http.join();
             clean_up();
             return 1;
         }
@@ -476,9 +476,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         if (!ctx_server.load_model(params)) {
             clean_up();
-            if (ctx_http.thread.joinable()) {
-                ctx_http.thread.join();
-            }
+            ctx_http.join();
             SRV_ERR("%s", "exiting due to model loading error\n");
             return 1;
         }
@@ -512,11 +510,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
 #endif
     }
 
-    SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
+    for (const auto & address : ctx_http.listening_addresses) {
+        SRV_INF("listening on %s\n", address.c_str());
+    }
 
     // TODO: remove this in the future
-    // check the string to also handle the .sock case
-    if (string_ends_with(ctx_http.listening_address, ":8080")) {
+    // Unix sockets do not use the TCP port.
+    if (std::any_of(ctx_http.listening_addresses.begin(), ctx_http.listening_addresses.end(), [](const std::string & address) { return string_ends_with(address, ":8080"); })) {
         SRV_WRN("%s", "NOTICE: server default port will be changed to :9931 in a future release\n");
         SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
     }
@@ -527,9 +527,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
             SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
         }
 
-        if (ctx_http.thread.joinable()) {
-            ctx_http.thread.join(); // keep the main thread alive
-        }
+        ctx_http.join(); // keep the main thread alive
 
         // when the HTTP server stops, clean up and exit
         clean_up();
@@ -545,9 +543,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_server.start_loop();
 
         clean_up();
-        if (ctx_http.thread.joinable()) {
-            ctx_http.thread.join();
-        }
+        ctx_http.join();
         if (monitor_thread.joinable()) {
             monitor_thread.join();
         }
