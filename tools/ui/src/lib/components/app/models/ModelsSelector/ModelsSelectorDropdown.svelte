@@ -244,7 +244,7 @@
 							>
 								<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
-								<span class="flex min-w-0 items-center gap-1">
+								<span class="flex min-w-0 items-center gap-0.5">
 									{#if selectedOption}
 										<ModelId
 											class="min-w-0 overflow-hidden"
@@ -364,16 +364,17 @@
 						</div>
 
 						{#snippet footer()}
-							<!-- Sticky actions footer: reasoning effort panel.
-							     Sticks to the bottom of the content scrollport. -->
+							<!-- Sticky actions footer: backends, then the reasoning effort
+							     panel. Sticks to the bottom of the content scrollport. -->
+
+							<ModelsSelectorReasoningPanel inMenu />
+
 							<div
-								class="px-1.5"
+								class="flex flex-col px-1.5"
 								onfocusin={clearHighlight}
 								onmouseenter={clearHighlight}
 								role="none"
-							>
-								<ModelsSelectorReasoningPanel inMenu />
-							</div>
+							></div>
 						{/snippet}
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
