@@ -87,6 +87,39 @@ struct cpuid_x86 {
     bool AMX_FP16(void) { return f_7_1_eax[21]; }
     bool AMX_BF16(void) { return f_7_edx[22]; }
 
+    // -- OS XSAVE/AVX/AVX-512/AMX support checks ----------------------------------
+    // CPUID feature bits only indicate hardware support.  The OS must also have
+    // enabled the relevant extended state in XCR0 via XSAVE.  We read XCR0 with
+    // XGETBV after confirming the OSXSAVE bit (ECX[27] of CPUID leaf 1).
+
+#ifdef _MSC_VER
+    static uint64_t xgetbv(uint32_t xcr) { return _xgetbv(xcr); }
+#else
+    static uint64_t xgetbv(uint32_t xcr) {
+        uint32_t eax, edx;
+        __asm__ __volatile__("xgetbv" : "=a"(eax), "=d"(edx) : "c"(xcr));
+        return (static_cast<uint64_t>(edx) << 32) | eax;
+    }
+#endif
+
+    /// True when the OS saves/restores YMM registers (required for AVX, AVX2, FMA, F16C, AVX-VNNI).
+    bool os_saves_ymm(void) {
+        return f_1_ecx[27]                // OSXSAVE: OS enabled XSAVE
+            && (xgetbv(0) & 0x6) == 0x6;  // XCR0[2:1] -- SSE + YMM state
+    }
+
+    /// True when the OS saves/restores ZMM registers (required for all AVX-512 variants).
+    bool os_saves_zmm(void) {
+        return os_saves_ymm()
+            && (xgetbv(0) & 0xE0) == 0xE0; // XCR0[7:5] -- opmask, ZMM_Hi256, Hi16_ZMM
+    }
+
+    /// True when the OS saves/restores AMX tile registers (required for AMX-*).
+    bool os_saves_amx(void) {
+        return os_saves_zmm()
+            && (xgetbv(0) & 0x60000) == 0x60000; // XCR0[18:17] -- XTILECFG + XTILEDATA
+    }
+
 #ifdef _MSC_VER
     static void cpuid(int cpu_info[4], int eax) {
         __cpuid(cpu_info, eax);
@@ -261,17 +294,15 @@ void test_x86_is() {
 #endif
 
 static int ggml_backend_cpu_x86_score() {
-    // FIXME: this does not check for OS support
-
     int score = 1;
     cpuid_x86 is;
 
 #ifdef GGML_FMA
-    if (!is.FMA()) { return 0; }
+    if (!is.FMA() || !is.os_saves_ymm()) { return 0; }
     score += 1;
 #endif
 #ifdef GGML_F16C
-    if (!is.F16C()) { return 0; }
+    if (!is.F16C() || !is.os_saves_ymm()) { return 0; }
     score += 1<<1;
 #endif
 #ifdef GGML_SSE42
@@ -283,39 +314,39 @@ static int ggml_backend_cpu_x86_score() {
     score += 1<<3;
 #endif
 #ifdef GGML_AVX
-    if (!is.AVX()) { return 0; }
+    if (!is.AVX() || !is.os_saves_ymm()) { return 0; }
     score += 1<<4;
 #endif
 #ifdef GGML_AVX2
-    if (!is.AVX2()) { return 0; }
+    if (!is.AVX2() || !is.os_saves_ymm()) { return 0; }
     score += 1<<5;
 #endif
 #ifdef GGML_AVX_VNNI
-    if (!is.AVX_VNNI()) { return 0; }
+    if (!is.AVX_VNNI() || !is.os_saves_ymm()) { return 0; }
     score += 1<<6;
 #endif
 #ifdef GGML_AVX512
-    if (!is.AVX512F()) { return 0; }
-    if (!is.AVX512CD()) { return 0; }
-    if (!is.AVX512VL()) { return 0; }
-    if (!is.AVX512DQ()) { return 0; }
-    if (!is.AVX512BW()) { return 0; }
+    if (!is.AVX512F()  || !is.os_saves_zmm()) { return 0; }
+    if (!is.AVX512CD() || !is.os_saves_zmm()) { return 0; }
+    if (!is.AVX512VL() || !is.os_saves_zmm()) { return 0; }
+    if (!is.AVX512DQ() || !is.os_saves_zmm()) { return 0; }
+    if (!is.AVX512BW() || !is.os_saves_zmm()) { return 0; }
     score += 1<<7;
 #endif
 #ifdef GGML_AVX512_VBMI
-    if (!is.AVX512_VBMI()) { return 0; }
+    if (!is.AVX512_VBMI() || !is.os_saves_zmm()) { return 0; }
     score += 1<<8;
 #endif
 #ifdef GGML_AVX512_BF16
-    if (!is.AVX512_BF16()) { return 0; }
+    if (!is.AVX512_BF16() || !is.os_saves_zmm()) { return 0; }
     score += 1<<9;
 #endif
 #ifdef GGML_AVX512_VNNI
-    if (!is.AVX512_VNNI()) { return 0; }
+    if (!is.AVX512_VNNI() || !is.os_saves_zmm()) { return 0; }
     score += 1<<10;
 #endif
 #ifdef GGML_AMX_INT8
-    if (!is.AMX_INT8()) { return 0; }
+    if (!is.AMX_INT8() || !is.os_saves_amx()) { return 0; }
     score += 1<<11;
 #endif
 
