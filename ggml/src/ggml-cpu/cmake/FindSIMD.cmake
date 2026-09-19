@@ -52,6 +52,16 @@ set(FMA_CODE "
     }
 ")
 
+set(AVX_VNNI_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        __m256i a = _mm256_setzero_si256();
+        a = _mm256_dpbusd_avx_epi32(a, a, a);
+        return 0;
+    }
+")
+
 macro(check_sse type flags)
     set(__FLAG_I 1)
     set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
@@ -90,6 +100,12 @@ if ((NOT ${AVX2_FOUND}) OR (NOT ${FMA_FOUND}))
     set(GGML_AVX2 OFF)
 else()
     set(GGML_AVX2 ON)
+    check_sse("AVX_VNNI" " ;/arch:AVX2")
+    if (NOT ${AVX_VNNI_FOUND})
+        set(GGML_AVX_VNNI OFF)
+    else()
+        set(GGML_AVX_VNNI ON)
+    endif()
 endif()
 
 check_sse("AVX512" " ;/arch:AVX512")
