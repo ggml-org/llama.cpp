@@ -191,6 +191,7 @@ export enum MimeTypeAudio {
 	MP3 = 'audio/mp3',
 	MP3_MPEG = 'audio/mpeg',
 	MP4 = 'audio/mp4',
+	OGG = 'audio/ogg',
 	VND_WAVE = 'audio/vnd.wave',
 	WAV = 'audio/wav',
 	WAVE = 'audio/wave',
