@@ -31,9 +31,6 @@ static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
 namespace fs = std::filesystem;
 
-// macro for nicer error messages on server crash
-#define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server crashed or returned malformed response")
-
 // all RPC structures must be packed
 #pragma pack(push, 1)
 // ggml_tensor is serialized into rpc_tensor
@@ -351,7 +348,10 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     sock->get_caps(request.conn_caps);
 
     bool status = send_rpc_cmd(sock, RPC_CMD_HELLO, &request, sizeof(request), &response, sizeof(response));
-    RPC_STATUS_ASSERT(status);
+    if (!status) {
+        GGML_LOG_ERROR("RPC server closed the connection during the HELLO handshake\n");
+        return false;
+    }
 
     if (response.major != RPC_PROTO_MAJOR_VERSION || response.minor > RPC_PROTO_MINOR_VERSION) {
         GGML_LOG_ERROR("RPC server version mismatch: %d.%d.%d\n",
@@ -422,9 +422,14 @@ public:
     void start(const std::string & endpoint);
     void work();
 
+    // the buffers on the server are gone, so a lost connection can never be recovered
+    bool is_failed() const { return failed; }
+
     ~rpc_dispatcher();
 
 private:
+    void set_failed();
+
     struct rpc_msg {
         rpc_cmd                       cmd;
         std::shared_ptr<const void>   input;
@@ -441,7 +446,9 @@ private:
     };
     rpc_msg_queue    queue;
     socket_ptr       sock;
+    std::string      endpoint;
     std::atomic_bool running;
+    std::atomic_bool failed{false};
     std::thread      thread;
 };
 
@@ -550,8 +557,15 @@ void rpc_dispatcher::start(const std::string & endpoint) {
         GGML_ABORT("RPC handshake failed for %s\n", endpoint.c_str());
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
+    this->endpoint = endpoint;
     running = true;
     thread = std::thread(rpc_dispatcher_trampoline, this);
+}
+
+void rpc_dispatcher::set_failed() {
+    if (!failed.exchange(true)) {
+        GGML_LOG_ERROR("lost connection to RPC server %s, the device is now unusable\n", endpoint.c_str());
+    }
 }
 
 void rpc_dispatcher::work() {
@@ -561,14 +575,23 @@ void rpc_dispatcher::work() {
             break;
         }
         if (msg_ptr->cmd != RPC_CMD_NONE) {
-            if (msg_ptr->output) {
-                bool status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->output, msg_ptr->output_size);
-                RPC_STATUS_ASSERT(status);
-            } else {
-                bool status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size);
-                RPC_STATUS_ASSERT(status);
+            bool status = false;
+            if (!failed) {
+                if (msg_ptr->output) {
+                    status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->output, msg_ptr->output_size);
+                } else {
+                    status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size);
+                }
+            }
+            if (!status) {
+                // no response arrived, so the caller must not read whatever is in the buffer
+                if (msg_ptr->output) {
+                    memset(msg_ptr->output, 0, msg_ptr->output_size);
+                }
+                set_failed();
             }
         }
+        // callers block on this, it must be set even when the command failed
         msg_ptr->completion.set_value();
     }
 }
@@ -909,6 +932,10 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
         rpc_msg_get_alloc_size_rsp response;
         auto dispatcher = get_dispatcher(buft_ctx->endpoint);
         dispatcher->send(RPC_CMD_GET_ALLOC_SIZE, request, sizeof(*request), &response, sizeof(response));
+        if (dispatcher->is_failed()) {
+            // do not cache a size the server never sent
+            return ggml_nbytes(tensor);
+        }
 
         {
             std::lock_guard<std::mutex> lock(cache_mutex);
@@ -1034,6 +1061,9 @@ static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, g
     ggml_backend_rpc_device_context * rpc_dev_ctx = (ggml_backend_rpc_device_context *)rpc_dev->context;
 
     GGML_ASSERT(cgraph->n_nodes > 0);
+    if (rpc_ctx->dispatcher->is_failed()) {
+        return GGML_STATUS_FAILED;
+    }
     bool reuse = cgraph->uid != 0 && rpc_dev_ctx->last_graph_uid == cgraph->uid;
     if (reuse) {
         auto request = std::make_shared<rpc_msg_graph_recompute_req>();
@@ -1092,6 +1122,10 @@ ggml_backend_buffer_type_t ggml_backend_rpc_buffer_type(const char * endpoint, u
     auto dispatcher = get_dispatcher(endpoint);
     size_t alignment = get_alignment(dispatcher, device);
     size_t max_size = get_max_size(dispatcher, device);
+    if (dispatcher->is_failed()) {
+        // an alignment of zero would divide by zero in the allocator
+        return nullptr;
+    }
     ggml_backend_rpc_buffer_type_context * buft_ctx = new ggml_backend_rpc_buffer_type_context {
         /* .endpoint  = */ endpoint,
         /* .device    = */ device,
@@ -1770,7 +1804,10 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         }
     }
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
-    GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
+    if (status != GGML_STATUS_SUCCESS) {
+        GGML_LOG_ERROR("[%s] graph computation failed on device %u, status: %d\n", __func__, device, (int) status);
+        return false;
+    }
     stored_graphs[device].graph = graph;
     return true;
 }
@@ -1786,7 +1823,10 @@ bool rpc_server::graph_recompute(const rpc_msg_graph_recompute_req & request) {
     ggml_cgraph * graph = stored_graphs[device].graph;
     LOG_DBG("[%s] device: %u\n", __func__, device);
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
-    GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
+    if (status != GGML_STATUS_SUCCESS) {
+        GGML_LOG_ERROR("[%s] graph computation failed on device %u, status: %d\n", __func__, device, (int) status);
+        return false;
+    }
     return true;
 }
 
