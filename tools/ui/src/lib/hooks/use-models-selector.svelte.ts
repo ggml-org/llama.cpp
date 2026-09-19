@@ -145,9 +145,13 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				};
 			})
 	);
+	// favorites are listed once, at the top: the sections below skip them
+	const sectionOptions = $derived(
+		filteredOptions.filter((option) => !modelsStore.favoriteModelIds.has(option.model))
+	);
 	const providerSections = $derived(
 		groupProviderOptions(
-			filteredOptions,
+			sectionOptions,
 			remoteProviders,
 			// a drill-in or a search reaches every model, the sections stay short
 			providerViewId || searchTerm ? Infinity : REMOTE_PROVIDER_MODEL_LIMIT
@@ -160,7 +164,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return { ...EMPTY_GROUPS, providers: sections };
 		}
 
-		const local = groupModelOptions(filteredOptions.filter(isLocalOption), (m) =>
+		const local = groupModelOptions(sectionOptions.filter(isLocalOption), (m) =>
 			modelsStore.isModelLoaded(m)
 		);
 
