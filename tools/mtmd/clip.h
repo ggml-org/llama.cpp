@@ -135,5 +135,6 @@ std::map<ggml_backend_dev_t, size_t> clip_get_mem_usage(const struct clip_ctx * 
 struct clip_cap {
     bool has_vision;
     bool has_audio;
+    bool has_gen_audio;
 };
 struct clip_cap clip_get_cap(const char * fname);
