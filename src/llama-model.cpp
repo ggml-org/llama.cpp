@@ -3214,6 +3214,10 @@ bool llama_model_is_diffusion(const llama_model * model) {
     return llm_arch_is_diffusion(model->arch);
 }
 
+bool llama_model_is_causal(const llama_model * model) {
+    return model->hparams.causal_attn;
+}
+
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
     return model->tensors_by_name;
 }
