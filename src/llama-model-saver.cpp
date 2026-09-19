@@ -15,26 +15,11 @@
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
-        case LLM_ARCH_PLAMO3:
-        case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
-        case LLM_ARCH_COHERE2:
-        case LLM_ARCH_COHERE2MOE:
-        case LLM_ARCH_OLMO2:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
-        case LLM_ARCH_EXAONE_MOE:
-        case LLM_ARCH_AFMOE:
         case LLM_ARCH_APERTUS:
-        case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
-        case LLM_ARCH_SPARK2_5:
-        case LLM_ARCH_MUSE_GLIMMER:
-        case LLM_ARCH_MELLUM:
-        case LLM_ARCH_LAGUNA:
-        case LLM_ARCH_GRANITE_SWA:
-        case LLM_ARCH_DOTS3NOTE: // TODO: need to handle SWA pattern and MLA+SWA config
-        case LLM_ARCH_MAPLE:
             return false;
         default:
             return true;
@@ -290,7 +275,11 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
     add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,            hparams.rope_pattern, true);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
-    // add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  ???);
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        // never collapsed to a scalar: the loaders read a scalar as a period
+        add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>(
+                hparams.is_swa_impl.begin(), hparams.is_swa_impl.begin() + hparams.n_layer_all));
+    }
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
     add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
@@ -300,6 +289,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla_impl);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
+    add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,      hparams.n_embd_head_k_mla_swa);
+    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA,    hparams.n_embd_head_v_mla_swa);
+    add_kv(LLM_KV_ATTENTION_KV_LORA_RANK_SWA,        hparams.n_lora_kv_swa);
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
@@ -395,13 +387,13 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TOKENIZER_SCORES,                  scores);
     add_kv(LLM_KV_TOKENIZER_MERGES,                  vocab.get_bpe_merges());
     // FIXME llama_token is type i32 but when reading in a GGUF file u32 is expected, not an issue for writing though
-    add_kv(LLM_KV_TOKENIZER_BOS_ID,                  uint32_t(vocab.token_bos()));
-    add_kv(LLM_KV_TOKENIZER_EOS_ID,                  uint32_t(vocab.token_eos()));
-    add_kv(LLM_KV_TOKENIZER_EOT_ID,                  uint32_t(vocab.token_eot()));
-    add_kv(LLM_KV_TOKENIZER_EOM_ID,                  uint32_t(vocab.token_eom()));
-    add_kv(LLM_KV_TOKENIZER_UNK_ID,                  uint32_t(vocab.token_unk()));
-    add_kv(LLM_KV_TOKENIZER_SEP_ID,                  uint32_t(vocab.token_sep()));
-    add_kv(LLM_KV_TOKENIZER_PAD_ID,                  uint32_t(vocab.token_pad()));
+    if (vocab.token_bos()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_BOS_ID, uint32_t(vocab.token_bos()));  }
+    if (vocab.token_eos()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOS_ID, uint32_t(vocab.token_eos()));  }
+    if (vocab.token_eot()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOT_ID, uint32_t(vocab.token_eot()));  }
+    if (vocab.token_eom()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOM_ID, uint32_t(vocab.token_eom()));  }
+    if (vocab.token_unk()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_UNK_ID, uint32_t(vocab.token_unk()));  }
+    if (vocab.token_sep()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_SEP_ID, uint32_t(vocab.token_sep()));  }
+    if (vocab.token_pad()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_PAD_ID, uint32_t(vocab.token_pad()));  }
     // add_kv(LLM_KV_TOKENIZER_CLS_ID,                  uint32_t(vocab.token_bos())); // deprecated
     // add_kv(LLM_KV_TOKENIZER_MASK_ID,                 ???);
     add_kv(LLM_KV_TOKENIZER_ADD_BOS,                 vocab.get_add_bos());
@@ -412,12 +404,12 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,    vocab.get_precompiled_charsmap());
     // add_kv(LLM_KV_TOKENIZER_HF_JSON,                 ???);
     // add_kv(LLM_KV_TOKENIZER_RWKV,                    ???);
-    add_kv(LLM_KV_TOKENIZER_FIM_PRE_ID,              uint32_t(vocab.token_fim_pre()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SUF_ID,              uint32_t(vocab.token_fim_suf()));
-    add_kv(LLM_KV_TOKENIZER_FIM_MID_ID,              uint32_t(vocab.token_fim_mid()));
-    add_kv(LLM_KV_TOKENIZER_FIM_PAD_ID,              uint32_t(vocab.token_fim_pad()));
-    add_kv(LLM_KV_TOKENIZER_FIM_REP_ID,              uint32_t(vocab.token_fim_rep()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SEP_ID,              uint32_t(vocab.token_fim_sep()));
+    if (vocab.token_fim_pre() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_PRE_ID, uint32_t(vocab.token_fim_pre())); }
+    if (vocab.token_fim_suf() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_SUF_ID, uint32_t(vocab.token_fim_suf())); }
+    if (vocab.token_fim_mid() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_MID_ID, uint32_t(vocab.token_fim_mid())); }
+    if (vocab.token_fim_pad() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_PAD_ID, uint32_t(vocab.token_fim_pad())); }
+    if (vocab.token_fim_rep() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_REP_ID, uint32_t(vocab.token_fim_rep())); }
+    if (vocab.token_fim_sep() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_SEP_ID, uint32_t(vocab.token_fim_sep())); }
 
     // TODO: implement LoRA support
     // add_kv(LLM_KV_ADAPTER_TYPE,                      ???);

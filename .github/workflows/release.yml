@@ -106,6 +106,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -190,6 +191,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-cpu
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -275,6 +277,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-${{ matrix.os }}-vulkan
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -453,7 +456,7 @@ jobs:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
 
     #permissions:
     #  actions: write
@@ -481,10 +484,9 @@ jobs:
           distribution: temurin
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           log-accepted-android-sdk-licenses: false
-          packages: 'platform-tools'
 
       - name: Install NDK
         run: |
@@ -501,6 +503,7 @@ jobs:
       #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-android-arm64
+      #    evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -579,6 +582,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
+          evict-old-files: 1d
 
       - name: Dependencies
         run: |
@@ -822,6 +826,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
+          evict-old-files: 1d
 
       - name: Build
         shell: cmd
@@ -1066,6 +1071,7 @@ jobs:
       #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: release-windows-2025-${{ matrix.arch }}-${{ matrix.backend }}
+      #    evict-old-files: 1d
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
@@ -1154,6 +1160,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -1250,6 +1257,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-windows-2022-x64-sycl
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
@@ -1368,6 +1376,7 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.24
         with:
           key: release-ubuntu-24.04-sycl-${{ matrix.build }}
+          evict-old-files: 1d
 
       - name: Build
         id: cmake_build
