@@ -26,9 +26,6 @@
 		isSelected: boolean;
 		isHighlighted: boolean;
 		isFav: boolean;
-		/** Show the filled heart at rest. Off inside the favorites section, where
-		 * every row is a favorite. */
-		showFavIndicator?: boolean;
 		hideOrgName?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
@@ -48,8 +45,7 @@
 		onMouseEnter,
 		onSelect,
 		option,
-		showBaseModelAvatar = false,
-		showFavIndicator = true
+		showBaseModelAvatar = false
 	}: Props = $props();
 
 	// row actions follow the backend that serves the row, not the selected one
@@ -167,8 +163,7 @@
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<div
-			class="pointer-events-none flex items-center justify-center gap-1 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav &&
-			showFavIndicator
+			class="pointer-events-none flex items-center justify-center gap-1 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav
 				? ''
 				: 'opacity-0 group-hover:opacity-100'}"
 			onclick={(e) => e.stopPropagation()}

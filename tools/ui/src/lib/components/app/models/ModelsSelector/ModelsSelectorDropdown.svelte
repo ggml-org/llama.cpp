@@ -323,11 +323,7 @@
 								<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
 							{/if}
 
-							{#snippet modelOption(
-								item: ModelItem,
-								hideOrgName: boolean,
-								showFavIndicator: boolean
-							)}
+							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
 								{@const { option } = item}
 								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
 								{@const isHighlighted = option.id === highlightedId}
@@ -349,7 +345,6 @@
 									onSelect={ms.handleSelect}
 									{option}
 									showBaseModelAvatar
-									{showFavIndicator}
 								/>
 							{/snippet}
 
