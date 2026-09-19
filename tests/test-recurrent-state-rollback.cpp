@@ -90,6 +90,20 @@ static float logit_diff(float a, float b) {
     return std::isfinite(a) && std::isfinite(b) ? std::fabs(a - b) : std::numeric_limits<float>::infinity();
 }
 
+static double nmse(const float * a, const float * b, int n) {
+    double mse_ab = 0.0;
+    double mse_a0 = 0.0;
+    for (int i = 0; i < n; i++) {
+        if (!std::isfinite(a[i]) || !std::isfinite(b[i])) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const double diff = (double) a[i] - b[i];
+        mse_ab += diff*diff;
+        mse_a0 += (double) a[i]*a[i];
+    }
+    return mse_a0 == 0.0 ? (mse_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : mse_ab/mse_a0;
+}
+
 // Roll back multiple sequences, then replay them in a single batch whose
 // per-seq token count exceeds n_ubatch: each seq's replay spans several
 // ubatches while its rollback restore is still pending. Compared against a
@@ -189,6 +203,8 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     float    diff_max  = 0.0f;
     uint32_t seq_first = 0;
     int32_t  pos_first = -1;
+    double   nmse_ab   = 0.0;
+    double   nmse_a0   = 0.0;
     for (uint32_t i = 0; i < n_seqs*n_replay; ++i) {
         const float * l_roll = llama_get_logits_ith(ctx_roll, i);
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  i);
@@ -198,23 +214,34 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
             return false;
         }
         for (int t = 0; t < n_vocab; ++t) {
-            const float diff = logit_diff(l_roll[t], l_ref[t]);
+            const float r = l_roll[t];
+            const float f = l_ref[t];
+            const float diff = logit_diff(r, f);
             if (diff > eps && pos_first < 0) {
                 seq_first = i/n_replay;
                 pos_first = p0 + (int32_t) (i%n_replay);
             }
             diff_max = std::max(diff_max, diff);
+            if (std::isfinite(r) && std::isfinite(f)) {
+                const double d = (double) r - f;
+                nmse_ab += d*d;
+                nmse_a0 += (double) r*r;
+            } else {
+                nmse_ab = std::numeric_limits<double>::infinity();
+                nmse_a0 = 1.0;
+            }
         }
     }
+    const double nmse_val = nmse_a0 == 0.0 ? (nmse_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : nmse_ab/nmse_a0;
 
     if (diff_max > eps) {
-        fprintf(stderr, "%s : multi-seq split replay logits mismatch (max diff %g, first at seq %u pos %d)\n",
-                __func__, (double) diff_max, seq_first, pos_first);
+        fprintf(stderr, "%s : multi-seq split replay logits mismatch (max diff %g, nmse %g, first at seq %u pos %d)\n",
+                __func__, (double) diff_max, nmse_val, seq_first, pos_first);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : multi-seq split replay matched (max diff %g)\n", __func__, (double) diff_max);
+    fprintf(stderr, "%s : multi-seq split replay matched (max diff %g, nmse %g)\n", __func__, (double) diff_max, nmse_val);
 
     // seq-1-only decodes must be independent of seq 0's content: diverge seq 0
     // in ctx_ref only, then compare identical seq-1-only continuations bitwise
@@ -231,6 +258,8 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
 
     float diff_tail = 0.0f;
+    double nmse_tail_ab = 0.0;
+    double nmse_tail_a0 = 0.0;
     for (uint32_t i = 0; i < n_tail && ok; ++i) {
         const llama_pos pos = p0 + (llama_pos) (n_replay + i);
         llama_batch batch_one = llama_batch_init(1, 0, 1);
@@ -246,18 +275,29 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  0);
         ok = l_roll != nullptr && l_ref != nullptr;
         for (int t = 0; ok && t < n_vocab; ++t) {
-            diff_tail = std::max(diff_tail, logit_diff(l_roll[t], l_ref[t]));
+            const float r = l_roll[t];
+            const float f = l_ref[t];
+            diff_tail = std::max(diff_tail, logit_diff(r, f));
+            if (std::isfinite(r) && std::isfinite(f)) {
+                const double d = (double) r - f;
+                nmse_tail_ab += d*d;
+                nmse_tail_a0 += (double) r*r;
+            } else {
+                nmse_tail_ab = std::numeric_limits<double>::infinity();
+                nmse_tail_a0 = 1.0;
+            }
         }
     }
+    const double nmse_tail = nmse_tail_a0 == 0.0 ? (nmse_tail_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : nmse_tail_ab/nmse_tail_a0;
 
     if (!ok || diff_tail > eps) {
-        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g)\n",
-                __func__, ok ? 1 : 0, (double) diff_tail);
+        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g, nmse %g)\n",
+                __func__, ok ? 1 : 0, (double) diff_tail, nmse_tail);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g)\n", __func__, (double) diff_tail);
+    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g, nmse %g)\n", __func__, (double) diff_tail, nmse_tail);
     cleanup();
     return true;
 }
@@ -339,10 +379,11 @@ static int test_rollback(const common_params & params, llama_model * model, uint
             }
 
             logits_src_replay[i].assign(logits_src, logits_src + n_vocab);
+            const double nmse_val = nmse(logits_src, logits_dst, n_vocab);
             for (int token = 0; token < n_vocab; ++token) {
                 if (logit_diff(logits_src[token], logits_dst[token]) > eps) {
-                    fprintf(stderr, "%s : %s logits mismatch at position %d, token %d (%g != %g)\n",
-                            __func__, mode, pos, token, (double) logits_src[token], (double) logits_dst[token]);
+                    fprintf(stderr, "%s : %s logits mismatch at position %d, token %d (%g != %g), nmse %g\n",
+                            __func__, mode, pos, token, (double) logits_src[token], (double) logits_dst[token], nmse_val);
                     return false;
                 }
             }
@@ -408,10 +449,11 @@ static int test_rollback(const common_params & params, llama_model * model, uint
             return 1;
         }
 
+        const double nmse_dirty = nmse(logits_src_replay[i].data(), logits_dirty, n_vocab);
         for (int token = 0; token < n_vocab; ++token) {
             if (logit_diff(logits_src_replay[i][token], logits_dirty[token]) > eps) {
-                fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g)\n",
-                        __func__, pos, token, (double) logits_src_replay[i][token], (double) logits_dirty[token]);
+                fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g), nmse %g\n",
+                        __func__, pos, token, (double) logits_src_replay[i][token], (double) logits_dirty[token], nmse_dirty);
                 return 1;
             }
         }
