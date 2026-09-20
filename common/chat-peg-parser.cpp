@@ -318,13 +318,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_content   = node.tag == common_chat_peg_builder::CONTENT;
 
     if (is_reasoning) { // GPT OSS can have more than 1 reasoning block, so concatenate here
-        result.reasoning_content += std::string(node.text);
+        result.reasoning_content += node.sanitized_text();
     }
 
     if (is_content) {
         // Concatenate content from multiple content nodes (e.g., when reasoning markers
         // are preserved before content markers in reasoning_format=NONE mode)
-        result.content += std::string(node.text);
+        result.content += node.sanitized_text();
     }
 
     // Handle tool-related tags (supporting both JSON and tagged formats)
@@ -1058,12 +1058,12 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
     const auto & node = arena.get(id);
 
     if (node.tag == "reasoning") {
-        result.reasoning_content += std::string(node.text);
+        result.reasoning_content += node.sanitized_text();
         return;
     }
 
     if (node.tag == "content") {
-        result.content += std::string(node.text);
+        result.content += node.sanitized_text();
         return;
     }
 
@@ -1206,12 +1206,12 @@ void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena
     const auto & node = arena.get(id);
 
     if (node.tag == common_chat_peg_builder::REASONING) {
-        result.reasoning_content += std::string(node.text);
+        result.reasoning_content += node.sanitized_text();
         return;
     }
 
     if (node.tag == common_chat_peg_builder::CONTENT) {
-        result.content += std::string(node.text);
+        result.content += node.sanitized_text();
         return;
     }
 
