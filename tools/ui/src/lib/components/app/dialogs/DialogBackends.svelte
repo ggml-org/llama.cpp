@@ -2,7 +2,7 @@
 	import { SettingsBackends } from '$lib/components/app/backends';
 	import { Logo } from '$lib/components/app/misc';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { cn } from '$lib/components/ui/utils';
+	import * as Tabs from '$lib/components/ui/tabs';
 	import type { BackendProtocol } from '$lib/types';
 
 	const PROTOCOL_TABS: Array<{ label: string; value: BackendProtocol }> = [
@@ -26,7 +26,9 @@
 </script>
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
-	<Dialog.Content class="md:max-h-[80vh]! md:w-[calc(100vw-4rem)]! md:max-w-164! flex flex-col">
+	<Dialog.Content
+		class="flex flex-col gap-2 md:max-h-[80vh]! md:w-[calc(100vw-4rem)]! md:max-w-164!"
+	>
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<Logo class="h-5 w-5" style="--size: 1.25rem" />
@@ -39,24 +41,22 @@
 			</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="mt-4 flex w-fit shrink-0 items-center gap-1 rounded-full bg-muted p-1">
-			{#each PROTOCOL_TABS as tab (tab.value)}
-				<button
-					aria-pressed={protocol === tab.value}
-					class={cn(
-						'cursor-pointer rounded-full px-3 py-1 text-xs font-medium transition-colors',
-						protocol === tab.value
-							? 'bg-background text-foreground shadow-sm'
-							: 'text-muted-foreground hover:text-foreground'
-					)}
-					onclick={() => (protocol = tab.value)}
-					type="button"
-				>
-					{tab.label}
-				</button>
-			{/each}
-		</div>
+		<Tabs.Root
+			class="min-h-0 flex-1"
+			onValueChange={(value) => (protocol = value as BackendProtocol)}
+			value={protocol}
+		>
+			<Tabs.List>
+				{#each PROTOCOL_TABS as tab (tab.value)}
+					<Tabs.Trigger value={tab.value}>{tab.label}</Tabs.Trigger>
+				{/each}
+			</Tabs.List>
 
-		<SettingsBackends class="mt-2 overflow-y-auto" {protocol} />
+			{#each PROTOCOL_TABS as tab (tab.value)}
+				<Tabs.Content class="min-h-0 flex-1 overflow-y-auto" value={tab.value}>
+					<SettingsBackends protocol={tab.value} />
+				</Tabs.Content>
+			{/each}
+		</Tabs.Root>
 	</Dialog.Content>
 </Dialog.Root>
