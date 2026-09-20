@@ -2,7 +2,7 @@
 	import { Plus } from '@lucide/svelte';
 	import { BackendCard, DialogBackendForm } from '$lib/components/app/backends';
 	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
+	import * as Empty from '$lib/components/ui/empty';
 	import { backendsModelsStore, backendsStore, serverStore } from '$lib/stores';
 	import type { Backend, BackendProtocol } from '$lib/types';
 	import { fade } from 'svelte/transition';
@@ -76,11 +76,25 @@
 		/>
 	{/each}
 
-	<Card.Root class="items-center justify-center gap-3! border-dashed bg-muted/30 p-4">
-		<Button onclick={handleAdd} size="sm" variant="outline">
-			<Plus />
+	<Empty.Root class="border">
+		<Empty.Header>
+			<Empty.Media variant="icon">
+				<Plus />
+			</Empty.Media>
 
-			Add backend
-		</Button>
-	</Card.Root>
+			<Empty.Title>{isLlamaCpp ? 'Add a llama.cpp backend' : 'Add a backend'}</Empty.Title>
+
+			<Empty.Description>
+				{isLlamaCpp ? 'Point at another llama-server.' : 'Connect an OpenAI-compatible endpoint.'}
+			</Empty.Description>
+		</Empty.Header>
+
+		<Empty.Content>
+			<Button onclick={handleAdd} size="sm">
+				<Plus />
+
+				Add Backend
+			</Button>
+		</Empty.Content>
+	</Empty.Root>
 </div>
