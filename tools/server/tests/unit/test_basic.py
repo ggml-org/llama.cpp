@@ -38,6 +38,8 @@ def test_server_models():
     assert res.status_code == 200
     assert len(res.body["data"]) == 1
     assert res.body["data"][0]["id"] == server.model_alias
+    # bool is a subclass of int, so isinstance() would not catch a bool here
+    assert type(res.body["data"][0]["meta"]["vocab_type"]) is int
 
 
 def test_server_slots():
