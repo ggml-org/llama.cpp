@@ -1,5 +1,6 @@
 #include "fit.h"
 
+#include "json.h"
 #include "log.h"
 
 #include "../src/llama-ext.h"
@@ -191,9 +192,9 @@ static void common_params_fit_impl(
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
 
-    // with non-unified kv, we need to take into account n_streams
-    // for example, if memory can hold more than model's trained context size, we must extend the n_ctx to hold enough n_streams
-    const uint32_t n_streams  = cparams->kv_unified ? 1 : std::max<uint32_t>(1, cparams->n_seq_max);
+    // size the context for all sequences, but keep minimums and alignment per KV stream
+    const uint32_t n_seq_max  = std::max<uint32_t>(1, cparams->n_seq_max);
+    const uint32_t n_streams  = cparams->kv_unified ? 1 : n_seq_max;
     const bool     n_ctx_auto = cparams->n_ctx == 0;
 
     dmds_t   dmds_extra;       // memory of the extra model, laid out on the devices of the main model
@@ -263,15 +264,15 @@ static void common_params_fit_impl(
     dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
     // saturate instead of overflowing, this also preserves the UINT32_MAX sentinel of n_ctx_min:
-    const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_streams, UINT32_MAX);
+    const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_seq_max, UINT32_MAX);
     const uint32_t n_ctx_min_total = (uint32_t) std::min<uint64_t>(uint64_t(n_ctx_min) * n_streams, UINT32_MAX);
 
     // llama_context would use only hp_nct in total for n_ctx == 0, resolve the context before measuring anything else:
     if (n_ctx_auto) {
         cparams->n_ctx = n_ctx_max;
-        if (n_streams > 1) {
-            LOG_TRC("%s: context size unset and KV cache not unified -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
-                __func__, n_ctx_max, n_streams);
+        if (n_seq_max > 1) {
+            LOG_TRC("%s: context size unset -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
+                __func__, n_ctx_max, n_seq_max);
             dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
         }
     }
@@ -915,6 +916,9 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
 
     std::vector<std::array<std::string, 9>> table_data;
     table_data.reserve(devices.size());
+
+    // same data as the table below, for --log-jsonl consumers
+    common_json rows = common_json::array();
     const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
     const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
     const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
@@ -989,6 +993,19 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             std::to_string(unaccounted / static_cast<int64_t>(MiB))});
+
+        rows.push_back({
+            {"kind",        "device"},
+            {"name",        name},
+            {"description", desc},
+            {"total",       total / MiB},
+            {"free",        free / MiB},
+            {"self",        self / MiB},
+            {"model",       mb.model / MiB},
+            {"context",     mb.context / MiB},
+            {"compute",     mb.compute / MiB},
+            {"unaccounted", unaccounted / static_cast<int64_t>(MiB)},
+        });
     }
 
     // print memory breakdown for host:
@@ -1004,6 +1021,15 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb_host.context / MiB),
             std::to_string(mb_host.compute / MiB),
             ""}); // unaccounted
+
+        rows.push_back({
+            {"kind",    "host"},
+            {"name",    "Host"},
+            {"self",    self / MiB},
+            {"model",   mb_host.model / MiB},
+            {"context", mb_host.context / MiB},
+            {"compute", mb_host.compute / MiB},
+        });
     }
 
     // print memory breakdown for all remaining buffer types:
@@ -1025,6 +1051,16 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             std::to_string(mb.context / MiB),
             std::to_string(mb.compute / MiB),
             ""}); // unaccounted
+
+        rows.push_back({
+            {"kind",    "buffer_type"},
+            {"name",    name},
+            {"self",    self / MiB},
+            {"model",   mb.model / MiB},
+            {"context", mb.context / MiB},
+            {"compute", mb.compute / MiB},
+        });
+
         seen_buffer_types.insert(buft);
     }
 
@@ -1042,6 +1078,11 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
             __func__, td[1].c_str(), td[2].c_str(), td[3].c_str(), td[4].c_str(), td[5].c_str(),
             td[6].c_str(), td[7].c_str(), td[8].c_str());
     }
+
+    LOG_JSON("fit_memory_breakdown", common_json({
+        {"unit", "MiB"},
+        {"rows", rows},
+    }));
 }
 
 void common_fit_print(

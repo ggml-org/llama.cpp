@@ -240,21 +240,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const llm_graph_params & params) const {
-    switch (params.gtype) {
-        case LLM_GRAPH_TYPE_ENCODER:
-            return std::make_unique<graph<true>>(*this, params);
-        case LLM_GRAPH_TYPE_DEFAULT:
-        case LLM_GRAPH_TYPE_DECODER:
-            if (hparams.dsv4_hc_mult > 0) {
-                return std::make_unique<graph_dsv4>(*this, params);
-            }
-            return std::make_unique<graph<false>>(*this, params);
-        default:
-            GGML_ABORT("invalid graph type");
-    };
-}
-
 template <>
 ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
@@ -998,4 +983,19 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
     }
+}
+
+std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const llm_graph_params & params) const {
+    switch (params.gtype) {
+        case LLM_GRAPH_TYPE_ENCODER:
+            return std::make_unique<graph<true>>(*this, params);
+        case LLM_GRAPH_TYPE_DEFAULT:
+        case LLM_GRAPH_TYPE_DECODER:
+            if (hparams.dsv4_hc_mult > 0) {
+                return std::make_unique<graph_dsv4>(*this, params);
+            }
+            return std::make_unique<graph<false>>(*this, params);
+        default:
+            GGML_ABORT("invalid graph type");
+    };
 }

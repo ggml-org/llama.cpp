@@ -20,8 +20,8 @@ using json = common_json;
 // iterate over the function tools of an OpenAI-style tools array
 void foreach_function(const json & tools, const std::function<void(const json &)> & fn);
 
-// iterate over the parameters of a function tool, flagging the ones listed as required
-void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn);
+// iterate over the parameters of a function tool, with the document that owns them
+void foreach_parameter(const json & function, const std::function<void(const common_chat_schema_property &, const common_chat_schema_document_ptr &)> & fn);
 
 // render a template; the override arguments let a parser feed in messages, tools or context it has rewritten
 std::string common_chat_template_direct_apply_impl(
@@ -62,6 +62,8 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_kimi_k3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+
+common_chat_params common_chat_params_init_ling3(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 // tool_list_tokens preserves the LFM2 system tool-list markers; LFM2.5 renders without them
 common_chat_params common_chat_params_init_lfm2(const common_chat_template & tmpl, const autoparser::generation_params & inputs, bool tool_list_tokens);

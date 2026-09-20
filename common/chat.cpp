@@ -574,6 +574,16 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
     return result;
 }
 
+json common_chat_tool_parameters(const json & function) {
+    if (function.contains("parameters")) {
+        const auto & params = function.at("parameters");
+        if (!params.is_null() && !(params.is_object() && params.empty())) {
+            return params;
+        }
+    }
+    return json{{"type", "object"}, {"properties", json::object()}};
+}
+
 std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & tools) {
     std::vector<common_chat_tool> result;
 
@@ -1121,6 +1131,14 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("<|end_of_msg|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K3\n");
         return common_chat_params_init_kimi_k3(tmpl, params);
+    }
+
+    // Ling 3.0 / Bailing V3 - <role>X</role> sections with <arg_key>/<arg_value> tagged
+    // tool calls. <role> sections are unique to this family among the tagged-arg templates.
+    if (src.find("<role>ASSISTANT</role>") != std::string::npos &&
+        src.find("<arg_key>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Ling 3.0 (Bailing V3)\n");
+        return common_chat_params_init_ling3(tmpl, params);
     }
 
     // Cohere2 MoE / North Code - marker-wrapped format with <|START_TEXT|> content and
