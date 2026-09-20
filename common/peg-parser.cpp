@@ -699,10 +699,7 @@ struct parser_executor {
             }
 
             if (utf8_result.status != utf8_parse_result::SUCCESS) {
-                // Malformed UTF-8, or a sequence truncated by the end of a complete input
-                if (p.strict) {
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
-                }
+                // Malformed UTF-8, or a sequence truncated by the end of a complete input.
                 // A delimiter cannot start inside bytes that fail to decode, so consume them and move on
                 invalid_utf8.push_back({pos, utf8_result.bytes_consumed});
                 pos += utf8_result.bytes_consumed;
@@ -980,7 +977,7 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
         } else if constexpr (std::is_same_v<T, common_peg_string_parser>) {
             return "String(" + std::string(1, p.delimiter) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            return std::string(p.strict ? "UntilStrict(" : "Until(") + string_join(p.delimiters, " | ") + ")";
+            return "Until(" + string_join(p.delimiters, " | ") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_chat_schema::kind_name(p.node->kind()) : "null") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1866,7 +1863,7 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
         } else if constexpr (std::is_same_v<T, common_peg_string_parser>) {
             return json{{"type", "string"}, {"delimiter", std::string(1, p.delimiter)}};
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            return json{{"type", "until"}, {"delimiters", p.delimiters}, {"strict", p.strict}};
+            return json{{"type", "until"}, {"delimiters", p.delimiters}};
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return json{
                 {"type", "schema"},
@@ -2008,7 +2005,7 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
             throw std::runtime_error("until parser missing or invalid 'delimiters' field");
         }
-        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>(), j.value("strict", false)};
+        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
     }
     if (type == "schema") {
         if (!j.contains("child") || !j.contains("name") || !j.contains("raw")) {

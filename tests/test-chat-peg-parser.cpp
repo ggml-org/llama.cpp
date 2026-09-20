@@ -1103,15 +1103,4 @@ static void test_invalid_utf8(testing & t) {
 
         t.assert_equal("content", "a\xEF\xBF\xBD" "b", msg.content);
     });
-
-    t.test("strict until fails", [&](testing & t) {
-        auto strict = build_chat_peg_parser([](common_chat_peg_builder & p) {
-            return p.content(p.rest(true)) + p.end();
-        });
-
-        std::string input("a\x80" "b");
-        common_peg_parse_context ctx(input);
-        auto result = strict.parse(ctx);
-        t.assert_true("fail", result.fail());
-    });
 }

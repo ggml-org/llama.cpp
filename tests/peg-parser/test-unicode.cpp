@@ -272,39 +272,7 @@ void test_unicode(testing &t) {
             }
         });
 
-        t.test("malformed UTF-8 strict", [](testing &t) {
-            std::vector<test_case> test_cases {
-                // Invalid UTF-8 bytes
-                {std::string("Hello\xFF\xFE"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-
-                // Continuation byte without lead byte
-                {std::string("Hello\x80World"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-
-                // Invalid continuation byte
-                {std::string("\xC3\x28"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-
-                // Truncated sequence in a complete input
-                {std::string("Hello\xE4\xB8"), "", COMMON_PEG_PARSE_RESULT_FAIL},
-            };
-
-            auto parser = build_peg_parser([](common_peg_parser_builder& p) {
-                return p.until("</tag>", true);
-            });
-
-            for (size_t i = 0; i < test_cases.size(); i++) {
-                const auto & tc = test_cases[i];
-                std::string test_name = "case " + std::to_string(i) + ": " + hex_dump(tc.input);
-
-                t.test(test_name, [&](testing &t) {
-                    common_peg_parse_context ctx(tc.input);
-                    auto result = parser.parse(ctx);
-
-                    assert_result_equal(t, tc.expected_result, result.type);
-                });
-            }
-        });
-
-        t.test("malformed UTF-8 passthrough", [](testing &t) {
+        t.test("malformed UTF-8", [](testing &t) {
             struct passthrough_case {
                 std::string input;
                 std::string expected_text;

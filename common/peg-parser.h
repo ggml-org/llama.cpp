@@ -257,9 +257,6 @@ struct common_peg_string_parser {
 
 struct common_peg_until_parser {
     std::vector<std::string> delimiters;
-
-    // Fail on invalid UTF-8 instead of consuming the offending bytes and recording them on the AST nodes
-    bool strict = false;
 };
 
 struct common_peg_schema_parser {
@@ -449,17 +446,17 @@ class common_peg_parser_builder {
     common_peg_parser space() { return add(common_peg_space_parser{}); }
 
     // Matches all characters until a delimiter is found (delimiter not consumed).
-    // Invalid UTF-8 is consumed and recorded on the AST nodes unless strict is set, in which case it fails the parse.
+    // Invalid UTF-8 is consumed and recorded on the AST nodes.
     //   S -> (!delim .)*
-    common_peg_parser until(const std::string & delimiter, bool strict = false) { return add(common_peg_until_parser{{delimiter}, strict}); }
+    common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
 
     // Matches all characters until one of the delimiters in the list is found (delimiter not consumed).
     //   S -> (!delim .)*
-    common_peg_parser until_one_of(const std::vector<std::string> & delimiters, bool strict = false) { return add(common_peg_until_parser{delimiters, strict}); }
+    common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
 
     // Matches everything
     //   S -> .*
-    common_peg_parser rest(bool strict = false) { return until_one_of({}, strict); }
+    common_peg_parser rest() { return until_one_of({}); }
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
