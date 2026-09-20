@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-int ggml_san_level(void) {
+static int ggml_san_level(void) {
     static const int level = []() {
         const char * env = getenv("GGML_SCHED_SANITIZE");
         return env ? atoi(env) : 0;
@@ -308,7 +308,7 @@ void trace(san_state & s, int a, const char * fmt, ...) {
 
 } // namespace
 
-void ggml_san_sync(ggml_backend_t backend) {
+static void ggml_san_sync(ggml_backend_t backend) {
     if (ggml_san_level() == 0) {
         return;
     }
@@ -321,7 +321,7 @@ void ggml_san_sync(ggml_backend_t backend) {
     maybe_flush(s);
 }
 
-void ggml_san_event_record(ggml_backend_event_t event, ggml_backend_t backend) {
+static void ggml_san_event_record(ggml_backend_event_t event, ggml_backend_t backend) {
     if (ggml_san_level() == 0) {
         return;
     }
@@ -333,7 +333,7 @@ void ggml_san_event_record(ggml_backend_event_t event, ggml_backend_t backend) {
     trace(s, a, "EDGE  event_record  ev=%d\n", (int) s.events.emplace(event, (int) s.events.size()).first->second);
 }
 
-void ggml_san_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+static void ggml_san_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     if (ggml_san_level() == 0) {
         return;
     }
@@ -348,7 +348,7 @@ void ggml_san_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     trace(s, a, "EDGE  event_wait    ev=%d\n", (int) s.events.emplace(event, (int) s.events.size()).first->second);
 }
 
-void ggml_san_event_sync(ggml_backend_event_t event) {
+static void ggml_san_event_sync(ggml_backend_event_t event) {
     if (ggml_san_level() == 0) {
         return;
     }
@@ -363,7 +363,7 @@ void ggml_san_event_sync(ggml_backend_event_t event) {
     maybe_flush(s);
 }
 
-void ggml_san_compute(ggml_backend_t backend, const ggml_cgraph * cgraph) {
+static void ggml_san_compute(ggml_backend_t backend, const ggml_cgraph * cgraph) {
     if (ggml_san_level() == 0 || cgraph == nullptr) {
         return;
     }
@@ -407,7 +407,7 @@ void ggml_san_compute(ggml_backend_t backend, const ggml_cgraph * cgraph) {
     trace(s, a, "compute       %d nodes, r=%zu w=%zu ranges\n", cgraph->n_nodes, n_read, n_write);
 }
 
-void ggml_san_access(ggml_backend_t backend, const ggml_tensor * tensor,
+static void ggml_san_access(ggml_backend_t backend, const ggml_tensor * tensor,
                      size_t offset, size_t size, bool write, const char * what) {
     if (ggml_san_level() == 0) {
         return;
@@ -426,7 +426,7 @@ void ggml_san_access(ggml_backend_t backend, const ggml_tensor * tensor,
     }
 }
 
-void ggml_san_cpy_async(ggml_backend_t src_be, ggml_backend_t dst_be,
+static void ggml_san_cpy_async(ggml_backend_t src_be, ggml_backend_t dst_be,
                         const ggml_tensor * src, const ggml_tensor * dst) {
     if (ggml_san_level() == 0) {
         return;
@@ -495,4 +495,71 @@ void ggml_san_split(int split_id, ggml_backend_t backend, int n_inputs) {
     if (n_inputs == 0) {
         trace(s, a, "split         0 inputs (no sync path)\n");
     }
+}
+
+void ggml_backend_sched_backend::synchronize() const {
+    ggml_backend_synchronize(backend);
+    ggml_san_sync(backend);
+}
+
+void ggml_backend_sched_backend::event_record(ggml_backend_event_t event) const {
+    ggml_backend_event_record(event, backend);
+    ggml_san_event_record(event, backend);
+}
+
+void ggml_backend_sched_backend::event_wait(ggml_backend_event_t event) const {
+    ggml_backend_event_wait(backend, event);
+    ggml_san_event_wait(backend, event);
+}
+
+void ggml_backend_sched_backend::event_synchronize(ggml_backend_event_t event) {
+    ggml_backend_event_synchronize(event);
+    ggml_san_event_sync(event);
+}
+
+void ggml_backend_sched_backend::tensor_set_async(ggml_tensor * tensor, const void * data, size_t offset, size_t size) const {
+    if (backend->iface.set_tensor_async) {
+        ggml_san_access(backend, tensor, offset, size, true, "set_async");
+        ggml_backend_tensor_set_async(backend, tensor, data, offset, size);
+    } else {
+        synchronize();
+        ggml_san_access(nullptr, tensor, offset, size, true, "tensor_set");
+        ggml_backend_tensor_set(tensor, data, offset, size);
+    }
+}
+
+void ggml_backend_sched_backend::tensor_get_async(const ggml_tensor * tensor, void * data, size_t offset, size_t size) const {
+    if (backend->iface.get_tensor_async) {
+        ggml_san_access(backend, tensor, offset, size, false, "get_async");
+        ggml_backend_tensor_get_async(backend, tensor, data, offset, size);
+    } else {
+        synchronize();
+        ggml_san_access(nullptr, tensor, offset, size, false, "tensor_get");
+        ggml_backend_tensor_get(tensor, data, offset, size);
+    }
+}
+
+bool ggml_backend_sched_backend::copy_tensor_async(ggml_backend_sched_backend src_backend, const ggml_tensor * src, ggml_tensor * dst) const {
+    if (!backend->iface.cpy_tensor_async || !backend->iface.cpy_tensor_async(src_backend.backend, backend, src, dst)) {
+        return false;
+    }
+    ggml_san_cpy_async(src_backend.backend, backend, src, dst);
+    return true;
+}
+
+void ggml_backend_sched_backend::copy_tensor(const ggml_tensor * src, ggml_tensor * dst) {
+    if (src == dst) {
+        return;
+    }
+    ggml_san_access(nullptr, src, 0, ggml_nbytes(src), false, "tensor_copy src");
+    ggml_san_access(nullptr, dst, 0, ggml_nbytes(dst), true,  "tensor_copy dst");
+    ggml_backend_tensor_copy(src, dst);
+}
+
+ggml_status ggml_backend_sched_backend::graph_compute_async(ggml_cgraph * graph) const {
+    const ggml_status status = ggml_backend_graph_compute_async(backend, graph);
+    if (status == GGML_STATUS_SUCCESS) {
+        ggml_san_compute(backend, graph);
+    }
+    return status;
 }

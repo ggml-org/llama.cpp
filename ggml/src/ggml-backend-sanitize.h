@@ -1,36 +1,27 @@
 #pragma once
 
-// happens-before instrumentation for the ggml backend API
+// happens-before instrumentation for the ggml scheduler
 //
 // GGML_SCHED_SANITIZE=1  detect happens-before violations
 // GGML_SCHED_SANITIZE=2  also trace synchronization edges and memory ranges
 
 #include "ggml-backend.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+struct ggml_backend_sched_backend {
+    ggml_backend_t backend;
 
-    int  ggml_san_level(void);
+    void synchronize() const;
+    void event_record(ggml_backend_event_t event) const;
+    void event_wait(ggml_backend_event_t event) const;
 
-    void ggml_san_sync        (ggml_backend_t backend);
-    void ggml_san_event_record(ggml_backend_event_t event, ggml_backend_t backend);
-    void ggml_san_event_wait  (ggml_backend_t backend, ggml_backend_event_t event);
-    void ggml_san_event_sync  (ggml_backend_event_t event);
+    void tensor_set_async(ggml_tensor * tensor, const void * data, size_t offset, size_t size) const;
+    void tensor_get_async(const ggml_tensor * tensor, void * data, size_t offset, size_t size) const;
+    bool copy_tensor_async(ggml_backend_sched_backend src_backend, const ggml_tensor * src, ggml_tensor * dst) const;
+    ggml_status graph_compute_async(ggml_cgraph * graph) const;
 
-    void ggml_san_compute     (ggml_backend_t backend, const struct ggml_cgraph * cgraph);
+    static void copy_tensor(const ggml_tensor * src, ggml_tensor * dst);
+    static void event_synchronize(ggml_backend_event_t event);
+};
 
-    // backend == NULL means the access is performed by the host thread
-    void ggml_san_access      (ggml_backend_t backend, const struct ggml_tensor * tensor,
-                               size_t offset, size_t size, bool write, const char * what);
-
-    void ggml_san_cpy_async   (ggml_backend_t src_be, ggml_backend_t dst_be,
-                               const struct ggml_tensor * src, const struct ggml_tensor * dst);
-
-    void ggml_san_buffer_free (ggml_backend_buffer_t buffer);
-
-    void ggml_san_split       (int split_id, ggml_backend_t backend, int n_inputs);
-
-#ifdef __cplusplus
-}
-#endif
+void ggml_san_buffer_free(ggml_backend_buffer_t buffer);
+void ggml_san_split(int split_id, ggml_backend_t backend, int n_inputs);
