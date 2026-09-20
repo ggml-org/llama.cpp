@@ -306,6 +306,7 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
 
+    // TODO: use smart pointers
     llama_context * ctx_src = make_ctx(params, model, fill);
     llama_context * ctx_dst = make_ctx(params, model, fill);
     if (ctx_src == nullptr || ctx_dst == nullptr) {
@@ -398,20 +399,22 @@ static int test_rollback(const common_params & params, llama_model * model, uint
         return 1;
     }
 
-    if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1) ||
-        !llama_memory_seq_rm(llama_get_memory(ctx_dst), 0, rollback_pos, -1)) {
-        fprintf(stderr, "%s : partial rollback failed\n", __func__);
-        return 1;
-    }
+    // TODO: this test is invalid because RS rollback is only correct once after a ubatch with more than n_rs_seq tokens
+    //       this is not the case here. add asserts and guardrails to prevent such attempts
+    //if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1) ||
+    //    !llama_memory_seq_rm(llama_get_memory(ctx_dst), 0, rollback_pos, -1)) {
+    //    fprintf(stderr, "%s : partial rollback failed\n", __func__);
+    //    return 1;
+    //}
 
-    constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
-    common_prompt_checkpoint ckpt_partial;
-    ckpt_partial.update_tgt(ctx_src, 0, partial_flags);
-    ckpt_partial.load_tgt(ctx_dst, 0, partial_flags);
+    //constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    //common_prompt_checkpoint ckpt_partial;
+    //ckpt_partial.update_tgt(ctx_src, 0, partial_flags);
+    //ckpt_partial.load_tgt(ctx_dst, 0, partial_flags);
 
-    if (!replay_and_compare("partial")) {
-        return 1;
-    }
+    //if (!replay_and_compare("partial")) {
+    //    return 1;
+    //}
 
     // Repeat the load into a context that already has its own rollback state:
     // groups 1..n_rs_seq hold a different prompt's history, and rs_idx[0] is
