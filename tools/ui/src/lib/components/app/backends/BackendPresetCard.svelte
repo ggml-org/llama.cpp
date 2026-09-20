@@ -21,7 +21,7 @@
 </script>
 
 <Card.Root
-	class={`relative gap-3! select-none bg-muted/30 p-4 transition-all ${interactive ? 'cursor-pointer hover:bg-muted/50 hover:opacity-100' : ''} ${selected && !added ? 'bg-muted/30 ring-1 ring-primary/40' : ''} ${dimmed || added ? 'opacity-50' : ''}`}
+	class={`relative gap-3! select-none bg-muted/30 p-4 transition-[background-color,opacity,transform] duration-150 ${interactive ? 'cursor-pointer hover:bg-muted/50 hover:opacity-100 active:scale-[0.99]' : ''} ${selected && !added ? 'bg-muted/30 ring-1 ring-primary/40' : ''} ${dimmed || added ? 'opacity-50' : ''}`}
 	onclick={interactive ? onClick : undefined}
 >
 	{#if added}

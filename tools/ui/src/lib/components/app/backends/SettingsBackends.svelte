@@ -40,7 +40,7 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }} class={['flex flex-col gap-4', className]}>
+<div in:fade={{ duration: 150 }} class={['grid gap-4', className]}>
 	<DialogBackendForm
 		bind:open={isAdding}
 		backend={editing}
