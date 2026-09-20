@@ -562,6 +562,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     const int cc = ggml_cuda_info().devices[device].cc;
 
+    // MUSA: only QY2 (mp_22) and later are built with FA device code.
+    if (GGML_CUDA_CC_IS_MTHREADS(cc) && cc < GGML_CUDA_CC_QY2) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+
     switch (K->ne[0]) {
         case  40:
         case  64:
