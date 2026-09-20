@@ -206,6 +206,8 @@ add_library(ggml-base
             ggml-backend-memory.h
             ggml-kv-stream.cpp
             ggml-kv-stream.h
+            ggml-kv-stream-reference.cpp
+            ggml-kv-stream-reference.h
             ggml-kv-stream-partial.cpp
             ggml-kv-stream-partial.h
             ggml-kv-stream-device.cpp
