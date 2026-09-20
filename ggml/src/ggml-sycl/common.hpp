@@ -64,7 +64,6 @@ extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_enable_optimize;
 extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_enable_esimd;
-extern int g_ggml_sycl_esimd_q8_0;
 extern int g_ggml_sycl_mmvq_wide;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
