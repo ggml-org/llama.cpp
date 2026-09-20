@@ -52,7 +52,7 @@
 
 			{#each PROTOCOL_TABS as tab (tab.value)}
 				<Tabs.Content class="min-h-0 flex-1 overflow-y-auto" value={tab.value}>
-					<SettingsBackends class="mx-auto w-full max-w-3xl" protocol={tab.value} />
+					<SettingsBackends protocol={tab.value} />
 				</Tabs.Content>
 			{/each}
 		</Tabs.Root>

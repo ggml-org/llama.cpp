@@ -40,7 +40,11 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }} class={['grid gap-4', className]}>
+<div
+	in:fade={{ duration: 150 }}
+	class={['grid gap-4', className]}
+	style="grid-template-columns: repeat(auto-fill, minmax(min(25rem, calc(100dvw - 4rem)), 1fr));"
+>
 	<DialogBackendForm
 		bind:open={isAdding}
 		backend={editing}
