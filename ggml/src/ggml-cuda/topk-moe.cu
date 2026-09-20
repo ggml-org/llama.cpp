@@ -11,6 +11,11 @@ struct topk_moe_config {
     bool use_sqrt_softplus;
     bool with_norm;
     bool delayed_softmax;
+    bool grouped_experts;
+
+    int  n_expert_groups;
+    int  n_exp_per_group;
+    int  n_group_used;
 };
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
@@ -78,12 +83,74 @@ __device__ void sqrt_softplus_warp_inplace(float (&vals)[experts_per_thread], co
     }
 }
 
+__device__ __forceinline__ void topk_moe_top2_merge(float &a1, float &a2, float b1, float b2) {
+    // Merge two sorted top-2 pairs:
+    //   a1 >= a2
+    //   b1 >= b2
+    if (b1 > a1) {
+        a2 = max(a1, b2);
+        a1 = b1;
+    } else if (b1 > a2) {
+        a2 = b1;
+    }
+
+    if (b2 > a2) {
+        a2 = b2;
+    }
+}
+
+template <int experts_per_thread, bool has_bias>
+__device__ __forceinline__ float topk_moe_group_score(const float (&wt)[experts_per_thread],
+                                                      const float * bias,
+                                                      const int     n_experts,
+                                                      const int     n_exp_per_group,
+                                                      const int     group,
+                                                      const int     lane) {
+    const int start = group * n_exp_per_group;
+    const int end   = start + n_exp_per_group;
+
+    float top1 = -INFINITY;
+    float top2 = -INFINITY;
+
+#pragma unroll
+    for (int i = 0; i < experts_per_thread; ++i) {
+        const int e = i * WARP_SIZE + lane;
+
+        if (e >= start && e < end && e < n_experts) {
+            float v = wt[i];
+
+            if constexpr (has_bias) {
+                v += bias[e];
+            }
+
+            if (v > top1) {
+                top2 = top1;
+                top1 = v;
+            } else if (v > top2) {
+                top2 = v;
+            }
+        }
+    }
+
+    // Reduce the top-2 pair across the whole warp.
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+        const float o1 = __shfl_xor_sync(0xFFFFFFFF, top1, mask);
+        const float o2 = __shfl_xor_sync(0xFFFFFFFF, top2, mask);
+
+        topk_moe_top2_merge(top1, top2, o1, o2);
+    }
+
+    return (top2 == -INFINITY) ? top1 : (top1 + top2);
+}
+
 /*
     This kernel does the following:
     1. optionally softmax over the logits per token [n_experts, n_tokens]
     2. argmax reduce over the top-k (n_experts_used) logits
     3. write weights + ids to global memory
     4. optionally normalize the weights or apply softmax over the selected logits
+    5. optionally select top-k grouped experts (n_group_used)
 
     It is intended as fusion of softmax->top-k->get_rows pipeline for MoE models
 */
@@ -179,72 +246,208 @@ __global__ void topk_moe_cuda(const float *         logits,
         output_weights[i] = 0.f;
     }
 
-    ggml_cuda_pdl_lc();
-    for (int k = 0; k < n_expert_used; k++) {
-        float max_val    = wt[0];
-        int   max_expert = threadIdx.x;
+    if (config.grouped_experts) {
+        const int G = config.n_expert_groups;
+        const int P = config.n_exp_per_group;
 
-        if constexpr (has_bias) {
-            float max_val_s = selection_wt[0];
+        // The score for each group must be reduced across the whole warp because
+        // a group is distributed over many lanes.
+        float gval = -INFINITY;
+
+        for (int g = 0; g < G; ++g) {
+            const float score = topk_moe_group_score<experts_per_thread, has_bias>(
+                wt, bias, n_experts, P, g, threadIdx.x
+            );
+
+            if (threadIdx.x == g) {
+                gval = score;
+            }
+        }
+
+        unsigned selected_mask = 0;
+
+        // Select top n_group_used groups.
+        for (int k = 0; k < config.n_group_used; ++k) {
+            float best = -INFINITY;
+            int   best_group = WARP_SIZE;
+
+            int   my_group = WARP_SIZE;
+            float my_score = -INFINITY;
+
+            if (threadIdx.x < G) {
+                // Skip groups that were already selected in a previous round.
+                if ((selected_mask & (1u << threadIdx.x)) == 0) {
+                    my_group = threadIdx.x;
+                    my_score = gval;
+                }
+            }
+
+            if (my_score > best || (my_score == best && my_group < best_group)) {
+                best = my_score;
+                best_group = my_group;
+            }
 
 #pragma unroll
-            for (int i = 1; i < experts_per_thread; i++) {
+            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+                const float other       = __shfl_xor_sync(0xFFFFFFFF, best, mask);
+                const int   other_group = __shfl_xor_sync(0xFFFFFFFF, best_group, mask);
+
+                if (other > best || (other == best && other_group < best_group)) {
+                    best = other;
+                    best_group = other_group;
+                }
+            }
+
+            if (best_group < G) {
+                selected_mask |= (1u << best_group);
+
+                if (threadIdx.x == best_group) {
+                    gval = -INFINITY;
+                }
+            }
+        }
+
+        // Build the masked expert selection scores.
+        // If bias is present, selection uses wt + bias, but output weights use wt.
+        float sel[experts_per_thread];
+
+#pragma unroll
+        for (int i = 0; i < experts_per_thread; ++i) {
+            const int e = i * WARP_SIZE + threadIdx.x;
+
+            if ((n_experts % WARP_SIZE == 0 || e < n_experts) && P > 0) {
+                const int group = e / P;
+
+                if (group < G && ((selected_mask >> group) & 1u)) {
+                    float v = wt[i];
+
+                    if constexpr (has_bias) {
+                        v += bias[e];
+                    }
+
+                    sel[i] = v;
+                } else {
+                    sel[i] = -INFINITY;
+                }
+            } else {
+                sel[i] = -INFINITY;
+            }
+        }
+
+        ggml_cuda_pdl_lc();
+
+        // Final top-k expert selection over masked scores.
+        for (int k = 0; k < n_expert_used; ++k) {
+            float max_w      = -INFINITY;
+            float max_s      = -INFINITY;
+            int   max_expert = threadIdx.x;
+
+#pragma unroll
+            for (int i = 0; i < experts_per_thread; ++i) {
                 const int expert = threadIdx.x + i * WARP_SIZE;
-                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
-                    max_val    = wt[i];
-                    max_val_s  = selection_wt[i];
+
+                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && sel[i] > max_s) {
+                    max_s      = sel[i];
+                    max_w      = wt[i];
                     max_expert = expert;
                 }
             }
 
 #pragma unroll
             for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
-                if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
-                    max_val    = val;
-                    max_val_s  = val_s;
-                    max_expert = expert;
+                const float other_s   = __shfl_xor_sync(0xFFFFFFFF, max_s, mask);
+                const float other_w   = __shfl_xor_sync(0xFFFFFFFF, max_w, mask);
+                const int   other_exp = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask);
+
+                if (other_s > max_s || (other_s == max_s && other_exp < max_expert)) {
+                    max_s      = other_s;
+                    max_w      = other_w;
+                    max_expert = other_exp;
                 }
+            }
+
+            if ((k & (WARP_SIZE - 1)) == threadIdx.x) {
+                output_weights[k / WARP_SIZE] = max_w;
             }
 
             if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-                selection_wt[max_expert / WARP_SIZE] = -INFINITY;
+                ids[k] = max_expert;
+
+                if (config.with_norm) {
+                    wt_sum += max_w;
+                }
+
+                sel[max_expert / WARP_SIZE] = -INFINITY;
             }
-        } else {
+        }
+    } else {
+        ggml_cuda_pdl_lc();
+        for (int k = 0; k < n_expert_used; k++) {
+            float max_val    = wt[0];
+            int   max_expert = threadIdx.x;
+
+            if constexpr (has_bias) {
+                float max_val_s = selection_wt[0];
+
 #pragma unroll
-            for (int i = 1; i < experts_per_thread; i++) {
-                const int expert = threadIdx.x + i * WARP_SIZE;
-                if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
-                    max_val    = wt[i];
-                    max_expert = expert;
+                for (int i = 1; i < experts_per_thread; i++) {
+                    const int expert = threadIdx.x + i * WARP_SIZE;
+                    if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_wt[i] > max_val_s) {
+                        max_val    = wt[i];
+                        max_val_s  = selection_wt[i];
+                        max_expert = expert;
+                    }
+                }
+
+#pragma unroll
+                for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+                    const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
+                    const float val_s  = __shfl_xor_sync(0xFFFFFFFF, max_val_s, mask, WARP_SIZE);
+                    const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                    if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
+                        max_val    = val;
+                        max_val_s  = val_s;
+                        max_expert = expert;
+                    }
+                }
+
+                if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
+                    selection_wt[max_expert / WARP_SIZE] = -INFINITY;
+                }
+            } else {
+#pragma unroll
+                for (int i = 1; i < experts_per_thread; i++) {
+                    const int expert = threadIdx.x + i * WARP_SIZE;
+                    if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && wt[i] > max_val) {
+                        max_val    = wt[i];
+                        max_expert = expert;
+                    }
+                }
+
+#pragma unroll
+                for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
+                    const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
+                    const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
+                    if (val > max_val || (val == max_val && expert < max_expert)) {
+                        max_val    = val;
+                        max_expert = expert;
+                    }
+                }
+
+                if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
+                    wt[max_expert / WARP_SIZE] = -INFINITY;
                 }
             }
 
-#pragma unroll
-            for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float val    = __shfl_xor_sync(0xFFFFFFFF, max_val, mask, WARP_SIZE);
-                const int   expert = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
-                if (val > max_val || (val == max_val && expert < max_expert)) {
-                    max_val    = val;
-                    max_expert = expert;
-                }
+            if ((k & (WARP_SIZE - 1)) == threadIdx.x) {
+                output_weights[k / WARP_SIZE] = max_val;
             }
 
             if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-                wt[max_expert / WARP_SIZE] = -INFINITY;
-            }
-        }
-
-        if ((k & (WARP_SIZE - 1)) == threadIdx.x) {
-            output_weights[k / WARP_SIZE] = max_val;
-        }
-
-        if ((max_expert & (WARP_SIZE - 1)) == threadIdx.x) {
-            ids[k] = max_expert;
-            if (config.with_norm) {
-                wt_sum += max_val;
+                ids[k] = max_expert;
+                if (config.with_norm) {
+                    wt_sum += max_val;
+                }
             }
         }
     }
@@ -385,6 +588,12 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     config.use_sqrt_softplus = args.sqrt_softplus;
     config.with_norm         = with_norm;
     config.delayed_softmax   = args.delayed_softmax;
+    config.grouped_experts   = args.grouped_experts;
+    config.n_expert_groups   = args.n_expert_groups;
+    config.n_exp_per_group   = args.n_exp_per_group;
+    config.n_group_used      = args.n_group_used;
+
+    GGML_ASSERT(!(config.grouped_experts && config.delayed_softmax));
 
     if (bias) {
         launch_topk_moe_cuda<true>(ctx, logits_d, weights_d, ids_d, bias_d, n_rows, n_experts, n_expert_used, clamp_val,
