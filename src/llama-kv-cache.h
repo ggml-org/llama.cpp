@@ -131,6 +131,12 @@ public:
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
+    bool try_lazy_quantize(llama_context * lctx) override;
+
+    bool get_has_lazy_quant() const override;
+
+    bool get_needs_lazy_quant() const;
+
     bool get_can_shift() const override;
 
     void clear(bool data) override;
@@ -255,8 +261,14 @@ private:
         ggml_tensor * k;
         ggml_tensor * v;
 
+        ggml_tensor * k_target;
+        ggml_tensor * v_target;
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
+
+        std::vector<ggml_tensor *> k_stream_target;
+        std::vector<ggml_tensor *> v_stream_target;
     };
 
     bool v_trans = true;  // the value tensor is transposed
@@ -267,12 +279,20 @@ private:
     // required padding
     const uint32_t n_pad = 1;
 
+    struct cache_format {
+        uint32_t size = 0;
+        ggml_type type_k = GGML_TYPE_F16;
+        ggml_type type_v = GGML_TYPE_F16;
+        uint32_t n_rot_k = 0;
+        uint32_t n_rot_v = 0;
+    };
+
+    cache_format current;
+    cache_format target;
+    bool lazy_quant_pending = false;
+
     // SWA
     const uint32_t n_swa = 0;
-
-    // env: LLAMA_ATTN_ROT_DISABLE
-    bool attn_rot_k = false;
-    bool attn_rot_v = false;
 
     // if all layers participating in the cache have constant head size, the value is stored here
     // otherwise the value is -1

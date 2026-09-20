@@ -1445,6 +1445,19 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_update(llama_context * lctx, 
             std::move(lid_state->sc_info));
 }
 
+bool llama_kv_cache_dsv4::try_lazy_quantize(llama_context * lctx) {
+    const bool raw = kv_raw->try_lazy_quantize(lctx);
+    const bool csa = kv_csa->try_lazy_quantize(lctx);
+    const bool hca = kv_hca->try_lazy_quantize(lctx);
+    const bool lid = kv_lid->try_lazy_quantize(lctx);
+
+    return raw || csa || hca || lid;
+}
+
+bool llama_kv_cache_dsv4::get_has_lazy_quant() const {
+    return kv_raw->get_has_lazy_quant() || kv_csa->get_has_lazy_quant() || kv_hca->get_has_lazy_quant() || kv_lid->get_has_lazy_quant();
+}
+
 bool llama_kv_cache_dsv4::get_can_shift() const {
     // Compressed row metadata uses block-derived positions. Keep shifting
     // disabled until DSV4 compressed-cache shift semantics are wired.
