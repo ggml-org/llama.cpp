@@ -11877,6 +11877,61 @@ static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
     return n_fail == 0;
 }
 
+// ---- FA (non-vec) wide query tile: forced-config numerical slice (Metal only) ----
+// the wide tile is selected per device, so without the override most machines would never run it
+static bool run_fa_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+    if (getenv("LLAMA_TEST_FA_VEC_DISABLE") || !op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) {
+        return true;
+    }
+
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+
+    auto set_ov   = (void (*)(int, int)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_override");
+    auto clear_ov = (void (*)(void))     ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_override");
+    if (!set_ov || !clear_ov) {
+        return true;  // not the Metal backend: nothing to force
+    }
+
+    struct shape_t { int dk, dv; };
+    // every head size the wide tile fits in the threadgroup memory for, then two where it falls back
+    const shape_t   shapes[]   = { { 32, 32 }, { 40, 40 }, { 48, 48 }, { 64, 64 }, { 72, 72 }, { 80, 80 }, { 96, 96 }, { 96, 64 },
+                                   { 112, 112 }, { 128, 128 }, { 192, 192 }, { 192, 128 }, { 256, 256 }, { 320, 256 }, { 576, 512 } };
+    const int       ne01_pts[] = { 64, 77 };                                                // full and partial tiles
+    const int       ne11_pts[] = { 512, 4097 };                                             // without and with kvpad
+    const ggml_type types[]    = { GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_BF16 };         // wide, dequantized first, falls back
+
+    int n_run = 0, n_fail = 0;
+    for (auto s : shapes) {
+        for (int nsg : { 4, 8 }) {
+            for (ggml_type type_kv : types) {
+                for (bool sinks : { false, true }) {
+                    for (int ne01 : ne01_pts) {
+                        for (int ne11 : ne11_pts) {
+                            set_ov(16, nsg);
+                            test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/2, { 4, 1 }, /*kv=*/ne11, /*nb=*/ne01,
+                                                   /*mask=*/true, sinks, 0.0f, 0.0f, GGML_PREC_F32,
+                                                   type_kv, type_kv);
+                            auto st = tc.eval(backend, backend_cpu, "FLASH_ATTN_EXT", nullptr);
+                            clear_ov();
+
+                            if (st == test_status_t::FAIL) {
+                                printf("  FAIL fa slice: dk=%d dv=%d nsg=%d type=%s ne01=%d ne11=%d sinks=%d\n",
+                                       s.dk, s.dv, nsg, ggml_type_name(type_kv), ne01, ne11, (int) sinks);
+                                n_fail++;
+                            }
+                            n_run++;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    printf("  fa wide tile slice: %d cases run, %d failed\n", n_run, n_fail);
+
+    return n_fail == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -12014,7 +12069,8 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter) &&
+                              run_fa_slice    (backend, backend_cpu.get(), op_names_filter);
 
         return n_ok == tests_run && slice_ok;
     }
