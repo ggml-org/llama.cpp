@@ -119,6 +119,7 @@
 #define FC_NORM                        1700
 #define FC_TOPK_MOE                    1800
 #define FC_MOE_REDUCE                  1900
+#define FC_DSV4_HC                     2000
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
