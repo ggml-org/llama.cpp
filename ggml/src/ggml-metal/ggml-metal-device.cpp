@@ -1739,7 +1739,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     const char * type = use_kv_f16 ? "f16" : ggml_type_name(op->src[1]->type);
 
     // do bounds checks for the mask?
-    const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
+    const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % nqptg != 0);
 
     snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
             "flash_attn_ext",
