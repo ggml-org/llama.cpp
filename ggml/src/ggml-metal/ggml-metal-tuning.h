@@ -69,12 +69,7 @@ void         fa_vec_set_override(fa_vec_cfg_t cfg);
 void         fa_vec_clear_override();
 fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 
-constexpr int FA_VEC_FAMILY_MIN = 7;
-constexpr int FA_VEC_FAMILY_MAX = 10;
-
-// Rows are keyed by Apple GPU family rather than by SKU: repeated runs on one device differ by a
-// few percent, and the coarser model measured no worse while dropping most of the table.
-// A family above the tuned range takes the highest tuned one; below it, or unknown (0), baseline.
+// Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
 }  // namespace ggml_metal_tuning

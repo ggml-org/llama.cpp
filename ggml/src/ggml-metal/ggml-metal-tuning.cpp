@@ -1145,16 +1145,11 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
     if (ne11_b == 0) {
         return baseline;  // short KV: attention is a small slice of the step, left to baseline
     }
-    if (gpu_family < FA_VEC_FAMILY_MIN) {
-        return baseline;
-    }
-
-    const int family = gpu_family > FA_VEC_FAMILY_MAX ? FA_VEC_FAMILY_MAX : gpu_family;
 
     const int ne01_b = fa_vec_ne01_bucket(ne01);
 
     fa_vec_key_t k{};
-    k.family = (int8_t) family;
+    k.family = (int8_t) gpu_family;
     k.dtype  = (int8_t) dtype;
     k.dk     = (int16_t) dk;
     k.dv     = (int16_t) dv;
