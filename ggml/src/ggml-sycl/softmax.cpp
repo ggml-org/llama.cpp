@@ -4,11 +4,11 @@
 #include <cmath>
 
 
-template <typename T> static __dpct_inline__ float t2f32(T val) {
+template <typename T> static GGML_SYCL_INLINE float t2f32(T val) {
     return (float) val;
 }
 
-template <> float __dpct_inline__ t2f32<sycl::half>(sycl::half val) {
+template <> float GGML_SYCL_INLINE t2f32<sycl::half>(sycl::half val) {
   return sycl::vec<sycl::half, 1>(val)
       .convert<float, sycl::rounding_mode::automatic>()[0];
 }
@@ -48,7 +48,7 @@ static void soft_max_f32(const float *         x,
                          const float *         sinks,
                          float *               dst,
                          const soft_max_params p,
-                         uint8_t *             dpct_local) {
+                         uint8_t *             smem_buf) {
     auto      item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
     const int ncols    = ncols_template == 0 ? p.ncols : ncols_template;
     const int block_size = block_size_template == 0
@@ -83,7 +83,7 @@ static void soft_max_f32(const float *         x,
 
     const float slope = get_alibi_slope(p.max_bias, i02, p.n_head_log2, p.m0, p.m1);
 
-    float * buf_iw = (float *) dpct_local;
+    float * buf_iw = (float *) smem_buf;
 
     // shared memory buffer to cache values between iterations:
     float *vals = use_shared ? buf_iw + sycl::max(nwarps, WARP_SIZE) : dst;
@@ -202,17 +202,17 @@ static void launch_soft_max_kernels(const float *           x,
                                     const float *           sinks,
                                     float *                 dst,
                                     const soft_max_params & p,
-                                    dpct::queue_ptr         stream,
-                                    dpct::dim3              block_dims,
-                                    dpct::dim3              block_nums,
+                                    ggml_sycl::queue_ptr         stream,
+                                    ggml_sycl::dim3              block_dims,
+                                    ggml_sycl::dim3              block_nums,
                                     size_t                  nbytes_shared)
 {
     auto launch_kernel = [=](auto I) -> bool {
         constexpr int ncols = decltype(I)::value;
         constexpr int block = (ncols > 1024 ? 1024 : ncols);
         if (p.ncols == ncols) {
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<uint8_t, 1> dpct_local_acc_ct1(
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
+                sycl::local_accessor<uint8_t, 1> smem_acc(
                     sycl::range<1>(nbytes_shared), cgh);
 
                 cgh.parallel_for(
@@ -221,7 +221,7 @@ static void launch_soft_max_kernels(const float *           x,
                         WARP_SIZE)]] {
                         soft_max_f32<true, ncols, block>(
                             x, mask, sinks, dst, p,
-                            dpct_local_acc_ct1
+                            smem_acc
                                 .get_multi_ptr<sycl::access::decorated::no>()
                                 .get());
                         GGML_UNUSED(item_ct1);
@@ -237,8 +237,8 @@ static void launch_soft_max_kernels(const float *           x,
         return;
     }
 
-    stream->submit([&](sycl::handler &cgh) {
-        sycl::local_accessor<uint8_t, 1> dpct_local_acc_ct1(
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
+        sycl::local_accessor<uint8_t, 1> smem_acc(
             sycl::range<1>(nbytes_shared), cgh);
 
         cgh.parallel_for(
@@ -247,7 +247,7 @@ static void launch_soft_max_kernels(const float *           x,
                 [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     soft_max_f32<true, 0, 0>(
                         x, mask, sinks, dst, p,
-                        dpct_local_acc_ct1
+                        smem_acc
                             .get_multi_ptr<sycl::access::decorated::no>()
                             .get());
                     GGML_UNUSED(item_ct1);
@@ -259,7 +259,7 @@ template <typename T>
 static void soft_max_f32_sycl(const float *x, const T *mask,
                               const float *sinks, float *dst,
                               const soft_max_params &params,
-                              dpct::queue_ptr stream, int device) {
+                              ggml_sycl::queue_ptr stream, int device) {
     int nth = WARP_SIZE;
     int max_block_size = ggml_sycl_info().max_work_group_sizes[device];
     const int64_t ncols_x = params.ncols;
@@ -267,8 +267,8 @@ static void soft_max_f32_sycl(const float *x, const T *mask,
     while (nth < ncols_x && nth < max_block_size) nth *= 2;
     if (nth>max_block_size) nth = max_block_size;
 
-    const dpct::dim3 block_dims(nth, 1, 1);
-    const dpct::dim3 block_nums(params.ne01, params.ne02, params.ne03);
+    const ggml_sycl::dim3 block_dims(nth, 1, 1);
+    const ggml_sycl::dim3 block_nums(params.ne01, params.ne02, params.ne03);
     const size_t nbytes_shared =
         (GGML_PAD(ncols_x, WARP_SIZE) + WARP_SIZE) * sizeof(float);
 
@@ -282,8 +282,8 @@ static void soft_max_f32_sycl(const float *x, const T *mask,
     } else {
         const size_t nbytes_shared_low = WARP_SIZE * sizeof(float);
 
-        stream->submit([&](sycl::handler &cgh) {
-            sycl::local_accessor<uint8_t, 1> dpct_local_acc_ct1(
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
+            sycl::local_accessor<uint8_t, 1> smem_acc(
                 sycl::range<1>(nbytes_shared_low), cgh);
 
             cgh.parallel_for(
@@ -292,7 +292,7 @@ static void soft_max_f32_sycl(const float *x, const T *mask,
                     [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                     soft_max_f32<false, 0, 0>(
                         x, mask, sinks, dst, params,
-                        dpct_local_acc_ct1
+                        smem_acc
                             .get_multi_ptr<sycl::access::decorated::no>()
                             .get());
                     GGML_UNUSED(item_ct1);
@@ -307,11 +307,11 @@ static void soft_max_back_f32_sycl(const float *   grad,
                                    const int       ncols,
                                    const int       nrows,
                                    const float     scale,
-                                   dpct::queue_ptr stream) {
-    const dpct::dim3 block_dims(WARP_SIZE, 1, 1);
-    const dpct::dim3 block_nums(nrows, 1, 1);
+                                   ggml_sycl::queue_ptr stream) {
+    const ggml_sycl::dim3 block_dims(WARP_SIZE, 1, 1);
+    const ggml_sycl::dim3 block_nums(nrows, 1, 1);
 
-    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) {
                              soft_max_back_f32(grad, dstf, dst, ncols, scale);
                              GGML_UNUSED(item_ct1);
@@ -330,7 +330,7 @@ void ggml_sycl_op_soft_max(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const void  * src2_d = src2 ? (const void *) src2->data : nullptr;
     float       *  dst_d = (float *) dst->data;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
@@ -404,7 +404,7 @@ void ggml_sycl_op_soft_max_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const float * src1_d = (const float *) src1->data;
     float       * dst_d  = (float       *) dst->data;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);

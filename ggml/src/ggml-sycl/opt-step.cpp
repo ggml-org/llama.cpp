@@ -78,7 +78,7 @@ void ggml_sycl_opt_step_adamw(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad_v));
     GGML_ASSERT(ggml_nelements(adamw_params) == 7);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     float       * src0_d         = (float       *) src0->data;
@@ -90,7 +90,7 @@ void ggml_sycl_opt_step_adamw(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     const int64_t ne = ggml_nelements(src0);
     const int64_t num_blocks = (ne + SYCL_OPT_STEP_BLOCK_SIZE - 1) / SYCL_OPT_STEP_BLOCK_SIZE;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(num_blocks * SYCL_OPT_STEP_BLOCK_SIZE, SYCL_OPT_STEP_BLOCK_SIZE),
         [=](sycl::nd_item<1> item) {
             opt_step_adamw_f32_kernel(src0_d, src0_grad_d, src0_grad_m_d, src0_grad_v_d, adamw_params_d, ne, item);
@@ -113,7 +113,7 @@ void ggml_sycl_opt_step_sgd(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_nelements(sgd_params) == 2);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     float       * src0_d      = (float       *) src0->data;
@@ -123,7 +123,7 @@ void ggml_sycl_opt_step_sgd(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     const int64_t ne = ggml_nelements(src0);
     const int64_t num_blocks = (ne + SYCL_OPT_STEP_BLOCK_SIZE - 1) / SYCL_OPT_STEP_BLOCK_SIZE;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(num_blocks * SYCL_OPT_STEP_BLOCK_SIZE, SYCL_OPT_STEP_BLOCK_SIZE),
         [=](sycl::nd_item<1> item) {
             opt_step_sgd_f32_kernel(src0_d, src0_grad_d, sgd_params_d, ne, item);

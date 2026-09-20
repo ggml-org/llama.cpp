@@ -7,7 +7,7 @@
 
 namespace ggml_sycl_esimd {
 
-constexpr int GGML_SYCL_DMMV_ESIMD_WG_SIZE = 4;
+constexpr int GGML_SYCL_DMMV_ESIMD_WG_SIZE = 8;
 
 //
 // Shared ESIMD building blocks for the reordered K-quant dequantize-matvec

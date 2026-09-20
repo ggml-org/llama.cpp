@@ -84,15 +84,8 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         if (lane_id == 0) {
             s_sum[warp_id] = tmp;
         }
-        /*
-        DPCT1118:1: SYCL group functions and algorithms must be encountered in
-        converged control flow. You may need to adjust the code.
-        */
-        /*
-        DPCT1065:54: Consider replacing sycl::nd_item::barrier() with
-        sycl::nd_item::barrier(sycl::access::fence_space::local_space) for
-        better performance if there is no access to global memory.
-        */
+        
+        
         item_ct1.barrier();
         tmp = 0.f;
         for (size_t i = 0; i < nreduce; i += 1)
@@ -119,15 +112,8 @@ static void group_norm_f32(const float* x, float* dst, const int group_size, con
         if (lane_id == 0) {
             s_sum[warp_id] = tmp;
         }
-        /*
-        DPCT1118:2: SYCL group functions and algorithms must be encountered in
-        converged control flow. You may need to adjust the code.
-        */
-        /*
-        DPCT1065:55: Consider replacing sycl::nd_item::barrier() with
-        sycl::nd_item::barrier(sycl::access::fence_space::local_space) for
-        better performance if there is no access to global memory.
-        */
+        
+        
         item_ct1.barrier();
         tmp = 0.f;
         for (size_t i = 0; i < nreduce; i += 1)
@@ -264,7 +250,7 @@ static void norm_f32_sycl(const float * x, float * dst, const int ncols, const i
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
@@ -280,12 +266,8 @@ static void norm_f32_sycl(const float * x, float * dst, const int ncols, const i
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        /*
-        DPCT1049:17: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        stream->submit([&](sycl::handler& cgh) {
+        
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<sycl::float2, 1> s_sum_acc_ct1(
                             sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             cgh.parallel_for(
@@ -306,7 +288,7 @@ static void group_norm_f32_sycl(const float* x, float* dst,
     const int ne_elements, queue_ptr stream, int device) {
     if (group_size < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             const float eps_ct4 = eps;
             cgh.parallel_for(
                 sycl::nd_range<3>(sycl::range<3>(1, 1, num_groups) * block_dims,
@@ -323,13 +305,9 @@ static void group_norm_f32_sycl(const float* x, float* dst,
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        /*
-        DPCT1049:18: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
 
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(work_group_size / WARP_SIZE),
                 cgh);
 
@@ -357,7 +335,7 @@ static void rms_norm_f32_sycl(const float* x, float* dst, const int ncols, const
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
@@ -373,12 +351,8 @@ static void rms_norm_f32_sycl(const float* x, float* dst, const int ncols, const
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        /*
-        DPCT1049:19: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        stream->submit([&](sycl::handler& cgh) {
+        
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(work_group_size / WARP_SIZE),
                 cgh);
             cgh.parallel_for(
@@ -404,7 +378,7 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst, 
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
@@ -421,7 +395,7 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst, 
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
@@ -449,7 +423,7 @@ static void rms_norm_mul_add_f32_sycl(const float* x, const float* mul, const fl
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
@@ -467,7 +441,7 @@ static void rms_norm_mul_add_f32_sycl(const float* x, const float* mul, const fl
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
@@ -502,11 +476,11 @@ static void l2_norm_f32_sycl(const float *   x,
                              const float     eps,
                              queue_ptr       stream,
                              int             device) {
-    const dpct::dim3 blocks_num(nrows, nchannels, nsamples);
+    const ggml_sycl::dim3 blocks_num(nrows, nchannels, nsamples);
 
     if (ncols < 1024) {
-        const dpct::dim3 block_dims(warp_size, 1, 1);
-        stream->submit([&](sycl::handler& cgh) {
+        const ggml_sycl::dim3 block_dims(warp_size, 1, 1);
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(blocks_num * block_dims,
                     block_dims),
@@ -525,7 +499,7 @@ static void l2_norm_f32_sycl(const float *   x,
         assert(work_group_size % (warp_size * warp_size) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
         int lsm_size =  block_dims[2] > warp_size ? work_group_size / warp_size * sizeof(float): 0;
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(lsm_size),
                 cgh);
 
@@ -589,9 +563,9 @@ template <int warp_size>
 static void l2_norm_f32_batch_sycl(l2_batch_ptrs p, l2_batch_strides st, const int n_tensors,
                                    const int ncols, const int nrows_total, const float eps,
                                    queue_ptr stream) {
-    const dpct::dim3 blocks_num(nrows_total, 1, n_tensors);
-    const dpct::dim3 block_dims(warp_size, 1, 1);
-    stream->submit([&](sycl::handler & cgh) {
+    const ggml_sycl::dim3 blocks_num(nrows_total, 1, n_tensors);
+    const ggml_sycl::dim3 block_dims(warp_size, 1, 1);
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<3>(blocks_num * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
                 l2_norm_f32_batch<warp_size>(p, st, ncols, eps, item_ct1);
@@ -606,7 +580,7 @@ void ggml_sycl_op_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_UNARY_OP_LOCALS
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
     float *       dst_dd  = static_cast<float *>(dst->data);
@@ -637,7 +611,7 @@ void ggml_sycl_op_group_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     int num_groups = dst->op_params[0];
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
@@ -656,7 +630,7 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
@@ -701,7 +675,7 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     float * dst_dd = static_cast<float *>(mul_tensor->data);
 
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
@@ -775,7 +749,7 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
 
     float * dst_dd = static_cast<float *>(add_tensor->data);
 
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
@@ -858,7 +832,7 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const int64_t gs1 = G->nb[1] / ts, gs2 = G->nb[2] / ts, gs3 = G->nb[3] / ts;
     const int64_t ds1 = dst->nb[1] / ts, ds2 = dst->nb[2] / ts, ds3 = dst->nb[3] / ts;
 
-    dpct::queue_ptr q = ctx.stream();
+    ggml_sycl::queue_ptr q = ctx.stream();
 
     // work-group size: multiple of WARP_SIZE, capped by device and 256, and not larger than D
     const int device_max_wg = ggml_sycl_info().max_work_group_sizes[ctx.device];
@@ -868,7 +842,7 @@ void ggml_sycl_op_rms_norm_back(ggml_backend_sycl_context & ctx, ggml_tensor * d
     int WG = std::max(WARP_SIZE, std::min(roundup((int)std::min<int64_t>(D, wg_cap), WARP_SIZE), wg_cap));
 
     // FP32 path: per-thread compensated accumulation + hierarchical reduction
-    q->submit([&](sycl::handler &cgh) {
+    ggml_sycl::ordered_submit(q, [&](sycl::handler &cgh) {
         const int nwarps_loc = std::max(1, WG / WARP_SIZE);
         // store one partial value per warp (xx and xg) for cross-warp reduction
         auto l_xx   = sycl::local_accessor<sycl::float2, 1>(sycl::range<1>(nwarps_loc), cgh);
@@ -987,7 +961,7 @@ void ggml_sycl_op_l2_norm(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *) src0->data;
     float * dst_d = (float *) dst->data;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);

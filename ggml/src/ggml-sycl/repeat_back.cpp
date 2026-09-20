@@ -42,7 +42,7 @@ void ggml_sycl_op_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     queue_ptr stream = ctx.stream();
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(sycl::range<1>(num_blocks * BLOCK_SIZE), sycl::range<1>(BLOCK_SIZE)),
         [=](sycl::nd_item<1> item_ct1) {
             const size_t i = item_ct1.get_global_linear_id();

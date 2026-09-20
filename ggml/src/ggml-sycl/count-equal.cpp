@@ -24,7 +24,7 @@ static void count_equal(const T *__restrict__ x, const T *__restrict__ y,
         return;
     }
 
-    dpct::atomic_fetch_add<sycl::access::address_space::generic_space>(
+    ggml_sycl::atomic_fetch_add<sycl::access::address_space::generic_space>(
         (int *)dst, nequal);
 }
 
@@ -43,7 +43,7 @@ void ggml_sycl_count_equal(ggml_backend_sycl_context &ctx, ggml_tensor *dst) {
 
     int64_t * dst_d  = (int64_t *) dst->data;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     const int id       = get_current_device_id();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
@@ -52,10 +52,10 @@ void ggml_sycl_count_equal(ggml_backend_sycl_context &ctx, ggml_tensor *dst) {
     const int64_t dne =
         GGML_PAD((ne + 4 * nsm - 1) / (4 * nsm), SYCL_COUNT_EQUAL_CHUNK_SIZE);
 
-    SYCL_CHECK(CHECK_TRY_ERROR(stream->memset(dst_d, 0, ggml_nbytes(dst))));
+    SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memset(stream, dst_d, 0, ggml_nbytes(dst))));
 
-    const dpct::dim3 block_dims(WARP_SIZE, 1, 1);
-    const dpct::dim3 block_nums(
+    const ggml_sycl::dim3 block_dims(WARP_SIZE, 1, 1);
+    const ggml_sycl::dim3 block_nums(
         std::min((int64_t)4 * nsm, (ne + SYCL_COUNT_EQUAL_CHUNK_SIZE - 1) /
                                        SYCL_COUNT_EQUAL_CHUNK_SIZE),
         1, 1);
@@ -64,7 +64,7 @@ void ggml_sycl_count_equal(ggml_backend_sycl_context &ctx, ggml_tensor *dst) {
     case GGML_TYPE_I32: {
         const int *src0_d = (const int *)src0->data;
         const int *src1_d = (const int *)src1->data;
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) {
                 count_equal(src0_d, src1_d, dst_d, dne, ne);

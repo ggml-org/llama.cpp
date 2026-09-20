@@ -50,10 +50,10 @@ static void pad_f32_sycl(const float * src, size_t s00, size_t s01, size_t s02, 
                          float * dst, const int lp0, const int rp0, const int lp1, const int rp1,
                          const int lp2, const int rp2, const int lp3, const int rp3,
                          const int ne0, const int ne1, const int ne2, const int ne3,
-                         dpct::queue_ptr stream) {
+                         ggml_sycl::queue_ptr stream) {
     int num_blocks = (ne0 + SYCL_PAD_BLOCK_SIZE - 1) / SYCL_PAD_BLOCK_SIZE;
     sycl::range<3> grid(ne2 * ne3, ne1, num_blocks);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(grid * sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) {
@@ -66,7 +66,7 @@ void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *)src0->data;
     float * dst_d = (float *)dst->data;
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);

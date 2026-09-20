@@ -16,7 +16,7 @@ static void dsv4_hc_pre_f32_sycl(
     const int64_t block_size = 256;
     const int64_t num_blocks = (nr + block_size - 1) / block_size;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(sycl::range<1>(num_blocks * block_size), sycl::range<1>(block_size)),
         [=](sycl::nd_item<1> item) {
             const int64_t ir = item.get_global_id(0);
@@ -87,7 +87,7 @@ static void dsv4_hc_comb_f32_sycl(
     const int64_t block_size = 256;
     const int64_t num_blocks = (n_tokens + block_size - 1) / block_size;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(sycl::range<1>(num_blocks * block_size), sycl::range<1>(block_size)),
         [=](sycl::nd_item<1> item_ct1) {
             const int64_t it = item_ct1.get_global_id(0);
@@ -151,7 +151,7 @@ static void dsv4_hc_post_f32_sycl(
     const int64_t block_size = 256;
     const int64_t num_blocks = (nr + block_size - 1) / block_size;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(sycl::range<1>(num_blocks * block_size), sycl::range<1>(block_size)),
         [=](sycl::nd_item<1> item) {
             const int64_t ir = item.get_global_id(0);

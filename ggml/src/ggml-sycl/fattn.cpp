@@ -12,7 +12,7 @@
 
 
 #include <sycl/sycl.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "fattn-common.hpp"
 #include "fattn-tile.hpp"
@@ -342,8 +342,8 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         if (K_diag->ne[1] >= 1024) {
             fa_diag_count++;
             float diag_buf[64];
-            dpct::queue_ptr q = ctx.stream();
-            q->memcpy(diag_buf, dst->data, 64 * sizeof(float));
+            ggml_sycl::queue_ptr q = ctx.stream();
+            ggml_sycl::ordered_memcpy(q, diag_buf, dst->data, 64 * sizeof(float));
             q->wait();
             const char * kname = "???";
             best_fattn_kernel kb = ggml_sycl_get_best_fattn_kernel(ctx.device, dst);

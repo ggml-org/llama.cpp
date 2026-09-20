@@ -28,6 +28,6 @@ void ggml_sycl_op_mul_mat_q(
     const int64_t row_high,
     const int64_t src1_ncols,
     const int64_t src1_padded_row_size,
-    const dpct::queue_ptr& stream);
+    const ggml_sycl::queue_ptr& stream);
 
 #endif // GGML_SYCL_MMQ_HPP

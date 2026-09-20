@@ -50,7 +50,7 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context &ctx,
                                  ggml_tensor *dst) {
 
     const ggml_tensor *src0 = dst->src[0];
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -71,11 +71,11 @@ void ggml_sycl_op_pad_reflect_1d(ggml_backend_sycl_context &ctx,
 
     constexpr int64_t bx = SYCL_PAD_REFLECT_1D_BLOCK_SIZE;
     const int64_t tiles0 = (ne0 + bx - 1) / bx;
-    const dpct::dim3 grid_dims((unsigned)(ne01 * tiles0), (unsigned)ne02,
+    const ggml_sycl::dim3 grid_dims((unsigned)(ne01 * tiles0), (unsigned)ne02,
                                (unsigned)ne03);
-    const dpct::dim3 block_dims((unsigned)bx, 1, 1);
+    const ggml_sycl::dim3 block_dims((unsigned)bx, 1, 1);
 
-    stream->submit([&](sycl::handler &cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
         auto src0_data_ct0 = src0->data;
         auto dst_data_ct1 = dst->data;
         auto src0_nb_ct7 = src0->nb[0];

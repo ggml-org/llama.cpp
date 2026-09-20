@@ -5,7 +5,7 @@
 
 #define SYCL_CUMSUM_BLOCK_SIZE 256
 
-static __dpct_inline__ float warp_prefix_inclusive_sum_f32(float x, const sycl::nd_item<3> & item) {
+static GGML_SYCL_INLINE float warp_prefix_inclusive_sum_f32(float x, const sycl::nd_item<3> & item) {
     return sycl::inclusive_scan_over_group(item.get_sub_group(), x, sycl::plus<float>());
 }
 
@@ -102,7 +102,7 @@ inline void ggml_sycl_op_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * d
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     const float * src_d = static_cast<const float *>(src0->data);
@@ -130,7 +130,7 @@ inline void ggml_sycl_op_cumsum(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const sycl::range<3> grid(ne03, ne02, ne01);
     const sycl::range<3> block(1, 1, block_size);
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         sycl::local_accessor<float, 1> smem_acc(sycl::range<1>(smem_size), cgh);
         cgh.parallel_for(
             sycl::nd_range<3>(grid * block, block),

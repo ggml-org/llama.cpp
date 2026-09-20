@@ -15,7 +15,7 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
     // Get SYCL queue
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     // Dimension checks
     GGML_ASSERT(ne01 == ne11);  // Inner dimensions must match

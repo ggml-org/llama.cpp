@@ -1,6 +1,6 @@
 #include <sycl/sycl.hpp>
 #include <sycl/ext/oneapi/work_group_static.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "fattn-common.hpp"
 #include "fattn-tile.hpp"

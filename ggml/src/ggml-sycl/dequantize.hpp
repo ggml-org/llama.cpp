@@ -25,7 +25,7 @@ typedef void (*dequantize_kernel_f32_t)(const void * vx, const int64_t ib, const
 static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m);
 #endif
 
-static __dpct_inline__ void dequantize_q2_0(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q2_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q2_0 * x = (const block_q2_0 *) vx;
 
@@ -47,7 +47,7 @@ static __dpct_inline__ void dequantize_q2_0(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q4_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
@@ -70,7 +70,7 @@ static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q4_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+static GGML_SYCL_INLINE void dequantize_q4_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
                                             const int iqs, dfloat2 &v) {
     // const block_q4_0 * x = (const block_q4_0 *) vx;
 
@@ -93,7 +93,7 @@ static __dpct_inline__ void dequantize_q4_0_reorder(const void *d_ptr, const int
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q1_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+static GGML_SYCL_INLINE void dequantize_q1_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
                                             const int iqs, dfloat2 &v) {
     // Q1_0 reorder layout: scale values followed by quantized bits
     const dfloat d = (const dfloat)*((const sycl::half*)d_ptr+ib);
@@ -108,7 +108,7 @@ static __dpct_inline__ void dequantize_q1_0_reorder(const void *d_ptr, const int
     v.y() = (2 * bit_1 - 1) * d;
 }
 
-static __dpct_inline__ void dequantize_q1_0(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q1_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q1_0 * x = (const block_q1_0 *) vx;
     const dfloat d = x[ib].d;
@@ -123,7 +123,7 @@ static __dpct_inline__ void dequantize_q1_0(const void *vx, const int64_t ib,
     v.y() = (2 * bit_1 - 1) * d;
 }
 
-static __dpct_inline__ void dequantize_q4_1(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q4_1(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_1 * x = (const block_q4_1 *) vx;
 
@@ -147,7 +147,7 @@ static __dpct_inline__ void dequantize_q4_1(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q4_K(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q4_K(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_q4_K * x = (const block_q4_K *) vx;
@@ -178,7 +178,7 @@ static __dpct_inline__ void dequantize_q4_K(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_q4_K_f32(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q4_K_f32(const void *vx, const int64_t ib,
                                                 const int iqs, float &v0, float &v1) {
 #if QK_K == 256
     const block_q4_K * x = (const block_q4_K *) vx;
@@ -211,7 +211,7 @@ static __dpct_inline__ void dequantize_q4_K_f32(const void *vx, const int64_t ib
 #endif
 }
 
-static __dpct_inline__ void dequantize_q2_K(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q2_K(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_q2_K * x = (const block_q2_K *) vx;
@@ -240,7 +240,7 @@ static __dpct_inline__ void dequantize_q2_K(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_q2_K_f32(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q2_K_f32(const void *vx, const int64_t ib,
                                                 const int iqs, float &v0, float &v1) {
 #if QK_K == 256
     const block_q2_K * x = (const block_q2_K *) vx;
@@ -269,7 +269,7 @@ static __dpct_inline__ void dequantize_q2_K_f32(const void *vx, const int64_t ib
 #endif
 }
 
-static __dpct_inline__ void dequantize_q3_K(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q3_K(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_q3_K * x = (const block_q3_K *) vx;
@@ -306,7 +306,7 @@ static __dpct_inline__ void dequantize_q3_K(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_q5_K(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q5_K(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_q5_K * x = (const block_q5_K *) vx;
@@ -342,7 +342,7 @@ static __dpct_inline__ void dequantize_q5_K(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_q5_K_f32(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q5_K_f32(const void *vx, const int64_t ib,
                                                 const int iqs, float &v0, float &v1) {
 #if QK_K == 256
     const block_q5_K * x = (const block_q5_K *) vx;
@@ -378,7 +378,7 @@ static __dpct_inline__ void dequantize_q5_K_f32(const void *vx, const int64_t ib
 #endif
 }
 
-static __dpct_inline__ void dequantize_q6_K(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q6_K(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_q6_K * x = (const block_q6_K *) vx;
@@ -422,7 +422,7 @@ static __dpct_inline__ void dequantize_q6_K(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_mxfp4(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_mxfp4(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
     const block_mxfp4 * x = (const block_mxfp4 *) vx;
     const float d = ggml_sycl_e8m0_to_fp32(x[ib].e);
@@ -432,7 +432,7 @@ static __dpct_inline__ void dequantize_mxfp4(const void *vx, const int64_t ib,
     v.y() = d * kvalues_mxfp4[q >> 4] * 0.5f;
 }
 
-static __dpct_inline__ void dequantize_nvfp4(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_nvfp4(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
     const block_nvfp4 & xb = ((const block_nvfp4 *) vx)[ib];
 
@@ -452,7 +452,7 @@ static __dpct_inline__ void dequantize_nvfp4(const void *vx, const int64_t ib,
     v.y() = dequantize_one(iqs + 1);
 }
 
-static __dpct_inline__ void dequantize_iq2_xxs(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq2_xxs(const void *vx, const int64_t ib,
                                                const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq2_xxs * x = (const block_iq2_xxs *) vx;
@@ -480,7 +480,7 @@ static __dpct_inline__ void dequantize_iq2_xxs(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq2_xs(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq2_xs(const void *vx, const int64_t ib,
                                               const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq2_xs * x = (const block_iq2_xs *) vx;
@@ -506,7 +506,7 @@ static __dpct_inline__ void dequantize_iq2_xs(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq2_s(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq2_s(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq2_s * x = (const block_iq2_s *) vx;
@@ -532,7 +532,7 @@ static __dpct_inline__ void dequantize_iq2_s(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq3_xxs(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq3_xxs(const void *vx, const int64_t ib,
                                                const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq3_xxs * x = (const block_iq3_xxs *) vx;
@@ -564,7 +564,7 @@ static __dpct_inline__ void dequantize_iq3_xxs(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq3_s(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq3_s(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq3_s * x = (const block_iq3_s *) vx;
@@ -596,7 +596,7 @@ static __dpct_inline__ void dequantize_iq3_s(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq1_s(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq1_s(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq1_s * x = (const block_iq1_s *) vx;
@@ -623,7 +623,7 @@ static __dpct_inline__ void dequantize_iq1_s(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq1_m(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq1_m(const void *vx, const int64_t ib,
                                              const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq1_m * x = (const block_iq1_m *) vx;
@@ -658,7 +658,7 @@ static __dpct_inline__ void dequantize_iq1_m(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_iq4_nl(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq4_nl(const void *vx, const int64_t ib,
                                               const int iqs, dfloat2 &v) {
     const block_iq4_nl * x = (const block_iq4_nl *) vx;
     const float d = (float) x[ib].d;
@@ -674,7 +674,7 @@ static __dpct_inline__ void dequantize_iq4_nl(const void *vx, const int64_t ib,
     v.y() = dequantize_one(iqs + 1);
 }
 
-static __dpct_inline__ void dequantize_iq4_xs(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_iq4_xs(const void *vx, const int64_t ib,
                                               const int iqs, dfloat2 &v) {
 #if QK_K == 256
     const block_iq4_xs * x = (const block_iq4_xs *) vx;
@@ -698,7 +698,7 @@ static __dpct_inline__ void dequantize_iq4_xs(const void *vx, const int64_t ib,
 #endif
 }
 
-static __dpct_inline__ void dequantize_q5_0(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q5_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q5_0 * x = (const block_q5_0 *) vx;
 
@@ -725,7 +725,7 @@ static __dpct_inline__ void dequantize_q5_0(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q5_1(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q5_1 * x = (const block_q5_1 *) vx;
 
@@ -752,7 +752,7 @@ static __dpct_inline__ void dequantize_q5_1(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+static GGML_SYCL_INLINE void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
                                             const int iqs, dfloat2 &v) {
     const dfloat d = (const dfloat)*((const sycl::half*)d_ptr + ib);
 
@@ -768,7 +768,7 @@ static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void dequantize_q8_0(const void *vx, const int64_t ib,
+static GGML_SYCL_INLINE void dequantize_q8_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
@@ -1433,7 +1433,7 @@ static void dequantize_block_iq2_xs(const void * __restrict__ vx, dst_t * __rest
 }
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq2_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
                        const sycl::nd_item<3> &item_ct1) {
 
@@ -1491,7 +1491,7 @@ static void dequantize_block_iq3_xxs(const void * __restrict__ vx, dst_t * __res
 }
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
                        const sycl::nd_item<3> &item_ct1,
                        const uint8_t *kmask_iq2xs, const uint32_t *iq3s_grid) {
@@ -1521,7 +1521,7 @@ dequantize_block_iq3_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
 }
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq1_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
                        const sycl::nd_item<3> &item_ct1,
                        const uint32_t *iq1s_grid_gpu) {
@@ -1551,7 +1551,7 @@ dequantize_block_iq1_s(const void *__restrict__ vx, dst_t *__restrict__ yy,
 }
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq1_m(const void *__restrict__ vx, dst_t *__restrict__ yy,
                        const sycl::nd_item<3> &item_ct1,
                        const uint32_t *iq1s_grid_gpu) {
@@ -1585,7 +1585,7 @@ dequantize_block_iq1_m(const void *__restrict__ vx, dst_t *__restrict__ yy,
 }
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq4_nl(const void *__restrict__ vx, dst_t *__restrict__ yy,
                         const sycl::nd_item<3> &item_ct1) {
 
@@ -1608,7 +1608,7 @@ dequantize_block_iq4_nl(const void *__restrict__ vx, dst_t *__restrict__ yy,
 
 
 template <typename dst_t>
-__dpct_inline__ static void
+GGML_SYCL_INLINE static void
 dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
                         const sycl::nd_item<3> &item_ct1) {
     const int64_t i = item_ct1.get_group(2);

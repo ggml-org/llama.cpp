@@ -98,18 +98,18 @@ static void concat_T_sycl(const T *x, const T *y, T *dst,
   sycl::range<3> gridDim(ne2, ne1, num_blocks);
   switch (dim) {
   case 0:
-      stream->parallel_for(sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+      ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
                                           sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
                         [=](sycl::nd_item<3> item_ct1) { concat_T_dim0<T>(x, y, dst, ne0, ne00, item_ct1); });
       break;
   case 1:
-      stream->parallel_for(sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+      ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
                                           sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
                         [=](sycl::nd_item<3> item_ct1) { concat_T_dim1<T>(x, y, dst, ne0, ne01, item_ct1); });
       break;
   // dim >=2 will be dispatched to the default path
   default:
-      stream->parallel_for(sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+      ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
                                           sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
                         [=](sycl::nd_item<3> item_ct1) { concat_T_dim2<T>(x, y, dst, ne0, ne02, item_ct1); });
       break;
@@ -135,7 +135,7 @@ static void concat_T_sycl_non_cont(
   const int64_t block_ne0 = ne0_pad < SYCL_CONCAT_BLOCK_SIZE ? ne0_pad : (int64_t) SYCL_CONCAT_BLOCK_SIZE;
   sycl::range<3> blockDim(1, 1, block_ne0);
 
-  stream->parallel_for(sycl::nd_range<3>(gridDim * blockDim, blockDim), [=](sycl::nd_item<3> item_ct1) {
+  ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(gridDim * blockDim, blockDim), [=](sycl::nd_item<3> item_ct1) {
       int64_t i3 = item_ct1.get_group(0);
       int64_t i2 = item_ct1.get_group(1);
       int64_t i1 = item_ct1.get_group(2);
@@ -184,8 +184,8 @@ void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d + size0 / type_size, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d + size0 / type_size, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<T>(stream, (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
@@ -233,8 +233,8 @@ static void concat_impl_q4_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, (char *) dst_d + size0, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<block_q4_0>(
@@ -286,8 +286,8 @@ static void concat_impl_q4_1_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, (char *) dst_d + size0, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<block_q4_1>(
@@ -339,8 +339,8 @@ static void concat_impl_q5_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, (char *) dst_d + size0, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<block_q5_0>(
@@ -392,8 +392,8 @@ static void concat_impl_q5_1_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, (char *) dst_d + size0, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<block_q5_1>(
@@ -444,8 +444,8 @@ static void concat_impl_q8_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *
         } else {
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(stream, (char *) dst_d + size0, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<block_q8_0>(

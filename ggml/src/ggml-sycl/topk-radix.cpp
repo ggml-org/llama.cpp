@@ -154,7 +154,7 @@ static void top_k_radix_f32_sycl(
     const int64_t ncols,
     const int64_t nrows,
     const int k,
-    dpct::queue_ptr main_stream
+    ggml_sycl::queue_ptr main_stream
 ) {
     GGML_ASSERT(ncols <= INT32_MAX);
 
@@ -167,7 +167,7 @@ static void top_k_radix_f32_sycl(
     const sycl::range<1> block_dims(block_size);
     const sycl::range<1> grid_dims(nrows);
 
-    main_stream->submit([&](sycl::handler &cgh) {
+    ggml_sycl::ordered_submit(main_stream, [&](sycl::handler &cgh) {
         sycl::local_accessor<uint32_t, 1> slm(sycl::range<1>(SYCL_TOP_K_RADIX_SLM_WORDS), cgh);
 
         cgh.parallel_for(
@@ -448,7 +448,7 @@ static void top_k_radix_split_f32_sycl(
     const int64_t nrows,
     const int k,
     const int nparts,
-    dpct::queue_ptr main_stream
+    ggml_sycl::queue_ptr main_stream
 ) {
     GGML_ASSERT(ncols <= INT32_MAX);
     GGML_ASSERT(nparts > 1);
@@ -463,7 +463,7 @@ static void top_k_radix_split_f32_sycl(
     // Zero histogram, done counter and both emit counters. prefix/mask/need are seeded by
     // the first pass, which ignores the stored values.
     // The queue is in-order, so the passes below are already ordered after this fill.
-    SYCL_CHECK(CHECK_TRY_ERROR(main_stream->memset(state, 0, state_words * sizeof(uint32_t))));
+    SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memset(main_stream, state, 0, state_words * sizeof(uint32_t))));
 
     const sycl::range<1> block_dims(block_size);
     const sycl::range<1> grid_dims(nrows * nparts);
@@ -472,7 +472,7 @@ static void top_k_radix_split_f32_sycl(
     for (int shift = 32 - SYCL_TOP_K_RADIX_BITS; shift >= 0; shift -= SYCL_TOP_K_RADIX_BITS) {
         const bool is_first = first;
         first = false;
-        main_stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(main_stream, [&](sycl::handler &cgh) {
             sycl::local_accessor<uint32_t, 1> slm(sycl::range<1>(SYCL_TOP_K_RADIX_HIST_SIZE + 4), cgh);
 
             cgh.parallel_for(
@@ -492,7 +492,7 @@ static void top_k_radix_split_f32_sycl(
         });
     }
 
-    main_stream->submit([&](sycl::handler &cgh) {
+    ggml_sycl::ordered_submit(main_stream, [&](sycl::handler &cgh) {
         sycl::local_accessor<uint32_t, 1> slm(sycl::range<1>(8), cgh);
 
         cgh.parallel_for(
@@ -520,7 +520,7 @@ void ggml_sycl_top_k_radix(
     const int64_t   ncols,
     const int64_t   nrows,
     const int       k,
-    dpct::queue_ptr main_stream
+    ggml_sycl::queue_ptr main_stream
 ) {
     const int nparts = top_k_radix_split_groups(ctx.device, ncols, nrows);
     if (nparts > 1) {

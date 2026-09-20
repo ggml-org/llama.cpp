@@ -22,6 +22,6 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const char *src0_dd_i, const float *src1_ddf_i, const char *src1_ddq_i,
     float *dst_dd_i, const int64_t row_low, const int64_t row_high,
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
-    const dpct::queue_ptr &stream);
+    const ggml_sycl::queue_ptr &stream);
 
 #endif // GGML_SYCL_DMMV_HPP

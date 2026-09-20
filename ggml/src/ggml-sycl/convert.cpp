@@ -28,12 +28,12 @@ static void dequantize_block(const void * __restrict__ vx, dst_t * __restrict__ 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void dequantize_block_sycl(const void *__restrict__ vx,
                                   dst_t *__restrict__ y, const int64_t k,
-                                  dpct::queue_ptr stream) {
+                                  ggml_sycl::queue_ptr stream) {
     const int64_t num_blocks = (k + 2*SYCL_DEQUANTIZE_BLOCK_SIZE - 1) / (2*SYCL_DEQUANTIZE_BLOCK_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(
                 sycl::range<3>(1, 1, num_blocks) *
                     sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
@@ -46,14 +46,14 @@ static void dequantize_block_sycl(const void *__restrict__ vx,
 
 template <typename dst_t>
 static void dequantize_row_q2_K_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 #if QK_K == 256
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 64),
                                                sycl::range<3>(1, 1, 64)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -62,10 +62,10 @@ static void dequantize_row_q2_K_sycl(const void *vx, dst_t *y, const int64_t k,
     }
 #else
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -78,11 +78,11 @@ static void dequantize_row_q2_K_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_q2_K_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
-    stream->parallel_for(
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 64), sycl::range<3>(1, 1, 64)),
         [=](sycl::nd_item<3> item_ct1) {
             dequantize_block_q2_K_reorder(vx, y, item_ct1, nb);
@@ -91,14 +91,14 @@ static void dequantize_row_q2_K_sycl_reorder(const void *vx, dst_t *y, const int
 
 template <typename dst_t>
 static void dequantize_row_q3_K_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 #if QK_K == 256
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 64),
                                                sycl::range<3>(1, 1, 64)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -107,10 +107,10 @@ static void dequantize_row_q3_K_sycl(const void *vx, dst_t *y, const int64_t k,
     }
 #else
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -122,11 +122,11 @@ static void dequantize_row_q3_K_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_q3_K_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
-    stream->parallel_for(
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 64), sycl::range<3>(1, 1, 64)),
         [=](sycl::nd_item<3> item_ct1) {
             dequantize_block_q3_K_reorder(vx, y, item_ct1, nb);
@@ -135,14 +135,14 @@ static void dequantize_row_q3_K_sycl_reorder(const void *vx, dst_t *y, const int
 
 template <typename dst_t>
 static void dequantize_row_q4_0_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb32 = k / 32;
     const int64_t nb = (k + 255) / 256;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -153,15 +153,15 @@ static void dequantize_row_q4_0_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
 
-    dpct::has_capability_or_fail(stream->get_device(),
+    ggml_sycl::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
     int constexpr WARP_K = WARP_SIZE * QK4_0;
     const int n_warp = (k + WARP_K - 1) / WARP_K;
     GGML_ASSERT(k % 2 == 0);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
         sycl::range<3>(1, 1, WARP_SIZE),
         sycl::range<3>(1, 1, WARP_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
@@ -172,15 +172,15 @@ static void dequantize_row_q4_0_sycl_reorder(const void *vx, dst_t *y, const int
 
 template <typename dst_t>
 static void dequantize_row_q8_0_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
 
-    dpct::has_capability_or_fail(stream->get_device(),
+    ggml_sycl::has_capability_or_fail(stream->get_device(),
                                     {sycl::aspect::fp16});
 
     int constexpr WARP_K = WARP_SIZE * QK8_0;
     const int n_warp = (k + WARP_K - 1) / WARP_K;
     GGML_ASSERT(k % QK8_0 == 0);
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, n_warp) *
         sycl::range<3>(1, 1, WARP_SIZE),
         sycl::range<3>(1, 1, WARP_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
@@ -191,14 +191,14 @@ static void dequantize_row_q8_0_sycl_reorder(const void *vx, dst_t *y, const int
 
 template <typename dst_t>
 static void dequantize_row_q4_1_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb32 = k / 32;
     const int64_t nb = (k + 255) / 256;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -210,13 +210,13 @@ static void dequantize_row_q4_1_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_q4_K_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(12), cgh);
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
@@ -229,14 +229,14 @@ static void dequantize_row_q4_K_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
-static void dequantize_row_q4_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+static void dequantize_row_q4_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     const size_t  local_size  = 32;
     const size_t  global_size = nb * local_size;
 
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(12), cgh);
 
         cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(global_size), sycl::range<1>(local_size)),
@@ -248,14 +248,14 @@ static void dequantize_row_q4_K_sycl_reorder(const void * vx, dst_t * y, const i
 
 template <typename dst_t>
 static void dequantize_row_q5_K_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 #if QK_K == 256
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 64),
                                                sycl::range<3>(1, 1, 64)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -264,10 +264,10 @@ static void dequantize_row_q5_K_sycl(const void *vx, dst_t *y, const int64_t k,
     }
 #else
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -279,12 +279,12 @@ static void dequantize_row_q5_K_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
-static void dequantize_row_q5_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+static void dequantize_row_q5_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         sycl::local_accessor<uint8_t, 1> scale_local_acc(sycl::range<1>(K_SCALE_SIZE), cgh);
 
         cgh.parallel_for(
@@ -297,14 +297,14 @@ static void dequantize_row_q5_K_sycl_reorder(const void * vx, dst_t * y, const i
 
 template <typename dst_t>
 static void dequantize_row_q6_K_sycl(const void *vx, dst_t *y, const int64_t k,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 #if QK_K == 256
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 64),
                                                sycl::range<3>(1, 1, 64)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -313,10 +313,10 @@ static void dequantize_row_q6_K_sycl(const void *vx, dst_t *y, const int64_t k,
     }
 #else
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
+        ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
                              [=](sycl::nd_item<3> item_ct1) {
@@ -328,25 +328,25 @@ static void dequantize_row_q6_K_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
-static void dequantize_row_q6_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+static void dequantize_row_q6_K_sycl_reorder(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
 
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 64), sycl::range<3>(1, 1, 64)),
         [=](sycl::nd_item<3> item_ct1) { dequantize_block_q6_K_reorder(vx, y, item_ct1, nb); });
 }
 
 template <typename dst_t>
 static void dequantize_row_iq1_s_sycl(const void *vx, dst_t *y, const int64_t k,
-                                        dpct::queue_ptr stream) {
+                                        ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -361,13 +361,13 @@ static void dequantize_row_iq1_s_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_iq1_m_sycl(const void *vx, dst_t *y, const int64_t k,
-                                        dpct::queue_ptr stream) {
+                                        ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -382,13 +382,13 @@ static void dequantize_row_iq1_m_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_iq2_xxs_sycl(const void *vx, dst_t *y, const int64_t k,
-                                        dpct::queue_ptr stream) {
+                                        ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -403,13 +403,13 @@ static void dequantize_row_iq2_xxs_sycl(const void *vx, dst_t *y, const int64_t 
 
 template <typename dst_t>
 static void dequantize_row_iq2_xs_sycl(const void *vx, dst_t *y, const int64_t k,
-                                       dpct::queue_ptr stream) {
+                                       ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -424,13 +424,13 @@ static void dequantize_row_iq2_xs_sycl(const void *vx, dst_t *y, const int64_t k
 
 template <typename dst_t>
 static void dequantize_row_iq2_s_sycl(const void *vx, dst_t *y, const int64_t k,
-                                      dpct::queue_ptr stream) {
+                                      ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -444,13 +444,13 @@ static void dequantize_row_iq2_s_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_iq3_xxs_sycl(const void *vx, dst_t *y, const int64_t k,
-                                        dpct::queue_ptr stream) {
+                                        ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -465,13 +465,13 @@ static void dequantize_row_iq3_xxs_sycl(const void *vx, dst_t *y, const int64_t 
 
 template <typename dst_t>
 static void dequantize_row_iq3_s_sycl(const void *vx, dst_t *y, const int64_t k,
-                                        dpct::queue_ptr stream) {
+                                        ggml_sycl::queue_ptr stream) {
     const int64_t nb = k / QK_K;
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
             cgh.parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                                    sycl::range<3>(1, 1, 32),
                                                sycl::range<3>(1, 1, 32)),
@@ -485,16 +485,16 @@ static void dequantize_row_iq3_s_sycl(const void *vx, dst_t *y, const int64_t k,
 
 template <typename dst_t>
 static void dequantize_row_iq4_xs_sycl(const void *vx, dst_t *y, const int64_t k,
-                                       dpct::queue_ptr stream) {
+                                       ggml_sycl::queue_ptr stream) {
     const int64_t nb = (k + QK_K - 1) / QK_K;
 #if QK_K == 64
     dequantize_row_iq4_nl_sycl(vx, y, k, stream);
 #else
       {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                   cgh.parallel_for(
                       sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                             sycl::range<3>(1, 1, 32),
@@ -509,13 +509,13 @@ static void dequantize_row_iq4_xs_sycl(const void *vx, dst_t *y, const int64_t k
 
 template <typename dst_t>
 static void dequantize_row_iq4_nl_sycl(const void *vx, dst_t *y, const int64_t k,
-                                       dpct::queue_ptr stream) {
+                                       ggml_sycl::queue_ptr stream) {
     const int64_t nb = (k + QK_K - 1) / QK_K;
       {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                   cgh.parallel_for(
                       sycl::nd_range<3>(sycl::range<3>(1, 1, nb) *
                                             sycl::range<3>(1, 1, 32),
@@ -528,9 +528,9 @@ static void dequantize_row_iq4_nl_sycl(const void *vx, dst_t *y, const int64_t k
 }
 
 template <typename dst_t>
-static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr stream) {
     const int nb = (k + QK_K - 1) / QK_K;
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
         [=](sycl::nd_item<3> item_ct1) {
             dequantize_block_mxfp4(vx, y, item_ct1);
@@ -538,10 +538,10 @@ static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t 
 }
 
 template <typename dst_t>
-static void dequantize_row_nvfp4_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+static void dequantize_row_nvfp4_sycl(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(k % QK_NVFP4 == 0);
     const int nb = k / QK_NVFP4;
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
         [=](sycl::nd_item<3> /*item_ct1*/) {
             dequantize_block_nvfp4(vx, y, k);
@@ -596,10 +596,10 @@ static void dequantize_block_nc_sycl(const void *    vx,
                                   const int64_t   s01,
                                   const int64_t   s02,
                                   const int64_t   s03,
-                                  dpct::queue_ptr stream) {
-    const dpct::dim3 num_blocks((ne00 + 2 * SYCL_DEQUANTIZE_BLOCK_SIZE - 1) / (2 * SYCL_DEQUANTIZE_BLOCK_SIZE), ne01,
+                                  ggml_sycl::queue_ptr stream) {
+    const ggml_sycl::dim3 num_blocks((ne00 + 2 * SYCL_DEQUANTIZE_BLOCK_SIZE - 1) / (2 * SYCL_DEQUANTIZE_BLOCK_SIZE), ne01,
                                 ne02 * ne03);
-    stream->parallel_for(sycl::nd_range<3>(num_blocks * sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(num_blocks * sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_DEQUANTIZE_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) {
                              GGML_UNUSED(item_ct1);
@@ -632,8 +632,8 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ 
 template <typename src_t, typename dst_t>
 static void convert_unary_nc_sycl(const void * __restrict__ vx, dst_t * __restrict__ y,
                                   const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
-                                  const int64_t s01, const int64_t s02, const int64_t s03, dpct::queue_ptr queue) {
-    dpct::has_capability_or_fail(queue->get_device(), { sycl::aspect::fp16 });
+                                  const int64_t s01, const int64_t s02, const int64_t s03, ggml_sycl::queue_ptr queue) {
+    ggml_sycl::has_capability_or_fail(queue->get_device(), { sycl::aspect::fp16 });
 
     sycl::range<3> global_size(ne02 * ne03, ne01, ceil_div(ne00, SYCL_DEQUANTIZE_BLOCK_SIZE));
 
@@ -642,13 +642,13 @@ static void convert_unary_nc_sycl(const void * __restrict__ vx, dst_t * __restri
     int64_t        downsized_workgroup = downsample_sycl_global_range(global_size[0], SYCL_DEQUANTIZE_BLOCK_SIZE);
     sycl::range<3> workgroup_size(1, 1, downsized_workgroup);
 
-    queue->parallel_for(sycl::nd_range<3>(global_size * workgroup_size, workgroup_size), [=](sycl::nd_item<3> item_ct1) {
+    ggml_sycl::ordered_parallel_for(queue, sycl::nd_range<3>(global_size * workgroup_size, workgroup_size), [=](sycl::nd_item<3> item_ct1) {
         convert_unary_nc<src_t>(vx, y, ne00, ne01, ne02, s01, s02, s03, item_ct1);
     });
 }
 
 template <typename src_t, typename dst_t>
-static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr queue) {
+static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, ggml_sycl::queue_ptr queue) {
     convert_unary_nc_sycl<src_t>(vx, y, k, 1, 1, 1, k, k, k, queue);
 }
 

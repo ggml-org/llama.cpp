@@ -3,24 +3,24 @@
 #include "common.hpp"
 
 
-static __dpct_inline__ float op_repeat(const float a, const float b) {
+static GGML_SYCL_INLINE float op_repeat(const float a, const float b) {
     return b;
     GGML_UNUSED(a);
 }
 
-static __dpct_inline__ float op_add(const float a, const float b) {
+static GGML_SYCL_INLINE float op_add(const float a, const float b) {
     return a + b;
 }
 
-static __dpct_inline__ float op_sub(const float a, const float b) {
+static GGML_SYCL_INLINE float op_sub(const float a, const float b) {
     return a - b;
 }
 
-static __dpct_inline__ float op_mul(const float a, const float b) {
+static GGML_SYCL_INLINE float op_mul(const float a, const float b) {
     return a * b;
 }
 
-static __dpct_inline__ float op_div(const float a, const float b) {
+static GGML_SYCL_INLINE float op_div(const float a, const float b) {
     return a / b;
 }
 

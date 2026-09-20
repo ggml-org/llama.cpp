@@ -6,7 +6,7 @@
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
-__dpct_inline__ int best_index_int8(int n, const int8_t * val, float x) {
+GGML_SYCL_INLINE int best_index_int8(int n, const int8_t * val, float x) {
     if (x <= val[0]) {
         return 0;
     }
@@ -95,7 +95,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
 
     for (int j = 0; j < QK2_0; ++j) {
         int q = round_nearest_int(xi[j] * id) + 1;
-        q = dpct::max(0, dpct::min(3, q));
+        q = sycl::max(0, sycl::min(3, q));
 
         const int byte_index = j / 4;
         const int bit_offset = (j % 4) * 2;
@@ -128,11 +128,11 @@ inline int nearest_int_ggml_sycl(float x) {
 }
 
 inline uint8_t clamp_u8(const int x, const int lo, const int hi) {
-    return (uint8_t) dpct::max(lo, dpct::min(hi, x));
+    return (uint8_t) sycl::max(lo, sycl::min(hi, x));
 }
 
 inline int8_t clamp_i8(const int x, const int lo, const int hi) {
-    return (int8_t) dpct::max(lo, dpct::min(hi, x));
+    return (int8_t) sycl::max(lo, sycl::min(hi, x));
 }
 
 constexpr float GROUP_MAX_EPS_SYCL = 1e-15f;
@@ -158,7 +158,7 @@ inline float make_qx_quants_sycl(int n, int nmax, const float * x, int8_t * L, i
     if (rmse_type == 0) {
         for (int i = 0; i < n; ++i) {
             int l = nearest_int_ggml_sycl(iscale * x[i]);
-            L[i] = (int8_t) (nmax + dpct::max(-nmax, dpct::min(nmax - 1, l)));
+            L[i] = (int8_t) (nmax + sycl::max(-nmax, sycl::min(nmax - 1, l)));
         }
         return 1.0f / iscale;
     }
@@ -173,7 +173,7 @@ inline float make_qx_quants_sycl(int n, int nmax, const float * x, int8_t * L, i
     float suml2 = 0.0f;
     for (int i = 0; i < n; ++i) {
         int l = nearest_int_ggml_sycl(iscale * x[i]);
-        l = dpct::max(-nmax, dpct::min(nmax - 1, l));
+        l = sycl::max(-nmax, sycl::min(nmax - 1, l));
         L[i] = (int8_t) (l + nmax);
 
         const float w = qw ? qw[i] : (rmse_type == 1 ? x[i] * x[i] :
@@ -198,7 +198,7 @@ inline float make_qx_quants_sycl(int n, int nmax, const float * x, int8_t * L, i
         suml2 = 0.0f;
         for (int i = 0; i < n; ++i) {
             int l = nearest_int_ggml_sycl(iscale * x[i]);
-            l = dpct::max(-nmax, dpct::min(nmax - 1, l));
+            l = sycl::max(-nmax, sycl::min(nmax - 1, l));
             const float w = qw ? qw[i] : (rmse_type == 1 ? x[i] * x[i] :
                 rmse_type == 2 ? 1.0f : rmse_type == 3 ? sycl::fabs(x[i]) : sycl::sqrt(sycl::fabs(x[i])));
             sumlx += w * x[i] * l;
@@ -208,7 +208,7 @@ inline float make_qx_quants_sycl(int n, int nmax, const float * x, int8_t * L, i
         if (suml2 > 0.0f && sumlx * sumlx > best * suml2) {
             for (int i = 0; i < n; ++i) {
                 int l = nearest_int_ggml_sycl(iscale * x[i]);
-                L[i] = (int8_t) (nmax + dpct::max(-nmax, dpct::min(nmax - 1, l)));
+                L[i] = (int8_t) (nmax + sycl::max(-nmax, sycl::min(nmax - 1, l)));
             }
             scale = sumlx / suml2;
             best = scale * sumlx;
@@ -242,7 +242,7 @@ inline float make_q3_quants_sycl(int n, int nmax, const float * x, int8_t * L, b
         float suml2 = 0.0f;
         for (int i = 0; i < n; ++i) {
             int l = nearest_int_ggml_sycl(iscale * x[i]);
-            l = dpct::max(-nmax, dpct::min(nmax - 1, l));
+            l = sycl::max(-nmax, sycl::min(nmax - 1, l));
             L[i] = (int8_t) l;
             const float w = x[i] * x[i];
             sumlx += w * x[i] * l;
@@ -257,7 +257,7 @@ inline float make_q3_quants_sycl(int n, int nmax, const float * x, int8_t * L, b
                 if (slx > 0.0f) {
                     float sl2 = suml2 - w * L[i] * L[i];
                     int new_l = nearest_int_ggml_sycl(x[i] * sl2 / slx);
-                    new_l = dpct::max(-nmax, dpct::min(nmax - 1, new_l));
+                    new_l = sycl::max(-nmax, sycl::min(nmax - 1, new_l));
                     if (new_l != L[i]) {
                         slx += w * x[i] * new_l;
                         sl2 += w * new_l * new_l;
@@ -283,7 +283,7 @@ inline float make_q3_quants_sycl(int n, int nmax, const float * x, int8_t * L, b
 
     for (int i = 0; i < n; ++i) {
         int l = nearest_int_ggml_sycl(iscale * x[i]);
-        l = dpct::max(-nmax, dpct::min(nmax - 1, l));
+        l = sycl::max(-nmax, sycl::min(nmax - 1, l));
         L[i] = (int8_t) (l + nmax);
     }
 
@@ -386,8 +386,8 @@ inline void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
         const float x0 = xi[0 + j] * id;
         const float x1 = xi[QK4_0 / 2 + j] * id;
 
-        const uint8_t xi0 = dpct::min(15, (int8_t) (x0 + 8.5f));
-        const uint8_t xi1 = dpct::min(15, (int8_t) (x1 + 8.5f));
+        const uint8_t xi0 = sycl::min((int8_t) 15, (int8_t) (x0 + 8.5f));
+        const uint8_t xi1 = sycl::min((int8_t) 15, (int8_t) (x1 + 8.5f));
 
         dsti->qs[j] = xi0;
         dsti->qs[j] |= xi1 << 4;
@@ -418,8 +418,8 @@ inline void cpy_blck_f32_q4_1(const char * cxi, char * cdsti) {
         const float x0 = (xi[0 + j] - vmin) * id;
         const float x1 = (xi[QK4_1 / 2 + j] - vmin) * id;
 
-        const uint8_t xi0 = dpct::min(15, (int8_t) (x0 + 0.5f));
-        const uint8_t xi1 = dpct::min(15, (int8_t) (x1 + 0.5f));
+        const uint8_t xi0 = sycl::min((int8_t) 15, (int8_t) (x0 + 0.5f));
+        const uint8_t xi1 = sycl::min((int8_t) 15, (int8_t) (x1 + 0.5f));
 
         dsti->qs[j] = xi0;
         dsti->qs[j] |= xi1 << 4;
@@ -451,8 +451,8 @@ inline void cpy_blck_f32_q5_0(const char * cxi, char * cdsti) {
         const float x0 = xi[0 + j] * id;
         const float x1 = xi[QK5_0 / 2 + j] * id;
 
-        const uint8_t xi0 = dpct::min(31, (int8_t) (x0 + 16.5f));
-        const uint8_t xi1 = dpct::min(31, (int8_t) (x1 + 16.5f));
+        const uint8_t xi0 = sycl::min((int8_t) 31, (int8_t) (x0 + 16.5f));
+        const uint8_t xi1 = sycl::min((int8_t) 31, (int8_t) (x1 + 16.5f));
 
         dsti->qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
         qh |= ((xi0 & 0x10u) >> 4) << (j + 0);

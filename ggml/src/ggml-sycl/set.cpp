@@ -54,7 +54,7 @@ void ggml_sycl_op_set(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Copy src0 to dst if not inplace
     if (!inplace)
-        stream->memcpy(dst_ptr, src0_ptr, ggml_nbytes(dst));
+        ggml_sycl::ordered_memcpy(stream, dst_ptr, src0_ptr, ggml_nbytes(dst));
 
     const int64_t ne[4] = {src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]};
     const int64_t src_nb[3] = {src1->nb[1]/sizeof(float), src1->nb[2]/sizeof(float), src1->nb[3]/sizeof(float)};
@@ -63,7 +63,7 @@ void ggml_sycl_op_set(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     const size_t grid_size = ((total_threads + SYCL_SET_BLOCK_SIZE - 1) / SYCL_SET_BLOCK_SIZE) * SYCL_SET_BLOCK_SIZE;
 
     // Copy src0 to dst if not inplace
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         nd_range<1>(range<1>(grid_size), range<1>(SYCL_SET_BLOCK_SIZE)),
         [=](nd_item<1> item) {
             set_f32(src1_ptr, dst_ptr,

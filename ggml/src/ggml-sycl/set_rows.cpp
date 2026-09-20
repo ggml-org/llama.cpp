@@ -66,7 +66,7 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
     constexpr int block_size   = 256;
     const int64_t grid_size    = ceil_div(total_blocks, block_size);
 
-    stream->parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
         const int64_t i = item_ct1.get_global_linear_id();
         if (i >= total_blocks) {
             return;
@@ -139,8 +139,8 @@ static void set_rows_sycl_qk_host(
     std::vector<char> src0_host(src0_bytes);
     std::vector<char> src1_host(src1_bytes);
 
-    stream->memcpy(src0_host.data(), src0->data, src0_bytes);
-    stream->memcpy(src1_host.data(), src1->data, src1_bytes);
+    ggml_sycl::ordered_memcpy(stream, src0_host.data(), src0->data, src0_bytes);
+    ggml_sycl::ordered_memcpy(stream, src1_host.data(), src1->data, src1_bytes);
     stream->wait();
 
     std::vector<float> src_row_f32(ne00);
@@ -167,7 +167,7 @@ static void set_rows_sycl_qk_host(
                 quantize_row(src_row_f32.data(), dst_row_q.data(), ne00);
 
                 const size_t dst_offset = calculate_offset<3>({ nb1, nb2, nb3 }, { dst_row, i02, i03 });
-                stream->memcpy((char *) dst->data + dst_offset, dst_row_q.data(), nblocks * sizeof(blockType));
+                ggml_sycl::ordered_memcpy(stream, (char *) dst->data + dst_offset, dst_row_q.data(), nblocks * sizeof(blockType));
                 stream->wait();
             }
         }
@@ -203,8 +203,8 @@ static void set_rows_sycl_iq_host(
     std::vector<char> src0_host(src0_bytes);
     std::vector<char> src1_host(src1_bytes);
 
-    stream->memcpy(src0_host.data(), src0->data, src0_bytes);
-    stream->memcpy(src1_host.data(), src1->data, src1_bytes);
+    ggml_sycl::ordered_memcpy(stream, src0_host.data(), src0->data, src0_bytes);
+    ggml_sycl::ordered_memcpy(stream, src1_host.data(), src1->data, src1_bytes);
     stream->wait();
 
     std::vector<float> src_row_f32(ne00);
@@ -231,7 +231,7 @@ static void set_rows_sycl_iq_host(
                 quantize_rows(src_row_f32.data(), dst_row_q.data(), 1, ne00, nullptr);
 
                 const size_t dst_offset = calculate_offset<3>({ nb1, nb2, nb3 }, { dst_row, i02, i03 });
-                stream->memcpy((char *) dst->data + dst_offset, dst_row_q.data(), nblocks * sizeof(blockType));
+                ggml_sycl::ordered_memcpy(stream, (char *) dst->data + dst_offset, dst_row_q.data(), nblocks * sizeof(blockType));
                 stream->wait();
             }
         }
@@ -289,7 +289,7 @@ static void set_rows_sycl(
     constexpr int block_size = 64;
     const int64_t grid_size = ceil_div(total_elements, block_size);
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(grid_size * block_size, block_size),
         [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             k_set_rows<TIn, TIdx, TOut>(
@@ -314,7 +314,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     switch (dst->type) {
         case GGML_TYPE_F32:
             set_rows_sycl<TIn, TIdx, float>(
@@ -329,7 +329,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
         case GGML_TYPE_F16:
-            dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+            ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
             set_rows_sycl<TIn, TIdx, sycl::half>(
                 src0_d, src1_d, (char *)dst->data,
                 ne00, ne01, ne02, ne03,

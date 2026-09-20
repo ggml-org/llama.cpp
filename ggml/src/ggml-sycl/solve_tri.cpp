@@ -84,7 +84,7 @@ static void solve_tri_f32_fast(const float * __restrict__ A,
     }
 }
 
-static void solve_tri_f32_mkl(dpct::queue_ptr stream,
+static void solve_tri_f32_mkl(ggml_sycl::queue_ptr stream,
                                const float * A, float * X,
                                int n, int k,
                                int64_t ne02, [[maybe_unused]] int64_t ne03,
@@ -119,7 +119,7 @@ inline void ggml_sycl_op_solve_tri(ggml_backend_sycl_context & ctx, ggml_tensor 
     GGML_ASSERT(ggml_is_contiguous(src1));
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     const int n    = src0->ne[0];
@@ -135,7 +135,7 @@ inline void ggml_sycl_op_solve_tri(ggml_backend_sycl_context & ctx, ggml_tensor 
 
     if (X_d != B_d) {
         const int64_t total_elements = (int64_t)n * k * ne02 * ne03;
-        stream->memcpy(X_d, B_d, total_elements * sizeof(float));
+        ggml_sycl::ordered_memcpy(stream, X_d, B_d, total_elements * sizeof(float));
     }
 
     const int64_t nb02 = src0->nb[2];
@@ -151,7 +151,7 @@ inline void ggml_sycl_op_solve_tri(ggml_backend_sycl_context & ctx, ggml_tensor 
         const int smem_size = 2 * WARP_SIZE * 2 * WARP_SIZE;
         const sycl::range<2> grid(1, total_batches);
         const sycl::range<2> block(k, WARP_SIZE);
-        stream->submit([&](sycl::handler & cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
             sycl::local_accessor<float, 1> smem_acc(sycl::range<1>(smem_size), cgh);
             cgh.parallel_for(
                 sycl::nd_range<2>(grid * block, block),

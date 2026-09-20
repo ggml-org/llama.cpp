@@ -107,7 +107,7 @@ static void conv2d_dw_sycl(const float * x_d, const KernelT * w_d, float * y_d,
     const int num_blocks = (total + SYCL_CONV2D_DW_BLOCK_SIZE - 1) / SYCL_CONV2D_DW_BLOCK_SIZE;
     const sycl::range<3> block_dims(1, 1, SYCL_CONV2D_DW_BLOCK_SIZE);
     const sycl::range<3> block_nums(1, 1, num_blocks);
-    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) {
             conv2d_dw_kernel<KernelT, Layout>(x_d, w_d, y_d, p, item_ct1);
         });

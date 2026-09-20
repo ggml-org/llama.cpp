@@ -9,7 +9,7 @@ using namespace sycl;
 // One output element of the conv. DC is d_conv as a compile-time constant (0 keeps the
 // runtime loop); unfused callers pass literal false/nullptr so the epilogue folds away.
 template <int DC>
-static __dpct_inline__ void ssm_conv_element(
+static GGML_SYCL_INLINE void ssm_conv_element(
     size_t idx,
     const float *src_data,
     const float *weights,
@@ -90,7 +90,7 @@ static void kernel_ssm_conv_impl(
     const range<1> local_range(work_group_size);
 
     if constexpr (FUSED) {
-        q.submit([&](handler &h) {
+        ggml_sycl::ordered_submit(&q, [&](handler &h) {
             h.parallel_for(
                 nd_range<1>(global_range, local_range),
                 [=](nd_item<1> item) {
@@ -109,7 +109,7 @@ static void kernel_ssm_conv_impl(
         GGML_UNUSED(apply_silu);
         GGML_UNUSED(bias);
 
-        q.submit([&](handler &h) {
+        ggml_sycl::ordered_submit(&q, [&](handler &h) {
             h.parallel_for(
                 nd_range<1>(global_range, local_range),
                 [=](nd_item<1> item) {
@@ -130,7 +130,7 @@ static void kernel_ssm_conv_impl(
 // SLM transpose tile: coalesces both the loads and the stores. The +1 pad makes the row
 // stride 33, coprime with 32 banks, so both phases are bank-conflict-free.
 template <int DC, int TT, int TC, int WG>
-static __dpct_inline__ void ssm_conv_tile(
+static GGML_SYCL_INLINE void ssm_conv_tile(
     nd_item<1> it, local_accessor<float, 1> tile, const float *src_data, const float *weights,
     float *dst_data, int n_t, int nt_tiles, int nc_tiles, int src_stride_inner,
     int src_stride_seq, int dst_stride_token, int dst_stride_seq, bool apply_silu,
@@ -191,7 +191,7 @@ static void kernel_ssm_conv_tiled(
     const size_t groups = static_cast<size_t>(nt_tiles) * nc_tiles * n_s;
 
     if constexpr (FUSED) {
-        q.submit([&](handler &h) {
+        ggml_sycl::ordered_submit(&q, [&](handler &h) {
             local_accessor<float, 1> tile(range<1>(TC * (TT + 1)), h);
             h.parallel_for(nd_range<1>(range<1>(groups * WG), range<1>(WG)), [=](nd_item<1> it) {
                 ssm_conv_tile<DC, TT, TC, WG>(it, tile, src_data, weights, dst_data, n_t, nt_tiles,
@@ -203,7 +203,7 @@ static void kernel_ssm_conv_tiled(
         GGML_UNUSED(apply_silu);
         GGML_UNUSED(bias);
 
-        q.submit([&](handler &h) {
+        ggml_sycl::ordered_submit(&q, [&](handler &h) {
             local_accessor<float, 1> tile(range<1>(TC * (TT + 1)), h);
             h.parallel_for(nd_range<1>(range<1>(groups * WG), range<1>(WG)), [=](nd_item<1> it) {
                 ssm_conv_tile<DC, TT, TC, WG>(it, tile, src_data, weights, dst_data, n_t, nt_tiles,

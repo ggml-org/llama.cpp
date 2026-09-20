@@ -13,7 +13,7 @@ static inline void ggml_sycl_conv3d_write_output(
         const float * src, float * dst_data,
         int64_t patch_total, int64_t oc,
         int64_t dst_w, int64_t dst_h, int64_t dst_d,
-        dpct::queue_ptr stream) {
+        ggml_sycl::queue_ptr stream) {
     const int64_t dst_nb0 = dst->nb[0];
     const int64_t dst_nb1 = dst->nb[1];
     const int64_t dst_nb2 = dst->nb[2];
@@ -22,7 +22,7 @@ static inline void ggml_sycl_conv3d_write_output(
     const int64_t block_size = 256;
     const int64_t num_work_items = ((total + block_size - 1) / block_size) * block_size;
 
-    stream->parallel_for(sycl::range<1>(num_work_items), [=](sycl::id<1> id) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::range<1>(num_work_items), [=](sycl::id<1> id) {
         const int64_t i = id[0];
         if (i >= total) {
             return;
@@ -98,7 +98,7 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     dst_mat.buffer = dst->buffer;
     dst_mat.extra = dst->extra;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     // allocate packed arrays: A_packed (k x m), B_packed (k x n)
     ggml_sycl_pool_alloc<float> A_packed_alloc(ctx.pool());
@@ -142,7 +142,7 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t A_block_size = 256;
     const int64_t A_num_work = ((A_total + A_block_size - 1) / A_block_size) * A_block_size;
 
-    stream->parallel_for(sycl::range<1>(A_num_work), [=](sycl::id<1> id) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::range<1>(A_num_work), [=](sycl::id<1> id) {
         const int64_t t = id[0];
         if (t >= A_total) return;
 
@@ -184,7 +184,7 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t B_block_size = 256;
     const int64_t B_num_work = ((B_total + B_block_size - 1) / B_block_size) * B_block_size;
 
-    stream->parallel_for(sycl::range<1>(B_num_work), [=](sycl::id<1> id) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::range<1>(B_num_work), [=](sycl::id<1> id) {
         const int64_t t = id[0];
         if (t >= B_total) return;
 
@@ -210,10 +210,10 @@ void ggml_sycl_op_conv_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     SYCL_CHECK(CHECK_TRY_ERROR(oneapi::mkl::blas::column_major::gemm(
         *stream, oneapi::mkl::transpose::trans, oneapi::mkl::transpose::nontrans,
         m, n_gemm, k,
-        dpct::get_value(&alpha, *stream),
+        ggml_sycl::get_value(&alpha, *stream),
         (const float *) A_packed, lda,
         (const float *) B_packed, ldb,
-        dpct::get_value(&beta, *stream),
+        ggml_sycl::get_value(&beta, *stream),
         (float *) dst_mat.data, ldc)));
 
     const float * gemm_data = (const float *) dst_mat.data;

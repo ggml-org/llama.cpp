@@ -126,9 +126,9 @@ using namespace dnnl::graph;
 template <typename src_t>
 static void cont_to_f16_sycl(const char * src, sycl::half * dst,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
-        size_t nb1, size_t nb2, size_t nb3, dpct::queue_ptr stream) {
+        size_t nb1, size_t nb2, size_t nb3, ggml_sycl::queue_ptr stream) {
     const int64_t n = ne0 * ne1 * ne2 * ne3;
-    stream->parallel_for(sycl::range<1>(n), [=](sycl::id<1> ix) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::range<1>(n), [=](sycl::id<1> ix) {
         const int64_t gid = ix[0];
         int64_t       i   = gid;
         const int64_t i0 = i % ne0; i /= ne0;
@@ -141,9 +141,9 @@ static void cont_to_f16_sycl(const char * src, sycl::half * dst,
 
 // oneDNN SDPA out (f16 contiguous [mb,H,q,d]) -> ggml dst (f32 [head_dim,H,n_tok,mb], contiguous).
 static void permute_sdpa_out_sycl(const sycl::half * out, float * dst,
-        int64_t mb, int64_t H, int64_t q, int64_t d, dpct::queue_ptr stream) {
+        int64_t mb, int64_t H, int64_t q, int64_t d, ggml_sycl::queue_ptr stream) {
     const int64_t n = mb * H * q * d;
-    stream->parallel_for(sycl::range<1>(n), [=](sycl::id<1> ix) {
+    ggml_sycl::ordered_parallel_for(stream, sycl::range<1>(n), [=](sycl::id<1> ix) {
         const int64_t gid = ix[0];
         int64_t       i   = gid;
         const int64_t e = i % d; i /= d;
@@ -248,7 +248,7 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     float kq_scale = 1.0f;
     memcpy(&kq_scale, (const float *) dst->op_params + 0, sizeof(float));
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     dnnl::engine    eng    = ctx.engine_dnnl(stream);
     dnnl::stream    strm   = ctx.stream_dnnl(stream);
 
@@ -386,7 +386,7 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         scbuf.emplace(ctx.pool(), 1);
         scale_dev = scbuf->get();
     }
-    stream->single_task([=]() { *scale_dev = scale_h; });
+    ggml_sycl::ordered_single_task(stream, [=]() { *scale_dev = scale_h; });
 
     // f16 contiguous SDPA out [mb,H,q,d]
     std::optional<ggml_sycl_pool_alloc<sycl::half>> outf_pool;

@@ -264,11 +264,11 @@ static void upscale_f32_sycl(const float *   x,
                              const float     sf1,
                              const float     sf2,
                              const float     sf3,
-                             dpct::queue_ptr stream) {
+                             ggml_sycl::queue_ptr stream) {
     const int64_t dst_size   = ne10 * ne11 * ne12 * ne13;
     const int64_t num_blocks = (dst_size + SYCL_UPSCALE_BLOCK_SIZE - 1) / SYCL_UPSCALE_BLOCK_SIZE;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(
             sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
              sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
@@ -295,12 +295,12 @@ static void upscale_f32_bilinear_sycl(const float *   x,
                                       const float     sf3,
                                       const float     pixel_offset,
                                       bool            antialias,
-                                      dpct::queue_ptr stream) {
+                                      ggml_sycl::queue_ptr stream) {
     const int64_t dst_size   = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
     const int64_t num_blocks = (dst_size + SYCL_UPSCALE_BLOCK_SIZE - 1) / SYCL_UPSCALE_BLOCK_SIZE;
 
     if (antialias) {
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(
                 sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
                 sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
@@ -310,7 +310,7 @@ static void upscale_f32_bilinear_sycl(const float *   x,
                     ne12_dst, ne13_dst, sf0, sf1, sf2, sf3, pixel_offset);
             });
     } else {
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(
                 sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
                 sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE)),
@@ -339,12 +339,12 @@ static void upscale_f32_bicubic_sycl(const float *   x,
                                      const float     sf2,
                                      const float     sf3,
                                      const float     pixel_offset,
-                                     dpct::queue_ptr stream) {
+                                     ggml_sycl::queue_ptr stream) {
     const int64_t dst_size   = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
     const int64_t num_blocks = (dst_size + SYCL_UPSCALE_BLOCK_SIZE - 1) / SYCL_UPSCALE_BLOCK_SIZE;
 
     {
-        stream->submit([&](sycl::handler & cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(
                     sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_UPSCALE_BLOCK_SIZE),
@@ -362,7 +362,7 @@ void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *)src0->data;
     float * dst_d = (float *)dst->data;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);

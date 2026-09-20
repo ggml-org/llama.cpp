@@ -40,7 +40,7 @@ using oneapi::mkl::blas::column_major::gemm;
 // n_queries * DKQ elements using the per-group dst offset and
 // per-head source stride.
 static void mkl_fa_pack_q_fp16(
-    dpct::queue_ptr stream,
+    ggml_sycl::queue_ptr stream,
     sycl::half * __restrict dst,
     const float * __restrict q_src,
     int n_queries, int DKQ,
@@ -55,7 +55,7 @@ static void mkl_fa_pack_q_fp16(
         const int64_t n_elem = (int64_t)n_queries * DKQ;
         const int64_t wg = ((n_elem + wg_size - 1) / wg_size) * wg_size;
 
-        stream->submit([&](sycl::handler & cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
             cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
                 [=](sycl::nd_item<1> item) {
                     int64_t e = item.get_global_id(0);
@@ -81,7 +81,7 @@ static void mkl_fa_pack_q_fp16(
 // KQ_max → -inf, KQ_sum → 0, VKQ_accum → 0.
 // Merged into one kernel to avoid per-array launch overhead.
 static void mkl_fa_init_softmax_state(
-    dpct::queue_ptr stream,
+    ggml_sycl::queue_ptr stream,
     float * kmax, float * ksum, float * vacc,
     int n_query_rows, int DV, int64_t wg_size) {
 
@@ -91,7 +91,7 @@ static void mkl_fa_init_softmax_state(
     const int64_t  total     = (n_vacc > n_maxsum) ? n_vacc : n_maxsum;
     const int64_t  wg = ((total + wg_size - 1) / wg_size) * wg_size;
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
             [=](sycl::nd_item<1> item) {
                 int64_t i = item.get_global_id(0);
@@ -113,7 +113,7 @@ static void mkl_fa_init_softmax_state(
 // For each row: find local max → rescale previous VKQ_accum →
 // compute exp(s - max) → write S_f16 → update running max/sum.
 static void mkl_fa_online_softmax_chunk(
-    dpct::queue_ptr stream,
+    ggml_sycl::queue_ptr stream,
     float * __restrict KQ_f32,
     sycl::half * __restrict S_f16,
     float * __restrict KQ_max,
@@ -128,7 +128,7 @@ static void mkl_fa_online_softmax_chunk(
 
     const int64_t wg = ((q_rows + wg_size - 1) / wg_size) * wg_size;
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
             [=](sycl::nd_item<1> item) {
                 int jc_rel = item.get_global_id(0);
@@ -205,7 +205,7 @@ static void mkl_fa_online_softmax_chunk(
 
 // Write one GQA group's normalized output to its destination head.
 static void mkl_fa_normalize_head(
-    dpct::queue_ptr stream,
+    ggml_sycl::queue_ptr stream,
     float * __restrict dst_batch,
     const float * __restrict VKQ_accum,
     const float * __restrict KQ_sum,
@@ -214,7 +214,7 @@ static void mkl_fa_normalize_head(
 
     const int64_t wg = ((n_queries + wg_size - 1) / wg_size) * wg_size;
 
-    stream->submit([&](sycl::handler & cgh) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
             [=](sycl::nd_item<1> item) {
                 int jc = item.get_global_id(0);
@@ -304,7 +304,7 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
 
 // Dequant one KV-head chunk into a dense [this_chunk x D] fp16 buffer.
 static void mkl_fa_dequant_chunk(
-    dpct::queue_ptr stream, const mkl_fa_kv_desc & d, ggml_tensor * dst_ctx,
+    ggml_sycl::queue_ptr stream, const mkl_fa_kv_desc & d, ggml_tensor * dst_ctx,
     sycl::half * out, int ikvh, int chunk_start, int this_chunk) {
 
     const int64_t D = d.D;
@@ -312,7 +312,7 @@ static void mkl_fa_dequant_chunk(
         case MKL_FA_KV_MODE_F16_DENSE: {
             const char * base = d.data + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
-            stream->memcpy(out, base, (size_t)this_chunk * D * sizeof(sycl::half));
+            ggml_sycl::ordered_memcpy(stream, out, base, (size_t)this_chunk * D * sizeof(sycl::half));
             break;
         }
         case MKL_FA_KV_MODE_F16_INTERLEAVED: {
@@ -320,7 +320,7 @@ static void mkl_fa_dequant_chunk(
                 + (int64_t)chunk_start * d.nb1;
             const int64_t row_halfs = d.nb1 / (int64_t)sizeof(sycl::half);
             const sycl::half * src = (const sycl::half *)base;
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::range<2>((size_t)this_chunk, (size_t)D),
                 [=](sycl::item<2> it) {
                     int64_t r = it.get_id(0);
@@ -442,7 +442,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     }
 
     // --- Stream and allocators ---
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
 #define MKL_TAKE_TIME(t0)  auto t0 = std::chrono::steady_clock::now()
 #define MKL_ACCUM(acc, t0) do { if (do_print) { \
@@ -635,7 +635,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                         const int64_t wg = ((n_total + wg_size - 1) / wg_size)
                             * wg_size;
                         float * accum = VKQ_accum_ptr + (int64_t)q0 * DV;
-                        stream->submit([&](sycl::handler & cgh) {
+                        ggml_sycl::ordered_submit(stream, [&](sycl::handler & cgh) {
                             cgh.parallel_for(sycl::nd_range<1>(wg, wg_size),
                                 [=](sycl::nd_item<1> item) {
                                     int64_t i = item.get_global_id(0);

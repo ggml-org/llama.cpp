@@ -1,7 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "ggml.h"
 

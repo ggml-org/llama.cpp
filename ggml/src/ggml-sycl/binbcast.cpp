@@ -221,10 +221,10 @@ struct bin_bcast_sycl {
                 // this is the maximum number of blocks in z direction, fallback to 1D grid kernel
                 int block_num = (ne0*ne1*ne2*ne3 + block_size - 1) / block_size;
                 {
-                    dpct::has_capability_or_fail(stream->get_device(),
+                    ggml_sycl::has_capability_or_fail(stream->get_device(),
                                                  {sycl::aspect::fp16});
 
-                    stream->parallel_for(
+                    ggml_sycl::ordered_parallel_for(stream, 
                         sycl::nd_range<3>(sycl::range<3>(1, 1, block_num) *
                                               sycl::range<3>(1, 1, block_size),
                                           sycl::range<3>(1, 1, block_size)),
@@ -236,16 +236,11 @@ struct bin_bcast_sycl {
                         });
                 }
             } else {
-                /*
-                DPCT1049:16: The work-group size passed to the SYCL kernel may
-                exceed the limit. To get the device limit, query
-                info::device::max_work_group_size. Adjust the work-group size if
-                needed.
-                */
-                dpct::has_capability_or_fail(stream->get_device(),
+                
+                ggml_sycl::has_capability_or_fail(stream->get_device(),
                                              {sycl::aspect::fp16});
 
-                stream->parallel_for(
+                ggml_sycl::ordered_parallel_for(stream, 
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         k_bin_bcast<bin_op>(src0_dd, src1_dd, dst_dd, ne0, ne1,
@@ -261,7 +256,7 @@ struct bin_bcast_sycl {
 template <class op>
 inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                                    ggml_tensor * dst) {
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     GGML_TENSOR_BINARY_OP_LOCALS
 
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -453,7 +448,7 @@ static void k_bin_bcast3_unravel(const src0_t * src0, const src1_t * src1, const
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                               const ggml_tensor * src2, ggml_tensor * dst) {
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     GGML_TENSOR_TERNARY_OP_LOCALS
@@ -567,11 +562,11 @@ static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor
                                   (ne1 + block_dims[1] - 1) / block_dims[1],
                                   (hne0 + block_dims[2] - 1) / block_dims[2]);
 
-        dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+        ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
         if (block_nums[0] > 65535) {
             int block_num = (ne0 * ne1 * ne2 * ne3 + block_size - 1) / block_size;
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<3>(sycl::range<3>(1, 1, block_num) * sycl::range<3>(1, 1, block_size),
                                   sycl::range<3>(1, 1, block_size)),
                 [=](sycl::nd_item<3> item_ct1) {
@@ -580,7 +575,7 @@ static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor
                                                  s10, s11, s12, s13, s20, s21, s22, s23, item_ct1);
                 });
         } else {
-            stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(block_nums * block_dims, block_dims),
                                  [=](sycl::nd_item<3> item_ct1) {
                                      k_bin_bcast3<bin_op>(src0_dd, src1_dd, src2_dd, dst_dd, ne0, ne1, ne2, ne3, ne10,
                                                           ne11, ne12, ne13, ne20, ne21, ne22, ne23, s1, s2, s3, s00,

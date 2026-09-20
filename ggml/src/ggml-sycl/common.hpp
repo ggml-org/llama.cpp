@@ -19,7 +19,7 @@
 #include <string>
 
 #include "base.hpp"
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-sycl.h"
@@ -78,17 +78,19 @@ extern int g_ggml_sycl_memtrace_step;
   [&]() {                                                                \
     try {                                                                \
       expr;                                                              \
-      return dpct::success;                                              \
+      return ggml_sycl::success;                                         \
     } catch (std::exception const& e) {                                  \
       std::cerr << e.what() << "\nException caught at file:" << __FILE__ \
                 << ", line:" << __LINE__ << ", func:" << __func__        \
                 << std::endl;                                            \
-      return dpct::default_error;                                        \
+      return ggml_sycl::default_error;                                   \
     }                                                                    \
   }()
 
 
-#define __SYCL_ARCH__ DPCT_COMPATIBILITY_TEMP
+#define __SYCL_ARCH__ GGML_SYCL_ARCH_DEFAULT
+#define GGML_SYCL_ARCH_DEFAULT 900 // placeholder; not used on Intel GPUs
+#define MIN_CC_DP4A 610 // lowest compute capability for integer intrinsics
 #define VER_4VEC 610 // todo for hardware optimize.
 #define VER_GEN9 700 // todo for hardware optimize.
 #define VER_GEN12 1000000 // todo for hardware optimize.
@@ -152,12 +154,7 @@ static void crash() {
             ggml_sycl_error(#err, __func__, __FILE__, __LINE__, "Exception caught in this line of code."); \
     } while (0)
 
-#if DPCT_COMPAT_RT_VERSION >= 11100
 #define GGML_SYCL_ASSUME(x) __builtin_assume(x)
-#else
-#define GGML_SYCL_ASSUME(x)
-#endif // DPCT_COMPAT_RT_VERSION >= 11100
-
 #ifdef GGML_SYCL_F16
 typedef sycl::half dfloat; // dequantize float
 typedef sycl::half2 dfloat2;
@@ -190,20 +187,20 @@ static size_t g_scratch_offset = 0;
 int get_current_device_id();
 
 inline int ggml_sycl_get_device() {
-    return get_current_device_id();
+    return ggml_sycl::get_current_device_id();
 }
 
-inline dpct::err0 ggml_sycl_set_device(const int device) try {
-  int current_device_id;
-  SYCL_CHECK(CHECK_TRY_ERROR(current_device_id = get_current_device_id()));
+inline ggml_sycl::err0 ggml_sycl_set_device(const int device) try {
+  const int current_device_id = ggml_sycl::get_current_device_id();
 
   // GGML_SYCL_DEBUG("ggml_sycl_set_device device_id=%d,
   // current_device_id=%d\n", device, current_device);
   if (device == current_device_id) {
-    return 0;
+    return ggml_sycl::success;
   }
 
-  return CHECK_TRY_ERROR(dpct::select_device(device));
+  ggml_sycl::set_current_device(device);
+  return ggml_sycl::success;
 } catch (sycl::exception const& exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
@@ -315,8 +312,8 @@ struct ggml_sycl_pool_alloc {
 struct ggml_tensor_extra_gpu {
   void* data_device[GGML_SYCL_MAX_DEVICES]; // 1 pointer for each device for split
                                        // tensors
-  dpct::event_ptr events[GGML_SYCL_MAX_DEVICES]
-                        [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
+  ggml_sycl::event_ptr events[GGML_SYCL_MAX_DEVICES]
+                             [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
   optimize_feature optimized_feature;
 };
 
@@ -346,15 +343,25 @@ struct ggml_backend_sycl_context {
         opt_feature = ggml_sycl_info().devices[device].opt_feature;
     }
 
+    // Returns the out-of-order queue for (device, stream). All commands
+    // submitted on this queue must go through ordered_submit() so that
+    // dependencies are expressed with native sycl::event objects instead of
+    // relying on the in-order queue property.
     queue_ptr stream(int device, int stream) {
         if (qptrs[device][stream] == nullptr) {
-            qptrs[device][stream] = &(dpct::get_device(device).default_queue());
+            qptrs[device][stream] = &(ggml_sycl::device_registry::instance().queue(device));
         }
         return qptrs[device][stream];
     }
 
     queue_ptr stream() {
         return stream(device, 0);
+    }
+
+    // Ordered submission on this context's default stream.
+    template <typename CGF>
+    sycl::event submit(CGF && cgf) {
+        return ggml_sycl::ordered_submit(stream(), std::forward<CGF>(cgf));
     }
 
 #if GGML_SYCL_DNNL
@@ -456,22 +463,22 @@ struct ggml_backend_sycl_context {
 
 // common device functions
 
-static __dpct_inline__ float warp_reduce_sum(float x,
+static GGML_SYCL_INLINE float warp_reduce_sum(float x,
     const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
+        x += ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), x, mask);
     }
     return x;
 }
 
-static __dpct_inline__ sycl::float2
+static GGML_SYCL_INLINE sycl::float2
 warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        a.x() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.x(),
+        a.x() += ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), a.x(),
             mask);
-        a.y() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.y(),
+        a.y() += ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), a.y(),
             mask);
     }
     return a;
@@ -479,17 +486,17 @@ warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ int warp_reduce_sum(int x) {
+static GGML_SYCL_INLINE int warp_reduce_sum(int x) {
   return sycl::reduce_over_group(
       sycl::ext::oneapi::this_work_item::get_sub_group(), x, sycl::plus<>());
 }
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ float warp_reduce_sum(float x) {
+static GGML_SYCL_INLINE float warp_reduce_sum(float x) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
-    x += dpct::permute_sub_group_by_xor(
+    x += ggml_sycl::sub_group_shuffle_xor(
         sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset, width);
   }
   return x;
@@ -497,10 +504,10 @@ static __dpct_inline__ float warp_reduce_sum(float x) {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ float warp_reduce_sum(float x, const sycl::nd_item<3>& item_ct1) {
+static GGML_SYCL_INLINE float warp_reduce_sum(float x, const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
-    x += dpct::permute_sub_group_by_xor(
+    x += ggml_sycl::sub_group_shuffle_xor(
         item_ct1.get_sub_group(), x, offset);
   }
   return x;
@@ -508,13 +515,13 @@ static __dpct_inline__ float warp_reduce_sum(float x, const sycl::nd_item<3>& it
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ sycl::float2 warp_reduce_sum(sycl::float2 a) {
+static GGML_SYCL_INLINE sycl::float2 warp_reduce_sum(sycl::float2 a) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
-    a.x() += dpct::permute_sub_group_by_xor(
+    a.x() += ggml_sycl::sub_group_shuffle_xor(
         sycl::ext::oneapi::this_work_item::get_sub_group(), a.x(), offset,
         width);
-    a.y() += dpct::permute_sub_group_by_xor(
+    a.y() += ggml_sycl::sub_group_shuffle_xor(
         sycl::ext::oneapi::this_work_item::get_sub_group(), a.y(), offset,
         width);
   }
@@ -523,10 +530,10 @@ static __dpct_inline__ sycl::float2 warp_reduce_sum(sycl::float2 a) {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ sycl::half2 warp_reduce_sum(sycl::half2 a) {
+static GGML_SYCL_INLINE sycl::half2 warp_reduce_sum(sycl::half2 a) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
-    a = a + dpct::permute_sub_group_by_xor(
+    a = a + ggml_sycl::sub_group_shuffle_xor(
                 sycl::ext::oneapi::this_work_item::get_sub_group(), a, offset,
                 width);
   }
@@ -540,7 +547,7 @@ static constexpr int ggml_sycl_get_physical_warp_size() {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ int warp_reduce_all(int x) {
+static GGML_SYCL_INLINE int warp_reduce_all(int x) {
     if (width == ggml_sycl_get_physical_warp_size()) {
         return sycl::all_of_group(
             sycl::ext::oneapi::this_work_item::get_sub_group(),
@@ -551,7 +558,7 @@ static __dpct_inline__ int warp_reduce_all(int x) {
     } else {
 #pragma unroll
         for (int offset = width / 2; offset > 0; offset >>= 1) {
-            x = dpct::permute_sub_group_by_xor(
+            x = ggml_sycl::sub_group_shuffle_xor(
                     sycl::ext::oneapi::this_work_item::get_sub_group(), x,
                     offset, width) &&
                 x;
@@ -562,7 +569,7 @@ static __dpct_inline__ int warp_reduce_all(int x) {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ int warp_reduce_any(int x) {
+static GGML_SYCL_INLINE int warp_reduce_any(int x) {
     if (width == ggml_sycl_get_physical_warp_size()) {
         return sycl::any_of_group(
             sycl::ext::oneapi::this_work_item::get_sub_group(),
@@ -573,7 +580,7 @@ static __dpct_inline__ int warp_reduce_any(int x) {
     } else {
 #pragma unroll
         for (int offset = width / 2; offset > 0; offset >>= 1) {
-            x = dpct::permute_sub_group_by_xor(
+            x = ggml_sycl::sub_group_shuffle_xor(
                     sycl::ext::oneapi::this_work_item::get_sub_group(), x,
                     offset, width) ||
                 x;
@@ -584,21 +591,21 @@ static __dpct_inline__ int warp_reduce_any(int x) {
 
 /* use WARP_SIZE or WARP_32_SIZE*/
 template <int width>
-static __dpct_inline__ float warp_reduce_max(float x) {
+static GGML_SYCL_INLINE float warp_reduce_max(float x) {
 #pragma unroll
   for (int offset = width / 2; offset > 0; offset >>= 1) {
-    x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
+    x = sycl::fmax(x, ggml_sycl::sub_group_shuffle_xor(
                           sycl::ext::oneapi::this_work_item::get_sub_group(), x,
                           offset, width));
   }
   return x;
 }
 
-static __dpct_inline__ float warp_reduce_max(float x,
+static GGML_SYCL_INLINE float warp_reduce_max(float x,
     const sycl::nd_item<3>& item_ct1) {
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
+        x = sycl::fmax(x, ggml_sycl::sub_group_shuffle_xor(
             item_ct1.get_sub_group(), x, mask));
     }
     return x;
@@ -607,7 +614,7 @@ static __dpct_inline__ float warp_reduce_max(float x,
 /* Helper for Computing the linear offset of a ggml_tensor given
 per-dimension sizes, strides, and indices */
 template<int N>
-__dpct_inline__ size_t calculate_offset(const std::array<int, N> & strides, const std::array<int, N> & indices) {
+GGML_SYCL_INLINE size_t calculate_offset(const std::array<int, N> & strides, const std::array<int, N> & indices) {
     size_t offset = 0;
 #pragma unroll
     for (int i = 0; i < N; i++) {
@@ -625,7 +632,7 @@ inline sycl::vec<Tp, n> vec_aligned_load(const Tp* aligned_ptr) {
 
 // Helper for accessing pointers with no warnings
 template <typename Tp, int dim>
-static __dpct_inline__ Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
+static GGML_SYCL_INLINE Tp* get_pointer(sycl::local_accessor<Tp, dim> acc) {
     return acc.template get_multi_ptr<sycl::access::decorated::no>().get();
 }
 
@@ -707,7 +714,7 @@ struct scope_op_debug_print {
     std::string_view func_suffix;
 };
 
-static __dpct_inline__ float get_alibi_slope(const float    max_bias,
+static GGML_SYCL_INLINE float get_alibi_slope(const float    max_bias,
                                              const uint32_t h,
                                              const uint32_t n_head_log2,
                                              const float    m0,
@@ -718,7 +725,7 @@ static __dpct_inline__ float get_alibi_slope(const float    max_bias,
     const float base = h < n_head_log2 ? m0 : m1;
     const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
 
-    return dpct::pow(base, exph);
+    return sycl::pow(base, (float) exph);
 }
 
 static const sycl::uint3 init_fastdiv_values(uint32_t d) {
@@ -741,7 +748,7 @@ static constexpr int ggml_sycl_get_max_cpy_bytes() {
 
 // Aligned memory transfers of 8/16 bytes can be faster than 2 transfers with 4 bytes.
 template <int nbytes, int alignment = 0>
-static __dpct_inline__ void ggml_sycl_memcpy_1(void * dst, const void * src) {
+static GGML_SYCL_INLINE void ggml_sycl_memcpy_1(void * dst, const void * src) {
     if constexpr (alignment != 0) {
         static_assert(nbytes % alignment == 0, "bad alignment");
     }
@@ -765,39 +772,39 @@ static __dpct_inline__ void ggml_sycl_memcpy_1(void * dst, const void * src) {
     }
 }
 template <typename T>
-sycl::half2 __dpct_inline__ make_half2( T x, T y) {
+sycl::half2 GGML_SYCL_INLINE make_half2( T x, T y) {
     sycl::half2 res(static_cast<sycl::half>(x),static_cast<sycl::half>(y));
     return res;
 }
 
-static __dpct_inline__ uint32_t fastdiv(uint32_t n, const sycl::uint3 fastdiv_values) {
+static GGML_SYCL_INLINE uint32_t fastdiv(uint32_t n, const sycl::uint3 fastdiv_values) {
     const uint32_t hi = sycl::mul_hi<unsigned>(n, fastdiv_values.x());
     return (hi + n) >> fastdiv_values.y();
 }
 
 
 template <typename T>
-sycl::float2 __dpct_inline__ make_float2( T x, T y) {
+sycl::float2 GGML_SYCL_INLINE make_float2( T x, T y) {
     sycl::float2 res(static_cast<float>(x),static_cast<float>(y));
     return res;
 }
 
-sycl::float2 __dpct_inline__ __half22float2(sycl::half2 &H) {
+sycl::float2 GGML_SYCL_INLINE __half22float2(sycl::half2 &H) {
     sycl::float2 float2_value(static_cast<float>(H.x()), static_cast<float>(H.y()));
     return float2_value;
 }
 
-static __dpct_inline__ sycl::uint2 fast_div_modulo(uint32_t n, const sycl::uint3 fastdiv_values) {
+static GGML_SYCL_INLINE sycl::uint2 fast_div_modulo(uint32_t n, const sycl::uint3 fastdiv_values) {
     const uint32_t div_val = fastdiv(n, fastdiv_values);
     const uint32_t mod_val = n - div_val * fastdiv_values.z();
     return sycl::uint2(div_val, mod_val);
 }
 
-static __dpct_inline__ int ggml_sycl_dp4a(const int a, const int b, int c) {
-    return dpct::dp4a(a, b, c);
+static GGML_SYCL_INLINE int ggml_sycl_dp4a(const int a, const int b, int c) {
+    return ggml_sycl::dp4a(a, b, c);
 }
 
-static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
+static GGML_SYCL_INLINE float ggml_sycl_e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
     if (x == 0) {
         bits = 0x00400000;
@@ -810,25 +817,25 @@ static __dpct_inline__ float ggml_sycl_e8m0_to_fp32(uint8_t x) {
     return result;
 }
 
-sycl::float2 __dpct_inline__ __half22float2(const sycl::half2 &H) {
+sycl::float2 GGML_SYCL_INLINE __half22float2(const sycl::half2 &H) {
     sycl::float2 float2_value(static_cast<float>(H.x()), static_cast<float>(H.y()));
     return float2_value;
 }
 
-float __dpct_inline__ __half2float(sycl::half H) {
+float GGML_SYCL_INLINE __half2float(sycl::half H) {
     return static_cast<float>(H);
 }
 
-static __dpct_inline__ void ggml_sycl_mad(float & acc, const float v, const float u) {
+static GGML_SYCL_INLINE void ggml_sycl_mad(float & acc, const float v, const float u) {
     acc += v*u;
 }
 
-static __dpct_inline__ void ggml_sycl_mad(float & acc, const sycl::float2 v, const sycl::float2 u) {
+static GGML_SYCL_INLINE void ggml_sycl_mad(float & acc, const sycl::float2 v, const sycl::float2 u) {
     acc += v.x() * u.x();
     acc += v.y() * u.y();
 }
 
-static __dpct_inline__ void ggml_sycl_mad(float & acc, const sycl::half2 v, const sycl::half2 u) {
+static GGML_SYCL_INLINE void ggml_sycl_mad(float & acc, const sycl::half2 v, const sycl::half2 u) {
 #ifdef GGML_SYCL_F16
     const sycl::float2 tmp = (v * u).template convert<float, sycl::rounding_mode::automatic>();
     acc += tmp.x() + tmp.y();
@@ -840,7 +847,7 @@ static __dpct_inline__ void ggml_sycl_mad(float & acc, const sycl::half2 v, cons
 #endif // GGML_SYCL_F16
 }
 
-static __dpct_inline__ void ggml_sycl_mad(sycl::half2 & acc, const sycl::half2 v, const sycl::half2 u) {
+static GGML_SYCL_INLINE void ggml_sycl_mad(sycl::half2 & acc, const sycl::half2 v, const sycl::half2 u) {
 #ifdef GGML_SYCL_F16
     acc += v*u;
 #else
@@ -871,7 +878,7 @@ struct ggml_sycl_unroll<1> {
     }
 };
 
-static __dpct_inline__ sycl::half2 ggml_sycl_hmax2(const sycl::half2 a, const sycl::half2 b) {
+static GGML_SYCL_INLINE sycl::half2 ggml_sycl_hmax2(const sycl::half2 a, const sycl::half2 b) {
     sycl::half2 ret;
     reinterpret_cast<sycl::half &>(ret.x()) =
         sycl::vec<float, 1>(sycl::fmax(a[0], b[0])).convert<sycl::half, sycl::rounding_mode::automatic>()[0];
@@ -880,20 +887,20 @@ static __dpct_inline__ sycl::half2 ggml_sycl_hmax2(const sycl::half2 a, const sy
     return ret;
 }
 
-static __dpct_inline__ sycl::half ggml_sycl_hmax(const sycl::half a, const sycl::half b) {
+static GGML_SYCL_INLINE sycl::half ggml_sycl_hmax(const sycl::half a, const sycl::half b) {
     return sycl::vec<float, 1>(
                sycl::fmax(sycl::vec<sycl::half, 1>(a).convert<float, sycl::rounding_mode::automatic>()[0],
                           sycl::vec<sycl::half, 1>(b).convert<float, sycl::rounding_mode::automatic>()[0]))
         .convert<sycl::half, sycl::rounding_mode::automatic>()[0];
 }
 
-static __dpct_inline__ uint32_t __hgt2_mask(const sycl::half2 a, const sycl::half2 b) {
+static GGML_SYCL_INLINE uint32_t __hgt2_mask(const sycl::half2 a, const sycl::half2 b) {
     const uint32_t mask_low  = 0x0000FFFF * (float(a[0]) > float(b[0]));
     const uint32_t mask_high = 0xFFFF0000 * (float(a[1]) > float(b[1]));
     return mask_low | mask_high;
 }
 
-static __dpct_inline__ uint32_t fastmodulo(uint32_t n, const sycl::uint3 fastdiv_values) {
+static GGML_SYCL_INLINE uint32_t fastmodulo(uint32_t n, const sycl::uint3 fastdiv_values) {
     // expects  fastdiv_values to contain <mp, L, divisor> in <x, y, z> (see init_fastdiv_values)
     return n - fastdiv(n, fastdiv_values) * fastdiv_values.z();
 }
@@ -994,7 +1001,7 @@ static T block_reduce(T val, T * shared_vals, int block_size_template) {
     return val;
 }
 
-static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
+static GGML_SYCL_INLINE float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
     // UE4M3 is unsigned: 4 exp bits (bias 7), 3 mantissa bits, no sign, no NaN.
     // exp == 0xF is a valid exponent (256-448 range), not NaN.
     if (x == 0 || x == 0x7F) {

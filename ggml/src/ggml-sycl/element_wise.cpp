@@ -51,13 +51,13 @@ static void acc_f32(const char * x, const char * y, float * dst, const int64_t n
 
 /* Unary OP funcs */
 template<typename T>
-static __dpct_inline__ T op_sgn(T x) {
+static GGML_SYCL_INLINE T op_sgn(T x) {
     return x > static_cast<T>(0.f) ? static_cast<T>(1.f) : ((x < static_cast<T>(0.f) ? static_cast<T>(-1.f) : static_cast<T>(0.f)));
 }
 
 
 template<typename T>
-static __dpct_inline__ T op_abs(T x) {
+static GGML_SYCL_INLINE T op_abs(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::fabs(x);  // or experimental namespace if needed
     } else {
@@ -66,7 +66,7 @@ static __dpct_inline__ T op_abs(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_expm1(T x) {
+static GGML_SYCL_INLINE T op_expm1(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return static_cast<sycl::ext::oneapi::bfloat16>(
             sycl::expm1(static_cast<float>(x))
@@ -77,12 +77,12 @@ static __dpct_inline__ T op_expm1(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_elu(T x) {
+static GGML_SYCL_INLINE T op_elu(T x) {
     return (x > static_cast<T>(0.f)) ? x : op_expm1(x);
 }
 
 template<typename T>
-static __dpct_inline__ T op_erf(T x) {
+static GGML_SYCL_INLINE T op_erf(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return static_cast<sycl::ext::oneapi::bfloat16>(
             sycl::erf(static_cast<float>(x))
@@ -93,19 +93,19 @@ static __dpct_inline__ T op_erf(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_gelu_erf(T x) {
+static GGML_SYCL_INLINE T op_gelu_erf(T x) {
     const T SQRT_2_INV = static_cast<T>(0.70710678118654752440084436210484f);
     return static_cast<T>(0.5f) * x * (static_cast<T>(1.0f) + op_erf(x * SQRT_2_INV));
 }
 
 template<typename T>
-static __dpct_inline__ T op_gelu_quick(T x) {
+static GGML_SYCL_INLINE T op_gelu_quick(T x) {
     const T GELU_QUICK_COEF_LOCAL = static_cast<T>(-1.702f);
     return x * (static_cast<T>(1.0f) / (static_cast<T>(1.0f) + op_exp(GELU_QUICK_COEF_LOCAL * x)));
 }
 
 template<typename T>
-static __dpct_inline__ T op_relu(T x) {
+static GGML_SYCL_INLINE T op_relu(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::fmax(x, static_cast<T>(0));
     } else {
@@ -114,12 +114,12 @@ static __dpct_inline__ T op_relu(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_sigmoid(T x) {
+static GGML_SYCL_INLINE T op_sigmoid(T x) {
     return static_cast<T>(1.0f) / (static_cast<T>(1.0f) + op_exp(-x));
 }
 
 template<typename T>
-static __dpct_inline__ T op_sqrt(T x) {
+static GGML_SYCL_INLINE T op_sqrt(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::sqrt(x);
     } else {
@@ -128,7 +128,7 @@ static __dpct_inline__ T op_sqrt(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_sin(T x) {
+static GGML_SYCL_INLINE T op_sin(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::sin(x);
     } else {
@@ -137,7 +137,7 @@ static __dpct_inline__ T op_sin(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_cos(T x) {
+static GGML_SYCL_INLINE T op_cos(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::cos(x);
     } else {
@@ -146,7 +146,7 @@ static __dpct_inline__ T op_cos(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_hardsigmoid(T x) {
+static GGML_SYCL_INLINE T op_hardsigmoid(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::fmin(
             static_cast<T>(1.0f), sycl::ext::oneapi::experimental::fmax(
@@ -158,7 +158,7 @@ static __dpct_inline__ T op_hardsigmoid(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_hardswish(T x) {
+static GGML_SYCL_INLINE T op_hardswish(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return x * sycl::ext::oneapi::experimental::fmin(static_cast<T>(1.0f), sycl::ext::oneapi::experimental::fmax(static_cast<T>(0.0f), (x + static_cast<T>(3.0f)) / static_cast<T>(6.0f)));
     } else {
@@ -167,7 +167,7 @@ static __dpct_inline__ T op_hardswish(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_log(T x) {
+static GGML_SYCL_INLINE T op_log(T x) {
     if (x <= static_cast<T>(0)) {
         return neg_infinity<T>();
     }
@@ -179,7 +179,7 @@ static __dpct_inline__ T op_log(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_softplus(T x) {
+static GGML_SYCL_INLINE T op_softplus(T x) {
     const float xf = (float) x;
     const float ax = op_abs(xf);
     const float m  = sycl::fmax(xf, 0.0f);
@@ -188,17 +188,17 @@ static __dpct_inline__ T op_softplus(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_neg(T x) {
+static GGML_SYCL_INLINE T op_neg(T x) {
     return -x;
 }
 
 template<typename T>
-static __dpct_inline__ T op_step(T x) {
+static GGML_SYCL_INLINE T op_step(T x) {
     return (x > static_cast<T>(0.0f)) ? static_cast<T>(1.0f) : static_cast<T>(0.0f);
 }
 
 template<typename T>
-static __dpct_inline__ T op_leaky_relu(T x, float negative_slope) {
+static GGML_SYCL_INLINE T op_leaky_relu(T x, float negative_slope) {
     T neg_slope_T = static_cast<T>(negative_slope);
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::fmax(x, static_cast<T>(0)) +
@@ -211,7 +211,7 @@ static __dpct_inline__ T op_leaky_relu(T x, float negative_slope) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_xielu(T x, float alpha_n, float alpha_p, float beta, float eps) {
+static GGML_SYCL_INLINE T op_xielu(T x, float alpha_n, float alpha_p, float beta, float eps) {
     const float xi        = static_cast<float>(x);
     const float gate_pos  = (xi > 0.0f);
     const float y_pos     = alpha_p * xi * xi + beta * xi;
@@ -222,17 +222,17 @@ static __dpct_inline__ T op_xielu(T x, float alpha_n, float alpha_p, float beta,
 }
 
 template<typename T>
-static __dpct_inline__ T op_sqr(T x) {
+static GGML_SYCL_INLINE T op_sqr(T x) {
     return x * x;
 }
 
 template<typename T>
-static __dpct_inline__ T op_clamp(T x, float min_val, float max_val) {
+static GGML_SYCL_INLINE T op_clamp(T x, float min_val, float max_val) {
     return x < static_cast<T>(min_val) ? static_cast<T>(min_val) : (x > static_cast<T>(max_val) ? static_cast<T>(max_val) : x);
 }
 
 template<typename T>
-static __dpct_inline__ T op_floor(T x) {
+static GGML_SYCL_INLINE T op_floor(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::floor(x);
     } else {
@@ -241,7 +241,7 @@ static __dpct_inline__ T op_floor(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_ceil(T x) {
+static GGML_SYCL_INLINE T op_ceil(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::ceil(x);
     } else {
@@ -250,7 +250,7 @@ static __dpct_inline__ T op_ceil(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_round(T x) {
+static GGML_SYCL_INLINE T op_round(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return static_cast<sycl::ext::oneapi::bfloat16>(
             sycl::round(static_cast<float>(x))
@@ -261,7 +261,7 @@ static __dpct_inline__ T op_round(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_trunc(T x) {
+static GGML_SYCL_INLINE T op_trunc(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::trunc(x);
     } else {
@@ -438,7 +438,7 @@ static void unary_mul_sycl(const T * x, const T * g, T * dst, const int64_t k, c
 
     // o0 == o1 == n makes (i/n)*o0 + (i%n) == i, so the strided kernel degenerates to the flat one
     if (o0 == n && o1 == n) {
-        main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+        ggml_sycl::ordered_parallel_for(main_stream, range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             unary_mul_flat_kernel(x, g, dst, k, item_ct1, op);
         });
         return;
@@ -447,7 +447,7 @@ static void unary_mul_sycl(const T * x, const T * g, T * dst, const int64_t k, c
     // 32-bit fastdiv, exact only below 2^31; ggml_sycl_can_fuse() already declined past that
     GGML_ASSERT(k < ((int64_t) 1 << 31));
     const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-    main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+    ggml_sycl::ordered_parallel_for(main_stream, range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
         unary_mul_strided_kernel(x, g, dst, k, n_fd, o0, o1, item_ct1, op);
     });
 }
@@ -462,7 +462,7 @@ static void acc_f32_sycl(const char *x, const char *y, float *dst,
                          const int64_t s1, const int64_t s2, const int64_t s3,
                          const int64_t offset, queue_ptr stream) {
     const int num_blocks = (n_elements + SYCL_ACC_BLOCK_SIZE - 1) / SYCL_ACC_BLOCK_SIZE;
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> /*item_ct1*/) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                             acc_f32(x, y, dst, n_elements,
@@ -488,7 +488,7 @@ static inline void dispatch_ggml_sycl_op_unary(ggml_backend_sycl_context & ctx, 
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(dst->src[0]->type == dst->type);
 
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     switch (dst->type) {
         case GGML_TYPE_F16:
@@ -522,7 +522,7 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
     GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->src[0]->type == dst->type);
 
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -623,7 +623,7 @@ static inline void ggml_sycl_op_unary(
             const int num_blocks = ceil_div(k_elements, 256);
 
             if (contiguous) {
-                stream->parallel_for(
+                ggml_sycl::ordered_parallel_for(stream, 
                     sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
                                       sycl::range<1>(256)),
                     [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -635,7 +635,7 @@ static inline void ggml_sycl_op_unary(
                 const sycl::uint3 ne0_fd = init_fastdiv_values((uint32_t) ne0);
                 const sycl::uint3 ne1_fd = init_fastdiv_values((uint32_t) ne1);
                 const sycl::uint3 ne2_fd = init_fastdiv_values((uint32_t) ne2);
-                stream->parallel_for(
+                ggml_sycl::ordered_parallel_for(stream, 
                     sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
                                       sycl::range<1>(256)),
                     [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -666,14 +666,14 @@ static inline void ggml_sycl_op_unary_gated(
             // o0 == n and o1 == n make the index math the identity, so index flat
             // note: not ggml_is_contiguous - a fused [gate|up] src0 is contiguous with o0 == 2n
             if (o0 == n && o1 == n) {
-                main_stream->parallel_for(launch_range,
+                ggml_sycl::ordered_parallel_for(main_stream, launch_range,
                     [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         unary_gated_op_flat_kernel(x_ptr, g_ptr, dst_ptr, k, item_ct1, func);
                     });
             } else {
                 // launch-invariant divisor, and only this path needs it
                 const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-                main_stream->parallel_for(launch_range,
+                ggml_sycl::ordered_parallel_for(main_stream, launch_range,
                     [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         unary_gated_op_generic_kernel(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1, func);
                     });
@@ -688,12 +688,12 @@ static inline void ggml_sycl_op_arange(ggml_backend_sycl_context & ctx, ggml_ten
     memcpy(&start, dst->op_params, sizeof(float));
     memcpy(&stop, (float *) dst->op_params + 1, sizeof(float));
     memcpy(&step, (float *) dst->op_params + 2, sizeof(float));
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     float * dst_ptr = (float *)dst->data;
     const int k = (int)ggml_nelements(dst);
     const int num_blocks = ceil_div(k, SYCL_ARANGE_BLOCK_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE),
                           sycl::range<1>(SYCL_ARANGE_BLOCK_SIZE)),
         [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -787,7 +787,7 @@ static inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, SYCL_EXP_BLOCK_SIZE); // Using EXP block size
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_EXP_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_EXP_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -825,7 +825,7 @@ static inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tenso
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, SYCL_SQRT_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SQRT_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_SQRT_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -838,7 +838,7 @@ static inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, SYCL_SIN_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SIN_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_SIN_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -851,7 +851,7 @@ static inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, SYCL_SIN_BLOCK_SIZE); // Using SIN block size
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SIN_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_SIN_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -866,7 +866,7 @@ static inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, ggml
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float slope) {
             const int num_blocks = ceil_div(k_elements, SYCL_RELU_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_RELU_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -879,7 +879,7 @@ static inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
             const int num_blocks = ceil_div(k_elements, SYCL_SQR_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_SQR_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_SQR_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -896,7 +896,7 @@ static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tens
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float min_arg, float max_arg) {
             const int num_blocks = ceil_div(k_elements, SYCL_CLAMP_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -913,7 +913,7 @@ static inline void ggml_sycl_op_xielu(ggml_backend_sycl_context & ctx, ggml_tens
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float alpha_n_arg, float alpha_p_arg, float beta_arg, float eps_arg) {
             const int num_blocks = ceil_div(k_elements, SYCL_RELU_BLOCK_SIZE);
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_RELU_BLOCK_SIZE),
                                   sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
                 [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -954,7 +954,7 @@ static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor
     const char  * src1_d = (const char  *) src1->data;
     float       * dst_d  = (float       *)  dst->data;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
@@ -1041,7 +1041,7 @@ void ggml_sycl_op_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor *
     }
 }
 
-__dpct_inline__ float ggml_sycl_op_swiglu_oai_single(float x, float g, float alpha = 1.702f, float limit = 7.0f) {
+GGML_SYCL_INLINE float ggml_sycl_op_swiglu_oai_single(float x, float g, float alpha = 1.702f, float limit = 7.0f) {
     x = sycl::fmin(x, limit);
     g = sycl::fmax(sycl::fmin(g, limit), -limit);
 
@@ -1079,9 +1079,9 @@ static void swiglu_oai_sycl(const T *       x,
                             const int64_t   o1,
                             const float     alpha,
                             const float     limit,
-                            dpct::queue_ptr stream) {
+                            ggml_sycl::queue_ptr stream) {
     const int64_t num_blocks = (k + SYCL_GLU_BLOCK_SIZE - 1) / SYCL_GLU_BLOCK_SIZE;
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              swiglu_oai_kernel(x, g, dst, k, n, o0, o1, alpha, limit, item_ct1);
@@ -1097,7 +1097,7 @@ void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
     void * dst_d = dst->data;
     const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
@@ -1165,9 +1165,9 @@ static void swiglu_clamp_sycl(const T *       gate,
                               const int64_t   o0,
                               const int64_t   o1,
                               float           limit,
-                              dpct::queue_ptr stream) {
+                              ggml_sycl::queue_ptr stream) {
     const int64_t num_blocks = (k + SYCL_GLU_BLOCK_SIZE - 1) / SYCL_GLU_BLOCK_SIZE;
-    stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_GLU_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              swiglu_clamp_kernel(gate, up, dst, k, n, o0, o1, limit, item_ct1);
@@ -1183,7 +1183,7 @@ static void ggml_sycl_op_swiglu_clamp(ggml_backend_sycl_context & ctx, ggml_tens
     const int64_t       src1_o = src1 ? src1->nb[1] : src0->nb[1];
     void *              dst_d  = dst->data;
     const int64_t       nc     = src1 ? src0->ne[0] : src0->ne[0] / 2;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));

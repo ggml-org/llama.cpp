@@ -38,7 +38,7 @@ inline void ggml_sycl_op_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     GGML_ASSERT(ggml_is_contiguous(src0));
     GGML_ASSERT(src0->ne[1] == 1);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     const void * src0_d = src0->data;
@@ -52,7 +52,7 @@ inline void ggml_sycl_op_diag(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     const int64_t num_blocks = (n_elems + SYCL_DIAG_BLOCK_SIZE - 1) / SYCL_DIAG_BLOCK_SIZE;
 
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(num_blocks * SYCL_DIAG_BLOCK_SIZE, SYCL_DIAG_BLOCK_SIZE),
         [=](sycl::nd_item<1> item) {
             diag_kernel(static_cast<float *>(dst_d),

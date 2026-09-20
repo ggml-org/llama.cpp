@@ -16,7 +16,7 @@ static void fill_kernel(T * dst, const int64_t k, const T value,
 inline void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     float value;
@@ -28,7 +28,7 @@ inline void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     switch (dst->type) {
         case GGML_TYPE_F32:
-            stream->parallel_for(
+            ggml_sycl::ordered_parallel_for(stream, 
                 sycl::nd_range<1>(num_blocks * SYCL_FILL_BLOCK_SIZE, SYCL_FILL_BLOCK_SIZE),
                 [=](sycl::nd_item<1> item) {
                     fill_kernel(static_cast<float *>(dst_d), k, value, item);
@@ -37,7 +37,7 @@ inline void ggml_sycl_op_fill(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         case GGML_TYPE_F16:
             {
                 sycl::half h_value = sycl::half(value);
-                stream->parallel_for(
+                ggml_sycl::ordered_parallel_for(stream, 
                     sycl::nd_range<1>(num_blocks * SYCL_FILL_BLOCK_SIZE, SYCL_FILL_BLOCK_SIZE),
                     [=](sycl::nd_item<1> item) {
                         fill_kernel(static_cast<sycl::half *>(dst_d), k, h_value, item);

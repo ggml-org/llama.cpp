@@ -21,4 +21,4 @@ void ggml_sycl_top_k_radix(
     const int64_t   ncols,
     const int64_t   nrows,
     const int       k,
-    dpct::queue_ptr main_stream);
+    ggml_sycl::queue_ptr main_stream);

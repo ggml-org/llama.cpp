@@ -60,7 +60,7 @@ void ggml_sycl_add_id(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
   int threads = std::min((unsigned int)ne00, max_work_group_size);  // cols
 
-  ctx.stream()->parallel_for(
+  ggml_sycl::ordered_parallel_for(ctx.stream(), 
       sycl::nd_range<3>(
           sycl::range<3>(1, ne02, ne01) * sycl::range<3>(1, 1, threads),
           sycl::range<3>(1, 1, threads)),

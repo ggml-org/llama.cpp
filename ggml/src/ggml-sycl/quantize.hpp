@@ -21,10 +21,10 @@
 
 #include <sycl/nd_item.hpp>
 
-#include "ggml-sycl/dpct/helper.hpp"
+#include "ggml-sycl/sycl_core.hpp"
 
 template <int ElementsPerWI>
-__dpct_inline__ static void quantize_q8_1_impl(const float * __restrict__ x,
+GGML_SYCL_INLINE static void quantize_q8_1_impl(const float * __restrict__ x,
                                                sycl::vec<int8_t, ElementsPerWI> & quantized_values, float & d,
                                                float & sum, const sycl::nd_item<1> & it) {
     auto subgroup_id = it.get_group(0);
@@ -61,7 +61,7 @@ template <int ElementsPerWI> struct no_quantize_q8_1 {
 };
 
 template <int ElementsPerWI> struct quantize_and_reorder_q8_1_soa {
-    __dpct_inline__ void operator()(const float * __restrict__ x, void * reordered_q8_tensor, const int kx,
+    GGML_SYCL_INLINE void operator()(const float * __restrict__ x, void * reordered_q8_tensor, const int kx,
                                     const int kx_padded, const sycl::nd_item<1> & it) const {
         /*
         Quantizes and reorders the resultant q8 tensor in a per row fashion
@@ -92,7 +92,7 @@ template <int ElementsPerWI> struct quantize_and_reorder_q8_1_soa {
 };
 
 template <int ElementsPerWI> struct quantize_q8_1 {
-    __dpct_inline__ void operator()(const float * __restrict__ x, void * q8_tensor, const int kx, const int kx_padded,
+    GGML_SYCL_INLINE void operator()(const float * __restrict__ x, void * q8_tensor, const int kx, const int kx_padded,
                                     const sycl::nd_item<1> & it) const {
         auto subgroup_id = it.get_group(0);
         auto wi_id       = it.get_local_id(0);
@@ -119,14 +119,14 @@ template <int ElementsPerWI> struct quantize_q8_1 {
 
 template <template <int> typename quantize_f>
 void quantize_row_q8_1_sycl(const float * x, void * vy, const int kx, const int ky, const int kx_padded,
-                            dpct::queue_ptr stream) {
+                            ggml_sycl::queue_ptr stream) {
     static_assert(QK8_1 % WARP_SIZE == 0);
     auto local_range      = std::size_t(WARP_SIZE);
     auto num_quant_blocks = ky * (kx / QK8_1);
     auto global_range     = num_quant_blocks * local_range;
-    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    ggml_sycl::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
-    stream->parallel_for(sycl::nd_range<1>({ global_range }, { local_range }),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<1>({ global_range }, { local_range }),
                          [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              quantize_f<QK8_1 / WARP_SIZE>()(x, vy, kx, kx_padded, it);
                          });

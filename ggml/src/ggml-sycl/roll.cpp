@@ -36,7 +36,7 @@ static void kernel_roll_fused_i0_i1(
 
     const range<3> global{ g0, g1, g2 };
 
-    q.submit([&](handler &h) {
+    ggml_sycl::ordered_submit(&q, [&](handler &h) {
         h.parallel_for(global, [=](id<3> idx) {
             const int i3 = (int) idx[0];
             const int i2 = (int) idx[1];
@@ -88,7 +88,7 @@ void ggml_sycl_roll(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     if ((shift0 | shift1 | shift2 | shift3) == 0) {
         const size_t nb = ggml_nbytes(src);
         queue *q = ctx.stream();
-        SYCL_CHECK(CHECK_TRY_ERROR(q->memcpy(dst->data, src->data, nb)));
+        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl::ordered_memcpy(q, dst->data, src->data, nb)));
         return;
     }
 

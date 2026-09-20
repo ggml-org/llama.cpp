@@ -30,7 +30,7 @@ const float GELU_QUICK_COEF = -1.702f;
 
 // Single-element activations, shared with the mat-vec kernels that fuse a GLU epilogue
 // (mmvq.cpp), so both apply the same formula.
-template <typename T> static __dpct_inline__ T op_tanh(T x) {
+template <typename T> static GGML_SYCL_INLINE T op_tanh(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
 #if defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER >= 20260000)
         return sycl::ext::oneapi::experimental::tanh(x);
@@ -42,7 +42,7 @@ template <typename T> static __dpct_inline__ T op_tanh(T x) {
     }
 }
 
-template <typename T> static __dpct_inline__ T op_gelu(T x) {
+template <typename T> static GGML_SYCL_INLINE T op_gelu(T x) {
     const T GELU_COEF_A    = static_cast<T>(0.044715f);
     const T SQRT_2_OVER_PI = static_cast<T>(0.79788456080286535587989211986876f);
     return static_cast<T>(0.5f) * x *
@@ -50,7 +50,7 @@ template <typename T> static __dpct_inline__ T op_gelu(T x) {
             op_tanh(SQRT_2_OVER_PI * x * (static_cast<T>(1.0f) + GELU_COEF_A * x * x)));
 }
 
-template <typename T> static __dpct_inline__ T op_exp(T x) {
+template <typename T> static GGML_SYCL_INLINE T op_exp(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return sycl::ext::oneapi::experimental::exp(x);
     } else {
@@ -58,7 +58,7 @@ template <typename T> static __dpct_inline__ T op_exp(T x) {
     }
 }
 
-template <typename T> static __dpct_inline__ T op_silu(T x) {
+template <typename T> static GGML_SYCL_INLINE T op_silu(T x) {
     return x / (static_cast<T>(1.0f) + op_exp(-x));
 }
 

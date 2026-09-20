@@ -74,16 +74,14 @@ static void im2col_sycl(const float *   x,
                         int             p1,
                         int             d0,
                         int             d1,
-                        dpct::queue_ptr stream) {
+                        ggml_sycl::queue_ptr stream) {
     const int64_t IC_KH_KW = IC * KH * KW;
     const int64_t num_blocks = (IC_KH_KW + SYCL_IM2COL_BLOCK_SIZE - 1) / SYCL_IM2COL_BLOCK_SIZE;
     const int64_t N_OH = N * OH;
     const int64_t KH_KW = KW*KH;
-    dpct::dim3    block_nums(num_blocks, OW, MIN(N_OH, MAX_GRIDDIM_Z));
-    /*
-    DPCT1049:73: The work-group size passed to the SYCL kernel may exceed the limit. To get the device limit, query info::device::max_work_group_size. Adjust the work-group size if needed.
-    */
-    stream->parallel_for(sycl::nd_range<3>(block_nums * sycl::range<3>(1, 1, MIN(IC_KH_KW, SYCL_IM2COL_BLOCK_SIZE)),
+    ggml_sycl::dim3    block_nums(num_blocks, OW, MIN(N_OH, MAX_GRIDDIM_Z));
+    
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(block_nums * sycl::range<3>(1, 1, MIN(IC_KH_KW, SYCL_IM2COL_BLOCK_SIZE)),
                                            sycl::range<3>(1, 1, MIN(IC_KH_KW, SYCL_IM2COL_BLOCK_SIZE))),
                          [=](sycl::nd_item<3>) {
                              im2col_kernel(x, dst, IC, IW, IH, OH, OW, KW, KH, IC_IH_IW, IH_IW, N_OH, KH_KW, IC_KH_KW,
@@ -109,7 +107,7 @@ static void im2col_sycl_f16(const float *   x,
                             int             p1,
                             int             d0,
                             int             d1,
-                            dpct::queue_ptr stream) {
+                            ggml_sycl::queue_ptr stream) {
     im2col_sycl<sycl::half>(x, dst, IW, IH, OW, OH, KW, KH, IC, N, IC_IH_IW, IH_IW, s0, s1, p0, p1, d0, d1, stream);
 }
 
@@ -131,7 +129,7 @@ static void im2col_sycl_f32(const float *   x,
                             int             p1,
                             int             d0,
                             int             d1,
-                            dpct::queue_ptr stream) {
+                            ggml_sycl::queue_ptr stream) {
     im2col_sycl<float>(x, dst, IW, IH, OW, OH, KW, KH, IC, N, IC_IH_IW, IH_IW, s0, s1, p0, p1, d0, d1, stream);
 }
 
@@ -140,7 +138,7 @@ void ggml_sycl_op_im2col(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1];
     const float * src1_d = (const float *)src1->data;
     float * dst_d = (float *)dst->data;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
@@ -250,7 +248,7 @@ static void im2col_3d_sycl(const float *   src,
                            int             d0,
                            int             d1,
                            int             d2,
-                           dpct::queue_ptr stream) {
+                           ggml_sycl::queue_ptr stream) {
     const int64_t OH_OW = OH*OW;
     const int64_t KD_KH_KW = KD*KH*KW;
     const int64_t ID_IH_IW = ID*IH*IW;
@@ -265,11 +263,9 @@ static void im2col_3d_sycl(const float *   src,
     const int64_t OH_OW_IC_KD_KH_KW = OH*OW*IC*KD*KH*KW;
     const int64_t OW_IC_KD_KH_KW = OW*IC*KD*KH*KW;
     const int64_t num_blocks = (IC_KD_KH_KW + SYCL_IM2COL_BLOCK_SIZE - 1) / SYCL_IM2COL_BLOCK_SIZE;
-    dpct::dim3    block_nums(num_blocks, OW, MIN(N_OD_OH, MAX_GRIDDIM_Z));
-    /*
-    DPCT1049:74: The work-group size passed to the SYCL kernel may exceed the limit. To get the device limit, query info::device::max_work_group_size. Adjust the work-group size if needed.
-    */
-    stream->parallel_for(sycl::nd_range<3>(block_nums * sycl::range<3>(1, 1, MIN(IC_KD_KH_KW, SYCL_IM2COL_BLOCK_SIZE)),
+    ggml_sycl::dim3    block_nums(num_blocks, OW, MIN(N_OD_OH, MAX_GRIDDIM_Z));
+    
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<3>(block_nums * sycl::range<3>(1, 1, MIN(IC_KD_KH_KW, SYCL_IM2COL_BLOCK_SIZE)),
                                            sycl::range<3>(1, 1, MIN(IC_KD_KH_KW, SYCL_IM2COL_BLOCK_SIZE))),
                          [=](sycl::nd_item<3>) {
                              im2col_3d_kernel(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, OH_OW, KD_KH_KW,
@@ -307,7 +303,7 @@ static void im2col_3d_sycl_f16(const float *   src,
                                int             d0,
                                int             d1,
                                int             d2,
-                               dpct::queue_ptr stream) {
+                               ggml_sycl::queue_ptr stream) {
     im2col_3d_sycl<sycl::half>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW, stride_q, stride_z, stride_y,
                                stride_x, s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
 }
@@ -339,7 +335,7 @@ static void im2col_3d_sycl_f32(const float *   src,
                                int             d0,
                                int             d1,
                                int             d2,
-                               dpct::queue_ptr stream) {
+                               ggml_sycl::queue_ptr stream) {
     im2col_3d_sycl<float>(src, dst, N, IC, ID, IH, IW, OC, KD, KH, KW, OD, OH, OW,
                           stride_q, stride_z, stride_y, stride_x,
                           s0, s1, s2, p0, p1, p2, d0, d1, d2, stream);
@@ -350,7 +346,7 @@ void ggml_sycl_op_im2col_3d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src1 = dst->src[1];
     const float * src1_d = (const float *)src1->data;
     float * dst_d = (float *)dst->data;
-    dpct::queue_ptr     stream = ctx.stream();
+    ggml_sycl::queue_ptr     stream = ctx.stream();
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);

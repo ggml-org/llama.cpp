@@ -11,12 +11,12 @@ static void col2im_1d_sycl(
         const int32_t s0,
         const int32_t p0,
         const int total,
-        dpct::queue_ptr stream) {
+        ggml_sycl::queue_ptr stream) {
 
     const uint32_t block_size = SYCL_COL2IM_1D_BLOCK_SIZE;
     const uint32_t num_blocks = (uint32_t) ((total + block_size - 1) / block_size);
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(
             sycl::range<3>(1, 1, num_blocks * block_size),
             sycl::range<3>(1, 1, block_size)),
@@ -73,7 +73,7 @@ void ggml_sycl_op_col2im_1d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
 
     const int total = T_out * OC;
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     switch (src0->type) {
         case GGML_TYPE_F32:

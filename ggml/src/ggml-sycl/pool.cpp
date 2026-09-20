@@ -116,7 +116,7 @@ static void pool1d_ncw_kernel(
 void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
     float *       dst_dd  = static_cast<float *>(dst->data);
@@ -141,7 +141,7 @@ void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int parallel_elements = N * OC * OH * OW;
     const int num_blocks = (parallel_elements + SYCL_POOL2D_BLOCK_SIZE - 1) / SYCL_POOL2D_BLOCK_SIZE;
     sycl::range<3> block_nums(1, 1, num_blocks);
-    main_stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(main_stream, 
         sycl::nd_range<3>(block_nums *
                               sycl::range<3>(1, 1, SYCL_IM2COL_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_IM2COL_BLOCK_SIZE)),
@@ -155,7 +155,7 @@ void ggml_sycl_op_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_op_pool1d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    dpct::queue_ptr main_stream = ctx.stream();
+    ggml_sycl::queue_ptr main_stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
     float *       dst_dd  = static_cast<float *>(dst->data);
@@ -173,7 +173,7 @@ void ggml_sycl_op_pool1d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int parallel_elements = NC * OW;
     const int num_blocks = (parallel_elements + SYCL_POOL1D_BLOCK_SIZE - 1) / SYCL_POOL1D_BLOCK_SIZE;
     sycl::range<3> block_nums(1, 1, num_blocks);
-    main_stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(main_stream, 
         sycl::nd_range<3>(block_nums *
                               sycl::range<3>(1, 1, SYCL_POOL1D_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_POOL1D_BLOCK_SIZE)),

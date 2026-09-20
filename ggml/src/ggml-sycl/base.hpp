@@ -28,6 +28,17 @@ extern int g_ggml_sycl_dev_debug;
 #    define UNLIKELY(expr) (expr)
 #endif
 
+// Always-inline marker for device-code helpers - replaces the SYCLomatic
+// __dpct_inline__.
+#if defined(_MSC_VER) && !defined(__clang__)
+#    define GGML_SYCL_INLINE __forceinline
+#else
+#    define GGML_SYCL_INLINE inline __attribute__((always_inline))
+#endif
+
+// Variable alignment attribute - replaces the SYCLomatic __dpct_align__.
+#define GGML_SYCL_ALIGN(n) __attribute__((aligned(n)))
+
 #define GGML_SYCL_DEBUG(...)              \
     do {                                  \
         if (UNLIKELY(g_ggml_sycl_debug))  \

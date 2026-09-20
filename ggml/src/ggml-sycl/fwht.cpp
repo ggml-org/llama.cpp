@@ -77,7 +77,7 @@ static void fwht_kernel(const float * __restrict__ src, float * __restrict__ dst
 #pragma unroll
         for (int j = 0; j < el_w; ++j) {
             const float val  = reg[j];
-            const float val2 = dpct::permute_sub_group_by_xor(sg, val, h, WARP_SIZE);
+            const float val2 = ggml_sycl::sub_group_shuffle_xor(sg, val, h, WARP_SIZE);
 
             reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
         }
@@ -109,7 +109,7 @@ static void fwht_kernel(const float * __restrict__ src, float * __restrict__ dst
 
 template <int N>
 static void launch_fwht(const float * src, float * dst, const int64_t n_rows, const float scale,
-                        dpct::queue_ptr stream) {
+                        ggml_sycl::queue_ptr stream) {
     constexpr int rows_per_block = 4;
 
     const int64_t num_blocks = (n_rows + rows_per_block - 1) / rows_per_block;
@@ -118,7 +118,7 @@ static void launch_fwht(const float * src, float * dst, const int64_t n_rows, co
     const sycl::range<2> global(num_blocks * rows_per_block, WARP_SIZE);
     const sycl::range<2> local(rows_per_block, WARP_SIZE);
 
-    stream->parallel_for(sycl::nd_range<2>(global, local),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<2>(global, local),
                          [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              fwht_kernel<N>(src, dst, n_rows, scale, item);
                          });
@@ -184,7 +184,7 @@ static void kronecker_kernel(const float * __restrict__ src,
 #pragma unroll
             for (int k = 0; k < m; ++k) {
                 const float val  = reg[j * m + k];
-                const float val2 = dpct::permute_sub_group_by_xor(sg, val, h, WARP_SIZE);
+                const float val2 = ggml_sycl::sub_group_shuffle_xor(sg, val, h, WARP_SIZE);
 
                 reg[j * m + k] = (lane & h) == 0 ? val + val2 : val2 - val;
             }
@@ -225,7 +225,7 @@ static void launch_kronecker(const float *   src,
                              float *         dst,
                              const int64_t   n_rows,
                              const float     scale,
-                             dpct::queue_ptr stream) {
+                             ggml_sycl::queue_ptr stream) {
     constexpr int rows_per_block = 4;
 
     const int64_t num_blocks = (n_rows + rows_per_block - 1) / rows_per_block;
@@ -234,7 +234,7 @@ static void launch_kronecker(const float *   src,
     const sycl::range<2> global(num_blocks * rows_per_block, WARP_SIZE);
     const sycl::range<2> local(rows_per_block, WARP_SIZE);
 
-    stream->parallel_for(sycl::nd_range<2>(global, local),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<2>(global, local),
                          [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              kronecker_kernel<N, m>(src, dst, n_rows, scale, item);
                          });
@@ -256,7 +256,7 @@ bool ggml_sycl_op_fwht(ggml_backend_sycl_context & ctx, const ggml_tensor * src,
 
     const float *   src_d  = (const float *) src->data;
     float *         dst_d  = (float *) dst->data;
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     const float scale = 1.0f / std::sqrt((float) n);
 

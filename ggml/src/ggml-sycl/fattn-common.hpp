@@ -1,7 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "convert.hpp"
 #include "vecdotq.hpp"
@@ -63,7 +63,7 @@ typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
 
 template <int D, int nthreads>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_f16(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_f16(const char * __restrict__ K_c,
                                                       const void * __restrict__ Q_v,
                                                       const int * __restrict__ Q_q8,
                                                       const void * __restrict__ Q_ds_v) {
@@ -96,7 +96,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_f16(const char * __restrict__ 
 }
 
 template <int D, int nthreads, int warp_size>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_q4_0(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_q4_0(const char * __restrict__ K_c,
                                                        const void * __restrict__ Q_v,
                                                        const int * __restrict__ Q_q8,
                                                        const void * __restrict__ Q_ds_v) {
@@ -131,7 +131,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q4_0(const char * __restrict__
 }
 
 template <int D, int nthreads , int warp_size>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_q4_1(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_q4_1(const char * __restrict__ K_c,
                                                        const void * __restrict__ Q_v,
                                                        const int * __restrict__ Q_q8,
                                                        const void * __restrict__ Q_ds_v) {
@@ -167,7 +167,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q4_1(const char * __restrict__
 }
 
 template <int D, int nthreads, int warp_size>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_q5_0(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_q5_0(const char * __restrict__ K_c,
                                                        const void * __restrict__ Q_v,
                                                        const int * __restrict__ Q_q8,
                                                        const void * __restrict__ Q_ds_v) {
@@ -215,7 +215,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q5_0(const char * __restrict__
 }
 
 template <int D, int nthreads, int warp_size>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_q5_1(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_q5_1(const char * __restrict__ K_c,
                                                        const void * __restrict__ Q_v,
                                                        const int * __restrict__ Q_q8,
                                                        const void * __restrict__ Q_ds_v) {
@@ -264,7 +264,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q5_1(const char * __restrict__
 }
 
 template <int D, int nthreads, int warp_size>
-static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__ K_c,
+static GGML_SYCL_INLINE float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__ K_c,
                                                        const void * __restrict__ Q_v,
                                                        const int * __restrict__ Q_q8,
                                                        const void * __restrict__ Q_ds_v) {
@@ -295,7 +295,7 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__
 }
 
 template <typename Tds, int ni, int warp_size>
-static __dpct_inline__ void quantize_q8_1_to_shared(const float * __restrict__ x,
+static GGML_SYCL_INLINE void quantize_q8_1_to_shared(const float * __restrict__ x,
                                                     const float scale,
                                                     int * __restrict__ yq32,
                                                     void * __restrict__ yds) {
@@ -318,8 +318,8 @@ static __dpct_inline__ void quantize_q8_1_to_shared(const float * __restrict__ x
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
         amax = sycl::fmax(
-            amax, dpct::permute_sub_group_by_xor(sycl::ext::oneapi::this_work_item::get_sub_group(), amax, mask));
-        sum += dpct::permute_sub_group_by_xor(sycl::ext::oneapi::this_work_item::get_sub_group(), sum, mask);
+            amax, ggml_sycl::sub_group_shuffle_xor(sycl::ext::oneapi::this_work_item::get_sub_group(), amax, mask));
+        sum += ggml_sycl::sub_group_shuffle_xor(sycl::ext::oneapi::this_work_item::get_sub_group(), sum, mask);
     }
 
     const float d = amax / 127;
@@ -346,7 +346,7 @@ static __dpct_inline__ void quantize_q8_1_to_shared(const float * __restrict__ x
 typedef void (*dequantize_V_t)(const void *, void *, const int64_t);
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_f16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_f16(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     if constexpr (std::is_same_v<T, sycl::half>) {
         ggml_sycl_memcpy_1<ne * sizeof(sycl::half)>(dst, (const sycl::half *) vx + i0);
     } else if constexpr (std::is_same_v<T, float>) {
@@ -364,7 +364,7 @@ static __dpct_inline__ void dequantize_V_f16(const void * __restrict__ vx, void 
 }
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_q4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_q4_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q4_0 * x = (const block_q4_0 *) vx;
 
     const int64_t ib    =  i0          /  QK4_0;
@@ -376,7 +376,7 @@ static __dpct_inline__ void dequantize_V_q4_0(const void * __restrict__ vx, void
     ggml_sycl_memcpy_1<ne, 2>(&q, x[ib].qs + iqs);
     q >>= 4*shift;
     q &= 0x0F0F0F0F;
-    q = dpct::vectorized_binary<sycl::char4>(q, 0x08080808, dpct::sub_sat());
+    q = ggml_sycl::vectorized_binary<sycl::char4>(q, 0x08080808, ggml_sycl::sub_sat());
 
     const int8_t * q8 = (const int8_t *) &q;
 
@@ -403,7 +403,7 @@ static __dpct_inline__ void dequantize_V_q4_0(const void * __restrict__ vx, void
 }
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_q4_1(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_q4_1(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q4_1 * x = (const block_q4_1 *) vx;
 
     const int64_t ib    =  i0          /  QK4_1;
@@ -443,7 +443,7 @@ static __dpct_inline__ void dequantize_V_q4_1(const void * __restrict__ vx, void
 }
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_q5_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_q5_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q5_0 * x = (const block_q5_0 *) vx;
 
     const int64_t ib    =  i0          /  QK5_0;
@@ -466,7 +466,7 @@ static __dpct_inline__ void dequantize_V_q5_0(const void * __restrict__ vx, void
         }
     }
 
-    q = dpct::vectorized_binary<sycl::char4>(q, 0x10101010, dpct::sub_sat());
+    q = ggml_sycl::vectorized_binary<sycl::char4>(q, 0x10101010, ggml_sycl::sub_sat());
 
     const int8_t * q8 = (const int8_t *) &q;
 
@@ -493,7 +493,7 @@ static __dpct_inline__ void dequantize_V_q5_0(const void * __restrict__ vx, void
 }
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_q5_1(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_q5_1(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q5_1 * x = (const block_q5_1 *) vx;
 
     const int64_t ib    =  i0          /  QK5_1;
@@ -543,7 +543,7 @@ static __dpct_inline__ void dequantize_V_q5_1(const void * __restrict__ vx, void
 }
 
 template <typename T, int ne>
-static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+static GGML_SYCL_INLINE void dequantize_V_q8_0(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
     const block_q8_0 * x = (const block_q8_0 *) vx;
 
     const int64_t ib  = i0 / QK8_0;
@@ -784,7 +784,7 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
                                        const sycl::float2 * __restrict__ VKQ_meta,
                                        float * __restrict__ dst,
                                        const int parallel_blocks,
-                                       uint8_t * dpct_local) {
+                                       uint8_t * smem_buf) {
     // Dimension 0: threadIdx.x
     // Dimension 1: blockIdx.x
     // Dimension 2: blockIdx.y
@@ -808,7 +808,7 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     const int tid = item_ct1.get_local_id(2);
     __builtin_assume(tid < D);
 
-    auto meta = (sycl::float2 *) dpct_local;
+    auto meta = (sycl::float2 *) smem_buf;
     for (int i = tid; i < 2*parallel_blocks; i += D) {
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
     }
@@ -834,8 +834,8 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
 
 template <fattn_kernel_t fattn_kernel, int warp_size>
 static void lauch_kernel(
-    dpct::dim3 group_range,
-    dpct::dim3 local_range,
+    ggml_sycl::dim3 group_range,
+    ggml_sycl::dim3 local_range,
     queue_ptr q,
     unsigned int local_mem_size,
     const char* __restrict__ Q,
@@ -876,7 +876,7 @@ static void lauch_kernel(
     const int32_t nb32,
     const int64_t nb33) {
     GGML_UNUSED(local_mem_size);
-    q->submit([&](sycl::handler &cgh) {
+    ggml_sycl::ordered_submit(q, [&](sycl::handler &cgh) {
         cgh.parallel_for(
             sycl::nd_range<3>(
                 static_cast<sycl::range<3>>(group_range * local_range),
@@ -921,7 +921,7 @@ void launch_fattn(
 
     ggml_sycl_pool & pool = ctx.pool();
     ggml_sycl_fattn_kv_buffers & fbuf = ctx.fattn_buffers();
-    dpct::queue_ptr  main_stream = ctx.stream();
+    ggml_sycl::queue_ptr  main_stream = ctx.stream();
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
@@ -1018,17 +1018,17 @@ void launch_fattn(
         const int s31 = mask->nb[1] / sizeof(sycl::half2);
         const int s33 = mask->nb[3] / sizeof(sycl::half2);
 
-        const dpct::dim3 blocks_num_KV_max(ntiles_x, Q->ne[3], 1);
-        const dpct::dim3 block_dim_KV_max(FATTN_KQ_STRIDE / 2, 1, 1);
+        const ggml_sycl::dim3 blocks_num_KV_max(ntiles_x, Q->ne[3], 1);
+        const ggml_sycl::dim3 block_dim_KV_max(FATTN_KQ_STRIDE / 2, 1, 1);
 
         const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
         const int iter_k = K->ne[1] / FATTN_KQ_STRIDE;
 
         KV_max.alloc(ne_KV_max);
         {
-            dpct::has_capability_or_fail(main_stream->get_device(), { sycl::aspect::fp16 });
+            ggml_sycl::has_capability_or_fail(main_stream->get_device(), { sycl::aspect::fp16 });
 
-            main_stream->submit([&](sycl::handler & cgh) {
+            ggml_sycl::ordered_submit(main_stream, [&](sycl::handler & cgh) {
                 sycl::local_accessor<int, 1> buf_iw_acc_ct1(sycl::range<1>(warp_size), cgh);
 
                 auto mask_data_ct0  = (const sycl::half2 *) mask->data;
@@ -1046,12 +1046,12 @@ void launch_fattn(
         SYCL_CHECK(0);
     }
 
-    const dpct::dim3 block_dim(warp_size, nwarps, 1);
+    const ggml_sycl::dim3 block_dim(warp_size, nwarps, 1);
 
     // Max. number of active blocks limited by occupancy.
     int max_blocks_per_sm = ggml_sycl_info().devices[id].max_wg_per_cu;
     int parallel_blocks = max_blocks_per_sm;
-    dpct::dim3 blocks_num;
+    ggml_sycl::dim3 blocks_num;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
@@ -1140,10 +1140,10 @@ void launch_fattn(
 
     if (stream_k) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
-            const dpct::dim3 block_dim_combine(DV, 1, 1);
-            const dpct::dim3 blocks_num_combine = { blocks_num.x, ncols1, ncols2 };
+            const ggml_sycl::dim3 block_dim_combine(DV, 1, 1);
+            const ggml_sycl::dim3 blocks_num_combine = { blocks_num.x, ncols1, ncols2 };
 
-            main_stream->submit([&](sycl::handler & cgh) {
+            ggml_sycl::ordered_submit(main_stream, [&](sycl::handler & cgh) {
                 auto KQV_data_ct0         = (float *) KQV->data;
                 auto dst_tmp_meta_ptr_ct1 = dst_tmp_meta.ptr;
                 auto Q_ne_ct2             = Q->ne[1];
@@ -1162,11 +1162,11 @@ void launch_fattn(
             });
         }
     } else if (parallel_blocks > 1) {
-        const dpct::dim3 block_dim_combine(DV, 1, 1);
-        const dpct::dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
+        const ggml_sycl::dim3 block_dim_combine(DV, 1, 1);
+        const ggml_sycl::dim3 blocks_num_combine(Q->ne[1], Q->ne[2], Q->ne[3]);
         const size_t     nbytes_shared_combine = parallel_blocks * sizeof(sycl::float2);
-        main_stream->submit([&](sycl::handler & cgh) {
-            sycl::local_accessor<uint8_t, 1> dpct_local_acc_ct1(sycl::range<1>(nbytes_shared_combine), cgh);
+        ggml_sycl::ordered_submit(main_stream, [&](sycl::handler & cgh) {
+            sycl::local_accessor<uint8_t, 1> smem_acc(sycl::range<1>(nbytes_shared_combine), cgh);
 
             auto dst_tmp_ptr_ct0      = dst_tmp.ptr;
             auto dst_tmp_meta_ptr_ct1 = dst_tmp_meta.ptr;
@@ -1177,7 +1177,7 @@ void launch_fattn(
                                  GGML_UNUSED(item_ct1);
                                  flash_attn_combine_results<DV>(
                                      dst_tmp_ptr_ct0, dst_tmp_meta_ptr_ct1, KQV_data_ct2, parallel_blocks,
-                                     dpct_local_acc_ct1.get_multi_ptr<sycl::access::decorated::no>().get());
+                                     smem_acc.get_multi_ptr<sycl::access::decorated::no>().get());
                              });
         });
     }

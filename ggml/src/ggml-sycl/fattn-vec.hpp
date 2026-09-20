@@ -6,7 +6,7 @@
 #include <iostream>
 #include <iomanip>
 
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "ggml.h"
 #include "fattn-common.hpp"
@@ -341,7 +341,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
             for (int offset = nthreads_KQ; offset < warp_size; offset <<= 1) {
                KQ_max_new[j] = sycl::fmax(
                   (float)KQ_max_new[j],
-                  (float)dpct::permute_sub_group_by_xor(
+                  (float)ggml_sycl::sub_group_shuffle_xor(
                       sycl::ext::oneapi::this_work_item::get_sub_group(),
                       KQ_max_new[j],
                       offset,

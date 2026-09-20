@@ -1,6 +1,6 @@
 #include <sycl/sycl.hpp>
 #include <sycl/ext/oneapi/work_group_static.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 #include "fattn-common.hpp"
 
@@ -191,7 +191,7 @@ static constexpr int ggml_sycl_fattn_tile_get_nbatch_K(const int DKQ, const int 
 }
 
 template <int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
-static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const __restrict__ KV,
+static GGML_SYCL_INLINE void flash_attn_tile_load_tile(const sycl::half2 * const __restrict__ KV,
                                                       sycl::half2 * const __restrict__ tile_KV,
                                                       const int stride_KV,
                                                       const int i_sup) {
@@ -226,7 +226,7 @@ static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const 
                                                                          item_ct1.get_local_id(2) % stride_j) *
                                                     cpy_ne;
 
-                    const __dpct_align__(16) sycl::half2 zero[cpy_ne] = {
+                    const GGML_SYCL_ALIGN(16) sycl::half2 zero[cpy_ne] = {
                         { 0.0f, 0.0f }
                     };
                     ggml_sycl_memcpy_1<cpy_nb>(
@@ -249,7 +249,7 @@ static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const 
 }
 
 template <int warp_size, int nwarps, int I, int J, int J_padding, bool oob_check>
-static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const __restrict__ KV,
+static GGML_SYCL_INLINE void flash_attn_tile_load_tile(const sycl::half2 * const __restrict__ KV,
                                                       float * const __restrict__ tile_KV,
                                                       const int stride_KV,
                                                       const int i_sup) {
@@ -287,11 +287,11 @@ static __dpct_inline__ void flash_attn_tile_load_tile(const sycl::half2 * const 
                     const sycl::half2 zero[cpy_ne / 2] = {
                         { 0.0f, 0.0f }
                     };
-                    __dpct_align__(16) sycl::half2 tmp_h2[cpy_ne / 2];
+                    GGML_SYCL_ALIGN(16) sycl::half2 tmp_h2[cpy_ne / 2];
                     ggml_sycl_memcpy_1<sizeof(tmp_h2)>(
                         tmp_h2, !oob_check || i < i_sup ? KV + i*stride_KV + j : zero);
 
-                    __dpct_align__(16) sycl::float2 tmp_f2[cpy_ne / 2];
+                    GGML_SYCL_ALIGN(16) sycl::float2 tmp_f2[cpy_ne / 2];
 #pragma unroll
                     for (int l = 0; l < cpy_ne/2; ++l) {
                         tmp_f2[l] = tmp_h2[l].template convert<float, sycl::rounding_mode::automatic>();
@@ -322,7 +322,7 @@ template <int  warp_size,
           bool use_logit_softcap,
           bool oob_check,
           typename T_vec_dot>
-static __dpct_inline__ void flash_attn_tile_iter_KQ(T_vec_dot * const Q_tmp,
+static GGML_SYCL_INLINE void flash_attn_tile_iter_KQ(T_vec_dot * const Q_tmp,
                                                     const sycl::half2 * const __restrict__ K_h2,
                                                     T_vec_dot * const KV_tmp,
                                                     const int         stride_K2,
@@ -346,14 +346,14 @@ static __dpct_inline__ void flash_attn_tile_iter_KQ(T_vec_dot * const Q_tmp,
     static_assert((nbatch_K/2) % cpy_ne == 0, "bad nbatch_K");
 #pragma unroll
     for (int k_KQ_1 = 0; k_KQ_1 < nbatch_K/2; k_KQ_1 += cpy_ne) {
-        __dpct_align__(16) sycl::half2 K_k[nbatch_fa / (np * warp_size)][cpy_ne];
-        __dpct_align__(16) sycl::half2 Q_k[cpw][cpy_ne];
+        GGML_SYCL_ALIGN(16) sycl::half2 K_k[nbatch_fa / (np * warp_size)][cpy_ne];
+        GGML_SYCL_ALIGN(16) sycl::half2 Q_k[cpw][cpy_ne];
 #else
     static_assert(nbatch_K % cpy_ne == 0, "bad nbatch_K");
 #pragma unroll
     for (int k_KQ_1 = 0; k_KQ_1 < nbatch_K; k_KQ_1 += cpy_ne) {
-        __dpct_align__(16) float K_k[nbatch_fa/(np*warp_size)][cpy_ne];
-        __dpct_align__(16) float Q_k[cpw][cpy_ne];
+        GGML_SYCL_ALIGN(16) float K_k[nbatch_fa/(np*warp_size)][cpy_ne];
+        GGML_SYCL_ALIGN(16) float Q_k[cpw][cpy_ne];
 #endif // SYCL_FAST_FP16
 
 #pragma unroll
@@ -411,7 +411,7 @@ template <int  warp_size,
 /*
 The total declared local variable size in device function flash_attn_tile_iter exceeds 128 bytes and may cause high register pressure. Consult with your hardware vendor to find the total register size available and adjust the code, or use smaller sub-group size to avoid high register pressure.
 */
-static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
+static GGML_SYCL_INLINE void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
                                                  const sycl::half2 * const __restrict__ K_h2,
                                                  const sycl::half2 * const __restrict__ V_h2,
                                                  const sycl::half * const __restrict__ mask,
@@ -521,9 +521,9 @@ static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
 #pragma unroll
     for (int jc0 = 0; jc0 < cpw; jc0 += KQ_cs) {
 #ifdef SYCL_FAST_FP16
-        __dpct_align__(16) sycl::half tmp[nbatch_fa / (np * warp_size)][KQ_cs];
+        GGML_SYCL_ALIGN(16) sycl::half tmp[nbatch_fa / (np * warp_size)][KQ_cs];
 #else
-        __dpct_align__(16) float tmp[nbatch_fa/(np*warp_size)][KQ_cs];
+        GGML_SYCL_ALIGN(16) float tmp[nbatch_fa/(np*warp_size)][KQ_cs];
 #endif // SYCL_FAST_FP16
 
 #pragma unroll
@@ -587,8 +587,8 @@ static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
 #ifdef SYCL_FAST_FP16
 #pragma unroll
         for (int k1 = 0; k1 < nbatch_V; k1 += np) {
-            __dpct_align__(16) sycl::half2 V_k[(DVp / 2) / warp_size];
-            __dpct_align__(16) sycl::half2 KQ_k[cpw];
+            GGML_SYCL_ALIGN(16) sycl::half2 V_k[(DVp / 2) / warp_size];
+            GGML_SYCL_ALIGN(16) sycl::half2 KQ_k[cpw];
 
             constexpr int cpy_ne_D = cpy_ne/2 < (DVp/2)/warp_size ? cpy_ne/2 : (DVp/2)/warp_size;
 #pragma unroll
@@ -601,7 +601,7 @@ static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
             for (int jc_VKQ_0 = 0; jc_VKQ_0 < cpw; jc_VKQ_0 += KQ_cs) {
                 const int jc_KQ = jc_VKQ_0 / KQ_cs + (item_ct1.get_local_id(1) / np) * (cpw / KQ_cs);
 
-                __dpct_align__(16) sycl::half tmp[KQ_cs];
+                GGML_SYCL_ALIGN(16) sycl::half tmp[KQ_cs];
                 ggml_sycl_memcpy_1<KQ_cs * sizeof(sycl::half)>(
                     &tmp, KQ + jc_KQ * (nbatch_fa * KQ_cs) + (k0 + k1 + item_ct1.get_local_id(1) % np) * KQ_cs);
 #pragma unroll
@@ -624,8 +624,8 @@ static __dpct_inline__ void flash_attn_tile_iter(T_vec_dot * const Q_tmp,
 #else
 #pragma unroll
         for (int k1 = 0; k1 < nbatch_V; k1 += np) {
-            __dpct_align__(16) sycl::float2 V_k[(DVp/2)/warp_size];
-            __dpct_align__(16) float  KQ_k[cpw];
+            GGML_SYCL_ALIGN(16) sycl::float2 V_k[(DVp/2)/warp_size];
+            GGML_SYCL_ALIGN(16) float  KQ_k[cpw];
 
             constexpr int cpy_ne_D = cpy_ne < DVp/warp_size ? cpy_ne : DVp/warp_size;
 #pragma unroll
@@ -776,7 +776,7 @@ static void flash_attn_tile(const char *  Q,
     sycl::half *KQ = (sycl::half *)(KV_tmp+lsm_size2);
     float *KQ_max_new_shared = (float *)(KQ+lsm_size3);
 
-    __dpct_align__(16) sycl::half2 VKQ[cpw * ((DVp / 2) / warp_size)] = {
+    GGML_SYCL_ALIGN(16) sycl::half2 VKQ[cpw * ((DVp / 2) / warp_size)] = {
         { 0.0f, 0.0f }
     };
 #else
@@ -794,7 +794,7 @@ static void flash_attn_tile(const char *  Q,
     float *KQ = KV_tmp+lsm_size2;
     float *KQ_max_new_shared = KQ+lsm_size3;
 
-    __dpct_align__(16) sycl::float2 VKQ[cpw * ((DVp/2)/warp_size)] = {{0.0f, 0.0f}};
+    GGML_SYCL_ALIGN(16) sycl::float2 VKQ[cpw * ((DVp/2)/warp_size)] = {{0.0f, 0.0f}};
 
 
 #endif // SYCL_FAST_FP16
@@ -822,7 +822,7 @@ static void flash_attn_tile(const char *  Q,
             if (i0 + np * warp_size * cpy_ne_D <= DKQ ||
                 i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) + item_ct1.get_local_id(2) * cpy_ne_D <
                     DKQ) {
-                __dpct_align__(16) float tmp_f[cpy_ne_D] = { 0.0f };
+                GGML_SYCL_ALIGN(16) float tmp_f[cpy_ne_D] = { 0.0f };
                 ggml_sycl_memcpy_1<sizeof(tmp_f)>(
                     tmp_f, &Q_f[c * (nb02 / sizeof(float)) + fastmodulo(col_Q_0 + j, ne01) * (nb01 / sizeof(float)) +
                                 i0 + (item_ct1.get_local_id(1) % np) * (warp_size * cpy_ne_D) +
@@ -834,7 +834,7 @@ static void flash_attn_tile(const char *  Q,
                 }
 
 #ifdef SYCL_FAST_FP16
-                __dpct_align__(16) sycl::half2 tmp_h2[cpy_ne_D / 2];
+                GGML_SYCL_ALIGN(16) sycl::half2 tmp_h2[cpy_ne_D / 2];
 #pragma unroll
                 for (int i1 = 0; i1 < cpy_ne_D; i1 += 2) {
                     tmp_h2[i1/2] = make_half2(tmp_f[i1 + 0], tmp_f[i1 + 1]);
@@ -944,7 +944,7 @@ static void flash_attn_tile(const char *  Q,
             constexpr int cpy_ne_D = cpy_ne < (DVp/2)/warp_size ? cpy_ne : (DVp/2)/warp_size;
 #pragma unroll
             for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
-                __dpct_align__(16) sycl::half2 tmp[cpy_ne_D];
+                GGML_SYCL_ALIGN(16) sycl::half2 tmp[cpy_ne_D];
                 ggml_sycl_memcpy_1<cpy_ne_D * 4>(tmp, &VKQ_combine[(item_ct1.get_local_id(1) + ip) * (DVp / 2) + i0 +
                                                                    item_ct1.get_local_id(2) * cpy_ne_D]);
 #pragma unroll
@@ -956,7 +956,7 @@ static void flash_attn_tile(const char *  Q,
             constexpr int cpy_ne_D = cpy_ne < DVp/warp_size ? cpy_ne : DVp/warp_size;
 #pragma unroll
             for (int i0 = 0; i0 < DVp; i0 += warp_size*cpy_ne_D) {
-                __dpct_align__(16) float tmp[cpy_ne_D];
+                GGML_SYCL_ALIGN(16) float tmp[cpy_ne_D];
                 ggml_sycl_memcpy_1<cpy_ne_D*4>(tmp, &VKQ_combine[(item_ct1.get_local_id(1) + ip)*DVp + i0 + item_ct1.get_local_id(2)*cpy_ne_D]);
 #pragma unroll
                 for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
@@ -1021,7 +1021,7 @@ static void flash_attn_tile(const char *  Q,
         constexpr int cpy_ne_D = cpy_ne/2 < (DVp/2)/warp_size ? cpy_ne/2 : (DVp/2)/warp_size;
 #pragma unroll
         for (int i0 = 0; i0 < DVp/2; i0 += warp_size*cpy_ne_D) {
-            __dpct_align__(16) sycl::float2 tmp[cpy_ne_D];
+            GGML_SYCL_ALIGN(16) sycl::float2 tmp[cpy_ne_D];
 #pragma unroll
             for (int i1 = 0; i1 < cpy_ne_D; ++i1) {
                 tmp[i1] = VKQ[jc0 * ((DVp / 2) / warp_size) + i0 / warp_size + i1]

@@ -21,7 +21,7 @@ static void lightning_indexer_f32_sycl(
     const int64_t n_rows = n_batch * n_stream * n_kv;
     const int64_t n_blocks = (n_rows + ROWS_PER_BLOCK - 1) / ROWS_PER_BLOCK;
 
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<1>(
             sycl::range<1>(n_blocks * BLOCK_SIZE),
             sycl::range<1>(BLOCK_SIZE)),

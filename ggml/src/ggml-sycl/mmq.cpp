@@ -41,7 +41,7 @@ typedef float (*vec_dot_q_mul_mat_sycl_t)(
 
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q4_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_qs_q4_0, float *tile_x_d_q4_0) {
     (void)x_qh; (void)x_sc;
@@ -51,7 +51,7 @@ allocate_tiles_q4_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q4_0(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -100,7 +100,7 @@ load_tiles_q4_0(const void *__restrict__ vx, int *__restrict__ x_ql,
     }
 }
 
-static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q4_0_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -124,7 +124,7 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q4_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_qs_q4_1, sycl::half2 *tile_x_dm_q4_1) {
     (void)x_qh; (void)x_sc;
@@ -135,7 +135,7 @@ allocate_tiles_q4_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q4_1(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -182,7 +182,7 @@ load_tiles_q4_1(const void *__restrict__ vx, int *__restrict__ x_ql,
     }
 }
 
-static __dpct_inline__ float vec_dot_q4_1_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q4_1_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -205,7 +205,7 @@ static __dpct_inline__ float vec_dot_q4_1_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q5_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q5_0, float *tile_x_d_q5_0) {
     (void)x_qh; (void)x_sc;
@@ -215,7 +215,7 @@ allocate_tiles_q5_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q5_0(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -250,8 +250,8 @@ load_tiles_q5_0(const void *__restrict__ vx, int *__restrict__ x_ql,
         qs0    |= (qh << 11)   & 0x00001000;  // 1 -> 12
         qs0    |= (qh << 18)   & 0x00100000;  // 2 -> 20
         qs0    |= (qh << 25)   & 0x10000000;  // 3 -> 28
-        qs0 = dpct::vectorized_binary<sycl::char4>(
-            qs0, 0x10101010, dpct::sub_sat()); // subtract 16
+        qs0 = ggml_sycl::vectorized_binary<sycl::char4>(
+            qs0, 0x10101010, ggml_sycl::sub_sat()); // subtract 16
 
         x_ql[i * (2*WARP_SIZE + 1) + 2*k+0] = qs0;
 
@@ -260,8 +260,8 @@ load_tiles_q5_0(const void *__restrict__ vx, int *__restrict__ x_ql,
         qs1    |= (qh >>  5)   & 0x00001000;  // 17 -> 12
         qs1    |= (qh <<  2)   & 0x00100000;  // 18 -> 20
         qs1    |= (qh <<  9)   & 0x10000000;  // 19 -> 28
-        qs1 = dpct::vectorized_binary<sycl::char4>(
-            qs1, 0x10101010, dpct::sub_sat()); // subtract 16
+        qs1 = ggml_sycl::vectorized_binary<sycl::char4>(
+            qs1, 0x10101010, ggml_sycl::sub_sat()); // subtract 16
 
         x_ql[i * (2*WARP_SIZE + 1) + 2*k+1] = qs1;
     }
@@ -284,7 +284,7 @@ load_tiles_q5_0(const void *__restrict__ vx, int *__restrict__ x_ql,
     }
 }
 
-static __dpct_inline__ float vec_dot_q5_0_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q5_0_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -309,7 +309,7 @@ static __dpct_inline__ float vec_dot_q5_0_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q5_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q5_1, sycl::half2 *tile_x_dm_q5_1) {
     (void)x_qh; (void)x_sc;
@@ -319,7 +319,7 @@ allocate_tiles_q5_1(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q5_1(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -383,7 +383,7 @@ load_tiles_q5_1(const void *__restrict__ vx, int *__restrict__ x_ql,
     }
 }
 
-static __dpct_inline__ float vec_dot_q5_1_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q5_1_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -406,7 +406,7 @@ static __dpct_inline__ float vec_dot_q5_1_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q8_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_qs_q8_0, float *tile_x_d_q8_0) {
     (void)x_qh; (void)x_sc;
@@ -416,7 +416,7 @@ allocate_tiles_q8_0(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q8_0(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -464,7 +464,7 @@ load_tiles_q8_0(const void *__restrict__ vx, int *__restrict__ x_ql,
     }
 }
 
-static __dpct_inline__ float vec_dot_q8_0_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q8_0_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -480,7 +480,7 @@ static __dpct_inline__ float vec_dot_q8_0_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q2_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q2_K, sycl::half2 *tile_x_dm_q2_K,
                     int *tile_x_sc_q2_K) {
@@ -492,7 +492,7 @@ allocate_tiles_q2_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q2_K(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -554,7 +554,7 @@ load_tiles_q2_K(const void *__restrict__ vx, int *__restrict__ x_ql,
 
 #define VDR_Q2_K_Q8_1_MMQ  2
 // contiguous u/y values
-static __dpct_inline__ float
+static GGML_SYCL_INLINE float
 vec_dot_q2_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
                            const uint8_t *__restrict__ scales,
                            const sycl::half2 &dm2, const float &d8) {
@@ -575,8 +575,8 @@ vec_dot_q2_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
 
 #pragma unroll
         for (int i = i0; i < i0 + QI8_1/2; ++i) {
-            sumi_d_sc = dpct::dp4a(v[i], u[i], sumi_d_sc); // SIMD dot product
-            sumi_m = dpct::dp4a(m, u[i],
+            sumi_d_sc = ggml_sycl::dp4a(v[i], u[i], sumi_d_sc); // SIMD dot product
+            sumi_m = ggml_sycl::dp4a(m, u[i],
                                 sumi_m); // multiply sum of q8_1 values with m
         }
 
@@ -589,7 +589,7 @@ vec_dot_q2_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
     return d8 * (dm2f.x() * sumi_d - dm2f.y() * sumi_m);
 }
 
-static __dpct_inline__ float vec_dot_q2_K_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q2_K_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -617,7 +617,7 @@ static __dpct_inline__ float vec_dot_q2_K_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q3_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q3_K, sycl::half2 *tile_x_dm_q3_K,
                     int *tile_x_qh_q3_K, int *tile_x_sc_q3_K) {
@@ -629,7 +629,7 @@ allocate_tiles_q3_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q3_K(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -709,8 +709,8 @@ load_tiles_q3_K(const void *__restrict__ vx, int *__restrict__ x_ql,
         const int shift_high = 2 * ksc;
         const int sc_high = ((get_int_from_uint8(bxi->scales, ksc_high) >> shift_high) << 4) & 0x30303030;
 
-        const int sc = dpct::vectorized_binary<sycl::char4>(
-            sc_low | sc_high, 0x20202020, dpct::sub_sat());
+        const int sc = ggml_sycl::vectorized_binary<sycl::char4>(
+            sc_low | sc_high, 0x20202020, ggml_sycl::sub_sat());
 
         x_sc[i * (WARP_SIZE/4) + i / 4 + k % (WARP_SIZE/4)] = sc;
     }
@@ -718,7 +718,7 @@ load_tiles_q3_K(const void *__restrict__ vx, int *__restrict__ x_ql,
 
 #define VDR_Q3_K_Q8_1_MMQ  2
 // contiguous u/y values
-static __dpct_inline__ float
+static GGML_SYCL_INLINE float
 vec_dot_q3_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
                            const int8_t *__restrict__ scales, const float &d3,
                            const float &d8) {
@@ -730,7 +730,7 @@ vec_dot_q3_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
         int sumi_sc = 0;
 
         for (int i = i0; i < i0 + QI8_1/2; ++i) {
-            sumi_sc = dpct::dp4a(v[i], u[i], sumi_sc); // SIMD dot product
+            sumi_sc = ggml_sycl::dp4a(v[i], u[i], sumi_sc); // SIMD dot product
         }
 
         sumi += sumi_sc * scales[i0 / (QI8_1/2)];
@@ -739,7 +739,7 @@ vec_dot_q3_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
     return d3*d8 * sumi;
 }
 
-static __dpct_inline__ float vec_dot_q3_K_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q3_K_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -763,7 +763,7 @@ static __dpct_inline__ float vec_dot_q3_K_q8_1_mul_mat(
         const int vh = x_qh[i * (WARP_SIZE/2) + i/2 + kbx * (QI3_K/2) + (ky+l)%8] >> ((ky+l) / 8);
         const int vlh = (vh << 2) & 0x04040404;
 
-        v[l] = dpct::vectorized_binary<sycl::char4>(vll, vlh, dpct::sub_sat());
+        v[l] = ggml_sycl::vectorized_binary<sycl::char4>(vll, vlh, ggml_sycl::sub_sat());
     }
 
     const int index_y = j * WARP_SIZE + (k*QR3_K) % WARP_SIZE;
@@ -771,7 +771,7 @@ static __dpct_inline__ float vec_dot_q3_K_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q4_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q4_K, sycl::half2 *tile_x_dm_q4_K,
                     int *tile_x_sc_q4_K) {
@@ -783,7 +783,7 @@ allocate_tiles_q4_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q4_K(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -859,7 +859,7 @@ load_tiles_q4_K(const void *__restrict__ vx, int *__restrict__ x_ql,
 #define VDR_Q4_K_Q8_1_MMQ  8
 
 // contiguous u/y values
-static __dpct_inline__ float vec_dot_q4_K_q8_1_impl_mmq(
+static GGML_SYCL_INLINE float vec_dot_q4_K_q8_1_impl_mmq(
     const int *__restrict__ v, const int *__restrict__ u,
     const uint8_t *__restrict__ sc, const uint8_t *__restrict__ m,
     const sycl::half2 &dm4, const sycl::half2 *__restrict__ ds8) {
@@ -873,7 +873,7 @@ static __dpct_inline__ float vec_dot_q4_K_q8_1_impl_mmq(
 
 #pragma unroll
         for (int j = 0; j < QI8_1; ++j) {
-            sumi_d = dpct::dp4a((v[j] >> (4 * i)) & 0x0F0F0F0F,
+            sumi_d = ggml_sycl::dp4a((v[j] >> (4 * i)) & 0x0F0F0F0F,
                                 u[i * QI8_1 + j], sumi_d); // SIMD dot product
         }
 
@@ -891,7 +891,7 @@ static __dpct_inline__ float vec_dot_q4_K_q8_1_impl_mmq(
 }
 
 
-static __dpct_inline__ float vec_dot_q4_K_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q4_K_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -906,7 +906,7 @@ static __dpct_inline__ float vec_dot_q4_K_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q5_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql_q5_K, sycl::half2 *tile_x_dm_q5_K,
                     int *tile_x_sc_q5_K) {
@@ -918,7 +918,7 @@ allocate_tiles_q5_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q5_K(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -1004,7 +1004,7 @@ load_tiles_q5_K(const void *__restrict__ vx, int *__restrict__ x_ql,
 #define VDR_Q5_K_Q8_1_MMQ  8
 
 // contiguous u/y values
-static __dpct_inline__ float vec_dot_q5_K_q8_1_impl_mmq(
+static GGML_SYCL_INLINE float vec_dot_q5_K_q8_1_impl_mmq(
     const int *__restrict__ v, const int *__restrict__ u,
     const uint8_t *__restrict__ sc, const uint8_t *__restrict__ m,
     const sycl::half2 &dm4, const sycl::half2 *__restrict__ ds8) {
@@ -1018,7 +1018,7 @@ static __dpct_inline__ float vec_dot_q5_K_q8_1_impl_mmq(
 
 #pragma unroll
         for (int j = 0; j < QI8_1; ++j) {
-            sumi_d = dpct::dp4a(v[i * QI8_1 + j], u[i * QI8_1 + j],
+            sumi_d = ggml_sycl::dp4a(v[i * QI8_1 + j], u[i * QI8_1 + j],
                                 sumi_d); // SIMD dot product
         }
 
@@ -1035,7 +1035,7 @@ static __dpct_inline__ float vec_dot_q5_K_q8_1_impl_mmq(
     return dm4f.x() * sumf_d - dm4f.y() * sumf_m;
 }
 
-static __dpct_inline__ float vec_dot_q5_K_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q5_K_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -1051,7 +1051,7 @@ static __dpct_inline__ float vec_dot_q5_K_q8_1_mul_mat(
 }
 
 template <int mmq_y>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 allocate_tiles_q6_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
                     int *tile_x_ql, sycl::half2 *tile_x_dm, int *tile_x_sc) {
     (void)x_qh;
@@ -1062,7 +1062,7 @@ allocate_tiles_q6_K(int **x_ql, sycl::half2 **x_dm, int **x_qh, int **x_sc,
 }
 
 template <int mmq_y, int nwarps, bool need_check>
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 load_tiles_q6_K(const void *__restrict__ vx, int *__restrict__ x_ql,
                 sycl::half2 *__restrict__ x_dm, int *__restrict__ x_qh,
                 int *__restrict__ x_sc, const int &i_offset, const int &i_max,
@@ -1102,11 +1102,11 @@ load_tiles_q6_K(const void *__restrict__ vx, int *__restrict__ x_ql,
         const int kq1 = ky - ky % QI6_K + k % (QI6_K/2) + (QI6_K/2);
 
         x_ql[i * (2 * WARP_SIZE + 1) + kq0] =
-            dpct::vectorized_binary<sycl::char4>(ql0 | qh0, 0x20202020,
-                                                 dpct::sub_sat());
+            ggml_sycl::vectorized_binary<sycl::char4>(ql0 | qh0, 0x20202020,
+                                                 ggml_sycl::sub_sat());
         x_ql[i * (2 * WARP_SIZE + 1) + kq1] =
-            dpct::vectorized_binary<sycl::char4>(ql1 | qh1, 0x20202020,
-                                                 dpct::sub_sat());
+            ggml_sycl::vectorized_binary<sycl::char4>(ql1 | qh1, 0x20202020,
+                                                 ggml_sycl::sub_sat());
     }
 
     constexpr int blocks_per_tile_x_row = QI6_K > WARP_SIZE ? 1 : WARP_SIZE / QI6_K; // == 1 if QK_K == 256
@@ -1143,7 +1143,7 @@ load_tiles_q6_K(const void *__restrict__ vx, int *__restrict__ x_ql,
 #define VDR_Q6_K_Q8_1_MMQ  8
 
 // contiguous u/y values
-static __dpct_inline__ float
+static GGML_SYCL_INLINE float
 vec_dot_q6_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
                            const int8_t *__restrict__ sc, const float &d6,
                            const float *__restrict__ d8) {
@@ -1156,14 +1156,14 @@ vec_dot_q6_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
 
 #pragma unroll
         for (int i = i0; i < i0 + 2; ++i) {
-            sumi_d.x() = dpct::dp4a(v[2 * i + 0], u[2 * i + 0],
+            sumi_d.x() = ggml_sycl::dp4a(v[2 * i + 0], u[2 * i + 0],
                                     sumi_d.x()); // SIMD dot product
-            sumi_d.x() = dpct::dp4a(v[2 * i + 1], u[2 * i + 1],
+            sumi_d.x() = ggml_sycl::dp4a(v[2 * i + 1], u[2 * i + 1],
                                     sumi_d.x()); // SIMD dot product
 
-            sumi_d.y() = dpct::dp4a(v[2 * i + 4], u[2 * i + 4],
+            sumi_d.y() = ggml_sycl::dp4a(v[2 * i + 4], u[2 * i + 4],
                                     sumi_d.y()); // SIMD dot product
-            sumi_d.y() = dpct::dp4a(v[2 * i + 5], u[2 * i + 5],
+            sumi_d.y() = ggml_sycl::dp4a(v[2 * i + 5], u[2 * i + 5],
                                     sumi_d.y()); // SIMD dot product
         }
 
@@ -1174,7 +1174,7 @@ vec_dot_q6_K_q8_1_impl_mmq(const int *__restrict__ v, const int *__restrict__ u,
     return d6 * sumf_d;
 }
 
-static __dpct_inline__ float vec_dot_q6_K_q8_1_mul_mat(
+static GGML_SYCL_INLINE float vec_dot_q6_K_q8_1_mul_mat(
     const int *__restrict__ x_ql, const sycl::half2 *__restrict__ x_dm,
     const int *__restrict__ x_qh, const int *__restrict__ x_sc,
     const int *__restrict__ y_qs, const sycl::half2 *__restrict__ y_ds,
@@ -1194,13 +1194,7 @@ static __dpct_inline__ float vec_dot_q6_K_q8_1_mul_mat(
 template <int qk, int qr, int qi, bool need_sum, typename block_q_t, int mmq_x,
           int mmq_y, int nwarps, load_tiles_sycl_t load_tiles, int vdr,
           vec_dot_q_mul_mat_sycl_t vec_dot>
-/*
-DPCT1110:8: The total declared local variable size in device function mul_mat_q
-exceeds 128 bytes and may cause high register pressure. Consult with your
-hardware vendor to find the total register size available and adjust the code,
-or use smaller sub-group size to avoid high register pressure.
-*/
-static __dpct_inline__ void
+static GGML_SYCL_INLINE void
 mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
           float *__restrict__ dst, const int ncols_x, const int nrows_x,
           const int ncols_y, const int nrows_y, const int nrows_dst,
@@ -1239,9 +1233,9 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
 #pragma unroll
             for (int i = 0; i < mmq_x; i += nwarps) {
-                const int col_y_eff = dpct::min(
+                const int col_y_eff = sycl::min(
                     (unsigned int)(col_y_0 + item_ct1.get_local_id(1) + i),
-                    ncols_y - 1); // to prevent out-of-bounds memory accesses
+                    (unsigned int)(ncols_y - 1)); // to prevent out-of-bounds memory accesses
 
                 const block_q8_1 * by0 = &y[col_y_eff*blocks_per_col_y + ib0 * (qk/QK8_1) + kbxd];
 
@@ -1275,15 +1269,8 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                 }
             }
 
-            /*
-            DPCT1118:9: SYCL group functions and algorithms must be encountered
-            in converged control flow. You may need to adjust the code.
-            */
-            /*
-            DPCT1065:56: Consider replacing sycl::nd_item::barrier() with
-            sycl::nd_item::barrier(sycl::access::fence_space::local_space) for
-            better performance if there is no access to global memory.
-            */
+            
+            
             item_ct1.barrier();
 
 // #pragma unroll // unrolling this loop causes too much register pressure
@@ -1300,15 +1287,8 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                 }
             }
 
-            /*
-            DPCT1118:10: SYCL group functions and algorithms must be encountered
-            in converged control flow. You may need to adjust the code.
-            */
-            /*
-            DPCT1065:57: Consider replacing sycl::nd_item::barrier() with
-            sycl::nd_item::barrier(sycl::access::fence_space::local_space) for
-            better performance if there is no access to global memory.
-            */
+            
+            
             item_ct1.barrier();
         }
     }
@@ -1774,7 +1754,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -1809,16 +1789,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:20: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
@@ -1844,16 +1820,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:21: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
@@ -1889,7 +1861,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -1924,16 +1896,12 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:22: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
@@ -1959,16 +1927,12 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:23: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
@@ -2004,7 +1968,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2039,16 +2003,12 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:24: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
@@ -2074,16 +2034,12 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:25: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
@@ -2119,7 +2075,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2154,16 +2110,12 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:26: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
@@ -2189,16 +2141,12 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:27: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
@@ -2234,7 +2182,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2269,16 +2217,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:28: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
@@ -2304,16 +2248,12 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:29: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
@@ -2349,7 +2289,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2384,16 +2324,12 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:30: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
@@ -2422,16 +2358,12 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:31: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
@@ -2470,7 +2402,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
 #if QK_K == 256
 
@@ -2507,16 +2439,12 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:32: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
@@ -2548,16 +2476,12 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:33: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
@@ -2600,7 +2524,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2635,16 +2559,12 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:34: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
@@ -2673,16 +2593,12 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:35: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
@@ -2721,7 +2637,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2756,16 +2672,12 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:36: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
@@ -2794,16 +2706,12 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:37: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
@@ -2842,7 +2750,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
                                         float *dst, const int ncols_x,
                                         const int nrows_x, const int ncols_y,
                                         const int nrows_y, const int nrows_dst,
-                                        dpct::queue_ptr stream) try {
+                                        ggml_sycl::queue_ptr stream) try {
 
     int id;
     SYCL_CHECK(
@@ -2877,16 +2785,12 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
 
     if (nrows_x % mmq_y == 0) {
         const bool need_check = false;
-        /*
-        DPCT1049:38: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
@@ -2915,16 +2819,12 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
         }
     } else {
         const bool need_check = true;
-        /*
-        DPCT1049:39: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
+        
         {
-            dpct::has_capability_or_fail(stream->get_device(),
+            ggml_sycl::has_capability_or_fail(stream->get_device(),
                                          {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
+            ggml_sycl::ordered_submit(stream, [&](sycl::handler &cgh) {
                 sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
                     sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
@@ -2965,7 +2865,7 @@ void ggml_sycl_op_mul_mat_q(
     const char *src0_dd_i, const float *src1_ddf_i, const char *src1_ddq_i,
     float *dst_dd_i, const int64_t row_low, const int64_t row_high,
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
-    const dpct::queue_ptr &stream) try {
+    const ggml_sycl::queue_ptr &stream) try {
 
     const int64_t ne00 = src0->ne[0];
 

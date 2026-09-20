@@ -4,7 +4,7 @@
 #include <cmath>
 
 template <bool has_shared>
-static __dpct_inline__ void cross_entropy_loss_f32_kernel(
+static GGML_SYCL_INLINE void cross_entropy_loss_f32_kernel(
         const float * __restrict__ logits,
         const float * __restrict__ labels,
         float * __restrict__ row_loss,
@@ -50,7 +50,7 @@ static __dpct_inline__ void cross_entropy_loss_f32_kernel(
 }
 
 template <bool has_shared>
-static __dpct_inline__ void cross_entropy_loss_back_f32_kernel(
+static GGML_SYCL_INLINE void cross_entropy_loss_back_f32_kernel(
         const float * __restrict__ grad,
         const float * __restrict__ logits,
         const float * __restrict__ labels,
@@ -104,21 +104,21 @@ static void cross_entropy_reduce_rows(
         const int64_t nrows) {
     if (nrows == 1) {
         SYCL_CHECK(CHECK_TRY_ERROR(
-            ctx.stream()->memcpy(dst, row_loss, sizeof(float))));
+            ggml_sycl::ordered_memcpy(ctx.stream(), dst, row_loss, sizeof(float))));
         return;
     }
 
     ggml_sycl_pool_alloc<float> tmp_alloc(ctx.pool(), nrows);
     float * tmp = tmp_alloc.get();
     SYCL_CHECK(CHECK_TRY_ERROR(
-        ctx.stream()->memcpy(tmp, row_loss, nrows * sizeof(float))));
+        ggml_sycl::ordered_memcpy(ctx.stream(), tmp, row_loss, nrows * sizeof(float))));
 
     int64_t cur = nrows;
     while (cur > 1) {
         const int64_t out = (cur + WARP_SIZE - 1) / WARP_SIZE;
         const sycl::range<3> block(1, 1, WARP_SIZE);
         const sycl::range<3> grid(1, 1, out);
-        ctx.stream()->parallel_for(
+        ggml_sycl::ordered_parallel_for(ctx.stream(), 
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 const int row = item.get_group(2);
@@ -134,7 +134,7 @@ static void cross_entropy_reduce_rows(
     }
 
     SYCL_CHECK(CHECK_TRY_ERROR(
-        ctx.stream()->memcpy(dst, tmp, sizeof(float))));
+        ggml_sycl::ordered_memcpy(ctx.stream(), dst, tmp, sizeof(float))));
 }
 
 void ggml_sycl_cross_entropy_loss(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -170,7 +170,7 @@ void ggml_sycl_cross_entropy_loss(ggml_backend_sycl_context & ctx, ggml_tensor *
     const size_t smpbo = ggml_sycl_info().devices[ctx.device].smpbo;
 
     if (nbytes_shared <= smpbo) {
-        ctx.stream()->submit([&](sycl::handler & cgh) {
+        ggml_sycl::ordered_submit(ctx.stream(), [&](sycl::handler & cgh) {
             sycl::local_accessor<float, 1> smem(sycl::range<1>(nclasses), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(grid * block, block),
@@ -182,7 +182,7 @@ void ggml_sycl_cross_entropy_loss(ggml_backend_sycl_context & ctx, ggml_tensor *
                 });
         });
     } else {
-        ctx.stream()->parallel_for(
+        ggml_sycl::ordered_parallel_for(ctx.stream(), 
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 cross_entropy_loss_f32_kernel<false>(
@@ -231,7 +231,7 @@ void ggml_sycl_cross_entropy_loss_back(ggml_backend_sycl_context & ctx, ggml_ten
     const size_t smpbo = ggml_sycl_info().devices[ctx.device].smpbo;
 
     if (nbytes_shared <= smpbo) {
-        ctx.stream()->submit([&](sycl::handler & cgh) {
+        ggml_sycl::ordered_submit(ctx.stream(), [&](sycl::handler & cgh) {
             sycl::local_accessor<float, 1> smem(sycl::range<1>(nclasses), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(grid * block, block),
@@ -243,7 +243,7 @@ void ggml_sycl_cross_entropy_loss_back(ggml_backend_sycl_context & ctx, ggml_ten
                 });
         });
     } else {
-        ctx.stream()->parallel_for(
+        ggml_sycl::ordered_parallel_for(ctx.stream(), 
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 cross_entropy_loss_back_f32_kernel<false>(

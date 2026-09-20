@@ -20,7 +20,7 @@
 #include "ggml-impl.h"
 
 int get_current_device_id() {
-  return dpct::dev_mgr::instance().current_device_id();
+  return ggml_sycl::get_current_device_id();
 }
 
 void* ggml_sycl_host_malloc(size_t size) try {
@@ -29,9 +29,9 @@ void* ggml_sycl_host_malloc(size_t size) try {
   }
 
   void* ptr = nullptr;
-  // allow to use dpct::get_in_order_queue() for host malloc
-  dpct::err0 err = CHECK_TRY_ERROR(
-      ptr = (void*)sycl::malloc_host(size, dpct::get_in_order_queue()));
+  // allow to use ggml_sycl::default_queue() for host malloc
+  ggml_sycl::err0 err = CHECK_TRY_ERROR(
+      ptr = (void*)sycl::malloc_host(size, ggml_sycl::default_queue()));
 
   if (err != 0) {
     // clear the error
@@ -47,8 +47,8 @@ void* ggml_sycl_host_malloc(size_t size) try {
 }
 
 void ggml_sycl_host_free(void* ptr) try {
-  // allow to use dpct::get_in_order_queue() for host malloc
-  SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, dpct::get_in_order_queue())));
+  // allow to use ggml_sycl::default_queue() for host malloc
+  SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, ggml_sycl::default_queue())));
 } catch (sycl::exception const& exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
@@ -150,7 +150,8 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
             if (extra->events[i][is] != nullptr) {
-                SYCL_CHECK(CHECK_TRY_ERROR(dpct::destroy_event(extra->events[i][is])));
+                delete extra->events[i][is];
+                extra->events[i][is] = nullptr;
             }
         }
         if (extra->data_device[i] != nullptr && streams.size()>0) {

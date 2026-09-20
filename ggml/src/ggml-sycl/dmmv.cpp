@@ -98,7 +98,7 @@ static void dequantize_mul_mat_vec(const void * __restrict__ vx, const dfloat * 
     const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
     for (int mask = mask_start; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -204,7 +204,7 @@ static void dequantize_mul_mat_vec_reorder(const void * __restrict__ vx, const d
     const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
     for (int mask = mask_start; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -219,16 +219,16 @@ static void dequantize_mul_mat_vec_reorder(const void * __restrict__ vx, const d
 static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
                                          float *dst, const int ncols,
                                          const int nrows,
-                                         dpct::queue_ptr stream) {
+                                         ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<1, 1, convert_f16>(vx, y, dst, ncols,
@@ -241,7 +241,7 @@ static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
 static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
                                           float *dst, const int ncols,
                                           const int nrows,
-                                          dpct::queue_ptr stream) {
+                                          ggml_sycl::queue_ptr stream) {
     // The qk=1 kernel iterates with stride 2*GGML_SYCL_DMMV_X, so ncols must be a
     // multiple of that — not just GGML_SYCL_DMMV_X — to avoid out-of-bounds reads.
     GGML_ASSERT(ncols % (2*GGML_SYCL_DMMV_X) == 0);
@@ -249,7 +249,7 @@ static void convert_mul_mat_vec_bf16_sycl(const void *vx, const dfloat *y,
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<1, 1, convert_bf16>(vx, y, dst, ncols,
@@ -372,7 +372,7 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -470,7 +470,7 @@ static void dequantize_mul_mat_vec_q2_k_reorder(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -582,7 +582,7 @@ static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -680,7 +680,7 @@ static void dequantize_mul_mat_vec_q3_k_reorder(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -828,7 +828,7 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -986,7 +986,7 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -1117,7 +1117,7 @@ static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -1235,7 +1235,7 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (item_ct1.get_local_id(2) == 0) {
@@ -1352,7 +1352,7 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -1477,7 +1477,7 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
         tmp +=
-            dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+            ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
     if (tid == 0) {
@@ -1488,17 +1488,17 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
 static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
@@ -1511,17 +1511,17 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloa
 static void dequantize_mul_mat_vec_q4_0_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK4_0, QR4_0, dequantize_q4_0>(
@@ -1533,17 +1533,17 @@ static void dequantize_mul_mat_vec_q4_0_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q1_0_sycl_reorder(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec_reorder<QK1_0, QR1_0, dequantize_q1_0_reorder>(
@@ -1555,17 +1555,17 @@ static void dequantize_mul_mat_vec_q1_0_sycl_reorder(const void *vx, const dfloa
 static void dequantize_mul_mat_vec_q1_0_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     // the number of rows may exceed maximum grid size in the y or z dimensions, use the x dimension instead
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK1_0, QR1_0, dequantize_q1_0>(
@@ -1577,16 +1577,16 @@ static void dequantize_mul_mat_vec_q1_0_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q4_1_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK4_1, QR4_1, dequantize_q4_1>(
@@ -1598,16 +1598,16 @@ static void dequantize_mul_mat_vec_q4_1_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q5_0_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK5_0, QR5_0, dequantize_q5_0>(
@@ -1619,16 +1619,16 @@ static void dequantize_mul_mat_vec_q5_0_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q5_1_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK5_1, QR5_1, dequantize_q5_1>(
@@ -1640,16 +1640,16 @@ static void dequantize_mul_mat_vec_q5_1_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 // Q8_0 reorder layout: [all qs (ncols*nrows bytes)][all d values]
@@ -1720,7 +1720,7 @@ static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloa
                 // reduce
                 const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
                 for (int mask = mask_start; mask > 0; mask >>= 1) {
-                    tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+                    tmp += ggml_sycl::sub_group_shuffle_xor(item_ct1.get_sub_group(), tmp, mask);
                 }
 
                 if (tid == 0) {
@@ -1737,16 +1737,16 @@ static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloa
 static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
     {
-        dpct::has_capability_or_fail(stream->get_device(),
+        ggml_sycl::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 dequantize_mul_mat_vec<QK8_0, QR8_0, dequantize_q8_0>(
@@ -1758,13 +1758,13 @@ static void dequantize_mul_mat_vec_q8_0_sycl(const void *vx, const dfloat *y,
 static void dequantize_mul_mat_vec_q2_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2; // very slightly faster than 1 even when K_QUANTS_PER_ITERATION = 2
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q2_k(vx, y, dst, ncols, nrows, item_ct1);
@@ -1774,13 +1774,13 @@ static void dequantize_mul_mat_vec_q2_K_sycl(const void *vx, const float *y,
 static void dequantize_mul_mat_vec_q2_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
-                                                     dpct::queue_ptr stream) {
+                                                     ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q2_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
@@ -1790,13 +1790,13 @@ static void dequantize_mul_mat_vec_q2_K_sycl_reorder(const void *vx, const float
 static void dequantize_mul_mat_vec_q3_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q3_k(vx, y, dst, ncols, nrows, item_ct1);
@@ -1806,13 +1806,13 @@ static void dequantize_mul_mat_vec_q3_K_sycl(const void *vx, const float *y,
 static void dequantize_mul_mat_vec_q3_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
-                                                     dpct::queue_ptr stream) {
+                                                     ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q3_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
@@ -1822,13 +1822,13 @@ static void dequantize_mul_mat_vec_q3_K_sycl_reorder(const void *vx, const float
 static void dequantize_mul_mat_vec_q4_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q4_k(vx, y, dst, ncols, nrows, item_ct1);
@@ -1838,13 +1838,13 @@ static void dequantize_mul_mat_vec_q4_K_sycl(const void *vx, const float *y,
 static void dequantize_mul_mat_vec_q5_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q5_k(vx, y, dst, ncols, nrows, item_ct1);
@@ -1854,13 +1854,13 @@ static void dequantize_mul_mat_vec_q5_K_sycl(const void *vx, const float *y,
 static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
                                              float *dst, const int ncols,
                                              const int nrows,
-                                             dpct::queue_ptr stream) {
+                                             ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q6_k(vx, y, dst, ncols, nrows, item_ct1);
@@ -1924,10 +1924,10 @@ ESIMD_INLINE void dequantize_mul_mat_vec_reorder_esimd(
 static void dequantize_mul_mat_vec_q2_K_sycl_reorder_esimd(const void *vx, const float *y,
                                                            float *dst, const int ncols,
                                                            const int nrows,
-                                                           dpct::queue_ptr stream) {
+                                                           ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
-    stream->submit([&](sycl::handler &h) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
@@ -1941,10 +1941,10 @@ static void dequantize_mul_mat_vec_q2_K_sycl_reorder_esimd(const void *vx, const
 static void dequantize_mul_mat_vec_q3_K_sycl_reorder_esimd(const void *vx, const float *y,
                                                            float *dst, const int ncols,
                                                            const int nrows,
-                                                           dpct::queue_ptr stream) {
+                                                           ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
-    stream->submit([&](sycl::handler &h) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
@@ -1958,10 +1958,10 @@ static void dequantize_mul_mat_vec_q3_K_sycl_reorder_esimd(const void *vx, const
 static void dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(const void *vx, const float *y,
                                                            float *dst, const int ncols,
                                                            const int nrows,
-                                                           dpct::queue_ptr stream) {
+                                                           ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
-    stream->submit([&](sycl::handler &h) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
@@ -1975,10 +1975,10 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(const void *vx, const
 static void dequantize_mul_mat_vec_q5_K_sycl_reorder_esimd(const void *vx, const float *y,
                                                            float *dst, const int ncols,
                                                            const int nrows,
-                                                           dpct::queue_ptr stream) {
+                                                           ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
-    stream->submit([&](sycl::handler &h) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
@@ -1992,10 +1992,10 @@ static void dequantize_mul_mat_vec_q5_K_sycl_reorder_esimd(const void *vx, const
 static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const float *y,
                                                            float *dst, const int ncols,
                                                            const int nrows,
-                                                           dpct::queue_ptr stream) {
+                                                           ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
-    stream->submit([&](sycl::handler &h) {
+    ggml_sycl::ordered_submit(stream, [&](sycl::handler &h) {
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
@@ -2011,13 +2011,13 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const
 static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
-                                                     dpct::queue_ptr stream) {
+                                                     ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q4_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
@@ -2027,13 +2027,13 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float
 static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
-                                                     dpct::queue_ptr stream) {
+                                                     ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q5_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
@@ -2043,13 +2043,13 @@ static void dequantize_mul_mat_vec_q5_K_sycl_reorder(const void *vx, const float
 static void dequantize_mul_mat_vec_q6_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
                                                      const int nrows,
-                                                     dpct::queue_ptr stream) {
+                                                     ggml_sycl::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int ny = 2 / K_QUANTS_PER_ITERATION;
     const int block_num_y = (nrows + ny - 1) / ny;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, ny, WARP_SIZE);
-    stream->parallel_for(
+    ggml_sycl::ordered_parallel_for(stream, 
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             dequantize_mul_mat_vec_q6_k_reorder(vx, y, dst, ncols, nrows, item_ct1);
@@ -2062,7 +2062,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const char *src0_dd_i, const float *src1_ddf_i, const char *src1_ddq_i,
     float *dst_dd_i, const int64_t row_low, const int64_t row_high,
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
-    const dpct::queue_ptr &stream) {
+    const ggml_sycl::queue_ptr &stream) {
 
     const int64_t ne00 = src0->ne[0];
     const int64_t row_diff = row_high - row_low;

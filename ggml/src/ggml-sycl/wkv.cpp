@@ -198,7 +198,7 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == WKV_BLOCK_SIZE || C / H == WKV_BLOCK_SIZE * 2); // The current sycl kernel is designed for RWKV6, HEAD_SIZE == 64
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     // Calculate execution configuration
     const size_t shared_mem_size = C / H * 4 * sizeof(float); // For k, r, tf, td
@@ -207,7 +207,7 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Submit kernel
     if (C / H == WKV_BLOCK_SIZE) {
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
             cgh.parallel_for(
@@ -220,7 +220,7 @@ void ggml_sycl_op_rwkv_wkv6(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 });
         });
     } else {
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
             cgh.parallel_for(
@@ -255,7 +255,7 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(C % H == 0);
     GGML_ASSERT(C / H == WKV_BLOCK_SIZE || C / H == WKV_BLOCK_SIZE * 2);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
 
     // Calculate execution configuration
     const size_t shared_mem_size = C / H * 5 * sizeof(float); // For r, w, k, a, b
@@ -264,7 +264,7 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
 
     // Submit kernel
     if (C / H == WKV_BLOCK_SIZE) {
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
             cgh.parallel_for(
@@ -277,7 +277,7 @@ void ggml_sycl_op_rwkv_wkv7(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
                 });
         });
     } else {
-        stream->submit([&](sycl::handler& cgh) {
+        ggml_sycl::ordered_submit(stream, [&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> shared_mem_acc(shared_mem_size, cgh);
 
             cgh.parallel_for(

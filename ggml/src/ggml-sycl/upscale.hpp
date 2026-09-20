@@ -1,7 +1,7 @@
 #pragma once
 
 #include <sycl/sycl.hpp>
-#include "dpct/helper.hpp"
+#include "sycl_core.hpp"
 #include "common.hpp"
 
 #define SYCL_UPSCALE_BLOCK_SIZE 256

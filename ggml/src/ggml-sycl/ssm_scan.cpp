@@ -90,7 +90,7 @@ static void ssm_scan_f32_sycl(
         const int src5_nb3, const int64_t s_off, const int64_t d_state, const int64_t head_dim,
         const int64_t n_head, const int64_t n_group, const int64_t n_tok, const int64_t n_seq,
         const int64_t K,
-        dpct::queue_ptr stream) {
+        ggml_sycl::queue_ptr stream) {
 
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     GGML_ASSERT(src3_nb1 == sizeof(float));
@@ -99,7 +99,7 @@ static void ssm_scan_f32_sycl(
         constexpr int num_warps = threads / WARP_SIZE;
         const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
         const sycl::range<2> block(1, threads);
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<2>(grid * block, block),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 ssm_scan_f32_group<128 / WARP_SIZE, 128>(
@@ -112,7 +112,7 @@ static void ssm_scan_f32_sycl(
         constexpr int num_warps = threads / WARP_SIZE;
         const sycl::range<2> grid(n_seq, (n_head * head_dim + num_warps - 1) / num_warps);
         const sycl::range<2> block(1, threads);
-        stream->parallel_for(
+        ggml_sycl::ordered_parallel_for(stream, 
             sycl::nd_range<2>(grid * block, block),
             [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 ssm_scan_f32_group<256 / WARP_SIZE, 256>(
@@ -151,7 +151,7 @@ inline void ggml_sycl_op_ssm_scan(ggml_backend_sycl_context & ctx, ggml_tensor *
     GGML_ASSERT(ggml_nelements(src1) + K * nc * nr * nh * n_s == ggml_nelements(dst));
     GGML_ASSERT(src3->ne[0] == 1 || K == 1);
 
-    dpct::queue_ptr stream = ctx.stream();
+    ggml_sycl::queue_ptr stream = ctx.stream();
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
 
     ssm_scan_f32_sycl(

@@ -162,8 +162,8 @@ static void topk_moe_kernel(const float * __restrict__ logits,
         }
 #pragma unroll
         for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-            const float val    = dpct::permute_sub_group_by_xor(sg, max_val, mask);
-            const int   expert = dpct::permute_sub_group_by_xor(sg, max_expert, mask);
+            const float val    = ggml_sycl::sub_group_shuffle_xor(sg, max_val, mask);
+            const int   expert = ggml_sycl::sub_group_shuffle_xor(sg, max_expert, mask);
             if (val > max_val || (val == max_val && expert < max_expert)) {
                 max_val    = val;
                 max_expert = expert;
@@ -212,7 +212,7 @@ static void launch_topk_moe(queue_ptr stream, const float * logits, float * weig
                             int n_expert_used, float clamp_val, float scale_val, const topk_moe_config & config) {
     const sycl::range<1> block_dims(WARP_SIZE);
     const sycl::range<1> block_nums(n_rows);
-    stream->parallel_for(sycl::nd_range<1>(block_nums * block_dims, block_dims),
+    ggml_sycl::ordered_parallel_for(stream, sycl::nd_range<1>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              topk_moe_kernel<n_experts>(logits, weights, ids, n_rows, n_expert_used, clamp_val,
                                                         scale_val, config);
