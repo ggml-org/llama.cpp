@@ -1466,7 +1466,6 @@ int ggml_metal_op_dsv4_hc(ggml_metal_op_t ctx, int idx) {
                 GGML_ASSERT(x->type       == GGML_TYPE_F32);
                 GGML_ASSERT(weights->type == GGML_TYPE_F32);
                 GGML_ASSERT(op->type      == GGML_TYPE_F32);
-                GGML_ASSERT(x->ne[1] == 4);
 
                 ggml_metal_kargs_dsv4_hc_pre args = {
                     /*.n_embd   =*/ (int32_t) x->ne[0],
