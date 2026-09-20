@@ -1,5 +1,7 @@
 #include "gated_delta_net.cuh"
 #include "ggml-cuda/common.cuh"
+#include "convert.cuh"
+#include "unary.cuh"
 
 template <int S_v, bool KDA, bool keep_rs_t>
 __global__ void __launch_bounds__((ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v) * 4, 2)
@@ -324,4 +326,110 @@ void ggml_cuda_op_gated_delta_net(ggml_backend_cuda_context & ctx, ggml_tensor *
 void ggml_cuda_op_gated_delta_net_fused_cache(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_cuda_gated_delta_net_fused_cache cache) {
     ggml_cuda_op_gated_delta_net_impl(ctx, dst, &cache);
+}
+
+// weight row accessors: dense rows are indexed per element, quantized rows per block
+template <typename T>
+static __device__ __forceinline__ const T * gdn_ab_row(const T * w, int h, int K) {
+    return w + int64_t(h)*K;
+}
+
+template <typename T>
+static __device__ __forceinline__ float gdn_ab_at(const T * w, int k) {
+    return ggml_cuda_cast<float>(w[k]);
+}
+
+template <>
+__device__ __forceinline__ const block_q8_0 * gdn_ab_row(const block_q8_0 * w, int h, int K) {
+    return w + int64_t(h)*(K/QK8_0);
+}
+
+template <>
+__device__ __forceinline__ float gdn_ab_at(const block_q8_0 * w, int k) {
+    const block_q8_0 & b = w[k/QK8_0];
+    return ggml_cuda_cast<float>(b.d)*b.qs[k % QK8_0];
+}
+
+// one block per (head, projection, token): heads alone cannot fill the GPU, so the K reduction carries the parallelism
+template <typename T, int block_size>
+static __global__ void k_gdn_ab_mul_mat(
+        const float * __restrict__ x,
+        const T * __restrict__ w_alpha,
+        const T * __restrict__ w_beta,
+        const float * __restrict__ dt,
+        const float * __restrict__ ssm_a,
+        float * __restrict__ gate,
+        float * __restrict__ beta,
+        int n_heads,
+        int K) {
+    const int  h       = blockIdx.x;
+    const int  n       = blockIdx.y;
+    const bool is_beta = blockIdx.z != 0;
+
+    const T *     w  = gdn_ab_row(is_beta ? w_beta : w_alpha, h, K);
+    const float * xn = x + int64_t(n)*K;
+
+    float sum = 0.0f;
+    for (int k = threadIdx.x; k < K; k += block_size) {
+        sum += gdn_ab_at(w, k)*xn[k];
+    }
+
+    __shared__ float s_sum[WARP_SIZE];
+    sum = block_reduce<block_reduce_method::SUM, block_size>(sum, s_sum);
+
+    if (threadIdx.x != 0) {
+        return;
+    }
+
+    const int64_t i = int64_t(n)*n_heads + h;
+    if (is_beta) {
+        beta[i] = ggml_cuda_op_sigmoid_single(sum);
+    } else {
+        gate[i] = ggml_cuda_op_softplus_single(sum + dt[h])*ssm_a[h];
+    }
+}
+
+template <typename T>
+static void ggml_cuda_op_gated_delta_net_ab_impl(
+        ggml_backend_cuda_context & ctx, const ggml_cuda_gated_delta_net_ab & ab) {
+    const int M = (int) ab.alpha_mm->ne[0];
+    const int N = (int) ab.alpha_mm->ne[1];
+    const int K = (int) ab.alpha_mm->src[0]->ne[0];
+
+    constexpr int block_size = 256;
+
+    k_gdn_ab_mul_mat<T, block_size><<<dim3(M, N, 2), block_size, 0, ctx.stream()>>>(
+        (const float *) ab.alpha_mm->src[1]->data,
+        (const T *)     ab.alpha_mm->src[0]->data,
+        (const T *)     ab.beta_mm->src[0]->data,
+        (const float *) ab.dt->data,
+        (const float *) ab.ssm_a->data,
+        (float *)       ab.gate_out->data,
+        (float *)       ab.beta_out->data,
+        M, K);
+
+    CUDA_CHECK(cudaGetLastError());
+}
+
+bool ggml_cuda_gated_delta_net_ab_supported_type(ggml_type type) {
+    return type == GGML_TYPE_BF16 || type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || type == GGML_TYPE_Q8_0;
+}
+
+void ggml_cuda_op_gated_delta_net_ab(ggml_backend_cuda_context & ctx, const ggml_cuda_gated_delta_net_ab & ab) {
+    switch (ab.alpha_mm->src[0]->type) {
+        case GGML_TYPE_BF16:
+            ggml_cuda_op_gated_delta_net_ab_impl<nv_bfloat16>(ctx, ab);
+            break;
+        case GGML_TYPE_F16:
+            ggml_cuda_op_gated_delta_net_ab_impl<half>(ctx, ab);
+            break;
+        case GGML_TYPE_F32:
+            ggml_cuda_op_gated_delta_net_ab_impl<float>(ctx, ab);
+            break;
+        case GGML_TYPE_Q8_0:
+            ggml_cuda_op_gated_delta_net_ab_impl<block_q8_0>(ctx, ab);
+            break;
+        default:
+            GGML_ABORT("unsupported GDN projection type");
+    }
 }

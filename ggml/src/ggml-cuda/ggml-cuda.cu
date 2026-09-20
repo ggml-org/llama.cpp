@@ -2620,6 +2620,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
             if (cgraph->nodes[i]->src[j]) {
                 prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
+                prop.node_src_types[j]     = cgraph->nodes[i]->src[j]->type;
                 memcpy(prop.node_src_ne[j], cgraph->nodes[i]->src[j]->ne, sizeof(prop.node_src_ne[j]));
                 memcpy(prop.node_src_nb[j], cgraph->nodes[i]->src[j]->nb, sizeof(prop.node_src_nb[j]));
             }
@@ -3032,6 +3033,169 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
     return is_ok;
 }
 
+static bool ggml_cuda_should_fuse_gdn_ab(const ggml_cuda_gated_delta_net_ab & ab) {
+    const ggml_tensor * alpha_w  = ab.alpha_mm->src[0];
+    const ggml_tensor * beta_w   = ab.beta_mm->src[0];
+    const ggml_tensor * x        = ab.alpha_mm->src[1];
+    const ggml_tensor * dt       = ab.dt;
+    const ggml_tensor * ssm_a    = ab.ssm_a;
+    const ggml_tensor * gate_out = ab.gate_out;
+    const ggml_tensor * beta_out = ab.beta_out;
+
+    // both projections run in one kernel, so they can share the activation, type and layout
+    if (ab.beta_mm->src[1] != x ||
+            alpha_w->type != beta_w->type ||
+            !ggml_cuda_gated_delta_net_ab_supported_type(alpha_w->type) ||
+            !ggml_are_same_shape(alpha_w, beta_w) ||
+            !ggml_is_contiguous(alpha_w) || !ggml_is_contiguous(beta_w) ||
+            alpha_w->ne[2] != 1 || alpha_w->ne[3] != 1) {
+        return false;
+    }
+
+    if (x->type != GGML_TYPE_F32 || !ggml_is_contiguous(x) || x->ne[2] != 1 || x->ne[3] != 1) {
+        return false;
+    }
+
+    const int64_t M = alpha_w->ne[1];
+    const int64_t N = x->ne[1];
+
+    // K parallelism stops paying off once the tokens alone can fill the GPU
+    if (N > GDN_AB_FUSION_MAX_TOKENS) {
+        return false;
+    }
+
+    // Each output must store the head values for each token next to each other.
+    if (gate_out->type != GGML_TYPE_F32 || beta_out->type != GGML_TYPE_F32 ||
+            !ggml_is_contiguous(gate_out) || !ggml_is_contiguous(beta_out) ||
+            ggml_nelements(gate_out) != M*N || ggml_nelements(beta_out) != M*N ||
+            gate_out->ne[0] != 1 || gate_out->ne[1] != M ||
+            beta_out->ne[0] != 1 || beta_out->ne[1] != M) {
+        return false;
+    }
+
+    // the broadcast must happen over the heads, not the tokens
+    if (dt->type != GGML_TYPE_F32 || ssm_a->type != GGML_TYPE_F32 ||
+            !ggml_is_contiguous(dt) || !ggml_is_contiguous(ssm_a) ||
+            dt->ne[0] != M || ggml_nelements(dt) != M ||
+            ssm_a->ne[0] != M || ggml_nelements(ssm_a) != M) {
+        return false;
+    }
+
+    return true;
+}
+
+// Inputs and their underlying tensors must come from outside the nodes being fused.
+static bool ggml_cuda_gdn_ab_operand_external(const ggml_cgraph * cgraph, int node_idx, int n_ops, const ggml_tensor * t) {
+    for (const ggml_tensor * cur = t; cur != nullptr; cur = cur->view_src) {
+        for (int i = node_idx; i < node_idx + n_ops; ++i) {
+            if (cgraph->nodes[i] == cur) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// matches the alpha/beta projections that feed GATED_DELTA_NET:
+//   alpha: mul_mat -> reshape -> add(dt) -> softplus -> mul(ssm_a) -> reshape
+//   beta:  mul_mat -> reshape -> sigmoid
+static int ggml_cuda_try_gdn_ab_fusion(
+        ggml_backend_cuda_context * cuda_ctx,
+        const ggml_cgraph * cgraph,
+        int node_idx,
+        bool use_cuda_graph,
+        ggml_cuda_gated_delta_net_ab & ab) {
+    static bool disable_gdn_ab_fusion = getenv("GGML_CUDA_DISABLE_GDN_AB_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_GDN_AB_FUSION"));
+    if (disable_gdn_ab_fusion) {
+        return 0;
+    }
+
+    const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+    if (!use_cuda_graph || cuda_ctx->curr_stream_no != 0 ||
+            !GGML_CUDA_CC_IS_NVIDIA(cc) || cc < GGML_CUDA_CC_TURING) {
+        return 0;
+    }
+
+    const std::initializer_list<enum ggml_op> ops = {
+        GGML_OP_MUL_MAT, GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_UNARY, GGML_OP_MUL, GGML_OP_RESHAPE,
+        GGML_OP_MUL_MAT, GGML_OP_RESHAPE, GGML_OP_UNARY,
+    };
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx + 5, node_idx + 8 }) ||
+            !ggml_check_edges(cgraph, node_idx, {{1, 0, 0}, {3, 0, 2}, {5, 0, 4}, {7, 0, 6}, {8, 0, 7}})) {
+        return 0;
+    }
+
+    const ggml_tensor * alpha_mm      = cgraph->nodes[node_idx + 0];
+    const ggml_tensor * alpha_reshape = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * alpha_add     = cgraph->nodes[node_idx + 2];
+    const ggml_tensor * alpha_sp      = cgraph->nodes[node_idx + 3];
+    const ggml_tensor * alpha_mul     = cgraph->nodes[node_idx + 4];
+    ggml_tensor *       gate_out      = cgraph->nodes[node_idx + 5];
+    const ggml_tensor * beta_mm       = cgraph->nodes[node_idx + 6];
+    ggml_tensor *       beta_out      = cgraph->nodes[node_idx + 8];
+
+    if (ggml_get_unary_op(alpha_sp) != GGML_UNARY_OP_SOFTPLUS ||
+            ggml_get_unary_op(beta_out) != GGML_UNARY_OP_SIGMOID) {
+        return 0;
+    }
+
+    // Check that ADD and MUL use the expected alpha results.
+    if ((alpha_add->src[0] != alpha_reshape && alpha_add->src[1] != alpha_reshape) ||
+            (alpha_mul->src[0] != alpha_sp && alpha_mul->src[1] != alpha_sp)) {
+        return 0;
+    }
+
+    ab.alpha_mm = alpha_mm;
+    ab.beta_mm  = beta_mm;
+    ab.dt       = alpha_add->src[0] == alpha_reshape ? alpha_add->src[1] : alpha_add->src[0];
+    ab.ssm_a    = alpha_mul->src[0] == alpha_sp      ? alpha_mul->src[1] : alpha_mul->src[0];
+    ab.gate_out = gate_out;
+    ab.beta_out = beta_out;
+
+    const ggml_tensor * operands[] = {
+        alpha_mm->src[0], alpha_mm->src[1], beta_mm->src[0], beta_mm->src[1], ab.dt, ab.ssm_a,
+    };
+    for (const ggml_tensor * operand : operands) {
+        if (!ggml_cuda_gdn_ab_operand_external(cgraph, node_idx, (int) ops.size(), operand)) {
+            return 0;
+        }
+    }
+
+    if (!ggml_cuda_should_fuse_gdn_ab(ab)) {
+        return 0;
+    }
+
+    const int out_nodes[] = { node_idx + 5, node_idx + 8 };
+    if (!ggml_cuda_check_fusion_memory_ranges(cgraph, node_idx, (int) ops.size(), out_nodes, 2)) {
+        return 0;
+    }
+
+    // the two outputs are only valid inputs if the consumer is the matching GDN op
+    const ggml_tensor * gdn = nullptr;
+    int gdn_idx = node_idx + (int) ops.size();
+    for (; gdn_idx < cgraph->n_nodes; ++gdn_idx) {
+        if (!ggml_cuda_is_view_or_noop(cgraph->nodes[gdn_idx])) {
+            gdn = cgraph->nodes[gdn_idx];
+            break;
+        }
+    }
+    if (gdn == nullptr || gdn->op != GGML_OP_GATED_DELTA_NET ||
+            gdn->src[3] != gate_out || gdn->src[4] != beta_out) {
+        return 0;
+    }
+
+    // a node scheduled on a side stream must keep its own ordering
+    for (const auto & event : cuda_ctx->stream_context().concurrent_events) {
+        for (int i = node_idx; i <= gdn_idx; ++i) {
+            if (event.second.stream_mapping.count(cgraph->nodes[i]) != 0) {
+                return 0;
+            }
+        }
+    }
+
+    return (int) ops.size() - 1;
+}
+
 // The long form spans 2*k + 1 nodes. ggml_can_fuse_subgraph() accepts at most
 // 31 nodes, so k <= 15; larger values use the per-operation path.
 static constexpr int MOE_WEIGHTED_REDUCTION_MAX_EXPERTS = 15;
@@ -3429,7 +3593,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
-static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i, bool use_cuda_graph) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (disable_fusion) {
@@ -3437,6 +3601,20 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    // mul_mat x2 -> gated_delta_net: the alpha/beta projections and their activation tails
+    if (node->op == GGML_OP_MUL_MAT) {
+        ggml_cuda_gated_delta_net_ab ab;
+        const int nodes_to_skip = ggml_cuda_try_gdn_ab_fusion(cuda_ctx, cgraph, i, use_cuda_graph, ab);
+        if (nodes_to_skip > 0) {
+#ifdef GGML_CUDA_DEBUG
+            GGML_LOG_INFO("%s: fused gated_delta_net alpha/beta projections for %s (skipped %d nodes)\n",
+                          __func__, node->name, nodes_to_skip);
+#endif
+            ggml_cuda_op_gated_delta_net_ab(*cuda_ctx, ab);
+            return nodes_to_skip;
+        }
+    }
 
     if (node->op == GGML_OP_MUL) {
         ggml_cuda_moe_weighted_reduction_match match;
@@ -4322,7 +4500,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i, use_cuda_graph);
 
                 if (nodes_to_skip != 0) {
 #ifdef GGML_CUDA_DEBUG
