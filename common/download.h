@@ -60,6 +60,7 @@ struct common_download_opts {
     bool download_eagle3  = false;
     bool download_dflash  = false;
     bool download_dspark  = false;
+    bool download_imatrix = false;
     common_download_callback * callback = nullptr;
 };
 
@@ -116,6 +117,7 @@ struct common_download_hf_plan {
     hf_cache::hf_file eagle3;
     hf_cache::hf_file dflash;
     hf_cache::hf_file dspark;
+    hf_cache::hf_file imatrix;
     hf_cache::hf_file preset; // if set, only this file is downloaded
 };
 common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);

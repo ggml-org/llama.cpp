@@ -9,6 +9,15 @@ ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .is_host          = */ NULL,
 };
 
+ggml_backend_buffer_type_i ggml_backend_vk_uma_buffer_type_interface = {
+    /* .get_name         = */ ggml_backend_vk_buffer_type_uma_name,
+    /* .alloc_buffer     = */ ggml_backend_vk_buffer_type_uma_alloc_buffer,
+    /* .get_alignment    = */ ggml_backend_vk_buffer_type_uma_get_alignment,
+    /* .get_max_size     = */ ggml_backend_vk_buffer_type_uma_get_max_size,
+    /* .get_alloc_size   = */ ggml_backend_vk_buffer_type_uma_get_alloc_size,
+    /* .is_host          = */ ggml_backend_vk_buffer_type_uma_is_host,
+};
+
 static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
     std::vector<uint32_t> indices;
 
@@ -756,6 +765,20 @@ ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .reset           = */ NULL,
 };
 
+ggml_backend_buffer_i ggml_backend_vk_buffer_interface_host = {
+    /* .free_buffer     = */ ggml_backend_vk_buffer_free_buffer,
+    /* .get_base        = */ ggml_backend_vk_buffer_get_base_host,
+    /* .init_tensor     = */ ggml_backend_vk_buffer_init_tensor,
+    /* .memset_tensor   = */ ggml_backend_vk_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_vk_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_vk_buffer_get_tensor,
+    /* .set_tensor_2d   = */ ggml_backend_vk_buffer_set_tensor_2d,
+    /* .get_tensor_2d   = */ ggml_backend_vk_buffer_get_tensor_2d,
+    /* .cpy_tensor      = */ ggml_backend_vk_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_vk_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {
     if (!device->external_memory_host) {
         return {};
@@ -780,4 +803,3 @@ vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t si
 
     return buf;
 }
-

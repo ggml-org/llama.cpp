@@ -11,6 +11,11 @@
 #include "llama-model-saver.h"
 #include "llama-model.h"
 
+#ifdef GUANACO_ENABLED
+#include "guanaco/guanaco.h"
+#include "guanaco/guanaco_model_hook.h"
+#endif
+
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "ggml-backend.h"
@@ -61,6 +66,8 @@ const char * llama_load_mode_name(enum llama_load_mode load_mode) {
             return "mmap+mlock";
         case LLAMA_LOAD_MODE_DIRECT_IO:
             return "dio";
+        case LLAMA_LOAD_MODE_STREAMING:
+            return "streaming";
     }
     GGML_ABORT("fatal error");
 }
@@ -72,6 +79,7 @@ enum llama_load_mode llama_load_mode_from_str(const char * str) {
     if (std::strcmp(str, "mlock")      == 0) { return LLAMA_LOAD_MODE_MLOCK;      }
     if (std::strcmp(str, "mmap+mlock") == 0) { return LLAMA_LOAD_MODE_MMAP_MLOCK; }
     if (std::strcmp(str, "dio")        == 0) { return LLAMA_LOAD_MODE_DIRECT_IO;  }
+    if (std::strcmp(str, "streaming")  == 0) { return LLAMA_LOAD_MODE_STREAMING;  }
     throw std::invalid_argument(std::string("unknown load mode: ") + str);
 }
 
@@ -366,9 +374,32 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {0, model_ptr.release()};
         }
 
+#ifdef GUANACO_ENABLED
+        if (params.load_mode == LLAMA_LOAD_MODE_STREAMING) {
+            guanaco::SteppeLoaderConfig cfg;
+            cfg.max_active_experts = params.guanaco_max_experts > 0 ? (size_t) params.guanaco_max_experts : 8;
+            cfg.use_io_uring = params.guanaco_io_uring;
+            cfg.use_pilot    = params.guanaco_pilot;
+            cfg.pilot_mass   = params.guanaco_pilot_mass;
+            cfg.use_imatrix  = params.guanaco_imatrix;
+            model->guanaco_hook = guanaco::create_guanaco_model_hook(fname.c_str(), cfg);
+            if (model->guanaco_hook != nullptr) {
+                static_cast<guanaco::GuanacoModelHook *>(model->guanaco_hook)->initialize(&ml, model);
+            }
+        }
+#endif
+
         if (!model->load_tensors(ml)) {
             return {-2, nullptr};
         }
+
+#ifdef GUANACO_ENABLED
+        if (model->guanaco_hook != nullptr) {
+            auto * hook = static_cast<guanaco::GuanacoModelHook *>(model->guanaco_hook);
+            hook->on_tensors_loaded();
+            hook->advise_random_access(&ml);
+        }
+#endif
 
         return {0, model_ptr.release()};
     } catch (const std::exception & err) {
@@ -618,3 +649,14 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
+#ifdef GUANACO_ENABLED
+void llama_guanaco_enable_streaming(struct llama_context * ctx, bool enable) {
+    (void) ctx;
+    (void) enable;
+}
+
+void llama_guanaco_set_max_experts(struct llama_context * ctx, int32_t max_experts) {
+    (void) ctx;
+    (void) max_experts;
+}
+#endif
