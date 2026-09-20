@@ -516,6 +516,9 @@ struct mtmd_context {
     bool tok_row_end_trail = false;
     bool ov_img_first      = false;
 
+    // MiniCPM-V 4.7 prepends an <image_id>N</image_id> tag before <image>
+    bool use_image_id = false;
+
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -680,6 +683,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
+            case PROJECTOR_TYPE_MINICPMV4_7:
                 {
                     slice_tmpl        = MTMD_SLICE_TMPL_MINICPMV_2_6;
                     tok_ov_img_start  = {lookup_token("<image>")};
@@ -689,6 +693,9 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
+                    // the reference processor prepends <image_id>N</image_id>
+                    // (MiniCPMV4_6/4_7Processor, use_image_id defaults to true)
+                    use_image_id      = true;
                     image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
@@ -1421,6 +1428,9 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
+                    if (ctx->use_image_id) {
+                        add_text(string_format("<image_id>%u</image_id>", n_images_added), true);
+                    }
                     add_text(ctx->tok_ov_img_start);
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);

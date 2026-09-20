@@ -66,6 +66,7 @@
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
+#define KEY_MAX_SLICE_NUMS         "clip.vision.max_slice_nums"
 #define KEY_WIN_ATTN_PATTERN       "clip.vision.n_wa_pattern"
 #define KEY_WIN_ATTN_LAYER_INDEXES "clip.vision.wa_layer_indexes"
 #define KEY_WA_PATTERN_MODE        "clip.vision.wa_pattern_mode"
@@ -494,6 +495,7 @@ enum projector_type {
     PROJECTOR_TYPE_PARAKEET,
     PROJECTOR_TYPE_EXAONE4_5,
     PROJECTOR_TYPE_MINICPMV4_6,
+    PROJECTOR_TYPE_MINICPMV4_7,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
     PROJECTOR_TYPE_MINIMAX_M3,
@@ -558,6 +560,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_EXAONE4_5,         "exaone4_5"},
     { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
     { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
+    { PROJECTOR_TYPE_MINICPMV4_7,       "minicpmv4_7"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
@@ -906,7 +909,7 @@ static std::string string_format(const char * fmt, ...) {
     GGML_ASSERT(size2 == size);
     va_end(ap2);
     va_end(ap);
-    return std::string(buf.data(), buf.size());
+    return std::string(buf.data(), size);
 }
 
 static void string_replace_all(std::string & s, const std::string & search, const std::string & replace) {

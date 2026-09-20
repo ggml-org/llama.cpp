@@ -390,6 +390,7 @@ class Keys:
         BLOCK_COUNT           = "clip.vision.block_count"
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
+        MAX_SLICE_NUMS        = "clip.vision.max_slice_nums" # llava-uhd slice cap (MiniCPM-V)
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
         EXPERT_COUNT_PER_LAYER = "clip.vision.expert_count_per_layer" # dots3note pyramid MoE, 0 = dense layer
         EXPERT_USED_COUNT     = "clip.vision.expert_used_count"
@@ -5859,6 +5860,7 @@ class VisionProjectorType:
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
     MINICPMV4_6    = "minicpmv4_6"
+    MINICPMV4_7    = "minicpmv4_7"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"

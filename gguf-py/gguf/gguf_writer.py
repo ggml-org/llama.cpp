@@ -1420,6 +1420,9 @@ class GGUFWriter:
     def add_vision_projector_scale_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Projector.SCALE_FACTOR, value)
 
+    def add_vision_max_slice_nums(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.MAX_SLICE_NUMS, value)
+
     def add_vision_n_wa_pattern(self, value: int) -> None:
         """Add window attention pattern interval for vision models.
 
