@@ -55,6 +55,7 @@
 #define cudaEvent_t musaEvent_t
 #define cudaEventDestroy musaEventDestroy
 #define cudaFree musaFree
+#define cudaDeviceGetAttribute musaDeviceGetAttribute
 #define cudaFreeHost musaFreeHost
 #define cudaGetDevice musaGetDevice
 #define cudaGetDeviceCount musaGetDeviceCount
@@ -114,6 +115,7 @@
 #define cuMemRelease muMemRelease
 #define cuMemSetAccess muMemSetAccess
 #define cuMemUnmap muMemUnmap
+#define cudaDevAttrCooperativeLaunch musaDevAttrCooperativeLaunch
 #define cudaFuncAttributeMaxDynamicSharedMemorySize musaFuncAttributeMaxDynamicSharedMemorySize
 #define cudaFuncSetAttribute musaFuncSetAttribute
 #define cudaMemcpy3DPeerParms musaMemcpy3DPeerParms
