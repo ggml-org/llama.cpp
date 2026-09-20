@@ -60,7 +60,6 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
 
     g = lift_to_rank(g, 4);
     beta = lift_to_rank(beta, 4);
-
     v = lift_to_rank(v, 4);
 
     // ggml maps GQA heads in tiled order, while OV GDN maps repeated heads in grouped order.
