@@ -26,7 +26,9 @@
 </script>
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
-	<Dialog.Content class="flex flex-col md:max-h-[80vh]! md:w-[calc(100vw-4rem)]! md:max-w-164!">
+	<Dialog.Content
+		class="flex flex-col md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!"
+	>
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<Logo class="h-5 w-5" style="--size: 1.25rem" />
@@ -50,7 +52,7 @@
 
 			{#each PROTOCOL_TABS as tab (tab.value)}
 				<Tabs.Content class="min-h-0 flex-1 overflow-y-auto" value={tab.value}>
-					<SettingsBackends protocol={tab.value} />
+					<SettingsBackends class="mx-auto w-full max-w-3xl" protocol={tab.value} />
 				</Tabs.Content>
 			{/each}
 		</Tabs.Root>

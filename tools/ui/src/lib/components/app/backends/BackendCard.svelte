@@ -73,22 +73,22 @@
 			<div class="flex shrink-0 items-center gap-1">
 				<Button
 					aria-label="Edit backend"
-					class="h-7 w-7"
+					class="relative h-7 w-7 after:absolute after:-inset-0.5 after:content-['']"
 					onclick={() => onEdit?.()}
 					size="icon"
 					variant="ghost"
 				>
-					<Pencil class="h-3.5 w-3.5" />
+					<Pencil />
 				</Button>
 
 				<Button
 					aria-label="Delete backend"
-					class="hover:text-destructive-foreground h-7 w-7 text-destructive hover:bg-destructive/10"
+					class="hover:text-destructive-foreground relative h-7 w-7 text-destructive after:absolute after:-inset-0.5 after:content-[''] hover:bg-destructive/10"
 					onclick={() => (showDelete = true)}
 					size="icon"
 					variant="ghost"
 				>
-					<Trash2 class="h-3.5 w-3.5" />
+					<Trash2 />
 				</Button>
 			</div>
 		{/if}
