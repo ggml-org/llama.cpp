@@ -5,7 +5,7 @@
  * No reactive state; consumed by toolsStore.
  */
 
-import { API_TOOLS, HEADERS } from '$lib/constants';
+import { API_TOOLS, HEADERS, LOCAL_BACKEND_ID } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ServerToolInfo, ToolExecutionResult } from '$lib/types';
 import { apiFetch, apiUrl } from '$lib/utils';
@@ -27,6 +27,7 @@ export class ToolsService {
 		cwd?: string
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
+			backendId: LOCAL_BACKEND_ID,
 			body: JSON.stringify({ params, tool: toolName }),
 			headers: cwd ? { [HEADERS.X_TOOL_CWD_HEADER]: cwd } : undefined,
 			method: 'POST',
@@ -66,6 +67,7 @@ export class ToolsService {
 		if (respType) headers[HEADERS.X_RESP_TYPE_HEADER] = respType;
 
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
+			backendId: LOCAL_BACKEND_ID,
 			body: JSON.stringify({ params, tool: toolName }),
 			headers: Object.keys(headers).length > 0 ? headers : undefined,
 			method: 'POST',
@@ -79,7 +81,8 @@ export class ToolsService {
 	 * @returns Array of tool definitions in OpenAI-compatible format
 	 */
 	static async list(): Promise<ServerToolInfo[]> {
-		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
+		// pinned to the local server: server tools do not exist on other backends
+		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST, { backendId: LOCAL_BACKEND_ID });
 	}
 
 	/**
@@ -103,11 +106,11 @@ export class ToolsService {
 		signal?: AbortSignal,
 		cwd?: string
 	): AsyncGenerator<ToolStreamEvent> {
-		const headers = getJsonHeaders();
+		const headers = getJsonHeaders(LOCAL_BACKEND_ID);
 
 		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
 
-		const response = await fetch(apiUrl(API_TOOLS.EXECUTE), {
+		const response = await fetch(apiUrl(API_TOOLS.EXECUTE, LOCAL_BACKEND_ID), {
 			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
 			method: 'POST',
