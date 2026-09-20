@@ -389,5 +389,10 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         return n_experts > 0;
     }
 
+    // MUSA: the MMQ kernels compute wrong values on PH1 (MTT S5000).
+    if (cc == GGML_CUDA_CC_PH1) {
+        return false;
+    }
+
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
 }
