@@ -55,6 +55,8 @@ add_library(llama
             llama-kv-stream-config.h
             llama-kv-stream-policy.cpp
             llama-kv-stream-policy.h
+            llama-kv-stream-layer-lease.cpp
+            llama-kv-stream-layer-lease.h
             llama-kv-stream-binding.cpp
             llama-kv-stream-binding.h
             llama-kv-stream-host.cpp
