@@ -53,20 +53,27 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
     std::mt19937 gen(seed);
     std::normal_distribution<float> dis(0.0f, params.stdev);
 
+    // TODO: refactor per-tensor initialization logic in a cleaner way
+
     // note: Mamba A must be negative (state decay)
     const bool is_ssm_a = strstr(tensor->name, "ssm_a") != nullptr;
+
+    // DSA indexer score projection is zeroed to make the synthetic fixture's top-k routing
+    // deterministic across backends.
+    const bool is_indexer_proj = strstr(tensor->name, "indexer.proj.weight") != nullptr;
+
     const int64_t ne = ggml_nelements(tensor);
     if (tensor->type == GGML_TYPE_F32) {
         std::vector<float> tmp(ne);
         for (int64_t i = 0; i < ne; i++) {
-            float val = dis(gen);
+            float val = is_indexer_proj ? 0.0f : dis(gen);
             tmp[i] = is_ssm_a ? -fabsf(val) : val;
         }
         ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
     } else if (tensor->type == GGML_TYPE_F16) {
         std::vector<ggml_fp16_t> tmp(ne);
         for (int64_t i = 0; i < ne; i++) {
-            float val = dis(gen);
+            float val = is_indexer_proj ? 0.0f : dis(gen);
             tmp[i] = ggml_fp32_to_fp16(is_ssm_a ? -fabsf(val) : val);
         }
         ggml_backend_tensor_set(tensor, tmp.data(), 0, ggml_nbytes(tensor));
