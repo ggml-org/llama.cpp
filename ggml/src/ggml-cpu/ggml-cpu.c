@@ -2877,11 +2877,11 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_MUL_MAT:
                     {
                         const enum ggml_type vec_dot_type = type_traits_cpu[node->src[0]->type].vec_dot_type;
-
                         if (node->src[1]->type != vec_dot_type) {
-                            cur = GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(node->src[1])), 64);
+                            cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                         }
                         // Workspace for tiled (see tiled.h)
+                        cur = GGML_PAD(cur, 64);
                         cur += ggml_tiled_wdata_size(n_tasks, node);
                     } break;
                 case GGML_OP_MUL_MAT_ID:
@@ -2903,6 +2903,7 @@ struct ggml_cplan ggml_graph_plan(
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
                         // Workspace for tiled (see tiled.h)
+                        cur = GGML_PAD(cur, 64);
                         cur += ggml_tiled_wdata_size(n_tasks, node);
                     } break;
                 case GGML_OP_OUT_PROD:
