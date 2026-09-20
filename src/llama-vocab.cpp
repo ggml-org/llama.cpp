@@ -3244,7 +3244,7 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
             const auto & raw_text = fragment.raw_text;
 
             // key is raw text offset, value is pair (match length, token id)
-            std::map<size_t, std::pair<size_t, llama_token> > longest_matches;
+            std::map<size_t, std::pair<size_t, llama_token>> longest_matches;
 
             // for each special token
             for (const llama_token special_id : cache_special_tokens) {
@@ -3297,15 +3297,13 @@ void llama_vocab::impl::tokenizer_st_partition(std::forward_list<fragment_buffer
             auto raw_text_base_offset = fragment.offset;
             auto raw_text_base_length = fragment.length;
 
-            for (auto match_it : longest_matches) {
-                auto match = match_it.first;
-
+            for (const auto & [match, match_data] : longest_matches) {
                 // skip all matches overlapping with the longest leftmost match
                 if (match < raw_text_base_offset) {
                     continue;
                 }
 
-                auto special_id  = match_it.second.second;
+                auto special_id = match_data.second;
 
                 const auto & data = vocab.get_token_data(special_id);
                 const auto & text = data.text;
