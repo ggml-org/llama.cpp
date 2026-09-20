@@ -1,11 +1,30 @@
 #include "ggml-kv-stream.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
+#include <new>
+#include <stdexcept>
+#include <vector>
 
 using status = ggml_kv_stream_status;
 using operand = ggml_kv_stream_operand;
+
+struct ggml_kv_stream_span_plan {
+    std::atomic<uint32_t> references{1};
+    ggml_kv_stream_shape shape;
+    std::vector<ggml_kv_stream_span> spans;
+    std::vector<ggml_backend_memory_lease_t> retained;
+    size_t active_tokens = 0;
+    size_t query_tokens = 0;
+    size_t k_bytes = 0;
+    size_t v_bytes = 0;
+
+    ~ggml_kv_stream_span_plan() {
+        for (auto * lease : retained) ggml_backend_memory_lease_free(lease);
+    }
+};
 
 // Check arithmetic before evaluation; no GGML tensor or backend allocation is involved.
 static bool multiply(size_t a, size_t b, size_t & out) {
@@ -171,4 +190,109 @@ ggml_kv_stream_result ggml_kv_stream_attention_validate(
     if (result.status != status::success) return result;
     output = next;
     return {};
+}
+
+// Check one physical operand range without evaluating an overflowing byte expression.
+static ggml_kv_stream_result span_range(
+        ggml_backend_buffer_t buffer, size_t offset, size_t tokens,
+        size_t token_bytes, size_t alignment, operand side) {
+    if (!buffer) return {status::invalid_buffer, side};
+    if (offset % alignment) return {status::invalid_alignment, side};
+    size_t bytes, end;
+    if (!multiply(tokens, token_bytes, bytes) || !add(offset, bytes, end)) return {status::overflow, side};
+    if (end > ggml_backend_buffer_get_size(buffer)) return {status::invalid_buffer, side};
+    return {};
+}
+
+// Build an immutable plan transactionally, retaining storage only after all metadata is valid.
+ggml_kv_stream_result ggml_kv_stream_span_plan_make(
+        const ggml_kv_stream_shape & shape, const ggml_kv_stream_span_source * spans, size_t count,
+        size_t active_tokens, size_t query_tokens, ggml_kv_stream_span_plan_t & output) {
+    if (output || !spans || count == 0) return {status::invalid_span};
+    if (active_tokens == 0 || query_tokens == 0 || query_tokens > active_tokens) return {status::invalid_shape};
+    if (count > SIZE_MAX/2) return {status::overflow};
+
+    ggml_kv_stream_layout layout;
+    auto result = ggml_kv_stream_layout_make(shape, active_tokens, layout);
+    if (result.status != status::success) return result;
+
+    size_t next_token = 0;
+    for (size_t i = 0; i < count; ++i) {
+        const auto & span = spans[i];
+        if (span.tokens == 0 || span.token_begin != next_token) return {status::invalid_span};
+        if (!add(span.token_begin, span.tokens, next_token)) return {status::overflow};
+        result = span_range(ggml_backend_memory_lease_buffer(span.k_lease),
+            span.k_offset, span.tokens, layout.k_token_bytes, shape.alignment, operand::k);
+        if (result.status != status::success) return result;
+        result = span_range(ggml_backend_memory_lease_buffer(span.v_lease),
+            span.v_offset, span.tokens, layout.v_token_bytes, shape.alignment, operand::v);
+        if (result.status != status::success) return result;
+    }
+    if (next_token != active_tokens) return {status::invalid_span};
+
+    try {
+        auto * next = new ggml_kv_stream_span_plan;
+        try {
+            next->shape = shape;
+            next->spans.reserve(count);
+            next->retained.reserve(2*count);
+            next->active_tokens = active_tokens;
+            next->query_tokens = query_tokens;
+            next->k_bytes = layout.k_bytes;
+            next->v_bytes = layout.v_bytes;
+            for (size_t i = 0; i < count; ++i) {
+                const auto & span = spans[i];
+                next->spans.push_back({
+                    ggml_backend_memory_lease_buffer(span.k_lease),
+                    ggml_backend_memory_lease_buffer(span.v_lease),
+                    span.token_begin, span.tokens, span.k_offset, span.v_offset});
+                next->retained.push_back(ggml_backend_memory_lease_retain(span.k_lease));
+                next->retained.push_back(ggml_backend_memory_lease_retain(span.v_lease));
+            }
+        } catch (...) {
+            delete next;
+            throw;
+        }
+        output = next;
+        return {};
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed};
+    } catch (const std::length_error &) {
+        return {status::overflow};
+    }
+}
+
+// Retain one immutable plan for an additional asynchronous consumer.
+ggml_kv_stream_span_plan_t ggml_kv_stream_span_plan_retain(ggml_kv_stream_span_plan_t plan) {
+    if (!plan) return nullptr;
+    uint32_t count = plan->references.load(std::memory_order_relaxed);
+    do {
+        GGML_ASSERT(count > 0 && count < std::numeric_limits<uint32_t>::max());
+    } while (!plan->references.compare_exchange_weak(
+        count, count + 1, std::memory_order_relaxed, std::memory_order_relaxed));
+    return plan;
+}
+
+// Release one reference and all arena leases after the final consumer retires.
+void ggml_kv_stream_span_plan_free(ggml_kv_stream_span_plan_t plan) {
+    if (!plan) return;
+    const uint32_t count = plan->references.fetch_sub(1, std::memory_order_acq_rel);
+    GGML_ASSERT(count > 0);
+    if (count == 1) delete plan;
+}
+
+// Expose immutable ordered spans while the plan continues to own their storage.
+bool ggml_kv_stream_span_plan_get_view(
+        ggml_kv_stream_span_plan_t plan, ggml_kv_stream_span_plan_view & output) {
+    if (!plan) return false;
+    ggml_kv_stream_span_plan_view next;
+    next.shape = plan->shape;
+    next.spans = plan->spans.data();
+    next.count = plan->spans.size();
+    next.active_tokens = plan->active_tokens;
+    next.query_tokens = plan->query_tokens;
+    next.k_bytes = plan->k_bytes;
+    next.v_bytes = plan->v_bytes;
+    output = next;
+    return true;
 }

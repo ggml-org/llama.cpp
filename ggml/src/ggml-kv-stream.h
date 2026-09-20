@@ -1,11 +1,12 @@
 #pragma once
 
-#include "ggml.h"
+#include "ggml-backend-memory.h"
 
 enum class ggml_kv_stream_status {
     success, invalid_type, unsupported_storage, invalid_shape, invalid_alignment,
     overflow, page_out_of_range, capability_mismatch, unsupported_write, unsupported_attention,
     invalid_tensor, unsupported_stride, unsupported_mask, unsupported_sinks,
+    invalid_span, invalid_buffer, allocation_failed,
 };
 enum class ggml_kv_stream_operand { none, k, v };
 struct ggml_kv_stream_result {
@@ -68,7 +69,41 @@ struct ggml_kv_stream_attention_limits {
     size_t alignment = 128;
 };
 
-// All functions are metadata-only and leave output unchanged on failure.
+// Creation input retains arena leases so their address ranges cannot be repartitioned.
+struct ggml_kv_stream_span_source {
+    ggml_backend_memory_lease_t k_lease = nullptr;
+    ggml_backend_memory_lease_t v_lease = nullptr;
+    size_t token_begin = 0;
+    size_t tokens = 0;
+    size_t k_offset = 0;
+    size_t v_offset = 0;
+};
+
+// One physical range in an ordered logical KV sequence. Offsets are relative to each buffer.
+struct ggml_kv_stream_span {
+    ggml_backend_buffer_t k_buffer = nullptr;
+    ggml_backend_buffer_t v_buffer = nullptr;
+    size_t token_begin = 0;
+    size_t tokens = 0;
+    size_t k_offset = 0;
+    size_t v_offset = 0;
+};
+
+struct ggml_kv_stream_span_plan;
+using ggml_kv_stream_span_plan_t = ggml_kv_stream_span_plan *;
+
+// Borrowed immutable metadata valid until the owning plan is freed.
+struct ggml_kv_stream_span_plan_view {
+    ggml_kv_stream_shape shape;
+    const ggml_kv_stream_span * spans = nullptr;
+    size_t count = 0;
+    size_t active_tokens = 0;
+    size_t query_tokens = 0;
+    size_t k_bytes = 0;
+    size_t v_bytes = 0;
+};
+
+// Geometry and tensor-validation functions below are metadata-only and leave output unchanged on failure.
 GGML_API ggml_kv_stream_result ggml_kv_stream_layout_make(
         const ggml_kv_stream_shape & shape, size_t tokens, ggml_kv_stream_layout & output);
 GGML_API ggml_kv_stream_result ggml_kv_stream_page_make(
@@ -81,3 +116,13 @@ GGML_API ggml_kv_stream_result ggml_kv_stream_resolve(
 GGML_API ggml_kv_stream_result ggml_kv_stream_attention_validate(
         const ggml_tensor * dst, const ggml_kv_stream_attention_limits & limits,
         const ggml_kv_stream_capabilities & capabilities, size_t span_tokens, ggml_kv_stream_execution & output);
+// Validate exact logical coverage and retain every backing lease until plan_free.
+GGML_API ggml_kv_stream_result ggml_kv_stream_span_plan_make(
+        const ggml_kv_stream_shape & shape, const ggml_kv_stream_span_source * spans, size_t count,
+        size_t active_tokens, size_t query_tokens, ggml_kv_stream_span_plan_t & output);
+// Share one immutable plan among asynchronous consumers.
+GGML_API ggml_kv_stream_span_plan_t ggml_kv_stream_span_plan_retain(ggml_kv_stream_span_plan_t plan);
+GGML_API void ggml_kv_stream_span_plan_free(ggml_kv_stream_span_plan_t plan);
+// Return a borrowed immutable view without transferring buffer ownership.
+GGML_API bool ggml_kv_stream_span_plan_get_view(
+        ggml_kv_stream_span_plan_t plan, ggml_kv_stream_span_plan_view & output);
