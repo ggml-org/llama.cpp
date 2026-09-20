@@ -139,9 +139,16 @@ class MiniCPMV4_6TextModel(Qwen3_5TextModel):
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
 @ModelBase.example("openbmb/MiniCPM-V-4_6")
 class MiniCPMV4_6VisionModel(MmprojModel):
+    projector_type = gguf.VisionProjectorType.MINICPMV4_6
+    # fallback for checkpoints whose preprocessor config omits `scale_resolution`
+    default_scale_resolution: int | None = None
+
+    def get_downsample_mode(self) -> str:
+        return self.preprocessor_config.get("downsample_mode", "16x")
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.downsample_mode = self.preprocessor_config.get("downsample_mode", "16x")
+        self.downsample_mode = self.get_downsample_mode()
         if self.downsample_mode not in {"4x", "16x"}:
             raise ValueError(f"Unsupported downsample mode: {self.downsample_mode}")
         if self.downsample_mode == "4x":
@@ -157,7 +164,8 @@ class MiniCPMV4_6VisionModel(MmprojModel):
             # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
             # as the slice size and warmup resolution, so report `scale_resolution` there
             # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
-            scale_resolution = self.preprocessor_config.get("scale_resolution")
+            scale_resolution = self.preprocessor_config.get(
+                "scale_resolution", self.default_scale_resolution)
             if scale_resolution is not None:
                 self.hparams_vision["image_size"] = int(scale_resolution)
 
@@ -166,11 +174,16 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         assert self.hparams_vision is not None
 
         # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
-        # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         self.gguf_writer.add_vision_projector_scale_factor(
             2 if self.downsample_mode == "4x" else 4)
+
+        # llava-uhd slice cap: the reference image processor decides how many slices to
+        # cut from this value, so it has to travel with the model
+        max_slice_nums = self.preprocessor_config.get("max_slice_nums")
+        if max_slice_nums is not None:
+            self.gguf_writer.add_vision_max_slice_nums(int(max_slice_nums))
 
         # borrow wa_layer_indexes for vit_merger insertion point
         insert_layer_id = int(self.global_config.get(
@@ -191,3 +204,52 @@ class MiniCPMV4_6VisionModel(MmprojModel):
             return None
 
         return super().filter_tensors(item)
+
+
+# MiniCPM-V 4.7 shares the MiniCPM-V 4.6 stack: a Qwen3.5 text tower wrapped under
+# `model.language_model.*` and the same SigLIP + vit_merger + merger vision tower.
+# The text tower swaps to the MoE variant when the checkpoint says so, and the
+# vision tower keeps the v4.6 graph but reports its own projector type.
+
+@ModelBase.register("MiniCPMV4_7ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4.7")
+class MiniCPMV4_7TextModel(Qwen3_5TextModel):
+    model_arch = gguf.MODEL_ARCH.QWEN35
+
+    def __init__(self, dir_model, ftype, fname_out, *, hparams: dict | None = None, **kwargs):
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
+        text_config = hparams.get("text_config", {})
+        if text_config.get("model_type") == "qwen3_5_moe_text":
+            self.model_arch = gguf.MODEL_ARCH.QWEN35MOE
+        else:
+            self.model_arch = gguf.MODEL_ARCH.QWEN35
+        super().__init__(dir_model, ftype, fname_out, hparams=hparams, **kwargs)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.startswith("model.merger.") or name.startswith("model.vision_tower."):
+            return None
+        # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
+        if name.startswith("mtp"):
+            return None
+
+        return super().filter_tensors(item)
+
+
+@ModelBase.register("MiniCPMV4_7ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4.7")
+class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
+    projector_type = gguf.VisionProjectorType.MINICPMV4_7
+    # MiniCPMV4_7ImageProcessorPil default; some 4.7 checkpoints ship no
+    # `scale_resolution` (and no `patch_size`) in their preprocessor config
+    default_scale_resolution = 448
+
+    def get_downsample_mode(self) -> str:
+        # 4.7 moved downsample_mode from the preprocessor config to the model config;
+        # an explicit preprocessor value still wins so that a copy of the model dir
+        # can export the 4x variant
+        return self.preprocessor_config.get(
+            "downsample_mode", self.global_config.get("downsample_mode", "16x"))
