@@ -60,7 +60,7 @@
 		</div>
 	</div>
 
-	<div class="mt-auto flex items-center justify-between gap-4">
+	<div class="flex items-center justify-between gap-4">
 		<div class="flex items-center gap-2">
 			<Switch checked={backend.enabled} onCheckedChange={(value) => onToggle?.(value)} />
 
