@@ -192,7 +192,7 @@ jobs:
           PYTEST_WORKERS=1 ./tests.sh
 
   server-kleidiai:
-    runs-on: ah-ubuntu_22_04-c8g_8x
+    runs-on: ah-ubuntu_24_04-c8g_8x
 
     steps:
       - name: Clone
@@ -232,7 +232,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DGGML_SCHED_NO_REALLOC=ON -DGGML_CPU_KLEIDIAI=ON
+          cmake -B build -DGGML_SCHED_NO_REALLOC=ON -DGGML_CPU_KLEIDIAI=ON -DLLAMA_FATAL_WARNINGS=ON
           cmake --build build --config Release -j $(nproc) --target llama-server
 
       - name: Python setup

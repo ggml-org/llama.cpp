@@ -953,7 +953,7 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             return "Until(" + string_join(p.delimiters, " | ") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
-            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.schema ? p.schema->dump() : "null") + ")";
+            return "Schema(" + dump_impl(p.child, visited) + ", " + (p.node ? common_chat_schema::kind_name(p.node->kind()) : "null") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
             return "Rule(" + p.name + ", " + dump_impl(p.child, visited) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1119,8 +1119,13 @@ common_peg_parser common_peg_parser_builder::chars(const std::string & classes, 
     return wrap(arena_.add_parser(common_peg_chars_parser{classes, ranges, negated, min, max}));
 }
 
+common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, common_chat_schema_document_ptr doc, const common_chat_schema & node, bool raw) {
+    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::move(doc), &node, raw}));
+}
+
 common_peg_parser common_peg_parser_builder::schema(const common_peg_parser & p, const std::string & name, const common_json & schema, bool raw) {
-    return wrap(arena_.add_parser(common_peg_schema_parser{p.id(), name, std::make_shared<common_json>(schema), raw}));
+    auto doc = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(schema));
+    return this->schema(p, name, doc, *doc->root, raw);
 }
 
 common_peg_parser common_peg_parser_builder::rule(const std::string & name, const common_peg_parser & p, bool trigger) {
@@ -1573,30 +1578,9 @@ static std::set<std::string> collect_reachable_rules(
 
 // GBNF generation implementation
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+    // A raw string value is parsed by the child rather than constrained by the schema
     auto schema_delegates = [](const common_peg_schema_parser & s) -> bool {
-        if (!s.schema) {
-            return true;
-        }
-        if (s.raw && s.schema->contains("type")) {
-            const auto & type_val = s.schema->at("type");
-            if (type_val.is_string() && type_val == "string") {
-                return true;
-            }
-            // Handle nullable types like ["string", "null"] - delegate when the
-            // non-null type is string, since the tagged format uses raw text
-            if (type_val.is_array()) {
-                for (const auto & t : type_val) {
-                    if (t.is_string() && t.get<std::string>() != "null") {
-                        return t.get<std::string>() == "string";
-                    }
-                }
-            }
-        }
-        // Delegate for enum schemas in raw mode - enum values are literal strings
-        if (s.raw && !s.schema->contains("type") && s.schema->contains("enum")) {
-            return true;
-        }
-        return false;
+        return !s.node || (s.raw && s.node->may_be_string());
     };
 
     // Unwrap the parser so we can properly check if it's a sequence or choice
@@ -1731,7 +1715,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
                 }
-                return builder.add_schema(p.name, *p.schema);
+                return builder.add_schema(p.name, *p.node);
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 return p.name;
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1859,7 +1843,6 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
                 {"type", "schema"},
                 {"child", p.child},
                 {"name", p.name},
-                {"schema", p.schema ? *p.schema : json(nullptr)},
                 {"raw", p.raw}
             };
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1999,15 +1982,12 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
     }
     if (type == "schema") {
-        if (!j.contains("child") || !j.contains("name") || !j.contains("schema") || !j.contains("raw")) {
+        if (!j.contains("child") || !j.contains("name") || !j.contains("raw")) {
             throw std::runtime_error("schema parser missing required fields");
         }
         common_peg_schema_parser parser;
         parser.child = j["child"].get<common_peg_parser_id>();
         parser.name = j["name"];
-        if (!j["schema"].is_null()) {
-            parser.schema = std::make_shared<common_json>(j["schema"]);
-        }
         parser.raw = j["raw"].get<bool>();
         return parser;
     }
