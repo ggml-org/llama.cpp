@@ -26,9 +26,7 @@
 </script>
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
-	<Dialog.Content
-		class="flex flex-col gap-2 md:max-h-[80vh]! md:w-[calc(100vw-4rem)]! md:max-w-164!"
-	>
+	<Dialog.Content class="flex flex-col md:max-h-[80vh]! md:w-[calc(100vw-4rem)]! md:max-w-164!">
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<Logo class="h-5 w-5" style="--size: 1.25rem" />
@@ -36,13 +34,11 @@
 				<span>Backends</span>
 			</Dialog.Title>
 
-			<Dialog.Description>
-				Endpoints this UI can talk to. The built-in backend is the llama.cpp server serving it.
-			</Dialog.Description>
+			<Dialog.Description>Endpoints this UI can talk to.</Dialog.Description>
 		</Dialog.Header>
 
 		<Tabs.Root
-			class="min-h-0 flex-1"
+			class="min-h-0 flex-1 gap-3"
 			onValueChange={(value) => (protocol = value as BackendProtocol)}
 			value={protocol}
 		>
