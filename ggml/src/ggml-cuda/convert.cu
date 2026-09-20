@@ -42,7 +42,7 @@ static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __
 
 template <bool need_check>
 static __global__ void dequantize_block_q8_0_f16(const void * __restrict__ vx, half * __restrict__ y, const int64_t k) {
-#if __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
+#if defined(__MUSA_ARCH__) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
     constexpr int nint = CUDA_Q8_0_NE_ALIGN/sizeof(int) + WARP_SIZE;
 
     const int64_t   i0 = CUDA_Q8_0_NE_ALIGN*blockIdx.x;
