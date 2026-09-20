@@ -273,6 +273,10 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
+        if(!(hparams.has_kv(il)) && (*inp_out_ids).ne[0] == 0) {
+            continue;
+        }
+
         // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
