@@ -9,11 +9,10 @@
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
 		ROUTES,
-		SETTINGS_KEYS,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { conversationsStore, deviceStore, serverStore, settingsStore } from '$lib/stores';
+	import { conversationsStore, deviceStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -26,8 +25,7 @@
 		searchQuery: string;
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
-		onBackendsClick?: () => void;
-		onDiscoverModelsClick?: () => void;
+		onManageModelsClick?: () => void;
 		onNewChat?: () => void;
 		onSettingsClick?: () => void;
 	}
@@ -36,8 +34,7 @@
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
-		onBackendsClick,
-		onDiscoverModelsClick,
+		onManageModelsClick,
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
@@ -51,12 +48,7 @@
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 
-	// discovery needs the local router's download endpoints
-	const actionsItems = $derived(
-		serverStore.localIsRouter && settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] === true
-			? SIDEBAR_ACTIONS_ITEMS
-			: SIDEBAR_ACTIONS_ITEMS.filter((item) => item.action !== SidebarAction.DISCOVER_MODELS)
-	);
+	const actionsItems = SIDEBAR_ACTIONS_ITEMS;
 
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
@@ -129,20 +121,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.DISCOVER_MODELS
-						? () => onDiscoverModelsClick?.()
-						: item.action === SidebarAction.BACKENDS
-							? () => onBackendsClick?.()
-							: item.action === SidebarAction.SETTINGS
-								? () => onSettingsClick?.()
-								: item.route
-									? () => {
-											onNewChat?.();
-											goto(item.route!);
-										}
-									: isSearchOnMobile
-										? undefined
-										: onSearchClick}
+					: item.action === SidebarAction.MANAGE_MODELS
+						? () => onManageModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -189,20 +179,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.DISCOVER_MODELS
-						? () => onDiscoverModelsClick?.()
-						: item.action === SidebarAction.BACKENDS
-							? () => onBackendsClick?.()
-							: item.action === SidebarAction.SETTINGS
-								? () => onSettingsClick?.()
-								: item.route
-									? () => {
-											onNewChat?.();
-											goto(item.route!);
-										}
-									: isSearchOnMobile
-										? undefined
-										: onSearchClick}
+					: item.action === SidebarAction.MANAGE_MODELS
+						? () => onManageModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,

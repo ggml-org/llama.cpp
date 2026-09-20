@@ -4,9 +4,8 @@
 	import { page } from '$app/state';
 	import {
 		ActionIcon,
-		DialogBackends,
 		DialogConversationRename,
-		DialogModelsDiscover,
+		DialogManageModels,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -95,8 +94,7 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
-	let backendsDialogOpen = $state(false);
-	let modelsDiscoverOpen = $state(false);
+	let manageModelsOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -393,8 +391,7 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
-				onBackendsClick={() => (backendsDialogOpen = true)}
-				onDiscoverModelsClick={() => (modelsDiscoverOpen = true)}
+				onManageModelsClick={() => (manageModelsOpen = true)}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -458,9 +455,7 @@
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
-<DialogBackends bind:open={backendsDialogOpen} />
-
-<DialogModelsDiscover bind:open={modelsDiscoverOpen} />
+<DialogManageModels bind:open={manageModelsOpen} />
 
 <style>
 	aside {
