@@ -4,14 +4,19 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
 	import { backendsModelsStore, backendsStore, serverStore } from '$lib/stores';
-	import type { Backend } from '$lib/types';
+	import type { Backend, BackendProtocol } from '$lib/types';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
+		protocol: BackendProtocol;
 	}
 
-	let { class: className }: Props = $props();
+	let { class: className, protocol }: Props = $props();
+
+	// the switcher above the list narrows it to one protocol
+	let backends = $derived(backendsStore.external.filter((b) => b.protocol === protocol));
+	let isLlamaCpp = $derived(protocol === 'llama.cpp');
 
 	let isAdding = $state(false);
 	let editing = $state<Backend | null>(null);
@@ -39,11 +44,12 @@
 	<DialogBackendForm
 		bind:open={isAdding}
 		backend={editing}
+		defaultProtocol={protocol}
 		onOpenChange={handleOpenChange}
 		onSaved={() => void backendsModelsStore.loadAll()}
 	/>
 
-	{#if !serverStore.localServerMissing}
+	{#if isLlamaCpp && !serverStore.localServerMissing}
 		<BackendCard
 			backend={backendsStore.local}
 			isLocal
@@ -51,7 +57,7 @@
 		/>
 	{/if}
 
-	{#each backendsStore.external as backend (backend.id)}
+	{#each backends as backend (backend.id)}
 		<BackendCard
 			{backend}
 			onDelete={() => {
@@ -72,9 +78,11 @@
 				<Plus />
 			</Empty.Media>
 
-			<Empty.Title>Add another backend</Empty.Title>
+			<Empty.Title>{isLlamaCpp ? 'Add a llama.cpp backend' : 'Add a backend'}</Empty.Title>
 
-			<Empty.Description>Connect an OpenAI-compatible endpoint.</Empty.Description>
+			<Empty.Description>
+				{isLlamaCpp ? 'Point at another llama-server.' : 'Connect an OpenAI-compatible endpoint.'}
+			</Empty.Description>
 		</Empty.Header>
 
 		<Empty.Content>

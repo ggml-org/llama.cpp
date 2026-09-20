@@ -8,19 +8,29 @@
 	import { BackendsService } from '$lib/services';
 	import type { BackendTestResult } from '$lib/services/backends.service';
 	import { backendsStore } from '$lib/stores';
-	import type { Backend, BackendPreset } from '$lib/types';
+	import type { Backend, BackendPreset, BackendProtocol } from '$lib/types';
 	import { findBackendPreset, uuid } from '$lib/utils';
 
 	interface Props {
 		backend?: Backend | null;
+		defaultProtocol?: BackendProtocol;
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
 		onSaved?: (backend: Backend) => void;
 	}
 
-	let { backend = null, onOpenChange, onSaved, open = $bindable(false) }: Props = $props();
+	let {
+		backend = null,
+		defaultProtocol = 'openai',
+		onOpenChange,
+		onSaved,
+		open = $bindable(false)
+	}: Props = $props();
 
 	let draft = $state<Backend>(createBackend());
+
+	// presets offered for the protocol the caller is adding
+	let presets = $derived(BACKEND_PRESETS.filter((preset) => preset.protocol === defaultProtocol));
 	let testResult = $state<BackendTestResult | null>(null);
 	let testing = $state(false);
 
@@ -64,7 +74,7 @@
 			enabled: true,
 			id: uuid() || `${BACKEND_ID_PREFIX}-${Date.now()}`,
 			name: '',
-			protocol: 'openai'
+			protocol: defaultProtocol
 		};
 	}
 
@@ -138,10 +148,14 @@
 		<Dialog.Header>
 			<Dialog.Title>{isEdit ? 'Edit backend' : 'Add backend'}</Dialog.Title>
 
-			<Dialog.Description>Connect an OpenAI-compatible endpoint.</Dialog.Description>
+			<Dialog.Description>
+				{defaultProtocol === 'llama.cpp'
+					? 'Point at another llama-server.'
+					: 'Connect an OpenAI-compatible endpoint.'}
+			</Dialog.Description>
 		</Dialog.Header>
 
-		{#if !isEdit}
+		{#if !isEdit && presets.length > 0}
 			<div class="space-y-3 pt-2">
 				<h3 class="text-sm font-medium">Recommended providers</h3>
 
@@ -149,7 +163,7 @@
 				     to the provider cards. -->
 
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-					{#each BACKEND_PRESETS as preset (preset.id)}
+					{#each presets as preset (preset.id)}
 						<BackendPresetCard
 							added={addedPresetIds.includes(preset.id)}
 							dimmed={Boolean(selectedPresetId) && selectedPresetId !== preset.id}
