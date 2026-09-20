@@ -639,3 +639,146 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
 
     return true;
 }
+
+// ---- FA (non-vec) (Q, NSG): baseline tile vs the wide tile (Q = 16) with 4 or 8 simdgroups ----
+
+bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_opts & opts) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+
+    auto set_ov    = (set_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_override");
+    auto clr_ov    = (clear_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_override");
+    auto ne11_b    = (bucket_t)       ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_fa_ne11_bucket");
+    auto dev_token = (device_token_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_device_token");
+    if (!set_ov || !clr_ov || !ne11_b || !dev_token) {
+        fprintf(stderr, "error: metal fa tuning procs unavailable\n");
+        return false;
+    }
+
+    // head sizes that fit the wide tile in the threadgroup memory (see ggml_metal_op_flash_attn_ext_cfg)
+    struct shape_t {
+        int dk, dv;
+    };
+
+    const shape_t shapes[] = {
+        { 32,  32  },
+        { 40,  40  },
+        { 48,  48  },
+        { 64,  64  },
+        { 72,  72  },
+        { 80,  80  },
+        { 96,  96  },
+        { 96,  64  },
+        { 112, 112 },
+        { 128, 128 },
+        { 192, 192 },
+        { 192, 128 },
+        { 256, 256 },
+    };
+
+    // KV lengths per ne11 bucket, and per KV length: the smallest batch that uses the wide tile, the smallest one
+    // that may pad its last tile with more rows than baseline, and two typical physical batch sizes
+    const std::vector<std::vector<int>> ne11_rep = { { 512, 1024, 2048 }, { 4096 }, { 8192 }, { 16384 }, { 32768 }, { 65536 } };
+    const int ne01_rep[] = { ggml_metal_tuning::FA_NE01_MIN, ggml_metal_tuning::FA_NE01_MIN_PARTIAL + 8, 512, 2048 };
+
+    // cands[0] is the baseline
+    const ggml_metal_tuning::fa_cfg_t cands[] = {
+        { ggml_metal_tuning::FA_Q_BASELINE, 0 },
+        { ggml_metal_tuning::FA_Q_WIDE,     4 },
+        { ggml_metal_tuning::FA_Q_WIDE,     8 },
+    };
+    const size_t n_cands = std::size(cands);
+
+    const double TUNE_THETA = 1.02;  // min aggregate bucket speedup vs baseline to emit a row
+    const double TUNE_TIE   = 1.03;  // min speedup vs an earlier candidate to replace it
+
+    const cooldown_opts cool = {
+        opts.cooldown, opts.cool_drift, opts.cool_eps, opts.cool_max_wait, opts.cool_max_retry,
+    };
+
+    fprintf(stderr, "seed=%u reps=%d cooldown=%s\n", opts.seed, opts.reps, cool.enabled ? "on" : "off");
+    fprintf(stderr, "device token: %s\n", dev_token(dev));
+
+    for (auto s : shapes) {
+        if (!fa_filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
+            continue;
+        }
+
+        std::vector<int> best;  // per ne11 bucket: the fastest config that is never slower than baseline, or 0
+
+        for (const auto & ne11_pts : ne11_rep) {
+            std::vector<double> t_sum(n_cands, 0.0);
+            std::vector<bool>   ok(n_cands, true);
+
+            std::vector<std::pair<int, int>> pts;
+            for (int ne11 : ne11_pts) {
+                for (int ne01 : ne01_rep) {
+                    if (ne01 <= ne11) {
+                        pts.emplace_back(ne11, ne01);
+                    }
+                }
+            }
+
+            for (const auto & [ne11, ne01] : pts) {
+                const fa_shape sh = { s.dk, s.dv, ne01, ne11, GGML_TYPE_F16 };
+
+                perf_cell cell = build_perf_cell(
+                    backend, [&](ggml_context * ctx) { return fa_build_graph(ctx, sh); },
+                    [&](ggml_context * ctx) { fa_init_tensors(ctx, sh, opts.seed); },
+                    [&](ggml_tensor *) { return fa_op_flops(sh); });
+
+                char label[128];
+                snprintf(label, sizeof(label), "dk=%d dv=%d ne11=%d ne01=%d", s.dk, s.dv, ne11, ne01);
+
+                cell_result r;
+                if (cell.gf != nullptr) {
+                    r = measure_cell(
+                        backend, cell, opts.reps, { 2, 1, 0 }, [&](int i) { set_ov(cands[i].Q, cands[i].NSG); },
+                        [&]() { clr_ov(); }, 0, cool, label);
+                }
+
+                if (cell.gf == nullptr || !r.trusted || r.t[0] <= 0.0) {
+                    fprintf(stderr, "# DROP untrusted cell %s\n", label);
+                    ok.assign(n_cands, false);
+                    continue;
+                }
+
+                fprintf(stderr, "# %s: Q8=%.1f", label, r.t[0]);
+                for (size_t i = 1; i < n_cands; ++i) {
+                    fprintf(stderr, "  Q%dNSG%d=%.1f (%.3fx)", cands[i].Q, cands[i].NSG, r.t[i], r.t[0] / r.t[i]);
+
+                    ok[i] = ok[i] && r.t[i] > 0.0 && r.t[i] <= r.t[0];
+                }
+                fprintf(stderr, "\n");
+
+                for (size_t i = 0; i < n_cands; ++i) {
+                    t_sum[i] += r.t[i];
+                }
+            }
+
+            int best_i = 0;
+            for (size_t i = 1; i < n_cands; ++i) {
+                if (ok[i] && ok[0] && t_sum[i] * TUNE_THETA <= t_sum[0] && (best_i == 0 || t_sum[i] * TUNE_TIE <= t_sum[best_i])) {
+                    best_i = (int) i;
+                }
+            }
+
+            fprintf(stderr, "# dk=%d dv=%d ne11=%d => Q%d,NSG%d\n", s.dk, s.dv, ne11_pts.back(), cands[best_i].Q, cands[best_i].NSG);
+            best.push_back(best_i);
+        }
+
+        // the same config in every bucket -> one ne11-collapsed default row
+        const bool collapse = std::all_of(best.begin(), best.end(), [&](int i) { return i == best[0]; });
+
+        for (size_t b = 0; b < best.size(); ++b) {
+            if (best[b] == 0 || (collapse && b > 0)) {
+                continue;
+            }
+            printf("    { { %s, %d, %d, %d }, { %d, %d } },\n", dev_token(dev),
+                   collapse ? (int) ggml_metal_tuning::FA_NE11_DEFAULT : ne11_b(ne11_rep[b].back()), s.dk, s.dv,
+                   cands[best[b]].Q, cands[best[b]].NSG);
+        }
+        fflush(stdout);
+    }
+
+    return true;
+}

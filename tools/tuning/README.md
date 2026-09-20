@@ -9,6 +9,7 @@ A non-zero exit code means bad arguments or a wrong environment (no Metal device
 | tuner | tunes | table |
 |---|---|---|
 | `fa-vec` | flash-attn vec `(Q, NE)` per `(dtype, head size, KV depth, batch width)` | `fa_vec_tuned_table` |
+| `fa` | flash-attn (non-vec) `(Q, NSG)` per `(head size, KV depth)` | `fa_tuned_table` |
 
 ## Adding a device to the FA-vec table
 
@@ -49,6 +50,17 @@ The tuner itself does no numerical checks, so the other head sizes have no autom
 
 If the device is not in `enum ggml_metal_device_id` yet, register it in `ggml/src/ggml-metal/ggml-metal-device.{h,m}` first.
 The tuner emits whatever token the runtime reports for the machine, so an unregistered device emits `GGML_METAL_DEVICE_GENERIC` and its rows would apply to every unknown device.
+
+## Adding a device to the FA table
+
+```bash
+./build/bin/ggml-metal-tuning fa > fa_rows.txt 2> fa_sweep.log
+```
+
+The sweep times the baseline tile against the wide tile with 4 and with 8 simdgroups at GQA 8, F16 K/V, over 8 KV depths (3 of them in the first bucket) x up to 4 batch widths per head size (well under an hour).
+A KV-depth bucket gets a row only for a config that is no slower at every sampled point and at least 2% faster in aggregate, so a device where the wide tile does not pay off emits nothing and stays at baseline.
+The 8-simdgroup variant replaces the 4-simdgroup one only when it is at least 3% faster, so that rows do not flip on noise.
+`test-backend-ops test -o FLASH_ATTN_EXT -b MTL0` forces the wide tile regardless of the table.
 
 ## Thermal throttling
 
