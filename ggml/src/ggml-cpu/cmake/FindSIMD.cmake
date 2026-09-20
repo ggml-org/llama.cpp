@@ -52,6 +52,15 @@ set(FMA_CODE "
     }
 ")
 
+set(BMI2_CODE "
+    #include <immintrin.h>
+    int main()
+    {
+        unsigned long long r = _pdep_u64(0x12345678ULL, 0x00ff00ff00ff00ffULL);
+        return 0;
+    }
+")
+
 macro(check_sse type flags)
     set(__FLAG_I 1)
     set(CMAKE_REQUIRED_FLAGS_SAVE ${CMAKE_REQUIRED_FLAGS})
@@ -97,4 +106,12 @@ if (NOT ${AVX512_FOUND})
     set(GGML_AVX512 OFF)
 else()
     set(GGML_AVX512 ON)
+endif()
+
+# BMI2 has no standalone /arch flag on MSVC (it ships with /arch:AVX2)
+check_sse("BMI2" " ;/arch:AVX2")
+if (BMI2_FOUND)
+    set(GGML_BMI2 ON)
+else()
+    set(GGML_BMI2 OFF)
 endif()
