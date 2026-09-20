@@ -135,8 +135,8 @@ __device__ __forceinline__ float topk_moe_group_score(const float (&wt)[experts_
     // Reduce the top-2 pair across the whole warp.
 #pragma unroll
     for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-        const float o1 = __shfl_xor_sync(0xFFFFFFFF, top1, mask);
-        const float o2 = __shfl_xor_sync(0xFFFFFFFF, top2, mask);
+        const float o1 = __shfl_xor_sync(0xFFFFFFFF, top1, mask, WARP_SIZE);
+        const float o2 = __shfl_xor_sync(0xFFFFFFFF, top2, mask, WARP_SIZE);
 
         topk_moe_top2_merge(top1, top2, o1, o2);
     }
@@ -289,8 +289,8 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float other       = __shfl_xor_sync(0xFFFFFFFF, best, mask);
-                const int   other_group = __shfl_xor_sync(0xFFFFFFFF, best_group, mask);
+                const float other       = __shfl_xor_sync(0xFFFFFFFF, best, mask, WARP_SIZE);
+                const int   other_group = __shfl_xor_sync(0xFFFFFFFF, best_group, mask, WARP_SIZE);
 
                 if (other > best || (other == best && other_group < best_group)) {
                     best = other;
@@ -355,9 +355,9 @@ __global__ void topk_moe_cuda(const float *         logits,
 
 #pragma unroll
             for (int mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-                const float other_s   = __shfl_xor_sync(0xFFFFFFFF, max_s, mask);
-                const float other_w   = __shfl_xor_sync(0xFFFFFFFF, max_w, mask);
-                const int   other_exp = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask);
+                const float other_s   = __shfl_xor_sync(0xFFFFFFFF, max_s, mask, WARP_SIZE);
+                const float other_w   = __shfl_xor_sync(0xFFFFFFFF, max_w, mask, WARP_SIZE);
+                const int   other_exp = __shfl_xor_sync(0xFFFFFFFF, max_expert, mask, WARP_SIZE);
 
                 if (other_s > max_s || (other_s == max_s && other_exp < max_expert)) {
                     max_s      = other_s;
