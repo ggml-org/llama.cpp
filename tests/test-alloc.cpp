@@ -668,6 +668,8 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+// Check that the size reported by ggml_backend_alloc_ctx_tensors_from_buft_size
+// matches the actual size of the buffer allocated for the ctx tensors
 static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
     const size_t expected_size = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, buft);
     ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft));
@@ -678,6 +680,8 @@ static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buf
     return buffer;
 }
 
+// Check that all tensors are placed in a single buffer when they fit within the
+// backend's max size
 static void test_buft_alloc_buffer_n_single_buffer() {
     dummy_backend backend      = dummy_backend_init(SIZE_MAX);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -705,6 +709,8 @@ static void test_buft_alloc_buffer_n_single_buffer() {
     }
 }
 
+// Check that tensors are split across multiple underlying buffers when they don't
+// fit within the backend's max size
 static void test_buft_alloc_buffer_n_multi_buffer() {
     dummy_backend backend      = dummy_backend_init(16);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -733,6 +739,7 @@ static void test_buft_alloc_buffer_n_multi_buffer() {
     }
 }
 
+// Check that allocating tensors with zero total size returns nullptr
 static void test_buft_alloc_buffer_n_zero_size() {
     dummy_backend backend      = dummy_backend_init(SIZE_MAX);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -748,6 +755,8 @@ static void test_buft_alloc_buffer_n_zero_size() {
     GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, &backend.buffer_type) == 0);
 }
 
+// Check that tensors already allocated to a buffer are left in place, and only the
+// remaining tensors are allocated to a new buffer
 static void test_buft_alloc_buffer_n_already_allocated() {
     dummy_backend backend      = dummy_backend_init(SIZE_MAX);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -777,6 +786,7 @@ static void test_buft_alloc_buffer_n_already_allocated() {
     GGML_ASSERT(ggml_backend_alloc_ctx_tensors_from_buft(ctx, &backend.buffer_type) == nullptr);
 }
 
+// Check that views don't require any extra memory and share the base tensor's data
 static void test_buft_alloc_buffer_n_views() {
     dummy_backend backend      = dummy_backend_init(SIZE_MAX);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -797,6 +807,8 @@ static void test_buft_alloc_buffer_n_views() {
     GGML_ASSERT(view->data == base->data);
 }
 
+// Check that the reported size matches the allocated size in various scenarios:
+// single buffer, multi buffer, and views
 static void test_alloc_ctx_tensors_from_buft_size_matches() {
     {
         dummy_backend backend      = dummy_backend_init(SIZE_MAX, 8);
@@ -849,6 +861,8 @@ static void test_alloc_ctx_tensors_from_buft_size_matches() {
     }
 }
 
+// Check that a backend-provided alloc_buffer_n implementation takes precedence over
+// the default one
 static void test_buft_alloc_buffer_n_custom_override() {
     dummy_backend backend = dummy_backend_init(SIZE_MAX);
     backend.buffer_type.iface.alloc_buffer_n = dummy_backend_buffer_type_alloc_buffer_n_custom;
