@@ -2,7 +2,7 @@
  * modelsDiscoverStore - Models Discover browse state
  *
  * Owns the HuggingFace GGUF model list shown in the discover sidebar
- * (DialogModelsDiscover). By default the list is the curated catalog set;
+ * (the Discover tab of DialogManageModels). By default the list is the curated catalog set;
  * search replaces it with matches across all of HuggingFace. Both paths fetch
  * the same fields, so a row renders the same badges and sizes either way.
  */
