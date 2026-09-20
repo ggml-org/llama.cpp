@@ -360,6 +360,9 @@ common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg
 
 common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
 
+// The parameters schema of a function tool. A tool without parameters, or with an empty {}, takes zero arguments.
+common_json common_chat_tool_parameters(const common_json & function);
+
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 

@@ -15,8 +15,10 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
         hparams.is_recr_impl[i] = i < hparams.n_layer() && hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0;
     }
 
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,     hparams.f_norm_eps); // MTP head final_layernorm
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps); // MTP head final_layernorm
+    if (!ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps, false)) {
+        hparams.f_norm_rms_eps = hparams.f_norm_eps;
+    }
 
     // Puzzle models set a different expert FFN size per layer
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
@@ -145,8 +147,14 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
         const int64_t n_head_i       = hparams.n_head(i);
         const int64_t n_embd_k_gqa_i = hparams.n_embd_k_gqa(i);
         const int64_t n_embd_v_gqa_i = hparams.n_embd_v_gqa(i);
-        const int64_t n_ff_exp       = hparams.n_ff_exp(i) ? (int64_t)hparams.n_ff_exp(i) : n_ff / (int64_t)hparams.n_expert_used(i);
-        const int64_t n_ff_shexp     = hparams.n_ff_shexp;
+        const int64_t n_expert_used_i = hparams.n_expert_used(i);
+        const int64_t n_ff_exp_i      = hparams.n_ff_exp(i);
+        if (n_ff_exp_i == 0 && n_expert_used_i == 0) {
+            throw std::runtime_error(format("%s: layer %d declares neither expert_feed_forward_length nor expert_used_count, "
+                                            "cannot determine the expert FFN size", __func__, i));
+        }
+        const int64_t n_ff_exp   = n_ff_exp_i ? n_ff_exp_i : n_ff / n_expert_used_i;
+        const int64_t n_ff_shexp = hparams.n_ff_shexp;
 
         // NextN input-fusion tensors
         layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), {n_embd}, mtp_flags);
@@ -164,6 +172,8 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
         layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), {n_embd}, mtp_flags);
         layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, mtp_flags);
         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, mtp_flags);
+        layer.ffn_latent_down = create_tensor(tn(LLM_TENSOR_FFN_LATENT_DOWN, "weight", i), {n_embd, moe_n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.ffn_latent_up   = create_tensor(tn(LLM_TENSOR_FFN_LATENT_UP,   "weight", i), {moe_n_embd, n_embd}, mtp_flags | TENSOR_NOT_REQUIRED);
         layer.ffn_down_exps   = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS,   "weight", i), {n_ff_exp,   moe_n_embd, n_expert}, mtp_flags);
         layer.ffn_up_exps     = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,     "weight", i), {moe_n_embd, n_ff_exp,   n_expert}, mtp_flags);
         layer.ffn_down_shexp  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,  "weight", i), {n_ff_shexp, n_embd}, mtp_flags);
