@@ -77,4 +77,13 @@ static inline bool hex_add_overflow(size_t a, size_t b, size_t *out) {
     return false;
 }
 
+static inline uint32_t hex_gcd_u32(uint32_t a, uint32_t b) {
+    while (b != 0) {
+        uint32_t t = b;
+        b = a % b;
+        a = t;
+    }
+    return a;
+}
+
 #endif // HEX_COMMON_H

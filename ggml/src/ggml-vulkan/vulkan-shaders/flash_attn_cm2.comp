@@ -29,6 +29,12 @@
 #include "dequant_funcs_cm2.glsl"
 #endif
 
+#ifdef GL_NV_cooperative_matrix_decode_vector
+#define FA_GATHER_BS 4u
+#else
+#define FA_GATHER_BS 1u
+#endif
+
 // buffer_reference stride = sizeof(struct) = FaBlockBytesK/V.
 layout(buffer_reference, std430, buffer_reference_align = 1) buffer decodeBufFA_K {
     uint8_t raw[FaBlockBytesK];
@@ -106,6 +112,67 @@ layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
 layout (binding = 2) readonly buffer V {uint8_t data_v[];};
 layout (binding = 3) readonly buffer M {uint8_t data_m[];};
+
+// f16 aliases for the sparse gather callbacks.
+layout (binding = 1) readonly buffer KF16 {float16_t data_kf16[];};
+layout (binding = 2) readonly buffer VF16 {float16_t data_vf16[];};
+layout (binding = 3) readonly buffer MF16 {float16_t data_mf16[];};
+#ifdef GL_NV_cooperative_matrix_decode_vector
+layout (binding = 1) readonly buffer KF16V4 {f16vec4 data_kf16v4[];};
+layout (binding = 2) readonly buffer VF16V4 {f16vec4 data_vf16v4[];};
+#endif
+
+// K/V/mask f16-element offsets for the current head/batch, set in main().
+uint32_t g_k_off_elem, g_v_off_elem, g_m_off_elem;
+
+#if !defined(BFLOAT16)
+// blockCoords are in block units: KV slot = blockCoords[0],
+// head dim = blockCoords[1]*FA_GATHER_BS + coordInBlock[1].
+float16_t faGatherK(const decodeBufFA_K unused, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
+    if (blockCoords[0] >= p.split_kv) { return float16_t(0); }
+    const int r = data_sparse[sparse_base + blockCoords[0]];
+    return r < 0 ? float16_t(0) : data_kf16[g_k_off_elem + uint(r) * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
+}
+
+float16_t faGatherV(const decodeBufFA_V unused, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
+    if (blockCoords[0] >= p.split_kv) { return float16_t(0); }
+    const int r = data_sparse[sparse_base + blockCoords[0]];
+    return r < 0 ? float16_t(0) : data_vf16[g_v_off_elem + uint(r) * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
+}
+
+#ifdef GL_NV_cooperative_matrix_decode_vector
+f16vec4 faGatherKVector(const decodeBufFA_K unused, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
+    if (blockCoords[0] >= p.split_kv) { return f16vec4(0); }
+    const int r = data_sparse[sparse_base + blockCoords[0]];
+    if (r < 0) { return f16vec4(0); }
+    const uint32_t o = g_k_off_elem + uint(r) * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
+    return data_kf16v4[o / 4];
+}
+
+f16vec4 faGatherVVector(const decodeBufFA_V unused, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
+    if (blockCoords[0] >= p.split_kv) { return f16vec4(0); }
+    const int r = data_sparse[sparse_base + blockCoords[0]];
+    if (r < 0) { return f16vec4(0); }
+    const uint32_t o = g_v_off_elem + uint(r) * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
+    return data_vf16v4[o / 4];
+}
+
+#define FAGATHERK , faGatherK, faGatherKVector
+#define FAGATHERV , faGatherV, faGatherVVector
+#else
+#define FAGATHERK , faGatherK
+#define FAGATHERV , faGatherV
+#endif
+#endif
+
+// Add gathered mask to S (slope==1 since sparse requires max_bias==0). col = slot in block jblk.
+ACC_TYPE faAddSparseMask(const uint32_t row, const uint32_t col, const ACC_TYPE elem, const uint32_t jblk) {
+    const float NEG = uintBitsToFloat(0xFEFFFFFF);
+    const uint32_t kvslot = jblk * Bc + col;
+    if (kvslot >= p.split_kv) { return ACC_TYPE(NEG); }
+    const int r = data_sparse[sparse_base + kvslot];
+    return r < 0 ? ACC_TYPE(NEG) : elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
+}
 
 ACC_TYPE maxReduce(const in ACC_TYPE x, const in ACC_TYPE y) {
     return max(x, y);
@@ -185,14 +252,16 @@ void main() {
 
     tensorViewNV<2, false, 1, 0> tensorViewTranspose = createTensorViewNV(2, false, 1, 0);
 
-    const uint bs_k = fa_block_elems(FaTypeK);
-    const uint bs_v = fa_block_elems(FaTypeV);
+    const uint bs_k = USE_SPARSE ? FA_GATHER_BS : fa_block_elems(FaTypeK);
+    const uint bs_v = USE_SPARSE ? FA_GATHER_BS : fa_block_elems(FaTypeV);
     tensorLayoutK = setTensorLayoutBlockSizeNV(tensorLayoutK, 1, bs_k);
     tensorLayoutV = setTensorLayoutBlockSizeNV(tensorLayoutV, 1, bs_v);
 
+    // Sparse iterates n_kv_max (in split_kv); the decode callbacks remap each slot.
+    const uint32_t KV_iter = USE_SPARSE ? p.split_kv : KV;
     tensorLayoutQ = setTensorLayoutDimensionNV(tensorLayoutQ, N, HSK);
-    tensorLayoutK = setTensorLayoutDimensionNV(tensorLayoutK, KV, HSK);
-    tensorLayoutV = setTensorLayoutDimensionNV(tensorLayoutV, KV, HSV);
+    tensorLayoutK = setTensorLayoutDimensionNV(tensorLayoutK, KV_iter, HSK);
+    tensorLayoutV = setTensorLayoutDimensionNV(tensorLayoutV, KV_iter, HSV);
 
     // hint to the compiler that strides are aligned for the aligned variant of the shader
     if (Clamp != gl_CooperativeMatrixClampModeConstantNV)
@@ -250,6 +319,10 @@ void main() {
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
     }
 
+    g_k_off_elem = (ik2*p.nb12 + ik3*p.nb13) / 2;
+    g_v_off_elem = (iv2*p.nb22 + iv3*p.nb23) / 2;
+    g_m_off_elem = m_offset / 2;
+
     uint32_t mask_opt = 0;
     uint32_t mask_opt_idx = ~0;
 
@@ -257,7 +330,7 @@ void main() {
     for (uint32_t j = start_j; j < end_j; ++j) {
 
         coopmat<float16_t, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> mv = coopmat<float16_t, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
-        if (MASK_ENABLE) {
+        if (MASK_ENABLE && !USE_SPARSE) {
 
             if (USE_MASK_OPT && mask_opt_idx != j / 16) {
                 mask_opt_idx = j / 16;
@@ -315,7 +388,9 @@ void main() {
         coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
 #else
         const bool k_use_decode = (bs_k > 1u);
-        if (k_use_decode) {
+        if (USE_SPARSE) {
+            coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose FAGATHERK);
+        } else if (k_use_decode) {
             coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose FADECODEK);
         } else {
             coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose);
@@ -330,7 +405,9 @@ void main() {
             }
         }
 
-        if (MASK_ENABLE) {
+        if (MASK_ENABLE && USE_SPARSE) {
+            coopMatPerElementNV(S, S, faAddSparseMask, j);
+        } else if (MASK_ENABLE) {
             S += slopeMat*coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(mv);
         }
 
@@ -385,7 +462,9 @@ void main() {
         coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
 #else
         const bool v_use_decode = (bs_v > 1u);
-        if (v_use_decode) {
+        if (USE_SPARSE) {
+            coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) FAGATHERV);
+        } else if (v_use_decode) {
             coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) FADECODEV);
         } else {
             coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad));
