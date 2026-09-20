@@ -72,4 +72,46 @@ fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 // Keyed by Apple GPU family; an untuned family matches no row and gets the baseline.
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
+// FA (non-vec) queries per threadgroup (Q) and simdgroups per threadgroup (NSG). Rows key an exact ne11 bucket,
+// or all of them with ne11_b == FA_NE11_DEFAULT. fa_pick tries exact bucket -> default, under the device and
+// then under its family representative -> baseline.
+// ne01 < FA_NE01_MIN always uses baseline, and so does ne01 < FA_NE01_MIN_PARTIAL when the last wide tile
+// would be padded with more rows than the baseline tile.
+constexpr int FA_NE11_BUCKETS[]   = { 4096, 8192, 16384, 32768, 65536 };
+constexpr int FA_NE01_MIN         = 64;
+constexpr int FA_NE01_MIN_PARTIAL = 256;
+
+constexpr int8_t FA_NE11_DEFAULT = -1;
+
+constexpr int8_t FA_Q_BASELINE = 8;
+constexpr int8_t FA_Q_WIDE     = 16;
+
+int fa_ne11_bucket(int64_t ne11);
+
+struct fa_key_t {
+    int8_t  device_id;
+    int8_t  ne11_b;
+    int16_t dk;
+    int16_t dv;
+};
+
+static_assert(sizeof(fa_key_t) == 6, "fa_key_t must be tightly packed for memcmp");
+
+// NSG is used with the wide tile only - the baseline tile keeps its own choice
+struct fa_cfg_t {
+    int8_t Q;
+    int8_t NSG;
+};
+
+struct fa_entry_t {
+    fa_key_t key;
+    fa_cfg_t cfg;
+};
+
+// test/tune-only override; when set, fa_pick returns it directly.
+void fa_set_override(fa_cfg_t cfg);
+void fa_clear_override();
+
+fa_cfg_t fa_pick(enum ggml_metal_device_id device_id, int gpu_family, int dk, int dv, int64_t ne11, int64_t ne01);
+
 }  // namespace ggml_metal_tuning

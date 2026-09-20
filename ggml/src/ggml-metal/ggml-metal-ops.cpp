@@ -2980,6 +2980,44 @@ static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
     }
 }
 
+// queries and simdgroups per threadgroup for the non-vec kernel
+static ggml_metal_tuning::fa_cfg_t ggml_metal_op_flash_attn_ext_cfg(const ggml_tensor * op, const ggml_metal_device_props * props_dev) {
+    assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+
+    const int64_t ne00 = op->src[0]->ne[0]; // DK
+    const int64_t ne01 = op->src[0]->ne[1]; // number of queries
+    const int64_t ne11 = op->src[1]->ne[1]; // KV length
+    const int64_t ne20 = op->src[2]->ne[0]; // DV
+
+    const ggml_metal_tuning::fa_cfg_t baseline = { OP_FLASH_ATTN_EXT_NQPSG, 0 };
+
+    const ggml_metal_tuning::fa_cfg_t cfg = ggml_metal_tuning::fa_pick(props_dev->device_id, props_dev->gpu_family, (int) ne00, (int) ne20, ne11, ne01);
+
+    // only Q = 16 with nsg = 4 or 8 is instantiated
+    if (cfg.Q != 2*OP_FLASH_ATTN_EXT_NQPSG || (cfg.NSG != 4 && cfg.NSG != 8)) {
+        return baseline;
+    }
+
+    // the wide tile supports F16 K/V only
+    if (op->src[1]->type != GGML_TYPE_F16 && !ggml_metal_op_flash_attn_ext_use_kv_f16(op)) {
+        return baseline;
+    }
+
+    // the P*V loop walks the padded V head in pairs of 8x8 tiles per simdgroup
+    if (GGML_PAD(ne20, 64) % (16*cfg.NSG) != 0) {
+        return baseline;
+    }
+
+    // see fa_smem in ggml_metal_op_flash_attn_ext
+    const size_t smem = GGML_PAD((cfg.Q*(ne00 + 2*GGML_PAD(ne20, 64) + 2*(2*OP_FLASH_ATTN_EXT_NCPSG)))*(sizeof(float)/2), 16);
+
+    if (smem > props_dev->max_theadgroup_memory_size) {
+        return baseline;
+    }
+
+    return cfg;
+}
+
 // returns the n_kv_max hint if the sparse path is available for this op, or 0 otherwise
 // the mask (src[3]) remains the single source of truth: finite entries are the valid KV positions,
 // n_kv_max is only an upper bound on their number per mask row, used to size the index lists
@@ -3418,7 +3456,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_sparse && !ggml_metal_op_flash_attn_ext_use_vec(op)) {
         // half8x8 kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_NQPSG; // queries per threadgroup
+        // note: the blk buffer is reserved for the baseline tile, which is an upper bound for the wide tile
+        const auto cfg = ggml_metal_op_flash_attn_ext_cfg(op, props_dev);
+
+        const int nqptg = cfg.Q;                   // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_NCPSG; // cache values per simdgroup
 
         GGML_ASSERT(nqptg <= 32);
@@ -3515,7 +3556,14 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // simdgroups per threadgroup (a.k.a. warps)
         int32_t nsg = ne00 >= 512 ? 8 : 4;
 
+        if (nqptg > OP_FLASH_ATTN_EXT_NQPSG) {
+            nsg = cfg.NSG;
+        }
+
         const size_t smem = fa_smem(nsg);
+        if (nqptg > OP_FLASH_ATTN_EXT_NQPSG) {
+            GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
+        }
 
         const int32_t ns10 = nb11_attn/nb10_attn;
         const int32_t ns20 = nb21_attn/nb20_attn;
@@ -3555,7 +3603,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             /*.logit_softcap =*/ logit_softcap,
         };
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, use_kv_f16, ns10, ns20);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext(lib, op, has_mask, has_sinks, has_bias, has_scap, has_kvpad, nsg, nqptg, use_kv_f16, ns10, ns20);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
