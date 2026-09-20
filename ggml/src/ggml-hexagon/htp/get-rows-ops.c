@@ -213,11 +213,13 @@ int op_get_rows(struct htp_ops_context * octx) {
 
     if (octx->src[0]->type != HTP_TYPE_F32 &&
         octx->src[0]->type != HTP_TYPE_F16 &&
-        octx->src[0]->type != HTP_TYPE_Q8_0) {
+        octx->src[0]->type != HTP_TYPE_Q8_0 &&
+        octx->src[0]->type != HTP_TYPE_I32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->dst->type != HTP_TYPE_F32) {
+    if ((octx->src[0]->type == HTP_TYPE_I32 && octx->dst->type != HTP_TYPE_I32) ||
+        (octx->src[0]->type != HTP_TYPE_I32 && octx->dst->type != HTP_TYPE_F32)) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -275,6 +277,7 @@ int op_get_rows(struct htp_ops_context * octx) {
             case HTP_TYPE_F32:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f32_int32_t  : get_rows_thread_f32_int64_t);  break;
             case HTP_TYPE_F16:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f16_int32_t  : get_rows_thread_f16_int64_t);  break;
             case HTP_TYPE_Q8_0: q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q8_0_int32_t : get_rows_thread_q8_0_int64_t); break;
+            case HTP_TYPE_I32:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t   : get_rows_thread_st_int64_t);   break;
             default:            return HTP_STATUS_NO_SUPPORT;
         }
     }

@@ -1733,6 +1733,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->ne[0] != 576) {
                 return false;
             }
+            if (op->src[1]->ne[0] == 72 && op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                return false;
+            }
+            if (op->src[1]->ne[0] < op->src[2]->ne[0]) {
+                return false;
+            }
             if (op->src[1]->type != op->src[2]->type) {
                 return false;
             }
@@ -1801,9 +1807,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->type         == GGML_TYPE_F32 &&
-                op->src[0]->ne[1] == 4 &&
-                op->src[1]->ne[0] == 4 &&
-                op->src[1]->ne[2] == 1 &&
                 ggml_is_contiguous_rows(op->src[0]) &&
                 ggml_is_contiguous_rows(op->src[1]);
         case GGML_OP_DSV4_HC_POST:
@@ -1811,17 +1814,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->type == GGML_TYPE_F32 &&
                 op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 &&
-                op->src[3] != NULL &&
-                op->src[3]->type == GGML_TYPE_F32 &&
+                (op->src[3] == NULL || op->src[3]->type == GGML_TYPE_F32) &&
                 op->type         == GGML_TYPE_F32 &&
                 op->src[1]->ne[1] == 4 &&
                 op->src[2]->ne[0] == 4 &&
-                op->src[3]->ne[0] == 4 &&
-                op->src[3]->ne[1] == 4 &&
+                (op->src[3] == NULL || (op->src[3]->ne[0] == 4 && op->src[3]->ne[1] == 4)) &&
                 ggml_is_contiguous_rows(op->src[0]) &&
                 ggml_is_contiguous_rows(op->src[1]) &&
                 ggml_is_contiguous_rows(op->src[2]) &&
-                ggml_is_contiguous_rows(op->src[3]);
+                (op->src[3] == NULL || ggml_is_contiguous_rows(op->src[3]));
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:
@@ -1834,6 +1835,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
+            // the FWHT kernels read an F16 source directly; every other F16 src1 path
+            // still goes through ggml_metal_supports_mul_mat_op
+            if (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F16 &&
+                ggml_metal_op_mul_mat_use_fwht(op)) {
+                return has_simdgroup_reduction;
+            }
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, true,
                     ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));

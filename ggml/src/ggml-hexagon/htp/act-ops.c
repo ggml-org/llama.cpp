@@ -312,6 +312,45 @@ static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * rest
     }
 }
 
+static inline void hvx_geglu_quick_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
+    assert((unsigned long) dst  % 128 == 0);
+    assert((unsigned long) src0 % 128 == 0);
+    assert((unsigned long) src1 % 128 == 0);
+
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vsrc1 = (const HVX_Vector *) src1;
+
+    const uint32_t epv  = 128 / sizeof(float);
+    const uint32_t nvec = n / epv;
+    const uint32_t nloe = n % epv;
+
+    const HVX_Vector v_scale    = hvx_vec_splat_f32(1.702f);
+    const HVX_Vector v_one      = hvx_vec_splat_f32(1.0f);
+    const HVX_Vector v_max_exp  = hvx_vec_splat_f32(87.0f);
+    const HVX_Vector v_min_exp  = hvx_vec_splat_f32(-87.0f);
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        HVX_Vector x = vsrc0[i];
+        HVX_Vector g = vsrc1[i];
+        HVX_Vector scaled_x = hvx_vec_mul_f32_f32(x, v_scale);
+        HVX_Vector sigmoid_x = hvx_vec_fast_sigmoid_f32_guard_2it(scaled_x, v_one, v_max_exp, v_min_exp);
+        vdst[i] = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(x, sigmoid_x), g);
+    }
+
+    if (nloe) {
+        HVX_Vector x = vsrc0[i];
+        HVX_Vector g = vsrc1[i];
+        HVX_Vector scaled_x = hvx_vec_mul_f32_f32(x, v_scale);
+        HVX_Vector sigmoid_x = hvx_vec_fast_sigmoid_f32_guard_2it(scaled_x, v_one, v_max_exp, v_min_exp);
+        HVX_Vector result = hvx_vec_mul_f32_f32(hvx_vec_mul_f32_f32(x, sigmoid_x), g);
+        hvx_vec_store_a((void *) &vdst[i], nloe * sizeof(float), result);
+    }
+}
+
 // geglu(x, g) = gelu(x) * g
 static void geglu_f32(const float * restrict src0,
                       const float * restrict src1,
@@ -326,6 +365,23 @@ static void geglu_f32(const float * restrict src0,
         uint8_t * restrict dst_ptr        = (uint8_t *) dst + (ib * dst_row_size_aligned);
 
         hvx_geglu_f32_aa(dst_ptr, src0_ptr, src1_ptr, nc);
+    }
+}
+
+// geglu_quick(x, g) = x * sigmoid(1.702 * x) * g
+static void geglu_quick_f32(const float * restrict src0,
+                            const float * restrict src1,
+                            float * restrict dst,
+                            const uint32_t num_rows,
+                            const struct htp_act_context * actx) {
+    htp_glu_op_preamble;
+
+    for (uint32_t ib = 0; ib < num_rows; ib++) {
+        const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
+        const uint8_t * restrict src1_ptr = (const uint8_t *) src1 + (ib * src1_row_size_aligned);
+        uint8_t * restrict dst_ptr        = (uint8_t *) dst + (ib * dst_row_size_aligned);
+
+        hvx_geglu_quick_f32_aa(dst_ptr, src0_ptr, src1_ptr, nc);
     }
 }
 
@@ -433,6 +489,7 @@ DEFINE_GLU_PER_THREAD(swiglu, "swiglu-f32", swiglu_f32(src0_spad, src1_spad, dst
 DEFINE_GLU_PER_THREAD(swiglu_oai, "swiglu-oai-f32", swiglu_oai_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 DEFINE_GLU_PER_THREAD(swiglu_clamp, "swiglu-clamp-f32", swiglu_clamp_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 DEFINE_GLU_PER_THREAD(geglu, "geglu-f32", geglu_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
+DEFINE_GLU_PER_THREAD(geglu_quick, "geglu-quick-f32", geglu_quick_f32(src0_spad, src1_spad, dst_spad, block_size, actx))
 
 static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
@@ -466,6 +523,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
         case HTP_OP_GLU_GEGLU:
             act_op_func = (worker_callback_t)glu_geglu_f32_per_thread;
             op_type     = "geglu-f32";
+            break;
+
+        case HTP_OP_GLU_GEGLU_QUICK:
+            act_op_func = (worker_callback_t)glu_geglu_quick_f32_per_thread;
+            op_type     = "geglu-quick-f32";
             break;
         default:
             FARF(ERROR, "Unsupported activations Op %u\n", octx->op);
@@ -570,7 +632,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const uint8_t * data_src0 = (const uint8_t *) src0->data;
     const uint8_t * data_src1 = src1 ? (const uint8_t *) src1->data : NULL;
 
-    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU || octx->op == HTP_OP_GLU_SWIGLU_OAI || octx->op == HTP_OP_GLU_SWIGLU_CLAMP || octx->op == HTP_OP_GLU_GEGLU)) {
+    if (!src1 && (octx->op == HTP_OP_GLU_SWIGLU ||
+                  octx->op == HTP_OP_GLU_SWIGLU_OAI ||
+                  octx->op == HTP_OP_GLU_SWIGLU_CLAMP ||
+                  octx->op == HTP_OP_GLU_GEGLU ||
+                  octx->op == HTP_OP_GLU_GEGLU_QUICK)) {
          const int32_t swapped = octx->op_params[1];
          data_src1 = data_src0;
          actx.src1_row_size = actx.src0_row_size;
