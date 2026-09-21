@@ -327,6 +327,9 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
 - `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
   Enables allocating host buffers for debugging. By default, host buffers are disabled.
 
+- `GGML_HEXAGON_DMA64=0` (default: enabled on v81+)
+  Disables 64-bit DMA for model weights. Set to `1` to enable it explicitly on a supported architecture.
+
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:
 

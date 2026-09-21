@@ -133,10 +133,13 @@ enum htp_tensor_flags {
     HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
 };
 
+enum htp_buf_flags {
+    HTP_BUF_EXTENDED = (1U << 0),
+};
+
 // Tensor descriptor
 struct htp_tensor {
-    uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
-    uint32_t reserved;             // Reserved for alignment padding (must be multiple of 8)
+    uint64_t data;                 // Buffer offset in the messages, and data pointer on the NPU
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
     uint32_t type;                 // Data type
@@ -150,12 +153,12 @@ struct htp_tensor {
 struct htp_buf_desc {
     uint64_t base;     // base address
     uint64_t size;     // total size
-    uint32_t flags;    // buffer flags (unused)
+    uint32_t flags;    // HTP_BUF_*
     uint32_t fd;       // file descriptor
 };
 
 enum htp_op_flags {
-    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
+    HTP_OPFLAGS_STUB  = (1U << 0),
 };
 
 // Op descriptor

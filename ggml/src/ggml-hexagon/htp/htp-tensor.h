@@ -21,6 +21,10 @@ static inline void * htp_tensor_data(const struct htp_tensor * t) {
     return (void *) (uintptr_t) t->data;
 }
 
+static inline bool htp_tensor_is_extended(const struct htp_tensor * t) {
+    return t && (t->data >> 32) != 0;
+}
+
 static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
     return (uint32_t *) &t->flags;
 }

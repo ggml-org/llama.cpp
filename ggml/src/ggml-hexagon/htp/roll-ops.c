@@ -67,8 +67,8 @@ static inline uint32_t htp_roll_wrap(int32_t i, uint32_t ne) {
 #define htp_roll_dma_preamble dma_queue * q = octx->ctx->dma[0];
 
 static inline void roll_dma_push(dma_queue * q,
-                                 uintptr_t   dst,
-                                 uintptr_t   src,
+                                 dma_addr_t  dst,
+                                 dma_addr_t  src,
                                  uint32_t    dst_stride,
                                  uint32_t    src_stride,
                                  uint32_t    bytes,
@@ -77,10 +77,10 @@ static inline void roll_dma_push(dma_queue * q,
         return;
     }
 
-    if (!dma_queue_push(q, dma_make_ptr((void *) dst, (const void *) src), dst_stride, src_stride, bytes, nrows)) {
+    if (!dma_queue_push(q, dma_make_data(dst, src), dst_stride, src_stride, bytes, nrows)) {
         dma_queue_flush(q);
-        dma_queue_push(q, dma_make_ptr((void *) dst, (const void *) src),
-                                       dst_stride, src_stride, bytes, nrows);
+        dma_queue_push(q, dma_make_data(dst, src),
+                       dst_stride, src_stride, bytes, nrows);
     }
 }
 
@@ -92,29 +92,29 @@ static inline void roll_dma_push_rows(dma_queue *               q,
                                       uint32_t                  nrows,
                                       uint32_t                  row_size,
                                       uint32_t                  i0_src0) {
-    const uintptr_t dst_base = dst->data + (uintptr_t) dst_row * row_size;
-    const uintptr_t src_base = src0->data + (uintptr_t) src_row * row_size;
-    const uint32_t  n0       = src0->ne[0] - i0_src0;
+    const dma_addr_t dst_base = dst->data + (size_t) dst_row * row_size;
+    const dma_addr_t src_base = src0->data + (size_t) src_row * row_size;
+    const uint32_t   n0       = src0->ne[0] - i0_src0;
 
-    roll_dma_push(q, dst_base, src_base + (uintptr_t) i0_src0 * sizeof(float),
+    roll_dma_push(q, dst_base, src_base + (size_t) i0_src0 * sizeof(float),
                   row_size, row_size, n0 * sizeof(float), nrows);
-    roll_dma_push(q, dst_base + (uintptr_t) n0 * sizeof(float), src_base,
+    roll_dma_push(q, dst_base + (size_t) n0 * sizeof(float), src_base,
                   row_size, row_size, i0_src0 * sizeof(float), nrows);
 }
 
 // Same row-wrap split as roll_dma_push_rows, but addressed with explicit byte strides so it
 // also works for a src0 that is row-contiguous only (e.g. a permuted view) rather than fully packed.
 static inline void roll_dma_push_range(dma_queue * q,
-                                       uintptr_t   dst_row,
-                                       uintptr_t   src_row,
+                                       dma_addr_t  dst_row,
+                                       dma_addr_t  src_row,
                                        uint32_t    dst_stride,
                                        uint32_t    src_stride,
                                        uint32_t    nrows,
                                        uint32_t    i0_src0,
                                        uint32_t    n0) {
-    roll_dma_push(q, dst_row, src_row + (uintptr_t) i0_src0 * sizeof(float),
+    roll_dma_push(q, dst_row, src_row + (size_t) i0_src0 * sizeof(float),
                   dst_stride, src_stride, n0 * sizeof(float), nrows);
-    roll_dma_push(q, dst_row + (uintptr_t) n0 * sizeof(float), src_row,
+    roll_dma_push(q, dst_row + (size_t) n0 * sizeof(float), src_row,
                   dst_stride, src_stride, i0_src0 * sizeof(float), nrows);
 }
 
@@ -184,12 +184,12 @@ static int roll_dma_f32_strided(struct htp_ops_context * octx) {
         for (uint32_t i2 = 0; i2 < ne2; i2++) {
             const uint32_t i02 = htp_roll_wrap((int32_t) i2 - s2, ne2);
 
-            const uintptr_t dst_row0 = dst->data  + (uintptr_t) i2  * nb2  + (uintptr_t) i3  * nb3;
-            const uintptr_t src_row0 = src0->data + (uintptr_t) i02 * nb02 + (uintptr_t) i03 * nb03;
+            const dma_addr_t dst_row0 = dst->data  + (size_t) i2  * nb2  + (size_t) i3  * nb3;
+            const dma_addr_t src_row0 = src0->data + (size_t) i02 * nb02 + (size_t) i03 * nb03;
 
-            roll_dma_push_range(q, dst_row0, src_row0 + (uintptr_t) i1_src0 * nb01,
+            roll_dma_push_range(q, dst_row0, src_row0 + (size_t) i1_src0 * nb01,
                                 nb1, nb01, n1_first, i0_src0, n0);
-            roll_dma_push_range(q, dst_row0 + (uintptr_t) n1_first * nb1, src_row0,
+            roll_dma_push_range(q, dst_row0 + (size_t) n1_first * nb1, src_row0,
                                 nb1, nb01, i1_src0, i0_src0, n0);
         }
     }
@@ -223,8 +223,8 @@ static void roll_thread_f32(unsigned int nth, unsigned int ith, void * data) {
         const uint32_t i02 = htp_roll_wrap((int32_t) i2 - s2, ne2);
         const uint32_t i03 = htp_roll_wrap((int32_t) i3 - s3, ne3);
 
-        const uint8_t * src_row = (const uint8_t *) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
-        uint8_t * dst_row = (uint8_t *) dst->data + i1*nb1 + i2*nb2 + i3*nb3;
+        const uint8_t * src_row = (const uint8_t *) (uintptr_t) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+        uint8_t * dst_row = (uint8_t *) (uintptr_t) dst->data + i1*nb1 + i2*nb2 + i3*nb3;
 
         hex_l2fetch(src_row + i0_src0 * sizeof(float), n0 * sizeof(float), ne0 * sizeof(float), 1);
         hvx_copy_uu(dst_row, src_row + i0_src0 * sizeof(float), n0, sizeof(float));
@@ -261,10 +261,6 @@ int execute_op_roll_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
-    }
-
     const uint32_t total_rows = ne1 * ne2 * ne3;
     const size_t dst_row_size = ne0 * sizeof(float);
 
@@ -288,6 +284,10 @@ int execute_op_roll_f32(struct htp_ops_context * octx) {
             return roll_dma_f32_contiguous(octx);
         }
         return roll_dma_f32_strided(octx);
+    }
+
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
     }
 
     const uint32_t n_threads = octx->n_threads;

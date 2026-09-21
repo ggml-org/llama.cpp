@@ -21,6 +21,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_NHVX",
     "GGML_HEXAGON_NHMX",
     "GGML_HEXAGON_HOSTBUF",
+    "GGML_HEXAGON_DMA64",
     "GGML_HEXAGON_OPBATCH",
     "GGML_HEXAGON_OPQUEUE",
     "GGML_HEXAGON_OPPOLL",
@@ -155,6 +156,7 @@ def main():
     parser.add_argument("--hex-nhvx", help="Number of HVX units to use (GGML_HEXAGON_NHVX)")
     parser.add_argument("--hex-nhmx", help="Number of HMX units to use. 0 disables HMX power-up (GGML_HEXAGON_NHMX)")
     parser.add_argument("--hex-hostbuf", help="Enable host buffers (GGML_HEXAGON_HOSTBUF)")
+    parser.add_argument("--hex-dma64", nargs="?", const="1", help="Enable (1) or disable (0) 64-bit DMA for model weights (GGML_HEXAGON_DMA64)")
     parser.add_argument("--hex-opbatch", help="Maximum number of operations to batch into a single HTP execution (GGML_HEXAGON_OPBATCH)")
     parser.add_argument("--hex-opqueue", help="Size of the asynchronous NPU operation queue (GGML_HEXAGON_OPQUEUE)")
     parser.add_argument("--hex-oppoll", default="1", help="Enable (1) or Disable (0) polling for NPU opbatch completion (GGML_HEXAGON_OPPOLL) (default: 1)")
@@ -162,7 +164,7 @@ def main():
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
     parser.add_argument("--hex-mbuf", help="Maximum host buffer size limit in MB to allocate (GGML_HEXAGON_MBUF)")
-    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 3:HMX,2:HVX-tiled,1:HVX-flat,0:disable")
+    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
@@ -294,6 +296,7 @@ def main():
     set_env("GGML_HEXAGON_NHVX", args.hex_nhvx)
     set_env("GGML_HEXAGON_NHMX", args.hex_nhmx)
     set_env("GGML_HEXAGON_HOSTBUF", args.hex_hostbuf)
+    set_env("GGML_HEXAGON_DMA64", args.hex_dma64)
     set_env("GGML_HEXAGON_OPBATCH", args.hex_opbatch)
     set_env("GGML_HEXAGON_OPQUEUE", args.hex_opqueue)
     set_env("GGML_HEXAGON_OPPOLL", args.hex_oppoll)

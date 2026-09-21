@@ -6,7 +6,7 @@
 #include "hexagon_types.h"
 #include "hexagon_protos.h"
 #include "hvx_hexagon_protos.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "htp-vtcm.h"
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
@@ -41,7 +41,7 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t end_i   = (start_i + cctx->nrows_per_thread < row_end) ? (start_i + cctx->nrows_per_thread) : row_end;
     if (start_i >= end_i) return;
 
-    dma_queue * q = octx->ctx->dma[ith];
+    dma_queue * dma_q = octx->ctx->dma[ith];
 
     uint8_t * spad0_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_thread;
     uint8_t * spad1_base = octx->src1_spad.data + ith * octx->src1_spad.size_per_thread;
@@ -64,14 +64,14 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
         uint32_t src1_width_bytes = current_block_i * sizeof(float);
-        uint8_t * src1_ptr = (uint8_t *)src1->data + i * src1->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad1_base, src1_ptr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
+        const dma_addr_t src1_addr = src1->data + i * src1->nb[1];
+        dma_queue_push(dma_q, dma_make_data(spad1_base, src1_addr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
 
         uint32_t src0_row_bytes = src0_ne0 * sizeof(float);
-        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
+        const dma_addr_t src0_addr = src0->data + i * src0->nb[1];
+        dma_queue_push(dma_q, dma_make_data(spad0_base, src0_addr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
 
-        dma_queue_pop(q); // src1
+        dma_queue_pop(dma_q); // src1
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
@@ -87,12 +87,12 @@ static void concat_2d_f32_transposed(unsigned int nth, unsigned int ith, void * 
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
 
-        dma_queue_pop(q); // src0
+        dma_queue_pop(dma_q); // src0
 
-        uint8_t * dst_ptr = (uint8_t *)dst->data + i * dst->nb[1];
-        dma_queue_push(q, dma_make_ptr(dst_ptr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(float), current_block_i);
+        const dma_addr_t dst_addr = dst->data + i * dst->nb[1];
+        dma_queue_push(dma_q, dma_make_data(dst_addr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(float), current_block_i);
 
-        dma_queue_pop(q);
+        dma_queue_pop(dma_q);
     }
 }
 
@@ -112,7 +112,7 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
     const uint32_t end_i   = (start_i + cctx->nrows_per_thread < row_end) ? (start_i + cctx->nrows_per_thread) : row_end;
     if (start_i >= end_i) return;
 
-    dma_queue * q = octx->ctx->dma[ith];
+    dma_queue * dma_q = octx->ctx->dma[ith];
 
     uint8_t * spad0_base = octx->src0_spad.data + ith * octx->src0_spad.size_per_thread;
     uint8_t * spad1_base = octx->src1_spad.data + ith * octx->src1_spad.size_per_thread;
@@ -135,14 +135,14 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
         uint32_t current_block_i = (end_i - i < block_i) ? (end_i - i) : block_i;
 
         uint32_t src1_width_bytes = current_block_i * sizeof(__fp16);
-        uint8_t * src1_ptr = (uint8_t *)src1->data + i * src1->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad1_base, src1_ptr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
+        const dma_addr_t src1_addr = src1->data + i * src1->nb[1];
+        dma_queue_push(dma_q, dma_make_data(spad1_base, src1_addr), spad1_stride, src1->nb[0], src1_width_bytes, src1_ne0);
 
         uint32_t src0_row_bytes = src0_ne0 * sizeof(__fp16);
-        uint8_t * src0_ptr = (uint8_t *)src0->data + i * src0->nb[1];
-        dma_queue_push(q, dma_make_ptr(spad0_base, src0_ptr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
+        const dma_addr_t src0_addr = src0->data + i * src0->nb[1];
+        dma_queue_push(dma_q, dma_make_data(spad0_base, src0_addr), spad0_row_bytes, src0->nb[1], src0_row_bytes, current_block_i);
 
-        dma_queue_pop(q); // src1
+        dma_queue_pop(dma_q); // src1
 
         HVX_Vector * vtcm_tmp = (HVX_Vector *)(spad1_base + src1_ne0_padded * spad1_stride);
 
@@ -158,12 +158,12 @@ static void concat_2d_f16_transposed(unsigned int nth, unsigned int ith, void * 
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
 
-        dma_queue_pop(q); // src0
+        dma_queue_pop(dma_q); // src0
 
-        uint8_t * dst_ptr = (uint8_t *)dst->data + i * dst->nb[1];
-        dma_queue_push(q, dma_make_ptr(dst_ptr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(__fp16), current_block_i);
+        const dma_addr_t dst_addr = dst->data + i * dst->nb[1];
+        dma_queue_push(dma_q, dma_make_data(dst_addr, spad0_base), dst->nb[1], spad0_row_bytes, (src0_ne0 + src1_ne0) * sizeof(__fp16), current_block_i);
 
-        dma_queue_pop(q);
+        dma_queue_pop(dma_q);
     }
 }
 
@@ -304,6 +304,10 @@ int op_concat(struct htp_ops_context * octx) {
             worker_func = concat_2d_f16_transposed;
         }
     } else {
+        if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(src1) || htp_tensor_is_extended(dst)) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
+
         const uint32_t total_elements = dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3];
         uint32_t elem_start = 0;
         uint32_t nelems     = total_elements;

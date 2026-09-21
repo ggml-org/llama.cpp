@@ -13,7 +13,7 @@
 #include "hvx-types.h"
 #include "hex-utils.h"
 #include "hvx-copy.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 
 #define htp_diag_tensors_preamble                           \
     const struct htp_tensor * restrict src0 = octx->src[0]; \
@@ -59,7 +59,7 @@ static inline void hvx_diag_row_f32(const float * restrict src, float * restrict
 
 static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data) {
     htp_diag_preamble;
-    dma_queue * dma_queue = octx->ctx->dma[ith];
+    dma_queue * dma_q = octx->ctx->dma[ith];
 
     const uint32_t ib0 = dctx->batch_start + dctx->batches_per_thread * ith;
     const uint32_t ib1 = MIN(ib0 + dctx->batches_per_thread, dctx->batch_start + dctx->total_batches);
@@ -73,8 +73,8 @@ static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data)
     const size_t src_batch_size_aligned = dctx->src_batch_size_aligned;
     const size_t dst_row_size_aligned   = dctx->dst_row_size_aligned;
 
-    const uint8_t * src_data = (const uint8_t *) src0->data;
-    uint8_t *       dst_data = (uint8_t *) dst->data;
+    const dma_addr_t src_data = src0->data;
+    const dma_addr_t dst_data = dst->data;
 
     // 1 src buffer + 1 dst row buffer per thread in VTCM
     uint8_t * src_spad = octx->src0_spad.data + (ith * src_batch_size_aligned);
@@ -86,13 +86,13 @@ static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data)
         const uint32_t i3 = ib / ne02;
         const uint32_t i2 = ib % ne02;
 
-        const uint8_t * src_batch = src_data + i3 * nb03 + i2 * nb02;
+        const dma_addr_t src_batch = src_data + i3 * nb03 + i2 * nb02;
 
         // Fetch source vector into VTCM
-        dma_queue_push_ddr_to_vtcm(dma_queue,
-                                   dma_make_ptr(src_spad, src_batch),
-                                   src_batch_size_aligned, src_batch_size, 1);
-        dma_queue_flush(dma_queue);
+        dma_queue_push(dma_q,
+                       dma_make_data(src_spad, src_batch),
+                       src_batch_size_aligned, src_batch_size, src_batch_size, 1);
+        dma_queue_flush(dma_q);
 
         const float * src_spad_f32 = (const float *) src_spad;
         float       * dst_spad_f32 = (float *) dst_spad;
@@ -104,11 +104,11 @@ static void diag_thread_f32_dma(unsigned int nth, unsigned int ith, void * data)
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (ib * ne1 + i1));
 
             // Write completed row back to DDR
-            uint8_t * dst_row = dst_data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-            dma_queue_push_vtcm_to_ddr(dma_queue,
-                                       dma_make_ptr(dst_row, dst_spad),
-                                       dst_row_size, dst_row_size_aligned, 1);
-            dma_queue_flush(dma_queue);
+            const dma_addr_t dst_row = dst_data + i3 * nb3 + i2 * nb2 + i1 * nb1;
+            dma_queue_push(dma_q,
+                           dma_make_data(dst_row, dst_spad),
+                           dst_row_size, dst_row_size_aligned, dst_row_size, 1);
+            dma_queue_flush(dma_q);
         }
     }
 
@@ -155,10 +155,6 @@ static void diag_thread_f32(unsigned int nth, unsigned int ith, void * data) {
 int op_diag_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * dst  = octx->dst;
-
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
-    }
 
     const uint32_t total_batches = src0->ne[2] * src0->ne[3];
     const size_t dst_batch_size  = dst->ne[1] * dst->nb[1];
@@ -221,6 +217,9 @@ int op_diag_f32(struct htp_ops_context * octx) {
     };
 
     if (octx->ctx->vtcm_size < spad_per_thread * n_threads) {
+        if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
         work_queue_run(octx->ctx->work_queue, diag_thread_f32, &dctx, n_threads);
     } else {
         work_queue_run(octx->ctx->work_queue, diag_thread_f32_dma, &dctx, n_threads);
