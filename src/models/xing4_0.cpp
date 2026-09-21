@@ -671,6 +671,12 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
+        // expose intermediate layer hidden states for speculative draft models (e.g. DSpark)
+        if ((size_t) il < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[il]) {
+            res->t_layer_inp[il] = xing4_0_hc_mean(ctx0, inpL);
+            cb(res->t_layer_inp[il], "layer_inp", il);
+            ggml_build_forward_expand(gf, res->t_layer_inp[il]);
+        }
 
         ggml_tensor * residual = inpL;
         ggml_tensor * post = nullptr;
@@ -842,6 +848,12 @@ llama_model_xing4_0::graph::graph(const llama_model & model, const llm_graph_par
         cb(inpL, "l_out", il);
     }
     cur = inpL;
+    // expose the final pre-norm hidden state for speculative draft models
+    if ((size_t) n_layer < cparams.embeddings_layer_inp.size() && cparams.embeddings_layer_inp[n_layer]) {
+        res->t_layer_inp[n_layer] = xing4_0_hc_mean(ctx0, inpL);
+        cb(res->t_layer_inp[n_layer], "layer_inp", n_layer);
+        ggml_build_forward_expand(gf, res->t_layer_inp[n_layer]);
+    }
 
     // average the residual streams -> single stream for the head
     cur = xing4_0_hc_mean(ctx0, cur);
