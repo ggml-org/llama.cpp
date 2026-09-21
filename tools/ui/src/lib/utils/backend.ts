@@ -228,16 +228,40 @@ function parseOptionalPath(raw: unknown): string | undefined {
  * `top_provider`, so try the flat fields first and the nested one after.
  */
 export function readModelContextLength(entry: Record<string, unknown>): number | undefined {
-	for (const field of MODEL_CONTEXT_LENGTH_FIELDS) {
-		const value = entry[field];
+	const flat = readContextField(entry);
 
-		if (typeof value === 'number' && value > 0) return value;
-	}
+	if (flat !== undefined) return flat;
 
 	const topProvider = entry.top_provider;
 
 	if (topProvider && typeof topProvider === 'object') {
-		const value = (topProvider as Record<string, unknown>).context_length;
+		const nested = readContextField(topProvider as Record<string, unknown>);
+
+		if (nested !== undefined) return nested;
+	}
+
+	// Hugging Face lists one entry per inference provider, and they disagree on
+	// the budget; take the largest so the gauge does not undersell the model.
+	const providers = entry.providers;
+
+	if (Array.isArray(providers)) {
+		const sizes = providers
+			.map((provider) =>
+				provider && typeof provider === 'object'
+					? readContextField(provider as Record<string, unknown>)
+					: undefined
+			)
+			.filter((size): size is number => size !== undefined);
+
+		if (sizes.length > 0) return Math.max(...sizes);
+	}
+
+	return undefined;
+}
+
+function readContextField(entry: Record<string, unknown>): number | undefined {
+	for (const field of MODEL_CONTEXT_LENGTH_FIELDS) {
+		const value = entry[field];
 
 		if (typeof value === 'number' && value > 0) return value;
 	}
