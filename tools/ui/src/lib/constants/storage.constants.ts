@@ -30,6 +30,9 @@ export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabled
 /** Default disabled tool categories, seeded into newly created conversations */
 export const DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolCategories`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
+
+/** Model the user picked last, kept across reloads. Stores `{ id, model }`. */
+export const SELECTED_MODEL_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.selectedModel`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;

@@ -7,7 +7,8 @@
  * {@link ModelsStore.status}; tracks which conversations use which models.
  */
 
-import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
+import { browser } from '$app/environment';
+import { FAVORITE_MODELS_LOCALSTORAGE_KEY, SELECTED_MODEL_LOCALSTORAGE_KEY } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -23,14 +24,35 @@ import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/mod
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
+/** Selection kept from the last session, so a reload does not drop the picked model. */
+function loadStoredSelection(): { id: string; model: string | null } | null {
+	if (!browser) return null;
+
+	try {
+		const raw = localStorage.getItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
+
+		if (!raw) return null;
+
+		const parsed = JSON.parse(raw) as { id?: unknown; model?: unknown };
+
+		if (typeof parsed?.id !== 'string' || !parsed.id) return null;
+
+		return { id: parsed.id, model: typeof parsed.model === 'string' ? parsed.model : null };
+	} catch {
+		return null;
+	}
+}
+
+const storedSelection = loadStoredSelection();
+
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	loading = $state(false);
 	routerModels = $state<ApiModelDataEntry[]>([]);
-	selectedModelId = $state<string | null>(null);
-	selectedModelName = $state<string | null>(null);
+	selectedModelId = $state<string | null>(storedSelection?.id ?? null);
+	selectedModelName = $state<string | null>(storedSelection?.model ?? null);
 
 	updating = $state(false);
 
@@ -43,6 +65,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	// Dedup concurrent fetch() callers — all awaiters share the same inflight promise.
 	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
 	private inflightFetch: Promise<void> | null = null;
+
+	/** A restored selection loses to the active conversation's model, a fresh pick does not. */
+	private selectionFromStorage = storedSelection !== null;
 
 	/**
 	 * Model the active conversation view resolves to. Router mode: the user's
@@ -61,11 +86,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return this.models.length > 0 ? this.models[0].model : this.singleModelName;
 		}
 
-		if (this.selectedModelId) {
-			const selected = this.models.find((m) => m.id === this.selectedModelId);
+		const picked = this.selectedModelId && !this.selectionFromStorage ? this.selectedModelId : null;
+		const selected = picked ? this.models.find((m) => m.id === picked) : undefined;
 
-			if (selected) return selected.model;
-		}
+		if (selected) return selected.model;
 
 		const conversationModel = getConversationModel(conversationsStore.activeMessages);
 
@@ -75,7 +99,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			if (model) return model.model;
 		}
 
-		return null;
+		const restored = this.selectedModelId
+			? this.models.find((m) => m.id === this.selectedModelId)
+			: undefined;
+
+		return restored?.model ?? null;
 	}
 
 	get loadedModelIds(): string[] {
@@ -166,6 +194,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	clearSelection(): void {
 		this.selectedModelId = null;
 		this.selectedModelName = null;
+		this.persistSelection();
 	}
 
 	/**
@@ -368,6 +397,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		try {
 			this.selectedModelId = qualifiedId;
 			this.selectedModelName = option.model;
+			this.selectionFromStorage = false;
+			this.persistSelection();
 		} finally {
 			this.updating = false;
 		}
@@ -537,6 +568,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return this.buildModelOptions(response);
 	}
+
 	/**
 	 * Filter to models visible in the UI (ui !== false).
 	 */
@@ -545,7 +577,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			(option) => this.props.getModelProps(option.model)?.ui !== false
 		);
 	}
-
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
 			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
@@ -555,6 +586,23 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			toast.error('Failed to load favorite models from local storage');
 
 			return new Set();
+		}
+	}
+
+	private persistSelection(): void {
+		if (!browser) return;
+
+		try {
+			if (!this.selectedModelId) {
+				localStorage.removeItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
+			} else {
+				localStorage.setItem(
+					SELECTED_MODEL_LOCALSTORAGE_KEY,
+					JSON.stringify({ id: this.selectedModelId, model: this.selectedModelName })
+				);
+			}
+		} catch {
+			console.warn('[ModelsStore] Failed to persist the model selection');
 		}
 	}
 
