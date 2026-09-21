@@ -317,9 +317,8 @@ static value try_builtin_func(context & ctx, const std::string & name, value & i
     throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
-value filter_expression::execute_impl(context & ctx) {
-    value input = operand ? operand->execute(ctx) : val;
-
+// filter is borrowed from the AST, never move it out: the AST is shared between threads
+static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
     auto set_filter_alias = [](auto & filter_id) {
@@ -375,6 +374,10 @@ value filter_expression::execute_impl(context & ctx) {
     }
 }
 
+value filter_expression::execute_impl(context & ctx) {
+    return apply_filter(ctx, filter, operand->execute(ctx));
+}
+
 value filter_statement::execute_impl(context & ctx) {
     // eval body as string, then apply filter
     auto body_val = exec_statements(body, ctx);
@@ -382,12 +385,7 @@ value filter_statement::execute_impl(context & ctx) {
     gather_string_parts_recursive(body_val, parts);
 
     JJ_DEBUG("FilterStatement: applying filter to body string of length %zu", parts->val_str.length());
-    filter_expression filter_expr(std::move(parts), std::move(filter));
-    value out = filter_expr.execute(ctx);
-
-    // this node can be reused later, make sure filter is preserved
-    this->filter = std::move(filter_expr.filter);
-    return out;
+    return apply_filter(ctx, filter, parts);
 }
 
 value test_expression::execute_impl(context & ctx) {
