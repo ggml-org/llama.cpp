@@ -179,6 +179,9 @@ public:
           slot_info_vec_t *   sinfos_out,
     const slot_info_vec_t *   sinfos_in);
 
+    // undo a state_read() of seq_id (-1 for the whole cache) that another memory module failed to complete
+    void state_clear(llama_seq_id seq_id);
+
     //
     // graph_build API
     //
