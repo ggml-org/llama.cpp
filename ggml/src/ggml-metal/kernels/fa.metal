@@ -142,7 +142,7 @@ kernel void kernel_flash_attn_ext_blk(
     const int32_t i1 = tgpig[1];
     const int32_t i0 = tgpig[0];
 
-    char res = i0*C + C > args.ne30 ? 1 : 0;
+    char res = i0*C + C > args.ne30 || i1*Q + Q > args.ne31 ? 1 : 0;
 
     device const half * mask_src = (device const half *) (mask + (i1*Q)*args.nb31 + i2*args.nb32 + i3*args.nb33) + i0*C + tiisg;
 
