@@ -7813,18 +7813,14 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     };
     const bool k_quant = k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_BF16 && k->type != GGML_TYPE_F32;
     const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
-    // f16/bf16 K/V in the strided KV-cache layout go through the same scratch as a plain copy.
-    // The elements are moved unchanged, so the scratch keeps the source type.
-    // A plain copy amortizes later than the fused dequant, so it needs a larger batch.
-    // Gated to AMD, where the strided-load penalty was measured.
     const bool kv_raw = (k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_BF16) && k->type == v->type;
+    // gated to AMD, where strided read costs were measured
     const bool kv_raw_strided = ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
                                 neq1 >= 256 &&
                                 kv_raw &&
                                 (k->nb[1] != (uint64_t)HSK * ggml_type_size(k->type) ||
                                  v->nb[1] != (uint64_t)HSV * ggml_type_size(v->type)) &&
                                 (HSK % 8) == 0 && (HSV % 8) == 0;
-    // the raw copy keeps the source type in the scratch, the dequant path writes f16
     const size_t kv_scratch_ts = kv_raw_strided ? ggml_type_size(k->type) : sizeof(ggml_fp16_t);
     const bool use_dequant_kv = ((k_quant && v_quant) || kv_raw_strided) && neq1 >= 64 &&
                                 is_dense_kv_cache(k) && is_dense_kv_cache(v) &&
@@ -8065,8 +8061,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         const uint32_t k_nel = (uint32_t)ggml_nelements(k);
         const uint32_t v_nel = (uint32_t)ggml_nelements(v);
         if (kv_raw_strided) {
-            // f16/bf16 K/V need only a strided copy, so reuse the generic copy shader, iterating
-            // in source memory order so the strided side is the write.
             vk_pipeline cp_k = ggml_vk_get_cpy_pipeline(ctx, k, nullptr, k->type);
             vk_pipeline cp_v = ggml_vk_get_cpy_pipeline(ctx, v, nullptr, v->type);
             ggml_pipeline_request_descriptor_sets(ctx, cp_k, 1);
@@ -8077,7 +8071,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             auto make_pc = [](uint32_t hs, uint32_t nh, uint32_t kv, uint32_t nel) {
                 vk_op_unary_push_constants pc{};
                 pc.ne = nel;
-                // read [HS, NH, KV, NS] linearly, write the scratch layout [HS, KV, NH, NS]
                 pc.ne00 = hs; pc.ne01 = nh;      pc.ne02 = kv; pc.ne03 = nel / (hs * nh * kv);
                 pc.nb00 = 1;  pc.nb01 = hs;      pc.nb02 = hs * nh; pc.nb03 = hs * nh * kv;
                 pc.ne10 = hs; pc.ne11 = nh;      pc.ne12 = kv; pc.ne13 = pc.ne03;
