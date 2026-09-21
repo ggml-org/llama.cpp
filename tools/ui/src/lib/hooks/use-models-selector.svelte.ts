@@ -240,7 +240,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				shouldCloseMenu = false;
 			}
 		} else {
-			await modelsStore.selectModelById(option.id);
+			await modelsStore.selectModelById(option.id, { recordRecent: true });
 		}
 
 		if (shouldCloseMenu) {

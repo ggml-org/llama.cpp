@@ -394,7 +394,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		);
 	}
 
-	async selectModelById(modelId: string): Promise<void> {
+	/**
+	 * Select a model. `recordRecent` marks a pick the user made in the selector, so
+	 * automatic picks (startup default, conversation sync) stay out of the recency list.
+	 */
+	async selectModelById(modelId: string, options?: { recordRecent?: boolean }): Promise<void> {
 		if (!modelId || this.updating) return;
 
 		const backendId = backendIdFromModelId(modelId) ?? backendsStore.active.id;
@@ -410,7 +414,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			await this.switchBackend();
 		}
 
-		if (this.selectedModelId === qualifiedId) return;
+		if (this.selectedModelId === qualifiedId) {
+			if (options?.recordRecent) this.recordRecentModel(qualifiedId);
+
+			return;
+		}
 
 		const option = this.activeModels.find((model) => model.id === rawId);
 
@@ -424,7 +432,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.selectedModelName = option.model;
 			this.selectionFromStorage = false;
 			this.persistSelection();
-			this.recordRecentModel(qualifiedId);
+
+			if (options?.recordRecent) this.recordRecentModel(qualifiedId);
 		} finally {
 			this.updating = false;
 		}
