@@ -15,3 +15,7 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         const ggml_cuda_kv_span * spans, size_t count,
         void * workspace, size_t workspace_bytes);
+
+bool ggml_cuda_flash_attn_ext_mma_convert_rows(
+        ggml_backend_cuda_context & ctx, ggml_type type,
+        const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride);

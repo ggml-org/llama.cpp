@@ -539,7 +539,9 @@ static bool mma_span_launch_make(
     const auto * v = dst->src[2];
     const auto * mask = dst->src[3];
     if (!q || !k || !v || !mask || dst->src[4] ||
-            q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16 ||
+            q->type != GGML_TYPE_F32 ||
+            !((k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) ||
+              (k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q4_0)) ||
             dst->type != GGML_TYPE_F32 || q->ne[0] != 256 || v->ne[0] != 256 ||
             k->ne[0] != 256 || (q->ne[1] != 3 && q->ne[1] != 4) ||
             q->ne[2] != 4 || k->ne[2] != 2 || v->ne[2] != 2 ||
@@ -632,7 +634,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
             workspace_bytes < plan.bytes || uintptr_t(workspace)%128) return false;
     constexpr int DKQ = 256, DV = 256, ncols1 = 4, ncols2 = 2;
     constexpr bool softcap = false, v_is_k = false;
-    auto kernel = flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k>;
+    auto kernel = dst->src[1]->type == GGML_TYPE_Q8_0 ?
+        flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0> :
+        flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k,GGML_TYPE_F16,GGML_TYPE_F16>;
     CUDA_CHECK(cudaFuncSetAttribute(
         kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,int(plan.shared_bytes)));
     auto * device_spans = static_cast<ggml_cuda_kv_span *>(workspace);
@@ -695,6 +699,33 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
             static_cast<float *>(dst->data),meta,
             q->ne[1],q->ne[2],plan.gqa_ratio,total_work,fd0,fd1,fd2,fd3);
     }
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+
+template<ggml_type type>
+__global__ void flash_attn_ext_mma_convert_rows_kernel(
+        const char * source, half * destination, int64_t source_stride, int64_t destination_stride) {
+    const int row = blockIdx.x;
+    const int first = 8*threadIdx.x;
+    flash_attn_ext_f16_dequantize_8<type>(
+        source+int64_t(row)*source_stride,
+        reinterpret_cast<half2 *>(reinterpret_cast<char *>(destination)+int64_t(row)*destination_stride)+first/2,
+        first);
+}
+
+bool ggml_cuda_flash_attn_ext_mma_convert_rows(
+        ggml_backend_cuda_context & ctx, ggml_type type,
+        const char * source, half * destination, int rows, int64_t source_stride, int64_t destination_stride) {
+    if (!source || !destination || rows <= 0 || source_stride <= 0 || destination_stride < 256*int64_t(sizeof(half))) return false;
+    const ggml_cuda_kernel_launch_params launch({unsigned(rows),1,1},{32,1,1},0,ctx.stream());
+    if (type == GGML_TYPE_Q8_0) {
+        ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_Q8_0>,launch,
+            source,destination,source_stride,destination_stride);
+    } else if (type == GGML_TYPE_Q4_0) {
+        ggml_cuda_kernel_launch(flash_attn_ext_mma_convert_rows_kernel<GGML_TYPE_Q4_0>,launch,
+            source,destination,source_stride,destination_stride);
+    } else return false;
     CUDA_CHECK(cudaGetLastError());
     return true;
 }

@@ -415,7 +415,8 @@ static bool spans_workspace(
         if (!vector_spans_workspace(view,plan,bytes)) return false;
     } else {
         if ((view.query_tokens != 3 && view.query_tokens != 4) ||
-                view.shape.type_k != GGML_TYPE_F16 || view.shape.type_v != GGML_TYPE_F16) return false;
+                !((view.shape.type_k == GGML_TYPE_F16 && view.shape.type_v == GGML_TYPE_F16) ||
+                  (view.shape.type_k == GGML_TYPE_Q8_0 && view.shape.type_v == GGML_TYPE_Q4_0))) return false;
         auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
         bytes = ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,op,view.count);
         if (!bytes) return false;
@@ -527,6 +528,26 @@ static bool vector_spans_launch(
     return true;
 }
 
+// Exercise the same row-local dequantizer used by span-aware MMA without allocating conversion planes.
+static bool convert_mma_rows(
+        ggml_backend_t backend, const ggml_tensor * source, ggml_tensor * destination) {
+    if (!backend || !ggml_backend_is_cuda(backend) || !source || !destination ||
+            (source->type != GGML_TYPE_Q8_0 && source->type != GGML_TYPE_Q4_0) ||
+            destination->type != GGML_TYPE_F16 || source->ne[0] != 256 ||
+            source->ne[1] <= 0 || source->ne[1] > INT_MAX || source->ne[2] != 1 || source->ne[3] != 1 ||
+            destination->ne[0] != source->ne[0] || destination->ne[1] != source->ne[1] ||
+            destination->ne[2] != 1 || destination->ne[3] != 1) return false;
+    span src, dst;
+    if (!tensor_span(backend,source,src) || !tensor_span(backend,destination,dst) || overlap(src,dst) ||
+            source->nb[0] != ggml_type_size(source->type) || destination->nb[0] != sizeof(half) ||
+            source->nb[1] > INT64_MAX || destination->nb[1] > INT64_MAX) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    ggml_cuda_set_device(ctx.device);
+    return ggml_cuda_flash_attn_ext_mma_convert_rows(
+        ctx,source->type,static_cast<const char *>(source->data),static_cast<half *>(destination->data),
+        int(source->ne[1]),int64_t(source->nb[1]),int64_t(destination->nb[1]));
+}
+
 // Stage-7 entry point: validate every physical range before the first asynchronous launch.
 static bool spans(
         ggml_backend_t backend, const ggml_tensor * op,
@@ -546,7 +567,8 @@ static bool spans(
 
     if (view.query_tokens >= 3) {
         if ((view.query_tokens != 3 && view.query_tokens != 4) ||
-                view.shape.type_k != GGML_TYPE_F16 || view.shape.type_v != GGML_TYPE_F16) return false;
+                !((view.shape.type_k == GGML_TYPE_F16 && view.shape.type_v == GGML_TYPE_F16) ||
+                  (view.shape.type_k == GGML_TYPE_Q8_0 && view.shape.type_v == GGML_TYPE_Q4_0))) return false;
         size_t required = 0;
         if (!spans_workspace(backend,op,span_plan,required) || !workspace ||
                 ggml_backend_buffer_get_size(workspace) < required ||
@@ -781,7 +803,7 @@ static bool clear(ggml_backend_t backend, ggml_tensor * output, ggml_backend_buf
 // Keep CUDA details behind the backend-neutral registry contract.
 const ggml_kv_stream_partial_ops * ggml_cuda_kv_stream_partial_ops() {
     static_assert(sizeof(float2) == sizeof(ggml_kv_stream_partial_meta), "partial metadata ABI");
-    static const ggml_kv_stream_partial_ops ops{7,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace};
+    static const ggml_kv_stream_partial_ops ops{8,supports,partial,merge,fold,clear,capabilities,supports_conversion,convert,direct,resume_plan,resume,spans,spans_workspace,convert_mma_rows};
 #ifdef GGML_CUDA_NO_FA
     GGML_UNUSED(ops);
     return nullptr;

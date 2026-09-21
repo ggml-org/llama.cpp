@@ -220,8 +220,8 @@ static int benchmark_spans() {
     GGML_ASSERT(ops && ops->version >= 7 && ops->spans && ops->spans_workspace);
     for (size_t active : {size_t(8192), size_t(32768), size_t(65536), size_t(131072), size_t(131073)}) {
         for (uint32_t queries : {1u, 4u}) {
-            const ggml_type type_k = queries == 1 ? GGML_TYPE_Q8_0 : GGML_TYPE_F16;
-            const ggml_type type_v = queries == 1 ? GGML_TYPE_Q4_0 : GGML_TYPE_F16;
+            const ggml_type type_k = GGML_TYPE_Q8_0;
+            const ggml_type type_v = GGML_TYPE_Q4_0;
             fixture f(backend.get(), true, type_k, type_v, (active+255)/256*256);
             GGML_ASSERT(f.attach());
             auto pin = f.binding->acquire();
@@ -270,7 +270,7 @@ int main(int argc, char ** argv) {
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
             ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
-        t.assert_true(get && get() && get()->version >= 7 && get()->spans && get()->spans_workspace);
+        t.assert_true(get && get() && get()->version >= 8 && get()->spans && get()->spans_workspace && get()->convert_mma_rows);
     });
 
     if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
@@ -421,6 +421,157 @@ int main(int argc, char ** argv) {
                 close_values(t, expected, b, 1e-5f);
             }
         }
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
+            "q8_q4_mma_tile_bytes_equal_stock_conversion", [](testing & t) {
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!t.assert_true(ops && ops->version >= 8 && ops->convert && ops->convert_mma_rows)) return;
+        for (ggml_type type : {GGML_TYPE_Q8_0,GGML_TYPE_Q4_0}) {
+            ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+            auto * source = ggml_new_tensor_2d(ctx.get(),type,256,7);
+            auto * stock = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,256,7);
+            auto * tile = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F16,256,7);
+            for (auto * tensor : {source,stock,tile}) tensor->nb[2] = tensor->nb[1];
+            ggml_set_input(source);
+            ggml_set_output(stock);
+            ggml_set_output(tile);
+            ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+            if (!t.assert_true(buffer != nullptr)) continue;
+            std::vector<float> values(7*256);
+            for (size_t i = 0; i < values.size(); ++i) values[i] = .25f*std::sin(float(i%509)*.031f);
+            std::vector<uint8_t> packed(7*ggml_row_size(type,256));
+            ggml_quantize_chunk(type,values.data(),packed.data(),0,7,256,nullptr);
+            ggml_backend_tensor_set(source,packed.data(),0,packed.size());
+            if (!t.assert_true(ops->supports_conversion(backend.get(),source,stock) &&
+                    ops->convert(backend.get(),source,stock))) continue;
+            if (!t.assert_true(ops->convert_mma_rows(backend.get(),source,tile))) continue;
+            ggml_backend_synchronize(backend.get());
+            std::vector<ggml_fp16_t> expected(7*256),actual(7*256);
+            ggml_backend_tensor_get(stock,expected.data(),0,expected.size()*sizeof(ggml_fp16_t));
+            ggml_backend_tensor_get(tile,actual.data(),0,actual.size()*sizeof(ggml_fp16_t));
+            size_t mismatches = 0;
+            for (size_t i = 0; i < expected.size(); ++i) mismatches += expected[i] != actual[i];
+            t.out << ggml_type_name(type) << " tile mismatches = " << mismatches << " / " << expected.size() << "\n";
+            t.assert_equal(size_t(0),mismatches);
+        }
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
+            "tg3_tg4_q8_q4_tile_conversion_matches_stock", [](testing & t) {
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 1025);
+        if (!t.assert_true(ops && ops->version >= 7 && ops->spans && ops->spans_workspace && f.attach())) return;
+        auto pin = f.binding->acquire();
+        if (!t.assert_true(bool(pin))) return;
+        size_t maximum_workspace = 0;
+        for (size_t active : {size_t(257),size_t(513),size_t(1017)}) {
+            for (uint32_t queries : {3u,4u}) {
+                block_inputs input(f,active,queries);
+                const auto expected = ordinary(f,input,0);
+                const std::vector<std::vector<size_t>> layouts{
+                    {0,active},
+                    {0,active/2,active},
+                    {0,active/4,3*active/4,active},
+                    {0,1,127,128,255,256,active},
+                };
+                for (auto cuts : layouts) {
+                    cuts.erase(std::remove_if(cuts.begin(),cuts.end(),
+                        [&](size_t value) { return value > active; }),cuts.end());
+                    std::sort(cuts.begin(),cuts.end());
+                    cuts.erase(std::unique(cuts.begin(),cuts.end()),cuts.end());
+                    auto storage = span_storage::create(f,0,active,queries,cuts);
+                    if (!t.assert_true(storage && storage->plan)) continue;
+                    bool accepted = false;
+                    size_t workspace = 0;
+                    const auto actual = evaluate(f,ops,*storage,input,0,accepted,&workspace);
+                    if (!t.assert_true(accepted)) continue;
+                    maximum_workspace = std::max(maximum_workspace,workspace);
+                    t.assert_true(workspace <= 1024*1024);
+                    ggml_kv_stream_layout gathered;
+                    auto f16 = f.policy.shape;
+                    f16.type_k = f16.type_v = GGML_TYPE_F16;
+                    if (t.assert_true(ggml_kv_stream_layout_make(f16,active,gathered).status ==
+                            ggml_kv_stream_status::success)) {
+                        t.assert_true(workspace < gathered.bytes);
+                    }
+                    close_values(t,expected,actual,2e-5f);
+                }
+            }
+        }
+        t.out << "maximum Q8/Q4 MMA workspace = " << maximum_workspace << " bytes\n";
+        t.assert_true(maximum_workspace <= 1024*1024);
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
+            "quantized_mma_workspace_ceiling_is_context_independent", [](testing & t) {
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8192);
+        if (!t.assert_true(ops != nullptr)) return;
+        block_inputs input(f,8192,4);
+        stock_attention_case stock(f,input);
+        auto storage = span_storage::create(f,0,8192,4,{0,2048,6144,8192});
+        if (!t.assert_true(storage && storage->plan)) return;
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * node = ggml_flash_attn_ext(ctx.get(),input.q,stock.k,stock.v,input.mask,1.0f/16,0,0);
+        if (!t.assert_true(node != nullptr)) return;
+        ggml_flash_attn_ext_set_prec(node,GGML_PREC_F32);
+        ggml_tensor op = *node;
+        op.buffer = input.output->buffer;
+        op.data = input.output->data;
+        size_t bytes = 0;
+        if (!t.assert_true(ops->spans_workspace(backend.get(),&op,storage->plan,bytes))) return;
+        t.out << "8K Q8/Q4 MMA workspace = " << bytes << " bytes\n";
+        t.assert_true(bytes <= 1024*1024);
+        ggml_kv_stream_layout gathered;
+        auto f16 = f.policy.shape;
+        f16.type_k = f16.type_v = GGML_TYPE_F16;
+        if (t.assert_true(ggml_kv_stream_layout_make(f16,8192,gathered).status ==
+                ggml_kv_stream_status::success)) t.assert_true(bytes < gathered.bytes);
+    });
+
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(
+            "quantized_mma_undersized_workspace_preserves_output", [](testing & t) {
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769);
+        if (!t.assert_true(ops && f.attach())) return;
+        auto pin = f.binding->acquire();
+        block_inputs input(f,513,4);
+        auto storage = span_storage::create(f,0,513,4,{0,256,513});
+        if (!t.assert_true(pin && storage && storage->plan)) return;
+        ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
+        auto * node = f.resident->attention(ctx.get(),0,input.q,input.mask,input.active,1.0f/16);
+        if (!t.assert_true(node != nullptr)) return;
+        ggml_tensor op = *node;
+        op.buffer = input.output->buffer;
+        op.data = input.output->data;
+        size_t bytes = 0;
+        if (!t.assert_true(ops->spans_workspace(backend.get(),&op,storage->plan,bytes) && bytes > 1)) return;
+        block_workspace tiny(f,bytes-1,101);
+        t.assert_true(!ops->spans(
+            backend.get(),&op,storage->plan,ggml_backend_memory_lease_buffer(tiny.lease.get())));
+        const auto actual = input.read();
+        t.assert_true(std::all_of(actual.begin(),actual.end(),[](float value) { return value == -77; }));
     });
 
     if (argc > 1 && !std::strcmp(argv[1], "--cuda")) t.test(

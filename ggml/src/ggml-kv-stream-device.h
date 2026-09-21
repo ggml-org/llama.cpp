@@ -54,6 +54,9 @@ struct ggml_kv_stream_partial_ops {
     // Version 7: exact bounded workspace for either vector or F16 MMA span execution.
     bool (*spans_workspace)(ggml_backend_t backend, const ggml_tensor * attention,
             ggml_kv_stream_span_plan_t spans, size_t & bytes) = nullptr;
+    // Version 8: invoke the exact tile-local MMA dequantizer for qualification and reusable staging.
+    bool (*convert_mma_rows)(ggml_backend_t backend, const ggml_tensor * source,
+            ggml_tensor * destination) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 
