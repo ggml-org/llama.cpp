@@ -6358,12 +6358,41 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         // A tool call as the first message of the turn: "<|start|>assistant" is the
-        // generation prompt, so the output starts at " to=" and must still trigger.
+        // generation prompt, so the output starts at " to=".
         tst.test(" to=special_function<|message|>" + call_markup)
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_call)
             .run();
+
+        // The lazy grammar only sees text the model generated, never the prompt. A turn
+        // that opens with a tool call must therefore trigger on " to=" alone, else the
+        // arguments are sampled unconstrained.
+        {
+            auto tmpls = read_templates("models/templates/muse-glimmer.jinja");
+
+            common_chat_templates_inputs inputs;
+            inputs.messages              = { message_user };
+            inputs.tools                 = { special_function_tool };
+            inputs.add_generation_prompt = true;
+
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+            assert_equals(true, params.grammar_lazy);
+
+            const std::string output = " to=special_function<|message|>" + call_markup;
+
+            bool fired = false;
+            for (const auto & trigger : params.grammar_triggers) {
+                std::smatch m;
+                if (std::regex_search(output, m, std::regex(trigger.value))) {
+                    fired = true;
+                    break;
+                }
+            }
+            if (!fired) {
+                throw std::runtime_error("no grammar trigger matches a turn opening with a tool call: " + output);
+            }
+        }
 
         // "Inform then act": the model answers the user and calls a tool in ONE generation,
         // closing the answer with <|eom|>. The answer must stop there rather than swallow it.
