@@ -72,7 +72,7 @@ shared slm_pool_block {
 } slm_pool_f32;
 
 shared slm_pool_alias_block {
-  float16_t slm_pool_k[2 * SLM_POOL_SIZE_K];
+  float16_t slm_pool_k[SLM_POOL_SIZE_K];
 } slm_pool_f16;
 
 void main() {
@@ -148,8 +148,6 @@ void main() {
 
     barrier();
     if (tokFlatIdx < p.activationLength) {
-      const uint slmLoadOffset = (pLoop & 0x1) * SLM_POOL_SIZE_K;
-
       [[unroll]] for (uint loop = 0; loop < loopCount; loop++) {
         coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> matQ[COOP_MAT_P_M];
         coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> matK[COOP_MAT_P_PER_LOOP];
@@ -167,7 +165,7 @@ void main() {
           coopMatLoad(
             matK[np],
             slm_pool_f16.slm_pool_k,
-            slmLoadOffset + loop * TK * MATP_PER_LOOP + np * TM * TK,
+            loop * TK * MATP_PER_LOOP + np * TM * TK,
             TK,
             gl_CooperativeMatrixLayoutRowMajor);
         }
@@ -180,8 +178,9 @@ void main() {
       }
     }
 
+    barrier();
+
     if (pLoop + 1 < P_LOOP_COUNT) {
-      const uint slmStoreOffset = ((pLoop + 1) & 0x1) * SLM_POOL_SIZE_K;
       [[unroll]] for (uint kLoad = 0; kLoad < K_LOAD_LOOPS; kLoad++) {
         const uint flatOffset = kLoad * GROUPSIZE + wgLane;
         const uint kRowIdx = flatOffset / HEAD_DIM_VEC4;
@@ -189,10 +188,10 @@ void main() {
         const uint slmChunkCol = kColIdx % SLM_CHUNK_SIZE;
         const uint slmChunkRow = kColIdx / SLM_CHUNK_SIZE;
         const uint offsetSlmK = kRowIdx * TK + slmChunkRow * TK * MATP_PER_LOOP + slmChunkCol * 4;
-        slm_pool_f16.slm_pool_k[slmStoreOffset + offsetSlmK + 0] = kTemp[kLoad].x;
-        slm_pool_f16.slm_pool_k[slmStoreOffset + offsetSlmK + 1] = kTemp[kLoad].y;
-        slm_pool_f16.slm_pool_k[slmStoreOffset + offsetSlmK + 2] = kTemp[kLoad].z;
-        slm_pool_f16.slm_pool_k[slmStoreOffset + offsetSlmK + 3] = kTemp[kLoad].w;
+        slm_pool_f16.slm_pool_k[offsetSlmK + 0] = kTemp[kLoad].x;
+        slm_pool_f16.slm_pool_k[offsetSlmK + 1] = kTemp[kLoad].y;
+        slm_pool_f16.slm_pool_k[offsetSlmK + 2] = kTemp[kLoad].z;
+        slm_pool_f16.slm_pool_k[offsetSlmK + 3] = kTemp[kLoad].w;
       }
     }
   }

@@ -2994,7 +2994,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const uint32_t out_dim_per_wg = gqa_ratio > 16 ? 8 : 16;
             uint32_t aligned_q_len = upper_power_of_2(q_len);
             uint32_t group_sz_ph1 = std::min(std::max(aligned_q_len * xe_native_sub_group_size, 64u), 256u);
-            uint32_t out_per_wg_ph1 = std::min(q_len, 16u);
+            uint32_t out_per_wg_ph1 = std::min(q_len, 256u / xe_native_sub_group_size);
             uint32_t aligned_gqa_ratio = upper_power_of_2(gqa_ratio);
             uint32_t split_p_per_iter_ph2 = 256;
             uint32_t split_p_per_warp = 16;
@@ -8008,8 +8008,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             auto it = pipelines.find({ (uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1 });
             if (it != pipelines.end()) {
                 xe_fa_pipeline_dual_phases = it->second;
-            }
-            else {
+            } else {
                 pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
             }
 
@@ -8185,91 +8184,95 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                               mask_n_head_log2, m0, m1,
                                               gqa_ratio, split_kv, split_k };
 
-    if (split_k > 1) {
-        if (xe_fa_opt) {
-            auto upper_power_of_2 = [&](uint32_t in) {
-                GGML_ASSERT(in != 0);
-                if (in <= 1) return 1u;
-                uint32_t ret = in - 1;
-                ret |= ret >> 1;
-                ret |= ret >> 2;
-                ret |= ret >> 4;
-                ret |= ret >> 8;
-                ret |= ret >> 16;
-                return ret + 1;
-                };
-            auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
-            const uint32_t out_dim_per_wg = qk_ratio > 16 ? 8 : 16;
-            size_t x_ne = ggml_nelements(q);
-            size_t temp_buf_offset = 0;
-            vk_fa_xe_opt_push_constants pc_ph1 = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1 : 0, (uint32_t)k_stride, (uint32_t)nbk2 / ggml_type_size(k->type),
-                uint32_t(nbq3 / ggml_type_size(q->type)), uint32_t(nbk3 / ggml_type_size(k->type)), uint32_t(nbv3 / ggml_type_size(v->type)), mask ? (mask->nb[3] / ggml_type_size(mask->type)) : 0, uint32_t(nb3 / ggml_type_size(dst->type)), scale };
-            vk_fa_xe_opt_push_constants pc_ph2 = pc_ph1;
-            pc_ph2.nbkv_tok = v_stride;
-            pc_ph2.nbkv_head = (uint32_t)nbv2 / ggml_type_size(v->type);
-            vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset) : q_buf;
-            temp_buf_offset += fa_copy_qstate ? x_ne * sizeof(ggml_fp16_t) : 0;
-            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
-            temp_buf_offset += size_p;
-            vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
-            temp_buf_offset += size_group_max;
-
-            uint32_t aligned_gqa_ratio = upper_power_of_2(qk_ratio);
-            uint32_t out_per_wg_ph1 = std::min(16u, (uint32_t)neq1);
-            uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_gqa_ratio, 1u), (uint32_t)neq1);
-            uint32_t ph1_wg = ((neq1 + out_per_wg_ph1 - 1) / out_per_wg_ph1) * nek2;
-            uint32_t ph2_wg = ((neq1 + out_per_wg_ph2 - 1) / out_per_wg_ph2) * ne0 / out_dim_per_wg;
-            if (fa_copy_qstate) {
-                const std::vector<uint32_t> pc_cpy_fp16 =
-                { (uint32_t)q->ne[0], (uint32_t)q->ne[1], (uint32_t)q->ne[2], (uint32_t)q->ne[3], (uint32_t)(x_ne) };
-                ggml_vk_sync_buffers(ctx, subctx);
-                ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
-                ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { q_buf, q_temp_buf }, pc_cpy_fp16, { (uint32_t)(x_ne), 1, 1 });
-            }
-
+    if (xe_fa_opt && split_k > 1) {
+        auto upper_power_of_2 = [&](uint32_t in) {
+            GGML_ASSERT(in != 0);
+            if (in <= 1) return 1u;
+            uint32_t ret = in - 1;
+            ret |= ret >> 1;
+            ret |= ret >> 2;
+            ret |= ret >> 4;
+            ret |= ret >> 8;
+            ret |= ret >> 16;
+            return ret + 1;
+        };
+        auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
+        const uint32_t out_dim_per_wg = qk_ratio > 16 ? 8 : 16;
+        size_t x_ne = ggml_nelements(q);
+        size_t temp_buf_offset = 0;
+        uint32_t head_stride_k = uint32_t(nbk2 / ggml_type_size(k->type));
+        uint32_t head_stride_v = uint32_t(nbv2 / ggml_type_size(v->type));
+        uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
+        uint32_t batch_stride_k = uint32_t(nbk3 / ggml_type_size(k->type));
+        uint32_t batch_stride_v = uint32_t(nbv3 / ggml_type_size(v->type));
+        uint32_t batch_stride_m = mask ? uint32_t(mask->nb[3] / ggml_type_size(mask->type)) : 0u;
+        uint32_t batch_stride_o = uint32_t(nb3 / ggml_type_size(dst->type));
+        vk_fa_xe_opt_push_constants pc_ph1 = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1u : 0u, (uint32_t)k_stride, head_stride_k,
+            batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_m, batch_stride_o, scale };
+        vk_fa_xe_opt_push_constants pc_ph2 = pc_ph1;
+        pc_ph2.nbkv_tok = v_stride;
+        pc_ph2.nbkv_head = head_stride_v;
+        vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset) : q_buf;
+        temp_buf_offset += fa_copy_qstate ? x_ne * sizeof(ggml_fp16_t) : 0;
+        vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+        temp_buf_offset += size_p;
+        vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+        temp_buf_offset += size_group_max;
+        uint32_t xe_native_sub_group_size = ctx->device.get()->architecture == INTEL_XE1 ? 8 : 16;
+        uint32_t aligned_gqa_ratio = upper_power_of_2(qk_ratio);
+        uint32_t out_per_wg_ph1 = std::min(256u / xe_native_sub_group_size, (uint32_t)neq1);
+        uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_gqa_ratio, 1u), (uint32_t)neq1);
+        uint32_t ph1_wg = ((neq1 + out_per_wg_ph1 - 1) / out_per_wg_ph1) * nek2;
+        uint32_t ph2_wg = ((neq1 + out_per_wg_ph2 - 1) / out_per_wg_ph2) * ne0 / out_dim_per_wg;
+        if (fa_copy_qstate) {
+            const std::vector<uint32_t> pc_cpy_fp16 =
+            { (uint32_t)q->ne[0], (uint32_t)q->ne[1], (uint32_t)q->ne[2], (uint32_t)q->ne[3], (uint32_t)(x_ne) };
             ggml_vk_sync_buffers(ctx, subctx);
-            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
-            ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
-                { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
-                pc_ph1, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
-
-            ggml_vk_sync_buffers(ctx, subctx);
-            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
-            ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
-                { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
-                pc_ph2, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
-
-            ctx->prealloc_x_need_sync = true;
-        } else {
-            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
-
-            if (ctx->prealloc_split_k_need_sync) {
-                ggml_vk_sync_buffers(ctx, subctx);
-            }
-
-            // We reuse workgroups_x to mean the number of splits, so we need to
-            // cancel out the divide by wg_denoms[0].
-            uint32_t dispatch_x;
-            if (gqa_ratio > 1) {
-                workgroups_x *= pipeline->wg_denoms[0];
-                dispatch_x = split_k * workgroups_x;
-            }
-            else {
-                dispatch_x = Tr * split_k * pipeline->wg_denoms[0];
-            }
-
-            vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
-            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-                { q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, mask_opt_buf, sparse_buf },
-                pc, { dispatch_x, workgroups_y, workgroups_z });
-
-            ggml_vk_sync_buffers(ctx, subctx);
-            const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3, split_k, (sinks != nullptr) };
-            ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
-                { split_k_buf, sinks_buf, dst_buf },
-                pc2, { (uint32_t)ne1, HSV, (uint32_t)(ne2 * ne3) });
-            ctx->prealloc_split_k_need_sync = true;
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
+            ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { q_buf, q_temp_buf }, pc_cpy_fp16, { (uint32_t)(x_ne), 1, 1 });
         }
+
+        ggml_vk_sync_buffers(ctx, subctx);
+        ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
+        ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
+            { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
+            pc_ph1, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
+
+        ggml_vk_sync_buffers(ctx, subctx);
+        ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
+        ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
+            { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
+            pc_ph2, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
+
+        ctx->prealloc_x_need_sync = true;
+    } else if (split_k > 1) {
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
+
+        if (ctx->prealloc_split_k_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
+
+        // We reuse workgroups_x to mean the number of splits, so we need to
+        // cancel out the divide by wg_denoms[0].
+        uint32_t dispatch_x;
+        if (gqa_ratio > 1) {
+            workgroups_x *= pipeline->wg_denoms[0];
+            dispatch_x = split_k * workgroups_x;
+        } else {
+            dispatch_x = Tr * split_k * pipeline->wg_denoms[0];
+        }
+
+        vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, mask_opt_buf, sparse_buf},
+                                    pc, { dispatch_x, workgroups_y, workgroups_z });
+
+        ggml_vk_sync_buffers(ctx, subctx);
+        const vk_op_flash_attn_split_k_reduce_push_constants pc2 = { HSV, (uint32_t)ne1, (uint32_t)ne2, (uint32_t)ne3, split_k, (sinks != nullptr) };
+        ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_flash_attn_split_k_reduce,
+                                    {split_k_buf, sinks_buf, dst_buf},
+                                    pc2, { (uint32_t)ne1, HSV, (uint32_t)(ne2 * ne3) });
+        ctx->prealloc_split_k_need_sync = true;
     } else {
         if (gqa_ratio > 1) {
             // When using gqa, we want one actual workgroup per batch, so cancel out wg_denoms
