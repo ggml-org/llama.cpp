@@ -558,6 +558,15 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 };
                 byte_encode = false;
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_SOPHIA:
+                // Sophia ships its tokenizer.json with the pre-tokenizer
+                // patterns serialized as literal strings (pattern.String),
+                // which never match. The effective tokenization is plain
+                // ByteLevel + BPE over the whole text; the merges table even
+                // contains newline-bearing pairs (e.g. "Ċ"+"Ċ"), so the text
+                // must not be split at all - not even on newlines.
+                regex_exprs = {};
+                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
@@ -2300,6 +2309,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 clean_spaces = false;
                 ignore_merges = true;
                 add_bos = true;
+            } else if (
+                tokenizer_pre == "sophia") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SOPHIA;
+                clean_spaces = false;
             } else if (
                 tokenizer_pre == "smollm") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SMOLLM;
