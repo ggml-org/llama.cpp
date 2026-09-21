@@ -1221,15 +1221,16 @@ void server_models::request_stop(const std::string & name, bool send_exit) {
 void server_models::on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code) {
     {
         std::lock_guard<std::mutex> lk(mutex);
-        stopping_models.erase(name);
         auto it = mapping.find(name);
         if (it == mapping.end() || it->second.subproc != proc) {
+            stopping_models.erase(name);
             return; // entry erased, or a newer instance took the name
         }
     }
     if (mode == SERVER_CHILD_MODE_DOWNLOAD) {
         // instance will be cleaned up on next load_models() call
         std::lock_guard<std::mutex> lk(mutex);
+        stopping_models.erase(name);
         cv.notify_all();
     } else {
         update_status(name, {
@@ -1299,6 +1300,9 @@ void server_models::update_status(const std::string & name, const update_status_
         auto & meta = it->second.meta;
         meta.status      = args.status;
         meta.exit_code   = args.exit_code;
+        if (args.status == SERVER_MODEL_STATUS_UNLOADED) {
+            stopping_models.erase(name);
+        }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
         }
@@ -1438,10 +1442,15 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->is_ready()) {
+    bool stopping;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        stopping = stopping_models.count(name) > 0;
+    }
+    if (!stopping && meta->is_ready()) {
         return false; // ready for taking requests
     }
-    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
+    if (!stopping && meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
 
@@ -1474,6 +1483,19 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
             auto it = mapping.find(name);
             if (it == mapping.end()) {
                 break; // removed by another code path, nothing to wait for
+            }
+            if (stopping_models.count(name)) {
+                // a stopping instance takes no new request, the next instance serves it
+                if (!queued) {
+                    sched->join(lk, name);
+                    sched->tick(lk);
+                    queued = true;
+                }
+                if (should_stop && should_stop()) {
+                    throw std::runtime_error("request cancelled while waiting for model name=" + name);
+                }
+                cv.wait_for(lk, std::chrono::milliseconds(200));
+                continue;
             }
             const server_model_status status = it->second.meta.status;
 
