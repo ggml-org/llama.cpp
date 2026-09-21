@@ -297,7 +297,7 @@ struct server_lru_sched {
             return;
         }
         queue.push_back({ model_id, 1, false });
-        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
+        SRV_INF("request for name=%s queued at position %zu\n",
                 model_id.c_str(), queue.size());
     }
 
@@ -1451,17 +1451,10 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
         std::unique_lock<std::mutex> lk(mutex);
         auto it = mapping.find(name);
         if (it != mapping.end() && it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
-            if (sched->has_capacity(lk) && sched->queue_empty(lk)) {
-                lk.unlock();
-                SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-                load(name);
-                did_load = true;
-            } else {
-                // also queue when a slot looks free but others wait already, else they starve
-                sched->join(lk, name);
-                sched->tick(lk);
-                queued = true;
-            }
+            // the queue entry protects the model from eviction until its waiters leave
+            sched->join(lk, name);
+            sched->tick(lk);
+            queued = true;
         }
     }
 
