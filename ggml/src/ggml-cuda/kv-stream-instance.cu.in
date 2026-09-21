@@ -28,14 +28,16 @@ fattn_kernel_t ggml_cuda_kv_stream_kernel_@KV_STREAM_KEY@(ggml_type value) {
 #endif
 }
 
-// One translation unit per key type keeps native-pair compilation parallel and bounded.
-ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_type value) {
+// Stock vector specialization used only to match ordinary split-count selection.
+fattn_kernel_t ggml_cuda_kv_stream_vector_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries) {
 #ifdef GGML_CUDA_NO_FA
-    GGML_UNUSED(value);
+    GGML_UNUSED(value); GGML_UNUSED(queries);
     return nullptr;
 #elif defined(GGML_CUDA_FA_ALL_QUANTS)
     switch (value) {
-#define KV_STREAM_VALUE(V) case GGML_TYPE_##V: return flash_attn_ext_vec_resume<256,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V>;
+#define KV_STREAM_VALUE(V) case GGML_TYPE_##V: return queries == 1 ? \
+            flash_attn_ext_vec<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V,false> : queries == 2 ? \
+            flash_attn_ext_vec<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V,false> : nullptr;
         KV_STREAM_VALUE(F16)
         KV_STREAM_VALUE(BF16)
         KV_STREAM_VALUE(Q4_0)
@@ -47,10 +49,43 @@ ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_t
         default: return nullptr;
     }
 #elif @KV_STREAM_DEFAULT_NATIVE@
-    if (value == GGML_TYPE_@KV_STREAM_KEY@) return flash_attn_ext_vec_resume<256,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@>;
+    if (value == GGML_TYPE_@KV_STREAM_KEY@) return queries == 1 ?
+        flash_attn_ext_vec<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@,false> : queries == 2 ?
+        flash_attn_ext_vec<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@,false> : nullptr;
     return nullptr;
 #else
-    GGML_UNUSED(value);
+    GGML_UNUSED(value); GGML_UNUSED(queries);
+    return nullptr;
+#endif
+}
+
+// One translation unit per key type keeps native-pair compilation parallel and bounded.
+ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries) {
+#ifdef GGML_CUDA_NO_FA
+    GGML_UNUSED(value); GGML_UNUSED(queries);
+    return nullptr;
+#elif defined(GGML_CUDA_FA_ALL_QUANTS)
+    switch (value) {
+#define KV_STREAM_VALUE(V) case GGML_TYPE_##V: return queries == 1 ? \
+            flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V> : queries == 2 ? \
+            flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V> : nullptr;
+        KV_STREAM_VALUE(F16)
+        KV_STREAM_VALUE(BF16)
+        KV_STREAM_VALUE(Q4_0)
+        KV_STREAM_VALUE(Q4_1)
+        KV_STREAM_VALUE(Q5_0)
+        KV_STREAM_VALUE(Q5_1)
+        KV_STREAM_VALUE(Q8_0)
+#undef KV_STREAM_VALUE
+        default: return nullptr;
+    }
+#elif @KV_STREAM_DEFAULT_NATIVE@
+    if (value == GGML_TYPE_@KV_STREAM_KEY@) return queries == 1 ?
+        flash_attn_ext_vec_resume<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@> : queries == 2 ?
+        flash_attn_ext_vec_resume<256,2,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@> : nullptr;
+    return nullptr;
+#else
+    GGML_UNUSED(value); GGML_UNUSED(queries);
     return nullptr;
 #endif
 }

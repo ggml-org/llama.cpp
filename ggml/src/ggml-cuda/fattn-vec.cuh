@@ -138,15 +138,21 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
         KQ_sum[j] = 0.0f;
     }
 
-    static_assert(!resumable || ncols == 1, "resumed decode uses one query per block");
-    constexpr int state_stride = 2 + 2*(D/2)/nthreads_V;
+    static_assert(!resumable || ncols <= 2, "resumed vector attention supports TG1/TG2");
+    constexpr int query_state_stride = 2 + 2*(D/2)/nthreads_V;
+    constexpr int state_stride = ncols*query_state_stride;
     float * saved = nullptr;
     if constexpr (resumable) {
         saved = resume_state + (((size_t(blockIdx.z)*gridDim.x + blockIdx.x)*gridDim.y + blockIdx.y)*nthreads + tid)*state_stride;
         if (!reset_state) {
-            KQ_max[0] = saved[0]; KQ_sum[0] = saved[1];
-            for (int i = 0; i < (D/2)/nthreads_V; ++i) {
-                VKQ[0][i].x = saved[2+2*i]; VKQ[0][i].y = saved[3+2*i];
+#pragma unroll
+            for (int j = 0; j < ncols; ++j) {
+                KQ_max[j] = saved[j*query_state_stride];
+                KQ_sum[j] = saved[j*query_state_stride + 1];
+                for (int i = 0; i < (D/2)/nthreads_V; ++i) {
+                    VKQ[j][i].x = saved[j*query_state_stride + 2 + 2*i];
+                    VKQ[j][i].y = saved[j*query_state_stride + 3 + 2*i];
+                }
             }
         }
     }
@@ -266,7 +272,8 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     const int local_first = first_owned - (resumable ? chunk_first : 0);
     K     += local_first * nb11;
     V     += local_first * nb21;
-    maskh += local_first;
+    // K/V addresses are span-local, while the causal mask retains global token coordinates.
+    maskh += resumable ? first_owned : local_first;
     for (int k_VKQ_0 = first_owned; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nthreads,
              // Increment pointers after each loop:
              K += gridDim.y*nthreads*nb11, V += gridDim.y*nthreads*nb21, maskh += gridDim.y*nthreads) {
@@ -286,14 +293,15 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                const bool token_valid = !resumable || k_VKQ_0 + i_KQ < k_VKQ_max;
+                float sum = token_valid ? vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]) : -INFINITY;
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
-                if (use_logit_softcap) {
+                if (token_valid && use_logit_softcap) {
                     sum = logit_softcap*tanhf(sum);
                 }
 
-                if (mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
+                if (token_valid && mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
                     sum += slope*__half2float(maskh[j*ne11 + i_KQ]);
                 }
 
@@ -347,18 +355,21 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
             }
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
-                half2 tmp[V_rows_per_thread/2];
-                if constexpr (type_V == GGML_TYPE_BF16) {
-                    float2 tmp_f[V_rows_per_thread/2];
-                    dequantize_V(V + k*nb21, tmp_f,
-                        2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
+                half2 tmp[V_rows_per_thread/2] = {};
+                const bool token_valid = !resumable || k_VKQ_0 + k < k_VKQ_max;
+                if (token_valid) {
+                    if constexpr (type_V == GGML_TYPE_BF16) {
+                        float2 tmp_f[V_rows_per_thread/2];
+                        dequantize_V(V + k*nb21, tmp_f,
+                            2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
 #pragma unroll
-                    for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
-                        tmp[i_VKQ_1] = __float22half2_rn(tmp_f[i_VKQ_1]);
+                        for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
+                            tmp[i_VKQ_1] = __float22half2_rn(tmp_f[i_VKQ_1]);
+                        }
+                    } else {
+                        dequantize_V(V + k*nb21, tmp,
+                            2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
                     }
-                } else {
-                    dequantize_V(V + k*nb21, tmp,
-                        2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
                 }
 #pragma unroll
                 for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
@@ -376,9 +387,12 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
             }
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
-                float2 tmp[V_rows_per_thread/2];
-                dequantize_V(V + k*nb21, tmp,
-                    2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
+                float2 tmp[V_rows_per_thread/2] = {};
+                const bool token_valid = !resumable || k_VKQ_0 + k < k_VKQ_max;
+                if (token_valid) {
+                    dequantize_V(V + k*nb21, tmp,
+                        2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
+                }
 #pragma unroll
                 for (int i_VKQ_1 = 0; i_VKQ_1 < V_rows_per_thread/2; ++i_VKQ_1) {
 #pragma unroll
@@ -394,9 +408,14 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 
     if constexpr (resumable) {
         if (!finish_state) {
-            saved[0] = KQ_max[0]; saved[1] = KQ_sum[0];
-            for (int i = 0; i < (D/2)/nthreads_V; ++i) {
-                saved[2+2*i] = VKQ[0][i].x; saved[3+2*i] = VKQ[0][i].y;
+#pragma unroll
+            for (int j = 0; j < ncols; ++j) {
+                saved[j*query_state_stride] = KQ_max[j];
+                saved[j*query_state_stride + 1] = KQ_sum[j];
+                for (int i = 0; i < (D/2)/nthreads_V; ++i) {
+                    saved[j*query_state_stride + 2 + 2*i] = VKQ[j][i].x;
+                    saved[j*query_state_stride + 3 + 2*i] = VKQ[j][i].y;
+                }
             }
             return;
         }
@@ -581,7 +600,7 @@ static __global__ void flash_attn_ext_vec(
 }
 
 // Save per-thread accumulators before native reductions; resume the same logical tile ownership.
-template<int D, ggml_type type_K, ggml_type type_V>
+template<int D, int ncols, ggml_type type_K, ggml_type type_V>
 __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
 static __global__ void flash_attn_ext_vec_resume(
         const char * Q_ptr,
@@ -606,7 +625,7 @@ static __global__ void flash_attn_ext_vec_resume(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * state, int first, int end, bool reset, bool finish) {
-    flash_attn_ext_vec_impl<D,1,type_K,type_V,false,true>(
+    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true>(
         Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31, nb32, nb33, state, first, end, reset, finish);
 }
 

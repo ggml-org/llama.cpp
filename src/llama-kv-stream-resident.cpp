@@ -932,7 +932,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] == 1 && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
-            uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),padded,resume_plan);
+            uint32_t(q->ne[2]),uint32_t(s.binding.config.shape.heads),1,padded,resume_plan);
     const bool native = s.native_graph_attention && !resumed;
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
             ggml_kv_stream_partial_status::success) return false;

@@ -291,7 +291,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         ggml_kv_stream_resume_plan plan;
         s->config.resume_decode = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") && get && get() &&
             get()->version >= 5 && get()->resume_plan && get()->resume && get()->resume_plan(config.backend,
-                config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,s->host->layout().tokens,plan);
+                config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,1,s->host->layout().tokens,plan);
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
         if (!s->allocate_private()) return {};
         const ggml_backend_execution_ops ops{

@@ -25,7 +25,7 @@ using ggml_kv_resume_kernel_t = void (*)(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33, float *, int, int, bool, bool);
-#define KV_RESUME_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_##K(ggml_type value);
+#define KV_RESUME_DECLARE(K) ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_##K(ggml_type value, uint32_t queries);
 KV_RESUME_DECLARE(F16)
 KV_RESUME_DECLARE(BF16)
 KV_RESUME_DECLARE(Q4_0)
@@ -34,9 +34,32 @@ KV_RESUME_DECLARE(Q5_0)
 KV_RESUME_DECLARE(Q5_1)
 KV_RESUME_DECLARE(Q8_0)
 #undef KV_RESUME_DECLARE
-static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_type key, ggml_type value) {
+#define KV_VECTOR_DECLARE(K) fattn_kernel_t ggml_cuda_kv_stream_vector_kernel_##K(ggml_type value, uint32_t queries);
+KV_VECTOR_DECLARE(F16)
+KV_VECTOR_DECLARE(BF16)
+KV_VECTOR_DECLARE(Q4_0)
+KV_VECTOR_DECLARE(Q4_1)
+KV_VECTOR_DECLARE(Q5_0)
+KV_VECTOR_DECLARE(Q5_1)
+KV_VECTOR_DECLARE(Q8_0)
+#undef KV_VECTOR_DECLARE
+static inline fattn_kernel_t ggml_cuda_kv_stream_vector_kernel(ggml_type key, ggml_type value, uint32_t queries) {
     switch (key) {
-#define KV_RESUME_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_kernel_##K(value);
+#define KV_VECTOR_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_vector_kernel_##K(value, queries);
+        KV_VECTOR_CASE(F16)
+        KV_VECTOR_CASE(BF16)
+        KV_VECTOR_CASE(Q4_0)
+        KV_VECTOR_CASE(Q4_1)
+        KV_VECTOR_CASE(Q5_0)
+        KV_VECTOR_CASE(Q5_1)
+        KV_VECTOR_CASE(Q8_0)
+#undef KV_VECTOR_CASE
+        default: return nullptr;
+    }
+}
+static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_type key, ggml_type value, uint32_t queries) {
+    switch (key) {
+#define KV_RESUME_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_kernel_##K(value, queries);
         KV_RESUME_CASE(F16)
         KV_RESUME_CASE(BF16)
         KV_RESUME_CASE(Q4_0)

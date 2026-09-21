@@ -20,13 +20,13 @@ int main(int argc, char ** argv) {
     testing t;
     t.test("resume_layout_is_bounded_and_transactional", [&](testing & t) {
         ggml_kv_stream_resume_plan plan;
-        if (!t.assert_true(ggml_kv_stream_resume_layout_make(24,3,8,plan))) return;
+        if (!t.assert_true(ggml_kv_stream_resume_layout_make(24,1,3,8,plan))) return;
         t.assert_equal(size_t(368640),plan.state_bytes);
         t.assert_equal(size_t(368640),plan.partial_offset);
         t.assert_equal(size_t(442368),plan.meta_offset);
         t.assert_equal(size_t(442944),plan.bytes);
         for (auto dims : {std::array<uint32_t,3>{0,3,8},{24,0,8},{24,3,0},{UINT32_MAX,UINT32_MAX,UINT32_MAX}}) {
-            t.assert_true(!ggml_kv_stream_resume_layout_make(dims[0],dims[1],dims[2],plan));
+            t.assert_true(!ggml_kv_stream_resume_layout_make(dims[0],1,dims[1],dims[2],plan));
             t.assert_equal(size_t(442944),plan.bytes);
         }
     });
@@ -51,7 +51,7 @@ int main(int argc, char ** argv) {
                 t.out << ggml_type_name(pair.first) << '/' << ggml_type_name(pair.second) << " active=" << active << '\n';
                 block_inputs input(f,active,1);
                 ggml_kv_stream_resume_plan plan;
-                if (!t.assert_true(get()->resume_plan(backend.get(),pair.first,pair.second,4,2,input.padded,plan))) return;
+                if (!t.assert_true(get()->resume_plan(backend.get(),pair.first,pair.second,4,2,1,input.padded,plan))) return;
                 block_workspace workspace(f,plan.bytes);
                 if (!t.assert_true(f.resident->begin_sequence({0,1},active,1,SIZE_MAX,{1,true}))) return;
                 for (uint32_t layer=0;layer<2;++layer) {
@@ -71,11 +71,11 @@ int main(int argc, char ** argv) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769);
         if (!t.assert_true(f.attach() && f.resident->synchronize(769))) return;
         block_inputs input(f,769,1); ggml_kv_stream_resume_plan plan;
-        t.assert_true(get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,input.padded,plan));
+        t.assert_true(get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,1,input.padded,plan));
         const auto bytes=plan.bytes;
-        t.assert_true(!get()->resume_plan(nullptr,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,input.padded,plan));
-        t.assert_true(!get()->resume_plan(backend.get(),GGML_TYPE_F16,GGML_TYPE_F16,4,2,input.padded,plan));
-        t.assert_true(!get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,3,2,input.padded,plan));
+        t.assert_true(!get()->resume_plan(nullptr,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,1,input.padded,plan));
+        t.assert_true(!get()->resume_plan(backend.get(),GGML_TYPE_F16,GGML_TYPE_F16,4,2,1,input.padded,plan));
+        t.assert_true(!get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,3,2,1,input.padded,plan));
         t.assert_equal(bytes,plan.bytes);
         ggml_context_ptr ctx(ggml_init({65536,nullptr,true}));
         auto * op=f.resident->attention(ctx.get(),0,input.q,input.mask,input.active,1.0f/16);

@@ -202,7 +202,8 @@ Each stage follows the same sequence:
 | --- | --- | --- | --- |
 | 7.1 | Complete | bff7edad3 | Ordered exact-coverage plans retain arena leases and support reference-counted asynchronous consumers. The new suite passes 7 cases / 60 assertions in CPU Debug, CUDA, OpenCL, oneAPI SYCL, and Vulkan-ASan builds, plus CPU ASan/leak checking and UBSan. Six focused Debug ownership/KV suites pass. No production dispatch changes. |
 | 7.2 | Complete | 82879f1a9 | Scalar host oracle consumes retained plans continuously across physical boundaries, supports GQA, TG1-TG4, explicit/no mask, softcap, F16 and Q8_0/Q4_0, and transactional failure. The suite passes 5 cases / 4,591 assertions in all configured builds and sanitizers. No production dispatch changes. |
-| 7.3 | Ready for review | - | One common owner reserves a complete layer's resident prefix and contiguous ring suffix, shares that reservation across query widths, rejects identity changes/repartition while live, and releases slots after final retirement. The suite passes 5 cases / 338 assertions across configured builds and sanitizers. Production prefetch is not connected yet. |
+| 7.3 | Complete | ffba29bea | One common owner reserves a complete layer's resident prefix and contiguous ring suffix, shares that reservation across query widths, rejects identity changes/repartition while live, and releases slots after final retirement. The suite passes 5 cases / 338 assertions across configured builds and sanitizers. Production prefetch is not connected yet. |
+| 7.4 | Ready for review | - | CUDA stock vector attention consumes retained ordered spans for TG1/TG2 with one continuous per-thread softmax state, tail-safe loads, global causal-mask coordinates, stock split topology, and bounded query-aware scratch. New and legacy CUDA suites pass with errors below 3.8e-9 and clean memcheck. The plan hook is not routed into production yet. |
 
 
 ### Stage 7.1 implementation and validation
@@ -248,3 +249,21 @@ TDD and validation evidence:
 - Five focused Debug suites pass: layer lease, segmented reference, spans, policy, and backend memory. The layer-lease, reference, and span suites pass under ASan with leak detection and UBSan.
 - The final suite builds and passes unchanged in CPU, CUDA, OpenCL, oneAPI SYCL, and Vulkan-ASan configurations. The TSan configuration builds, but its runtime cannot start on this host and exits with `unexpected memory mapping`; no TSan runtime claim is made.
 - This owner is not connected to the existing production prefetch scheduler. When MTP integration begins, it must become the single ring-admission authority so ordinary prefetch cannot bypass retained slots. This stage adds no device copy, attention kernel, policy decision, or production-server behavior. Stage 7.4 remains span-aware stock vector attention for TG1/TG2.
+
+### Stage 7.4 implementation and validation
+
+The first CUDA test build failed on the missing query-aware resume layout, TG2 resume state, and plan-consuming backend hook. The implementation extends the existing stock CUDA vector kernel rather than adding a second attention algorithm. Per-thread maximum, normalizer, and weighted-value accumulators are saved for one or two queries and restored across every ordered physical span. Normalization and cross-split reduction occur only after the final span.
+
+Backend hook version 6 accepts the immutable stage 7.1 span plan. The common plan remains backend-neutral; CUDA validates every buffer, byte range, mask/output alias, query width, type pair, and exact workspace before the first launch. Query-aware workspace accounting is tied to the logical token extent. CUDA instantiates TG1/TG2 stock and resumed vector variants per native K/V pair and derives split count from the same ordinary-vector occupancy topology as stock. Arbitrary final tails skip invalid K/V lanes rather than reading padded bytes outside a span.
+
+TDD exposed two correctness details before acceptance. First, resumed-kernel occupancy produced a different split topology from stock, so planning now uses the matching ordinary vector specialization. Second, K/V pointers are span-local but the causal mask remains globally indexed. Advancing the mask by a local offset admitted one extra TG2 token and caused a context-inverse error; the kernel now keeps global mask coordinates, while the legacy per-span adapter reconstructs the original mask base.
+
+TDD and validation evidence:
+
+- The intentional red build reported the missing query dimension, `spans` hook, and query-aware planner ABI.
+- The new suite passes 4 cases / 62 assertions. It covers TG1/TG2 workspace accounting, hook discovery, Q8_0/Q4_0 contexts of 257, 513, and 1017 tokens, contiguous and highly fragmented boundaries at 1/127/128/255/256/257 and final tails, causal masks, stock comparison, null/mismatched plans, undersized workspace, and output preservation.
+- Across all six TG/context points, segmented-versus-contiguous and segmented-versus-stock maximum absolute error is at most 3.72529e-9, below the explicit 1e-7 partition gate. Byte identity is not claimed.
+- The legacy TG1 resume suite passes 4 cases / 110 assertions across Q8_0/Q4_0, Q5_1/Q4_1, and Q4_0/F16 at 513, 769, and 4097 active tokens. Maximum stock error is at most 2.79397e-9.
+- The full CUDA block suite passes 20 cases / 656,887 assertions, the session suite 9 / 481, and the model suite 7 / 159. Compute Sanitizer memcheck reports zero errors and zero leaked bytes for both new and legacy vector suites.
+- CPU Debug, ASan with leak detection, UBSan, OpenCL, oneAPI SYCL, and Vulkan-ASan builds pass the common query-aware layout and host-only contract tests.
+- Existing production workspace planning explicitly requests TG1, so its behavior and allocation remain unchanged. The new `spans` hook is not yet called by production inference. The production container was restored with its existing configuration and `/health` reports `ok`. Stage 7.5 remains the span-aware stock F16 MMA path for TG3/TG4.

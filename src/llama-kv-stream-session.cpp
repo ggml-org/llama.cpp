@@ -106,7 +106,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
         if (!get || !get() || get()->version < 5 || !get()->resume_plan ||
                 !get()->resume_plan(backend,config.policy.shape.type_k,
                     config.policy.shape.type_v,config.query_heads,
-                    config.policy.shape.heads,content->host()->layout().tokens,plan)) return false;
+                    config.policy.shape.heads,1,content->host()->layout().tokens,plan)) return false;
         bytes = plan.bytes;
         return true;
     }
@@ -556,7 +556,7 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
         if (!get || !get() || get()->version < 5 || !get()->resume_plan ||
                 !get()->resume_plan(backend,config.policy.shape.type_k,
                     config.policy.shape.type_v,config.query_heads,
-                    config.policy.shape.heads,content->host()->layout().tokens,plan)) return {};
+                    config.policy.shape.heads,1,content->host()->layout().tokens,plan)) return {};
         partial_bytes = plan.bytes;
     }
     if (regions[0].size < config.policy.pool_bytes || regions[2].size < partial_bytes) return {};
@@ -999,7 +999,7 @@ bool llama_kv_stream_session::set_attention_workspace(ggml_backend_memory_lease_
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(s.backend)),"ggml_backend_kv_stream_partial_ops"));
             ggml_kv_stream_resume_plan plan;
             if (!get || !get() || get()->version < 5 || !get()->resume_plan || !get()->resume_plan(s.backend,
-                    s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,s.config.policy.shape.heads,
+                    s.config.policy.shape.type_k,s.config.policy.shape.type_v,s.config.query_heads,s.config.policy.shape.heads,1,
                     s.content->host()->layout().tokens,plan)) return false;
             needed = plan.bytes;
         }
