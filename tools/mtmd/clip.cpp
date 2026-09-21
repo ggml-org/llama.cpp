@@ -4652,8 +4652,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }
@@ -4696,8 +4696,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }
