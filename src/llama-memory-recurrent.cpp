@@ -866,15 +866,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
     }
 
     if (!res) {
-        // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
-        if (seq_id == -1) {
-            clear(true);
-        } else {
-            if (meta_read) {
-                clear_cells_data(cell_head, cell_count);
-            }
-            seq_rm(seq_id, -1, -1);
-        }
+        state_clear(seq_id, cell_head, meta_read ? cell_count : 0);
         throw std::runtime_error("failed to restore kv cache");
     }
 
@@ -1233,7 +1225,15 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
 
 // the cleared ranges mirror the write pattern of state_read_data() - keep both in sync
 // the transposed s layout is not handled - state_read_data() rejects it before any write
-void llama_memory_recurrent::clear_cells_data(uint32_t cell_head, uint32_t cell_count) {
+void llama_memory_recurrent::state_clear(llama_seq_id seq_id, uint32_t cell_head, uint32_t cell_count) {
+    // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
+    if (seq_id == -1) {
+        clear(true);
+        return;
+    }
+
+    seq_rm(seq_id, -1, -1);
+
     if (cell_count == 0) {
         return;
     }

@@ -72,6 +72,7 @@ void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size) {
     static const std::vector<uint8_t> zeros(1024*1024, 0);
 
     // not all backend buffers implement ggml_backend_tensor_memset(), so write zeros instead
+    // TODO: make this a generic fallback in `ggml_backend_tensor_memset` when `set_tensor` is available
     for (size_t ofs = 0; ofs < size; ofs += zeros.size()) {
         ggml_backend_tensor_set(t, zeros.data(), offset + ofs, std::min(size - ofs, zeros.size()));
     }
