@@ -20,6 +20,8 @@ export interface ModelOption {
 	backendId?: string;
 	description?: string;
 	capabilities: string[];
+	/** Context size reported by the provider's model listing, when it reports one. */
+	contextLength?: number;
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
