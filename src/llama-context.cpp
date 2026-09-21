@@ -600,11 +600,11 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
 
     for (const auto & [tensor, nodes] : users) {
         if (tensor->op != GGML_OP_NONE) {
-            LLAMA_LOG_WARN("%s: input tensor '%s' has op %s, expected GGML_OP_NONE\n",
+            LLAMA_LOG_WARN("%s: input tensor '%32s' has op %s, expected GGML_OP_NONE\n",
                     __func__, tensor->name, ggml_op_name(tensor->op));
         }
         for (const ggml_tensor * node : nodes) {
-            LLAMA_LOG_DEBUG("%s: input tensor '%s' [%s, ne = { %" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 " }] is used by node '%s' (%s)\n",
+            LLAMA_LOG_DEBUG("%s: input tensor '%32s' [%s, ne = { %5" PRId64 ", %5" PRId64 ", %5" PRId64 ", %5" PRId64 " }] is used by node '%s' (%s)\n",
                     __func__, tensor->name, ggml_type_name(tensor->type),
                     tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
                     node->name, ggml_op_name(node->op));
