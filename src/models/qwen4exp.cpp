@@ -36,9 +36,12 @@ static const llama_model & qwen4exp_shared_model(const llama_cparams & cparams, 
 }
 
 void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
-    // must precede the per-layer arrays: n_layer() == n_layer_all - n_layer_nextn.
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < block_count");
+    // the trunk must keep at least one block: n_layer() == n_layer_all - n_layer_nextn
+    if (hparams.n_layer_nextn >= hparams.n_layer_all) {
+        throw std::runtime_error(format("%s must be less than %s, got %u",
+                                        ml.llm_kv(LLM_KV_NEXTN_PREDICT_LAYERS).c_str(),
+                                        ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), hparams.n_layer_nextn));
+    }
 
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
@@ -527,7 +530,10 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     const int64_t hc_dim = hc * n_embd;
     GGML_ASSERT(hparams.n_embd_out() == (uint32_t) hc_dim && "QWEN4EXP MTP hidden width mismatch");
 
-    const int il = hparams.n_layer();
+    const int il = hparams.n_layer() + cparams.nextn_layer_offset;
+    GGML_ASSERT(cparams.nextn_layer_offset >= 0 &&
+                cparams.nextn_layer_offset < (int) hparams.n_layer_nextn &&
+                "nextn_layer_offset out of range [0, n_layer_nextn)");
     const auto & layer = model.layers[il];
 
     GGML_ASSERT(layer.nextn.eh_proj     && "MTP block missing nextn.eh_proj");
@@ -553,6 +559,7 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_
     ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
     if (tok_embd_w == nullptr) {
         tok_embd_w = qwen4exp_shared_model(cparams, model, "token_embd.weight").tok_embd;
+        GGML_ASSERT(tok_embd_w && "QWEN4EXP MTP: the target model has no token embeddings to borrow");
     }
     ggml_tensor * tok_embd   = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
     cb(tok_embd, "mtp_tok_embd", il);
@@ -1185,7 +1192,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     cb(q_conv, "q_conv", il);
     cb(k_conv, "k_conv", il);
     cb(v_conv, "v_conv", il);
-
 
     const float eps_norm = hparams.f_norm_rms_eps;
 

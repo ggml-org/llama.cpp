@@ -39,13 +39,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     @classmethod
     def filter_tensors(cls, item):
         name, gen = item
-        if name.startswith("model." + cls._MTP_MIXER_PREFIX):
-            name = name.replace("model.", "", 1)
-        if name.startswith(cls._MTP_MIXER_PREFIX):
+        _, _, mixer_suffix = name.partition(cls._MTP_MIXER_PREFIX)
+        if mixer_suffix:
             if cls.no_mtp:
                 return None
             assert cls._original_block_count is not None
-            return f"model.layers.{cls._original_block_count}.{name[len('mtp.'):]}", gen
+            return f"model.layers.{cls._original_block_count}.hyper_connection_mixer.{mixer_suffix}", gen
         return super().filter_tensors((name, gen))
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
@@ -100,7 +99,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         ratios += [0] * (self.block_count - n_layer)
         self.gguf_writer.add_attention_compress_ratios(ratios)
 
-        # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
+        # ple_layer_ids is 1-based in the HF config; empty means no n-gram table
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers or self.mtp_only:
             return
