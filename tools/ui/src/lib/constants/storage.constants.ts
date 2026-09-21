@@ -33,6 +33,9 @@ export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteMod
 
 /** Model the user picked last, kept across reloads. Stores `{ id, model }`. */
 export const SELECTED_MODEL_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.selectedModel`;
+
+/** Recently used model ids, most recent first, backend-qualified. */
+export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;

@@ -137,9 +137,18 @@ export function groupProviderOptions(
 		loading: boolean;
 		name: string;
 	}[],
-	limit = Infinity
+	limit = Infinity,
+	recentIds: readonly string[] = []
 ): ProviderGroup[] {
 	const byBackend = new SvelteMap<string, ModelItem[]>();
+	const rank = new SvelteMap<string, number>();
+
+	recentIds.forEach((id, index) => rank.set(id, index));
+
+	const rankOf = (id: string) => rank.get(id) ?? Number.MAX_SAFE_INTEGER;
+	// recently used models lead their section, the rest keep the backend's order
+	const byRecency = (items: ModelItem[]) =>
+		rank.size === 0 ? items : [...items].sort((a, b) => rankOf(a.option.id) - rankOf(b.option.id));
 
 	for (let i = 0; i < options.length; i++) {
 		const option = options[i];
@@ -151,7 +160,7 @@ export function groupProviderOptions(
 	}
 
 	return providers.map((provider) => {
-		const items = byBackend.get(provider.backendId) ?? [];
+		const items = byRecency(byBackend.get(provider.backendId) ?? []);
 
 		return { ...provider, items: items.slice(0, limit), matched: items.length };
 	});

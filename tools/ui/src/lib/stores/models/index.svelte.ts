@@ -8,7 +8,12 @@
  */
 
 import { browser } from '$app/environment';
-import { FAVORITE_MODELS_LOCALSTORAGE_KEY, SELECTED_MODEL_LOCALSTORAGE_KEY } from '$lib/constants';
+import {
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	RECENT_MODEL_LIMIT,
+	RECENT_MODELS_LOCALSTORAGE_KEY,
+	SELECTED_MODEL_LOCALSTORAGE_KEY
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -45,11 +50,31 @@ function loadStoredSelection(): { id: string; model: string | null } | null {
 
 const storedSelection = loadStoredSelection();
 
+/** Recently used backend-qualified ids, most recent first. */
+function loadRecentModels(): string[] {
+	if (!browser) return [];
+
+	try {
+		const raw = localStorage.getItem(RECENT_MODELS_LOCALSTORAGE_KEY);
+
+		if (!raw) return [];
+
+		const parsed = JSON.parse(raw) as unknown;
+
+		return Array.isArray(parsed)
+			? parsed.filter((id): id is string => typeof id === 'string').slice(0, RECENT_MODEL_LIMIT)
+			: [];
+	} catch {
+		return [];
+	}
+}
+
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	loading = $state(false);
+	recentModelIds = $state<string[]>(loadRecentModels());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(storedSelection?.id ?? null);
 	selectedModelName = $state<string | null>(storedSelection?.model ?? null);
@@ -399,6 +424,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.selectedModelName = option.model;
 			this.selectionFromStorage = false;
 			this.persistSelection();
+			this.recordRecentModel(qualifiedId);
 		} finally {
 			this.updating = false;
 		}
@@ -603,6 +629,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			}
 		} catch {
 			console.warn('[ModelsStore] Failed to persist the model selection');
+		}
+	}
+
+	/** Move a model to the front of the recently used list. */
+	private recordRecentModel(qualifiedId: string): void {
+		this.recentModelIds = [
+			qualifiedId,
+			...this.recentModelIds.filter((id) => id !== qualifiedId)
+		].slice(0, RECENT_MODEL_LIMIT);
+
+		if (!browser) return;
+
+		try {
+			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
+		} catch {
+			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}
 	}
 
