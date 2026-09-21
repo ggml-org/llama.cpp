@@ -9,7 +9,6 @@ import { tabsStore } from './tabs.svelte';
 import { toolsStore } from './tools.svelte';
 import { versionStore } from './version.svelte';
 import { browser } from '$app/environment';
-import { LOCAL_BACKEND_ID } from '$lib/constants';
 import { MigrationService } from '$lib/services/migration.service';
 
 let startup: Promise<void> | null = null;
@@ -27,14 +26,13 @@ export function initStores(): Promise<void> {
 		// per-backend and never block startup
 		void backendsModelsStore.loadAll();
 
-		// the local server state is needed once its tab is opened; loading it here
-		// keeps the tab switch free of /props requests
-		if (backendsStore.local.enabled && backendsStore.active.id !== LOCAL_BACKEND_ID) {
-			void serverStore.prefetchLocalState();
-		}
-
 		permissionsStore.initialize();
 		toolsStore.initialize();
+
+		// the local server state backs the installation facts and decides whether
+		// /tools exists at all, so probe it first and only then list the tools;
+		// otherwise they stay empty until the tools menu is opened
+		void serverStore.prefetchLocalState().then(() => toolsStore.fetchServerTools());
 		void versionStore.initialize();
 
 		// the full conversation list loads in the background; once it is back,
