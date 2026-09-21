@@ -100,7 +100,7 @@ int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
-int g_ggml_sycl_enable_vmm = 1;
+int g_ggml_sycl_enable_vmm = 0;
 int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
@@ -354,7 +354,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
-        g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+        g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 0);
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
@@ -1780,6 +1780,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     int           device;
     sycl::context ctx;
     sycl::device  dev;
+    queue_ptr     qptr = nullptr;
 
     uintptr_t pool_addr = 0;
     size_t    pool_used = 0;
@@ -1793,14 +1794,28 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     };
     std::vector<mapping> mappings;
 
+    // allocations served by the direct-USM fallback when the VMM commit
+    // failed; tracked so free() can release them with the right API
+    struct fallback_buffer {
+        void * ptr = nullptr;
+        size_t size = 0;
+    };
+    std::vector<fallback_buffer> fallbacks;
+
     explicit ggml_sycl_pool_vmm(queue_ptr qptr_, int device_) :
         device(device_),
         ctx(qptr_->get_context()),
         dev(qptr_->get_device()),
+        qptr(qptr_),
         granularity(ggml_sycl_info().devices[device_].vmm_granularity) {
     }
 
     ~ggml_sycl_pool_vmm() {
+        for (auto & f : fallbacks) {
+            if (f.ptr != nullptr) {
+                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(f.ptr, *qptr)));
+            }
+        }
         if (pool_addr == 0) {
             return;
         }
@@ -1817,6 +1832,20 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
     }
 
     void * alloc(size_t size, size_t * actual_size) override {
+        try {
+            return alloc_vmm(size, actual_size);
+        } catch (const std::exception & e) {
+            // the VMM commit failed - typically the device ran out of
+            // physical memory. Direct USM allocation may still succeed
+            // (it can also stage in shared memory), which beats failing
+            // the whole op.
+            GGML_LOG_WARN(GGML_SYCL_MEMTRACE_TAG " pool_vmm[%d] commit failed (%s), falling back to direct USM\n",
+                          device, e.what());
+            return alloc_direct(size, actual_size);
+        }
+    }
+
+    void * alloc_vmm(size_t size, size_t * actual_size) {
         // round up the allocation size to the alignment to ensure that all allocations are aligned for all data types
         size = GGML_PAD(size, SYCL_BUFFER_ALIGNMENT);
 
@@ -1836,8 +1865,10 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
             }
 
             // allocate more physical memory
+            // NOTE: no CHECK_TRY_ERROR here - the commit failure must
+            // propagate so the outer alloc() can fall back to direct USM
             std::optional<sycl::ext::oneapi::experimental::physical_mem> phys;
-            SYCL_CHECK(CHECK_TRY_ERROR(phys.emplace(dev, ctx, reserve_size)));
+            phys.emplace(dev, ctx, reserve_size);
 
             // reserve virtual address space (if not already reserved)
             if (pool_addr == 0) {
@@ -1857,6 +1888,7 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
                 std::move(*phys),
                 map_ptr,
             });
+
 
             // add to the pool
             pool_size += reserve_size;
@@ -1882,15 +1914,36 @@ struct ggml_sycl_pool_vmm : public ggml_sycl_pool {
         return ptr;
     }
 
+    void * alloc_direct(size_t size, size_t * actual_size) {
+        void * ptr = nullptr;
+        SYCL_CHECK(CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_device(size, *qptr)));
+        ggml_sycl_memtrace_add(GGML_SYCL_MEM_POOL_VMM, ptr, size);
+        fallbacks.push_back({ptr, size});
+        *actual_size = size;
+        return ptr;
+    }
+
     void free(void * ptr, size_t size) override {
 #ifdef DEBUG_SYCL_MALLOC
         GGML_LOG_INFO("sycl pool[%d]: freed %llu bytes at %p\n", device, (unsigned long long) size, ptr);
 #endif
 
+        if (fallbacks.size() > 0) {
+            for (size_t i = 0; i < fallbacks.size(); ++i) {
+                if (fallbacks[i].ptr == ptr) {
+                    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
+                    ggml_sycl_memtrace_del(ptr);
+                    fallbacks.erase(fallbacks.begin() + i);
+                    return;
+                }
+            }
+        }
+
         pool_used -= size;
 
         // all deallocations must be in reverse order of the allocations
         GGML_ASSERT(ptr == reinterpret_cast<void *>(pool_addr + pool_used));
+
     }
 };
 #endif // defined(GGML_SYCL_SUPPORT_VMM)
