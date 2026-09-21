@@ -21,7 +21,7 @@
 #include <stdatomic.h>
 
 #include "hex-utils.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hmx-queue.h"
 
 #define GGML_COMMON_DECL_C
@@ -49,33 +49,74 @@ struct htp_handle {
     struct htp_context * ctx;
 };
 
-static inline void * htp_mmap(uint32_t fd, uint32_t size) {
+static inline uint64_t htp_mmap(uint32_t fd, uint64_t size, uint32_t flags) {
+#if __HVX_ARCH__ > 79
+    if (flags & HTP_BUF_EXTENDED) {
+        HAP_mem_req_payload_t payload;
+        memset(&payload, 0, sizeof(payload));
+        payload.request_id = HAP_MEM_MAP;
+        payload.mmap.len   = size;
+        payload.mmap.prot  = HAP_MEM_CACHE_NON_SHARED | HAP_PROT_READ;
+        payload.mmap.flags = HAP_MEM_FLAGS_EXTENDED_MAP;
+        payload.mmap.fd    = fd;
+
+        if (HAP_mem_request(&payload) != 0) {
+            FARF(ERROR, "extended mmap failed : fd %u size %llu", fd, (unsigned long long) size);
+            return 0;
+        }
+
+        return payload.mmap.dsp_va;
+    }
+#else
+    if (flags & HTP_BUF_EXTENDED) {
+        FARF(ERROR, "extended mmap is unsupported on v%d", __HVX_ARCH__);
+        return 0;
+    }
+#endif
+
+    if (size > UINT32_MAX) {
+        FARF(ERROR, "mmap failed : size %llu exceeds 32-bit limit", (unsigned long long) size);
+        return 0;
+    }
+
     void * va = (void *)-1;
     for (int retry = 0; retry < 2; retry++) {
 #if __HVX_ARCH__ > 73
-        va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+        va = HAP_mmap2(NULL, (size_t) size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
 #else
         if (size > HTP_MMAP_MAX_VMEM) {
-            FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
+            FARF(ERROR, "mmap failed : size %llu exceeds 2GB limit for HAP_mmap", (unsigned long long) size);
             abort();
         }
-        va = HAP_mmap(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+        va = HAP_mmap(NULL, (int) size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
 #endif
         if (va != (void *)-1 && va != NULL) {
-            return va;
+            return (uint64_t) (uintptr_t) va;
         }
         if (retry == 0) {
-            FARF(HIGH, "mmap failed first try (va %p fd %u size %u), retrying...", va, fd, size);
+            FARF(HIGH, "mmap failed first try (va %p fd %u size %llu), retrying...", va, fd, (unsigned long long) size);
         }
     }
-    return NULL;
+    return 0;
 }
 
-static inline void htp_munmap(void * va, uint32_t size) {
+static inline void htp_munmap(uint64_t va, uint64_t size, uint32_t flags) {
+#if __HVX_ARCH__ > 79
+    if (flags & HTP_BUF_EXTENDED) {
+        HAP_mem_req_payload_t payload;
+        memset(&payload, 0, sizeof(payload));
+        payload.request_id   = HAP_MEM_UNMAP;
+        payload.munmap.dsp_va = va;
+        payload.munmap.len    = size;
+        HAP_mem_request(&payload);
+        return;
+    }
+#endif
+
 #if __HVX_ARCH__ > 73
-    HAP_munmap2(va, size);
+    HAP_munmap2((void *) (uintptr_t) va, (size_t) size);
 #else
-    HAP_munmap(va, size);
+    HAP_munmap((void *) (uintptr_t) va, (int) size);
 #endif
 }
 
@@ -160,10 +201,11 @@ AEEResult htp_iface_close(remote_handle64 handle) {
         // release the mmaps (if any)
         for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
             if (ctx->mmap[i].size) {
-                htp_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+                htp_munmap(ctx->mmap[i].base, ctx->mmap[i].size, ctx->mmap[i].flags);
                 ctx->mmap[i].size = 0;
-                ctx->mmap[i].base = NULL;
+                ctx->mmap[i].base = 0;
                 ctx->mmap[i].fd   = -1;
+                ctx->mmap[i].flags = 0;
             }
         }
 
@@ -184,7 +226,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
     return AEE_SUCCESS;
 }
 
-AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
+AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint64_t size) {
     struct htp_handle * h = (struct htp_handle *) handle;
     if (!h || !h->ctx) {
         return AEE_EBADPARM;
@@ -203,16 +245,17 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            FARF(HIGH, "mmap : fd %u size %u", fd, size);
-            void *va = htp_mmap(fd, size);
-            if (va == NULL) {
-                FARF(ERROR, "mmap failed : fd %u size %u", fd, (uint32_t) size);
+            FARF(HIGH, "mmap : fd %u size %llu", fd, (unsigned long long) size);
+            uint64_t va = htp_mmap(fd, size, 0);
+            if (va == 0) {
+                FARF(ERROR, "mmap failed : fd %u size %llu", fd, (unsigned long long) size);
                 return AEE_EFAILED;
             }
 
-            m->base   = (uint64_t) va;
+            m->base   = va;
             m->fd     = fd;
             m->size   = size;
+            m->flags  = 0;
 
             return AEE_SUCCESS;
         }
@@ -231,11 +274,12 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (fd < 0 || m->fd == fd) {
-            FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
-            htp_munmap((void *) m->base, m->size);
+            FARF(HIGH, "unmmap : base 0x%llx fd %u size %llu", (unsigned long long) m->base, m->fd, (unsigned long long) m->size);
+            htp_munmap(m->base, m->size, m->flags);
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
+            m->flags  = 0;
         }
     }
 
@@ -394,8 +438,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     for (uint32_t i = 0; i < n_hvx; i++) {
         size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
-        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
-        size_dma += dma_queue_alias_sizeof();
     }
     offset = offset_dma + size_dma;
 
@@ -538,16 +580,11 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     // Initialize DMA queues
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
     size_t size_dma_q = dma_queue_sizeof(256);
-    size_t size_dma_alias = dma_queue_alias_sizeof();
 
     for (int i = 0; i < ctx->n_threads; i++) {
         dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
-        ctx->dma_cached[i] = dma_queue_init(dma_ptr_curr, 256, (uintptr_t) ctx->vtcm_base, ctx->vtcm_size, &ctx->trace[i]);
+        ctx->dma[i] = dma_queue_init(dma_ptr_curr, 256, &ctx->trace[i]);
         dma_ptr_curr += size_dma_q;
-
-        dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
-        ctx->dma[i] = dma_queue_alias_init(dma_ptr_curr, ctx->dma_cached[i], 1);
-        dma_ptr_curr += size_dma_alias;
     }
 
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
@@ -608,8 +645,7 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     work_queue_free(ctx->work_queue);
 
     for (int i = 0; i < ctx->n_threads; i++) {
-        dma_queue_alias_free(ctx->dma[i]);
-        dma_queue_free(ctx->dma_cached[i]);
+        dma_queue_free(ctx->dma[i]);
     }
 
     if (ctx->hmx_queue) {
@@ -828,6 +864,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_OAI:
         case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
+        case HTP_OP_GLU_GEGLU_QUICK:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
@@ -858,6 +895,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ARGSORT:
             return op_argsort(octx);
 
+        case HTP_OP_TOP_K:
+            return op_top_k(octx);
+
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);
 
@@ -878,6 +918,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_IM2COL:
             return op_im2col(octx);
+
+        case HTP_OP_ROLL:
+            return op_roll(octx);
 
         case HTP_OP_CONCAT:
             return op_concat(octx);
@@ -901,7 +944,7 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = ctx->mmap + i;
-        if (m->size && m->fd == b->fd) {
+        if (m->size && m->fd == b->fd && m->flags == b->flags) {
             b->base   = m->base;
             *m_reuse |= (1 << i);
             return true;
@@ -913,11 +956,12 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     if (m->size) {
-        FARF(ALWAYS, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
-        htp_munmap((void *) m->base, m->size);
+        FARF(ALWAYS, "unmap : fd %u base 0x%llx size %llu", m->fd, (unsigned long long) m->base, (unsigned long long) m->size);
+        htp_munmap(m->base, m->size, m->flags);
         m->size = 0;
         m->base = 0;
         m->fd   = -1;
+        m->flags = 0;
     }
 }
 
@@ -928,17 +972,18 @@ static inline bool mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-            void *va = htp_mmap(b->fd, b->size);
-            if (va == NULL) {
-                FARF(HIGH, "mmap failed (will attempt defrag) : fd %u size %u", b->fd, (uint32_t) b->size);
+            uint64_t va = htp_mmap(b->fd, b->size, b->flags);
+            if (va == 0) {
+                FARF(HIGH, "mmap failed (will attempt defrag) : fd %u size %llu", b->fd, (unsigned long long) b->size);
                 return false;
             }
 
-            m->base   = b->base = (uint64_t) va;
+            m->base   = b->base = va;
             m->fd     = b->fd;
             m->size   = b->size;
+            m->flags  = b->flags;
 
-            FARF(ALWAYS, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
+            FARF(ALWAYS, "mmap : fd %u base 0x%llx size %llu flags 0x%x", m->fd, (unsigned long long) m->base, (unsigned long long) m->size, m->flags);
             return true;
         }
     }
@@ -957,14 +1002,22 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     // See what we can reuse
     for (uint32_t i=0; i < n_bufs; i++) {
         struct htp_buf_desc *b = bufs + i;
-        if (reuse_buf(ctx, &m_reuse, b)) { b_reuse++; } else { e_vmem += b->size; }
-        FARF(HIGH, "prep-buf #%u : pass0 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        if (reuse_buf(ctx, &m_reuse, b)) {
+            b_reuse++;
+        } else if (!(b->flags & HTP_BUF_EXTENDED)) {
+            e_vmem += b->size;
+        }
+        FARF(HIGH, "prep-buf #%u : pass0 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
     }
 
     if (b_reuse == n_bufs) return; // all bufs reuse existing mappings
 
     // See how much vmem we have mmaped right now
-    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) { m_vmem += ctx->mmap[i].size; }
+    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+        if (!(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+            m_vmem += ctx->mmap[i].size;
+        }
+    }
 
     FARF(HIGH, "prep-bufs : pass1 mmap-vmem %zu extra-vmem %zu max-vmem %zu : n-bufs %u b-reuse %u",
             (size_t) m_vmem, (size_t) e_vmem, (size_t) ctx->max_vmem, n_bufs, b_reuse);
@@ -973,7 +1026,9 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
         // Drop unused mappings
         for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
             bool used = m_reuse & (1<<i);
-            if (!used) { drop_mmap(ctx, ctx->mmap + i); }
+            if (!used && !(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+                drop_mmap(ctx, ctx->mmap + i);
+            }
         }
     }
 
@@ -985,35 +1040,40 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
             mmap_ok = false;
             break;
         }
-        FARF(HIGH, "prep-buf #%u : pass1 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+        FARF(HIGH, "prep-buf #%u : pass1 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
     }
 
     if (!mmap_ok) {
-        // Attempt clean defragmentation: drop all mappings and remap (pass 2)
-        FARF(HIGH, "prep-bufs : dropping all mappings to defragment address space");
-        for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) { drop_mmap(ctx, ctx->mmap + i); }
+        // Attempt defragmentation: drop 32-bit mappings and remap (pass 2)
+        FARF(HIGH, "prep-bufs : dropping 32-bit mappings to defragment address space");
+        for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
+            if (!(ctx->mmap[i].flags & HTP_BUF_EXTENDED)) {
+                drop_mmap(ctx, ctx->mmap + i);
+            }
+        }
 
         for (uint32_t i=0; i < n_bufs; i++) {
             struct htp_buf_desc *b = bufs + i;
-            b->base = 0;
+            if (!(b->flags & HTP_BUF_EXTENDED)) {
+                b->base = 0;
+            }
             if (!mmap_buf(ctx, b)) {
-                FARF(ERROR, "prep-bufs : mmap failed after defragmentation (fd %u size %u)", b->fd, (uint32_t) b->size);
+                FARF(ERROR, "prep-bufs : mmap failed after defragmentation (fd %u size %llu)", b->fd, (unsigned long long) b->size);
                 abort();
             }
-            FARF(HIGH, "prep-buf #%u : pass2 fd %u base %p size %u flags 0x%x", i, b->fd, (void*) b->base, (uint32_t) b->size, b->flags);
+            FARF(HIGH, "prep-buf #%u : pass2 fd %u base 0x%llx size %llu flags 0x%x", i, b->fd, (unsigned long long) b->base, (unsigned long long) b->size, b->flags);
         }
     }
 }
 
 static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t idx, struct htp_tensor *t) {
-    uint32_t offset = t->data;
-    uint32_t size   = t->size;
+    uint64_t offset = t->data;
     uint32_t bi     = t->bi;
 
-    t->data  = (uint32_t) (bufs[bi].base + offset);  // update data to the actual pointer
+    t->data  = bufs[bi].base + offset;  // update data to the actual pointer
 
-    FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
-        t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
+    FARF(HIGH, "prep-tensor #%u: bi %u offset %llu size %u data 0x%llx : %u:%u:%u:%u", idx, t->bi, (unsigned long long) offset, t->size, (unsigned long long) t->data,
+        t->ne[0], t->ne[1], t->ne[2], t->ne[3]);
 }
 
 static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t n_tens) {
@@ -1043,15 +1103,13 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
         uint16_t src_idx = op->src[i];
         if (src_idx == 0xffff) {
             octx->src[i]     = NULL;
-            octx->src_dma[i] = NULL;
             continue;
         }
 
         struct htp_tensor *src = tens + src_idx;
         octx->src[i]     = src;
-        octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
+        FARF(HIGH, "prep-src #%u: data 0x%llx size %u : %u:%u:%u:%u", op->src[i], (unsigned long long) src->data, src->size,
             src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
@@ -1062,14 +1120,12 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
         uint16_t dst_idx = op->dst[i];
         if (dst_idx == 0xffff) {
             octx->dsts[i]    = NULL;
-            octx->dst_dma[i] = NULL;
             continue;
         }
         struct htp_tensor *dst = tens + dst_idx;
         octx->dsts[i]    = dst;
-        octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
+        FARF(HIGH, "prep-dst[%u] #%u: data 0x%llx size %u : %u:%u:%u:%u", i, dst_idx, (unsigned long long) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 

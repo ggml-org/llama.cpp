@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #define FATTN_KQ_STRIDE       256
+#define FATTN_MASK_KV_BLOCKS    16
 #define HALF_MAX_HALF         __float2half(65504.0f/2) // Use neg. of this instead of -INFINITY to initialize KQ max vals to avoid NaN upon subtraction.
 #define SOFTMAX_FTZ_THRESHOLD -20.0f                   // Softmax exp. of values smaller than this are flushed to zero to avoid NaNs.
 
@@ -40,6 +41,9 @@ typedef void (* fattn_kernel_t)(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33);
+
+typedef void (*fattn_mask_blocks_kernel_t)(
+        const half *, uint32_t *, const int, const int, const int, const int64_t, const int64_t);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -664,7 +668,8 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
 template <int ncols1>
 __launch_bounds__(FATTN_KQ_STRIDE/2, 1)
 static __global__ void flash_attn_mask_to_KV_max(
-        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int64_t s31, const int64_t s33) {
+        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int ne01, const int ne33,
+        const int64_t s31, const int64_t s33) {
     const half2 * GGML_CUDA_RESTRICT mask   = mask_ptr;
     int         * GGML_CUDA_RESTRICT KV_max = KV_max_ptr;
 
@@ -673,7 +678,7 @@ static __global__ void flash_attn_mask_to_KV_max(
     const int sequence = blockIdx.y;
     const int jt       = blockIdx.x;
 
-    mask += sequence*s33 + jt*ncols1*s31;
+    mask += (sequence % ne33)*s33 + jt*ncols1*s31;
 
     __shared__ int buf_iw[WARP_SIZE];
     if (tid < WARP_SIZE) {
@@ -687,7 +692,7 @@ static __global__ void flash_attn_mask_to_KV_max(
         int all_inf = 1;
 
 #pragma unroll
-        for (int j = 0; j < ncols1; ++j) {
+        for (int j = 0; j < min(ncols1, ne01 - jt*ncols1); ++j) {
             const float2 tmp = __half22float2(mask[j*s31 + KV_max_sj/2 + tid]);
             all_inf = all_inf && int(isinf(tmp.x)) && int(isinf(tmp.y));
         }
@@ -715,11 +720,64 @@ static __global__ void flash_attn_mask_to_KV_max(
         return;
     }
 
-    KV_max[sequence*ne31 + jt] = KV_max_sj;
+    KV_max[int64_t(sequence)*ne31 + jt] = KV_max_sj;
+}
+
+template <int ncols1>
+__launch_bounds__(WARP_SIZE * FATTN_MASK_KV_BLOCKS, 1)
+static __global__ void flash_attn_mask_to_KV_blocks(
+        const half * mask, uint32_t * KV_blocks, const int ne00, const int ne01,
+        const int nbatch_fa, const int64_t s31, const int64_t s33) {
+    const int lane = threadIdx.x % WARP_SIZE;
+    const int warp = threadIdx.x / WARP_SIZE;
+    const int kb = blockIdx.x * FATTN_MASK_KV_BLOCKS + warp;
+    const int jt = blockIdx.y;
+    const int sequence = blockIdx.z;
+    const int64_t k0 = int64_t(kb) * nbatch_fa;
+    const int j0 = jt * ncols1;
+    const int j1 = j0 + min(ncols1, ne01 - j0);
+    const int64_t ib = (int64_t(sequence)*gridDim.y + jt)*gridDim.x + blockIdx.x;
+    mask += int64_t(sequence)*s33;
+    ggml_cuda_pdl_sync();
+
+    int all_masked = 1;
+    int all_zero = 0;
+    if (k0 < ne00) {
+        const float corner = __half2float(mask[int64_t(j1 - 1)*s31 + k0]);
+        all_masked = corner == -INFINITY;
+        all_zero = corner == 0.0f;
+        if (all_masked || all_zero) {
+            for (int j = j0; j < j1; ++j) {
+                for (int i = lane; i < nbatch_fa && k0 + i < ne00; i += WARP_SIZE) {
+                    const float value = __half2float(mask[int64_t(j)*s31 + k0 + i]);
+                    all_masked &= value == -INFINITY;
+                    all_zero &= value == 0.0f;
+                }
+            }
+        }
+    }
+    all_masked = warp_reduce_all(all_masked);
+    all_zero = warp_reduce_all(all_zero);
+
+    __shared__ int block_types[FATTN_MASK_KV_BLOCKS];
+    if (lane == 0) {
+        block_types[warp] = all_masked ? 1 : all_zero ? 2 : 0;
+    }
+    __syncthreads();
+    if (threadIdx.x < WARP_SIZE) {
+        uint32_t bits = lane < FATTN_MASK_KV_BLOCKS ? uint32_t(block_types[lane]) << (2*lane) : 0;
+#pragma unroll
+        for (int offset = WARP_SIZE/2; offset > 0; offset /= 2) {
+            bits |= __shfl_xor_sync(0xffffffff, bits, offset, WARP_SIZE);
+        }
+        if (lane == 0) {
+            KV_blocks[ib] = bits;
+        }
+    }
 }
 
 void ggml_cuda_flash_attn_ext_compact_mask(
-        const ggml_tensor * mask, int32_t * indices, int32_t n_kv_max, cudaStream_t stream);
+        const ggml_tensor * mask, int32_t * indices, int32_t * counts, int32_t n_queries, int32_t ncols1, int32_t n_kv_max, cudaStream_t stream);
 
 template<int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
@@ -976,9 +1034,10 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE
+    const int warp_size = WARP_SIZE, fattn_mask_blocks_kernel_t mask_blocks_kernel = nullptr
 ) {
     constexpr int ncols = ncols1 * ncols2;
+    const bool use_mask_blocks = mask_blocks_kernel != nullptr;
 
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
@@ -1010,6 +1069,7 @@ void launch_fattn(
         ggml_cuda_flash_attn_ext_get_f16_extra_data(KQV, need_f16_K, need_f16_V);
 
     ggml_cuda_pool_alloc<int>    KV_max(pool);
+    ggml_cuda_pool_alloc<uint32_t> KV_blocks(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
 
@@ -1092,34 +1152,76 @@ void launch_fattn(
     const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
     const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
 
-    const int32_t n_kv_max = use_sparse ? ggml_get_op_params_i32(KQV, 4) : 0;
+    // sparse: a query tile of ncols1 queries shares one index list, the union of the queries' visible columns
+    int32_t n_kv_max = 0;
     if (use_sparse) {
         GGML_ASSERT(mask != nullptr);
-        GGML_ASSERT(n_kv_max > 0);
-        const size_t mask_rows = size_t(mask->ne[1]) * mask->ne[3];
+        const int32_t n_kv_max_query = ggml_get_op_params_i32(KQV, 4);
+        GGML_ASSERT(n_kv_max_query > 0);
+        n_kv_max = std::min<int64_t>(K->ne[1], int64_t(ncols1)*n_kv_max_query);
 
-        KV_max.alloc(size_t(n_kv_max) * mask_rows);
-        ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, n_kv_max, main_stream);
+        const size_t n_lists = size_t(ntiles_x) * mask->ne[3];
+
+        KV_max.alloc(size_t(n_kv_max)*n_lists + n_lists);
+        ggml_cuda_flash_attn_ext_compact_mask(mask, KV_max.ptr, KV_max.ptr + size_t(n_kv_max)*n_lists, Q->ne[1], ncols1, n_kv_max, main_stream);
     }
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths.
-    if (!use_sparse && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
+    if (!use_sparse && !use_mask_blocks && mask && K->ne[1] % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1)) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
 
         const dim3 blocks_num_KV_max(ntiles_x, Q->ne[3], 1);
         const dim3 block_dim_KV_max(FATTN_KQ_STRIDE/2, 1, 1);
 
-        const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
+        const size_t ne_KV_max = size_t(blocks_num_KV_max.x)*blocks_num_KV_max.y;
         const int iter_k = K->ne[1] / FATTN_KQ_STRIDE;
 
         KV_max.alloc(ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
-            (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+            (const half2 *) mask->data, KV_max.ptr, iter_k, Q->ne[1], mask->ne[3], s31, s33);
         CUDA_CHECK(cudaGetLastError());
+    }
+
+    if (use_mask_blocks) {
+        // AMD WMMA dispatch requires a dense, single-head mask.
+        GGML_ASSERT(!use_sparse && mask && mask->ne[2] == 1);
+        const int nblocks_KV = (K->ne[1] - 1) / (nbatch_fa * FATTN_MASK_KV_BLOCKS) + 1;
+        const int64_t s31 = mask->nb[1] / sizeof(half);
+        const int64_t s33 = mask->nb[3] / sizeof(half);
+        KV_blocks.alloc(size_t(nblocks_KV)*ntiles_x*mask->ne[3]);
+
+        auto launch_blocks = [&](const int jt0, const int ntiles, const int64_t sequence, const int nsequences) {
+            const int64_t j0 = int64_t(jt0)*ncols1;
+            const int nq = std::min<int64_t>(Q->ne[1] - j0, int64_t(ntiles)*ncols1);
+            const dim3 blocks_num_KV(nblocks_KV, ntiles, nsequences);
+            ggml_cuda_kernel_launch_params launch_params(blocks_num_KV, dim3(WARP_SIZE * FATTN_MASK_KV_BLOCKS, 1, 1), 0, main_stream);
+            ggml_cuda_kernel_launch(mask_blocks_kernel, launch_params,
+                (const half *) mask->data + sequence*s33 + j0*s31,
+                KV_blocks.ptr + (sequence*ntiles_x + jt0)*nblocks_KV,
+                K->ne[1], nq, nbatch_fa, s31, s33);
+            CUDA_CHECK(cudaGetLastError());
+        };
+
+        // Bound grid.y and grid.z for HIP runtimes that enforce their limits.
+        constexpr int max_grid_yz = 65535;
+        if (ntiles_x <= max_grid_yz && mask->ne[3] <= max_grid_yz) {
+            launch_blocks(0, ntiles_x, 0, mask->ne[3]);
+        } else {
+            for (int64_t sequence = 0; sequence < mask->ne[3];) {
+                // Query slices need separate sequences to preserve the packed row stride.
+                const int nsequences = ntiles_x <= max_grid_yz ? std::min<int64_t>(mask->ne[3] - sequence, max_grid_yz) : 1;
+                for (int jt0 = 0; jt0 < ntiles_x;) {
+                    const int ntiles = std::min(ntiles_x - jt0, max_grid_yz);
+                    launch_blocks(jt0, ntiles, sequence, nsequences);
+                    jt0 += ntiles;
+                }
+                sequence += nsequences;
+            }
+        }
     }
 
     const dim3 block_dim(warp_size, nwarps, 1);
@@ -1231,14 +1333,14 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-        ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
-        ggml_cuda_kernel_launch(fattn_kernel, launch_params,
+    ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num, block_dim, nbytes_shared, main_stream);
+    ggml_cuda_kernel_launch(fattn_kernel, launch_params,
         (const char *) Q->data,
         K_data,
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
         sinks ? ((const char *) sinks->data) : nullptr,
-        KV_max.ptr,
+        use_mask_blocks ? (const int *) KV_blocks.ptr : KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
