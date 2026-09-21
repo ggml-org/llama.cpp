@@ -441,7 +441,7 @@ static __global__ void convert_unary(
 
 template <typename T> struct alignas(sizeof(T)*4) cvt_vec4 { T v[4]; };
 
-// four elements per thread, so a warp moves 512 B per load instead of 128 B
+// four elements per thread, so a warp moves 512B (RDNA) / 1k (CDNA) per load
 template <typename src_t, typename dst_t>
 static __global__ void convert_unary_cont_vec4(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t k4) {
