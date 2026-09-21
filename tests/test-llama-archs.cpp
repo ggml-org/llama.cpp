@@ -18,10 +18,18 @@
 #include <cstring>
 #include <cstdint>
 #include <random>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+static bool arch_matches(const std::string & filter, llm_arch arch) {
+    if (filter.empty()) {
+        return true;
+    }
+    return std::regex_search(llm_arch_name(arch), std::regex(filter));
+}
 
 // normalized mean squared error = mse(a, b) / mse(a, 0)
 static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
@@ -85,12 +93,12 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 static void usage(char ** argv) {
     LOG("Usage: %s [options]\n\n", argv[0]);
     LOG("Options:\n");
-    LOG("  -a, --arch <arch>    Run only the specified LLM architecture (default: all supported)\n");
-    LOG("  -s, --seed <seed>    Set the random seed for tensor initialization and token generation\n");
-    LOG("  -d, --stdev <stdev>  Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
-    LOG("  -o, --out <dir>      Save generated test models to <dir> instead of running backend tests\n");
-    LOG("  -v <N>               Set log verbosity level\n");
-    LOG("  -h, --help           Show this help message\n\n");
+    LOG("  -a, --arch <arch|regex>  Run only matching LLM architectures (default: all supported)\n");
+    LOG("  -s, --seed <seed>        Set the random seed for tensor initialization and token generation\n");
+    LOG("  -d, --stdev <stdev>      Set the standard deviation of the tensor initialization distribution (default: 0.1f)\n");
+    LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
+    LOG("  -v <N>                   Set log verbosity level\n");
+    LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
     LOG("  %s -a qwen35moe\n", argv[0]);
@@ -639,7 +647,7 @@ static bool arch_supported(const llm_arch arch) {
     return true;
 }
 
-static int save_models(const llm_arch target_arch, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
+static int save_models(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const std::string & dir) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -666,7 +674,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const floa
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
         }
-        if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
+        if (!arch_matches(arch_filter, arch)) {
             continue;
         }
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
@@ -697,7 +705,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const floa
     return 0;
 }
 
-static int test_backends(const llm_arch target_arch, const size_t seed, const float stdev, const int verbosity) {
+static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -779,7 +787,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const fl
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
         }
-        if (target_arch != LLM_ARCH_UNKNOWN && arch != target_arch) {
+        if (!arch_matches(arch_filter, arch)) {
             continue;
         }
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
@@ -898,7 +906,7 @@ int main(int argc, char ** argv) {
 
     std::random_device rd;
 
-    llm_arch arch = LLM_ARCH_UNKNOWN;
+    std::string arch_filter;
     size_t seed = rd();
     float stdev = 0.1f;
     std::string out;
@@ -912,10 +920,17 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
                 const std::string arch_name = argv[++i];
-                arch = llm_arch_from_string(arch_name);
-                if (arch == LLM_ARCH_UNKNOWN) {
-                    LOG_ERR("%s: unkown LLM architecture: %s\n", __func__, arch_name.c_str());
-                    return 1;
+                if (llm_arch_from_string(arch_name) != LLM_ARCH_UNKNOWN) {
+                    // exact architecture name
+                    arch_filter = "^" + arch_name + "$";
+                } else {
+                    try {
+                        std::regex re(arch_name);
+                        arch_filter = arch_name;
+                    } catch (const std::regex_error & err) {
+                        LOG_ERR("%s: invalid architecture regex: %s (%s)\n", __func__, arch_name.c_str(), err.what());
+                        return 1;
+                    }
                 }
             } else {
                 usage(argv);
@@ -963,9 +978,9 @@ int main(int argc, char ** argv) {
 
     try {
         if (!out.empty()) {
-            return save_models(arch, seed, stdev, verbosity, out);
+            return save_models(arch_filter, seed, stdev, verbosity, out);
         }
-        return test_backends(arch, seed, stdev, verbosity);
+        return test_backends(arch_filter, seed, stdev, verbosity);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;
