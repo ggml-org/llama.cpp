@@ -772,16 +772,16 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
     size_t n_tests = 0;
     size_t n_failed = 0;
     common_log_flush(common_log_main());
-    printf(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
-    printf("|");
+    LOG(template_header.c_str(), "Model arch.", "Device", "Config", "NMSE vs. CPU", "Roundtrip");
+    LOG("|");
     for (size_t i = 0; i < max_arch_name_length; i++) {
-        printf("-");
+        LOG("-");
     }
-    printf("|");
+    LOG("|");
     for (size_t i = 0; i < max_device_label_length; i++) {
-        printf("-");
+        LOG("-");
     }
-    printf("|------|---------------|---------|\n");
+    LOG("|------|---------------|---------|\n");
     for (const llm_arch & arch : llm_arch_all()) {
         if (arch == LLM_ARCH_UNKNOWN) {
             continue;
@@ -813,8 +813,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
-                printf(template_row_cfg.c_str(),
-                    llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
+                LOG(template_row_cfg.c_str(), llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
                 fflush(stdout);
 
                 std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_dev;
@@ -880,18 +879,17 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 }
 
                 // log the results for this test case
-                printf(template_row_res.c_str(),
-                    status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
+                LOG(template_row_res.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
             }
         }
     }
 
     if (n_tests == 0) {
-        printf("Summary: no tests executed\n");
+        LOG("Summary: no tests executed\n");
     } else if (n_failed == 0) {
-        printf("Summary: all %zu test(s) passed\n", n_tests);
+        LOG("Summary: all %zu test(s) passed\n", n_tests);
     } else {
-        printf("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
+        LOG("Summary: %zu test(s) executed, %zu failed\n", n_tests, n_failed);
     }
 
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
