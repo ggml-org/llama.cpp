@@ -1117,11 +1117,9 @@ size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
 
 // utils
 
-static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
-        struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
-    // collect tensors into a list
     int n_tensors = 0;
     for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         n_tensors++;
@@ -1131,6 +1129,9 @@ static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
     }
 
     struct ggml_tensor ** tensors = (struct ggml_tensor **) malloc(n_tensors * sizeof(struct ggml_tensor *));
+    if (tensors == NULL) {
+        return NULL;
+    }
     int i = 0;
     for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         tensors[i++] = t;
@@ -1141,11 +1142,7 @@ static ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft_impl(
     return buffer;
 }
 
-ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
-    return ggml_backend_alloc_ctx_tensors_from_buft_impl(ctx, buft);
-}
-
-// TODO [TAG_ALLOC_SAHRED_BUFFER_SPLIT]: reuse shared buffer-splitting logic from ggml_backend_buft_alloc_buffer_n_default
+// TODO [TAG_ALLOC_SHARED_BUFFER_SPLIT]: reuse shared buffer-splitting logic from ggml_backend_buft_alloc_buffer_n_default
 size_t ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
