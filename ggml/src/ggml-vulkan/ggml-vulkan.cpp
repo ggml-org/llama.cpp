@@ -3760,6 +3760,13 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         device->architecture = get_device_architecture(device->physical_device);
 
+        for (const auto & ext : ext_props) {
+            if (strcmp(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME, ext.extensionName) == 0) {
+                device->supports_membudget = true;
+                break;
+            }
+        }
+
         const char* GGML_VK_PREFER_HOST_MEMORY = getenv("GGML_VK_PREFER_HOST_MEMORY");
         device->prefer_host_memory = GGML_VK_PREFER_HOST_MEMORY != nullptr;
 

@@ -684,6 +684,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool supports_membudget {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;

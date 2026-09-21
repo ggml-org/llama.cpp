@@ -1,3 +1,4 @@
+#include <mutex>
 #include "ggml-vulkan-common.h"
 
 ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
@@ -241,8 +242,102 @@ void ggml_vk_destroy_buffer(vk_buffer& buf) {
     buf.reset();
 }
 
+// Remaining budget of the host-visible, non-device-local heaps: system memory the GPU can
+// address (GTT on amdgpu). No VkPhysicalDeviceLimits value implies it - on amdgpu it defaults to
+// about half of system RAM - so VK_EXT_memory_budget is the only way to see it.
+static uint64_t ggml_vk_host_visible_budget(vk_device& device, uint64_t * heap_total) {
+    *heap_total = 0;
+    if (!device->supports_membudget) {
+        return UINT64_MAX;
+    }
+
+    vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
+    vk::PhysicalDeviceMemoryProperties2 memprops = {};
+    memprops.pNext = &budgetprops;
+    device->physical_device.getMemoryProperties2(&memprops);
+
+    uint64_t avail = 0;
+    for (uint32_t i = 0; i < memprops.memoryProperties.memoryTypeCount; ++i) {
+        const vk::MemoryType & type = memprops.memoryProperties.memoryTypes[i];
+        if (!(type.propertyFlags & vk::MemoryPropertyFlagBits::eHostVisible) ||
+             (type.propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+            continue;
+        }
+        const uint32_t heap = type.heapIndex;
+        if (heap >= budgetprops.heapBudget.size()) {
+            continue;
+        }
+        const uint64_t budget = budgetprops.heapBudget[heap];
+        const uint64_t usage  = budgetprops.heapUsage[heap];
+        if (budget > *heap_total) {
+            *heap_total = budget;
+        }
+        avail = std::max(avail, budget > usage ? budget - usage : uint64_t{0});
+    }
+
+    // No host-visible heap outside device memory: on an integrated GPU the host-visible heaps are
+    // device-local, and pinning there is not the over-commit case this guards. Report no budget
+    // information rather than a budget of zero, which would refuse every pinned allocation.
+    if (*heap_total == 0) {
+        return UINT64_MAX;
+    }
+    return avail;
+}
+
+// Pinned host memory must not consume the whole host-visible heap: staging buffers and the command
+// submission itself come out of the same budget, and when they cannot be satisfied the amdgpu
+// kernel driver fails the submission rather than the allocation - "Not enough memory for command
+// submission" -> VK_ERROR_DEVICE_LOST. By then the device is gone and the fallback to an unpinned
+// buffer below can no longer run.
+//
+// Only drivers that over-commit host-visible allocations need this. Drivers that fail the
+// allocation are already handled by that fallback, and reserving on them costs performance for a
+// failure mode they do not have: measured on an RTX 5090 (NVIDIA proprietary, same build and
+// workload), reserving half the heap cost 6% (110.8 s vs 104.6 s) with 11695 MiB still free.
+// Only RADV was measured on the amdgpu side; AMDVLK is included as the same kernel driver.
+static bool ggml_vk_host_pin_over_commits(vk_device& device) {
+    return device->driver_id == vk::DriverId::eMesaRadv ||
+           device->driver_id == vk::DriverId::eAmdOpenSource;
+}
+
+// Half the heap is a deliberately blunt default; the right number depends on how much staging the
+// graph needs, which is not known here. Measured on a Radeon RX 7900 XTX (RADV, 30 GiB system RAM,
+// GTT budget 15591 MiB) running a workload that pins ~16.7 GiB of weights if left alone:
+//   no reserve    -> pinned 15488 MiB, device lost
+//   1 GiB         -> pinned 14519 MiB, device lost
+//   half the heap -> completes, the rest of the weights left unpinned
+// GGML_VK_HOST_PIN_RESERVE_MB overrides it on any driver.
+static uint64_t ggml_vk_host_pin_reserve(vk_device& device, uint64_t heap_total) {
+    static const uint64_t override_mb = []() -> uint64_t {
+        const char * env = getenv("GGML_VK_HOST_PIN_RESERVE_MB");
+        return env != nullptr ? std::stoull(env) : 0;
+    }();
+    if (override_mb > 0) {
+        return override_mb * 1024 * 1024;
+    }
+    return ggml_vk_host_pin_over_commits(device) ? heap_total / 2 : 0;
+}
+
 void * ggml_vk_host_malloc(vk_device& device, size_t size) {
     VK_LOG_MEMORY("ggml_vk_host_malloc(" << size << ")");
+
+    uint64_t heap_total = 0;
+    const uint64_t avail = ggml_vk_host_visible_budget(device, &heap_total);
+    if (avail != UINT64_MAX && size + ggml_vk_host_pin_reserve(device, heap_total) > avail) {
+        static std::once_flag warned;
+        std::call_once(warned, [&]() {
+            GGML_LOG_WARN("ggml_vulkan: host-visible memory budget reached (%.0f MiB left); "
+                          "keeping further allocations unpinned. This is slower but safe - pinning "
+                          "past the budget makes the kernel fail the submission, not the "
+                          "allocation, and the device is lost.\n", avail / 1048576.0);
+            if (ggml_vk_host_pin_over_commits(device)) {
+                GGML_LOG_WARN("ggml_vulkan: to pin more, raise the kernel's GTT budget (boot with "
+                              "amdgpu.gttsize=<MiB>).\n");
+            }
+        });
+        throw vk::OutOfDeviceMemoryError("Pinned memory would exceed the host-visible heap budget");
+    }
+
     vk_buffer buf = ggml_vk_create_buffer(device, size,
         {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
          vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
