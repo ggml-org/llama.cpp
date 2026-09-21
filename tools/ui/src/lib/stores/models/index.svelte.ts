@@ -17,6 +17,7 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import { readModelContextLength } from '$lib/utils/backend';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/model-option-id';
 import { SvelteSet } from 'svelte/reactivity';
@@ -96,28 +97,29 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	get models(): ModelOption[] {
 		const activeBackendId = backendsStore.active.id;
 		const merged: ModelOption[] = [];
+		const seen = new SvelteSet<string>();
+		const push = (option: ModelOption, backendId: string) => {
+			const id = qualifyModelId(backendId, rawModelId(option.id));
+
+			// a backend can be listed twice while a switch is in flight: the rows
+			// of the previous backend are still in activeModels
+			if (seen.has(id)) return;
+
+			seen.add(id);
+			merged.push({ ...option, backendId, id });
+		};
 
 		for (const option of this.activeModels) {
 			// keep the backend an option was built for: rows from the previous
 			// backend must not be relabelled while a switch is in flight
-			const backendId = option.backendId ?? activeBackendId;
-
-			merged.push({
-				...option,
-				backendId,
-				id: qualifyModelId(backendId, rawModelId(option.id))
-			});
+			push(option, option.backendId ?? activeBackendId);
 		}
 
 		for (const backend of backendsStore.enabled) {
 			if (backend.id === activeBackendId) continue;
 
 			for (const option of backendsModelsStore.get(backend.id).models) {
-				merged.push({
-					...option,
-					backendId: option.backendId ?? backend.id,
-					id: qualifyModelId(option.backendId ?? backend.id, rawModelId(option.id))
-				});
+				push(option, option.backendId ?? backend.id);
 			}
 		}
 
@@ -512,6 +514,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),
+						// external backends report the context in their listing, so the
+						// gauge keeps working when the list is rebuilt on reload
+						contextLength: readModelContextLength(item),
 						description: details?.description,
 						details: details?.details,
 						id: item.id,
