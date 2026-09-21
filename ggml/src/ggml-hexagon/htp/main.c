@@ -36,7 +36,7 @@
 #include "allreduce-ops.h"
 #include "htp-fence.h"
 
-#define HMX_QUEUE_CAPACITY     16
+#define HMX_QUEUE_CAPACITY     128
 #define HMX_QUEUE_STACK_SIZE   16384
 #define WORK_QUEUE_CAPACITY    16
 #define WORK_QUEUE_STACK_SIZE  16384

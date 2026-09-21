@@ -204,6 +204,14 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
     HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
+    HTP_TRACE_EVT_HVX_GDN_PREP        = 31,
+    HTP_TRACE_EVT_HVX_GDN_SOLVE       = 32,
+    HTP_TRACE_EVT_HVX_GDN_V_PREP      = 33,
+    HTP_TRACE_EVT_HVX_GDN_D_PREP      = 34,
+    HTP_TRACE_EVT_HVX_GDN_OUT         = 35,
+    HTP_TRACE_EVT_HVX_GDN_STATE       = 36,
+    HTP_TRACE_EVT_HVX_GDN_REM         = 37,
+
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };
 

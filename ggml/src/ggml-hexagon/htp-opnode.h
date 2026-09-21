@@ -358,7 +358,9 @@ struct htp_opformat {
             snprintf(str, max_size, "k%d nth %d vtcm %d", (int) kparams->kernel_id, (int) kparams->n_threads, (int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_GATED_DELTA_NET) {
             const auto * kparams = (const struct htp_gdn_kernel_params *) node.kernel_params;
-            snprintf(str, max_size, "%s vtcm %u",
+            const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
+            snprintf(str, max_size, "%s-%s vtcm %u",
+                     path,
                      kparams->kda ? "kda" : "scalar",
                      (unsigned int) (kparams->vtcm_size ? kparams->vtcm_size : kparams->vtcm_per_thread * kparams->n_threads));
         } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||

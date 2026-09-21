@@ -31,6 +31,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_MBUF",
     "GGML_HEXAGON_MM_SELECT",
     "GGML_HEXAGON_FA_SELECT",
+    "GGML_HEXAGON_GDN_SELECT",
     "GGML_HEXAGON_AR_SELECT",
     "GGML_HEXAGON_ETM",
     "GGML_HEXAGON_ARCH",
@@ -166,6 +167,7 @@ def main():
     parser.add_argument("--hex-mbuf", help="Maximum host buffer size limit in MB to allocate (GGML_HEXAGON_MBUF)")
     parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-gdn-select", help="Select Gated Delta Net kernel (GGML_HEXAGON_GDN_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
     parser.add_argument("--hex-arch", help="Target Hexagon NPU architecture version override (v73, v75, v79, v81, etc.) (GGML_HEXAGON_ARCH)")
@@ -306,6 +308,7 @@ def main():
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
     set_env("GGML_HEXAGON_FA_SELECT", args.hex_fa_select)
+    set_env("GGML_HEXAGON_GDN_SELECT", args.hex_gdn_select)
     set_env("GGML_HEXAGON_AR_SELECT", args.hex_ar_select)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)
     set_env("GGML_HEXAGON_ARCH", args.hex_arch)

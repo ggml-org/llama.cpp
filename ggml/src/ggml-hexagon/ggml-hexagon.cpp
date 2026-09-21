@@ -100,6 +100,7 @@ static bool   opt_dma64   = false;
 
 static int    opt_mm_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
+static int    opt_gdn_select = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
 static int    opt_ar_select = 2; // 2 = fused ALLREDUCE+ADD (DMA, default), 1 = unfused ALLREDUCE (DMA), 0 = fallback to CPY+FENCE
 
 // Default PMU events, if profiling with PMU (mode=2) is enabled
@@ -182,6 +183,13 @@ static const char * htp_event_name(uint16_t id) {
         case HTP_TRACE_EVT_HVX_FA_Q_PREP:  return "HVX_Q_PREP";
         case HTP_TRACE_EVT_HVX_FA_K_PREP:  return "HVX_K_PREP";
         case HTP_TRACE_EVT_HVX_FA_V_PREP:  return "HVX_V_PREP";
+        case HTP_TRACE_EVT_HVX_GDN_PREP:   return "HVX_GDN_PREP";
+        case HTP_TRACE_EVT_HVX_GDN_SOLVE:  return "HVX_GDN_SOLVE";
+        case HTP_TRACE_EVT_HVX_GDN_V_PREP: return "HVX_GDN_V_PREP";
+        case HTP_TRACE_EVT_HVX_GDN_D_PREP: return "HVX_GDN_D_PREP";
+        case HTP_TRACE_EVT_HVX_GDN_OUT:    return "HVX_GDN_OUT";
+        case HTP_TRACE_EVT_HVX_GDN_STATE:  return "HVX_GDN_STATE";
+        case HTP_TRACE_EVT_HVX_GDN_REM:    return "HVX_GDN_REM";
         case HTP_TRACE_EVT_HMX_COMP:       return "HMX_COMP";
         case HTP_TRACE_EVT_L2FLUSH:        return "L2FLUSH";
         case HTP_TRACE_EVT_INIT:           return "INIT";
@@ -472,7 +480,6 @@ struct ggml_hexagon_session {
     uint32_t n_hmx       = 0;
     uint64_t vtcm_size   = 0;
     size_t   max_vmem    = 0;
-    size_t   max_bufsize = 0;
     uint32_t fence_seq   = 0;
 
     std::atomic<uint64_t> batch_req_seq{0};
@@ -538,7 +545,6 @@ struct ggml_backend_hexagon_device_context {
     int                        dev_id;
     ggml_hexagon_device_config config;
     ggml_backend_dev_t         dev = nullptr;
-    size_t                     max_bufsize = 0;
 
     ggml_backend_buffer_type buffer_type       = {};
     ggml_backend_buffer_type host_buffer_type  = {};
@@ -554,9 +560,6 @@ struct ggml_backend_hexagon_device_context {
     ggml_hexagon_session * session() {
         if (!sess) {
             sess = std::make_unique<ggml_hexagon_session>(config, dev);
-            if (max_bufsize > sess->max_vmem) {
-                max_bufsize = sess->max_vmem;
-            }
         }
         return sess.get();
     }
@@ -2076,11 +2079,6 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
 static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
-    if (size > dev_ctx->max_bufsize) {
-        GGML_LOG_ERROR("ggml-hex: %s buffer size %zu exceeds max_bufsize %zu\n",
-                       dev_ctx->c_name(), size, dev_ctx->max_bufsize);
-        return nullptr;
-    }
     auto sess    = dev_ctx->session();
     if (sess && sess->max_vmem && size > sess->max_vmem) {
         GGML_LOG_ERROR("ggml-hex: %s buffer size %zu exceeds max_vmem %zu\n",
@@ -2099,11 +2097,6 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
 static ggml_backend_buffer_t ggml_backend_hexagon_host_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto dev_ctx = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->dev_ctx;
-    if (size > dev_ctx->max_bufsize) {
-        GGML_LOG_ERROR("ggml-hex: %s host buffer size %zu exceeds max_bufsize %zu\n",
-                       dev_ctx->c_name(), size, dev_ctx->max_bufsize);
-        return nullptr;
-    }
     auto sess    = dev_ctx->session();
     if (sess && sess->max_vmem && size > sess->max_vmem) {
         GGML_LOG_ERROR("ggml-hex: %s host buffer size %zu exceeds max_vmem %zu\n",
@@ -2138,10 +2131,8 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    auto * context = static_cast<ggml_backend_hexagon_buffer_type_context *>(buft->context);
-    auto dev_ctx = context->dev_ctx;
-    dev_ctx->session();
-    return dev_ctx->max_bufsize;
+    return opt_mbuf;
+    GGML_UNUSED(buft);
 }
 
 static bool ggml_backend_hexagon_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
@@ -2173,7 +2164,7 @@ static ggml_backend_buffer_type_i ggml_backend_hexagon_host_buffer_type_interfac
 };
 
 ggml_backend_hexagon_device_context::ggml_backend_hexagon_device_context(int dev_id, const ggml_hexagon_device_config & config, ggml_backend_dev_t dev)
-    : dev_id(dev_id), config(config), dev(dev), max_bufsize(opt_mbuf) {
+    : dev_id(dev_id), config(config), dev(dev) {
     buffer_type.device  = dev;
     buffer_type.iface   = ggml_backend_hexagon_buffer_type_interface;
     buffer_type.context = new ggml_backend_hexagon_buffer_type_context(config.name, this);
@@ -3927,7 +3918,6 @@ void ggml_hexagon_session::allocate(const ggml_hexagon_device_config & config) n
     this->valid_handle = true;
 
     // Query HW info and resolve session options
-    this->max_bufsize = opt_mbuf;
     {
         unsigned int hw_n_threads = 0;
         unsigned int hw_n_hvx     = 0;
@@ -4340,6 +4330,10 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
 }
 
 static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    if (opt_gdn_select < 1) {
+        return false;
+    }
+
     const struct ggml_tensor * q     = op->src[0];
     const struct ggml_tensor * k     = op->src[1];
     const struct ggml_tensor * v     = op->src[2];
@@ -4387,10 +4381,26 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
 
     const uint32_t total_rows = (uint32_t) (H * n_seqs);
     const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, total_rows);
-    struct htp_gdn_vtcm_layout layout;
-    htp_gdn_vtcm_layout_build(&layout, (uint32_t) S_v, n_threads ? n_threads : 1);
-    if (layout.total_bytes > sess->vtcm_size) {
-        return false;
+
+    const bool can_use_hmx = (opt_gdn_select >= 2) &&
+                             (sess->n_hmx > 0) &&
+                             (S_v % 64 == 0) &&
+                             (n_tokens >= HTP_GDN_MIN_TOKENS) &&
+                             (g->ne[0] == 1) &&
+                             (K == 1);
+
+    if (can_use_hmx) {
+        struct htp_gdn_hmx_vtcm_layout layout;
+        uint32_t n_heads_batch = 0;
+        if (!htp_gdn_hmx_solve_layout(&layout, (uint32_t) S_v, HTP_GDN_CHUNK_SIZE, total_rows, sess->vtcm_size, n_threads, true, &n_heads_batch)) {
+            return false;
+        }
+    } else {
+        struct htp_gdn_vtcm_layout layout;
+        htp_gdn_vtcm_layout_build(&layout, (uint32_t) S_v, n_threads);
+        if (layout.total_bytes > sess->vtcm_size) {
+            return false;
+        }
     }
 
     return true;
@@ -5206,10 +5216,37 @@ static void ggml_hexagon_precompute_gated_delta_net_params(
     const uint32_t total_rows = H * n_seqs;
     const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, total_rows);
 
-    struct htp_gdn_vtcm_layout layout;
-    htp_gdn_vtcm_layout_build(&layout, S_v, n_threads ? n_threads : 1);
+    const bool can_use_hmx = (opt_gdn_select >= 2) &&
+                             (sess->n_hmx > 0) &&
+                             (S_v % 64 == 0) &&
+                             (n_tokens >= HTP_GDN_MIN_TOKENS) &&
+                             (g->ne[0] == 1) &&
+                             (K == 1);
 
-    kparams->n_threads           = n_threads ? n_threads : 1;
+    struct htp_gdn_hmx_vtcm_layout hmx_layout;
+    struct htp_gdn_vtcm_layout hvx_layout;
+    uint32_t n_heads_batch = 1;
+
+    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, S_v, HTP_GDN_CHUNK_SIZE, total_rows, sess->vtcm_size, n_threads, true, &n_heads_batch)) {
+        kparams->kernel_type     = HTP_GDN_KERNEL_HMX_CHUNKED;
+        kparams->pipeline        = hmx_layout.pipeline ? 1 : 0;
+        kparams->chunk_size      = HTP_GDN_CHUNK_SIZE;
+        kparams->n_chunks        = (n_tokens + HTP_GDN_CHUNK_SIZE - 1) / HTP_GDN_CHUNK_SIZE;
+        kparams->n_heads_batch   = (uint16_t) n_heads_batch;
+        kparams->vtcm_size       = (uint32_t) hmx_layout.total_bytes;
+        kparams->state_aligned   = (uint32_t) hmx_layout.state_f32_bytes;
+        kparams->vtcm_per_thread = (uint32_t) (hmx_layout.total_bytes / (n_threads > 0 ? n_threads : 1));
+    } else {
+        htp_gdn_vtcm_layout_build(&hvx_layout, S_v, n_threads);
+        kparams->kernel_type     = HTP_GDN_KERNEL_HVX_RECURRENT;
+        kparams->pipeline        = 0;
+        kparams->n_heads_batch   = 1;
+        kparams->state_aligned   = (uint32_t) hvx_layout.state_aligned;
+        kparams->vtcm_per_thread = (uint32_t) hvx_layout.bytes_per_thread;
+        kparams->vtcm_size       = (uint32_t) hvx_layout.total_bytes;
+    }
+
+    kparams->n_threads           = n_threads;
     kparams->S_v                 = S_v;
     kparams->H                   = H;
     kparams->n_tokens            = n_tokens;
@@ -5218,9 +5255,6 @@ static void ggml_hexagon_precompute_gated_delta_net_params(
     kparams->total_rows          = total_rows;
     kparams->rows_per_thread     = (total_rows + kparams->n_threads - 1) / kparams->n_threads;
     kparams->kda                 = (g->ne[0] == S_v) ? 1 : 0;
-    kparams->state_aligned       = (uint32_t) layout.state_aligned;
-    kparams->vtcm_per_thread     = (uint32_t) layout.bytes_per_thread;
-    kparams->vtcm_size           = (uint32_t) layout.total_bytes;
     kparams->state_seq_stride    = (uint32_t) (state->nb[3] / sizeof(float));
     kparams->state_size_per_snap = S_v * S_v * H * n_seqs;
     kparams->scale               = 1.0f / sqrtf((float) S_v);
@@ -7731,6 +7765,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_nhmx     = getenv("GGML_HEXAGON_NHMX");
     const char * str_mm_select = getenv("GGML_HEXAGON_MM_SELECT");
     const char * str_fa_select = getenv("GGML_HEXAGON_FA_SELECT");
+    const char * str_gdn_select = getenv("GGML_HEXAGON_GDN_SELECT");
     const char * str_ar_select = getenv("GGML_HEXAGON_AR_SELECT");
     const char * str_ndev     = getenv("GGML_HEXAGON_NDEV");
     const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
@@ -7783,6 +7818,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
+    opt_gdn_select = str_gdn_select ? atoi(str_gdn_select)                 : opt_gdn_select;
     opt_ar_select = str_ar_select ? atoi(str_ar_select)                   : opt_ar_select;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
