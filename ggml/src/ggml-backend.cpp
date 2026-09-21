@@ -45,7 +45,7 @@ ggml_backend_buffer_t ggml_backend_buft_alloc_buffer(ggml_backend_buffer_type_t 
     return buft->iface.alloc_buffer(buft, size);
 }
 
-// TODO [TAG_ALLOC_SAHRED_BUFFER_SPLIT]: extract shared buffer-splitting logic with ggml_backend_alloc_ctx_tensors_from_buft_size
+// TODO [TAG_ALLOC_SHARED_BUFFER_SPLIT]: extract shared buffer-splitting logic with ggml_backend_alloc_ctx_tensors_from_buft_size
 // default implementation of alloc_buffer_n
 // allocates tensors from a list into one or more buffers of the given type
 static ggml_backend_buffer_t ggml_backend_buft_alloc_buffer_n_default(ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
@@ -69,9 +69,9 @@ static ggml_backend_buffer_t ggml_backend_buft_alloc_buffer_n_default(ggml_backe
         // flush the current buffer if adding this tensor would exceed max_size, or if we are at the end
         bool should_flush = (i == n_tensors) || (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size);
         if (should_flush && cur_buf_size > 0) {
-            // allocate the buffer with the computed size for this range
             ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, cur_buf_size);
             if (buffer == NULL) {
+                GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), cur_buf_size);
                 for (size_t b = 0; b < n_buffers; b++) {
                     ggml_backend_buffer_free(buffers[b]);
                 }
@@ -81,18 +81,18 @@ static ggml_backend_buffer_t ggml_backend_buft_alloc_buffer_n_default(ggml_backe
             struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
 
             // allocate tensors in the current buffer
-            bool ok = true;
+            struct ggml_tensor * t_failed = NULL;
             for (int j = first; j < i; j++) {
                 struct ggml_tensor * t = tensors[j];
                 if (t->data == NULL) {
                     if (t->view_src == NULL) {
                         if (ggml_tallocr_alloc(&tallocr, t) != GGML_STATUS_SUCCESS) {
-                            ok = false;
+                            t_failed = t;
                             break;
                         }
                     } else if (t->buffer == NULL) {
                         if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
-                            ok = false;
+                            t_failed = t;
                             break;
                         }
                     }
@@ -100,13 +100,14 @@ static ggml_backend_buffer_t ggml_backend_buft_alloc_buffer_n_default(ggml_backe
                     if (t->view_src != NULL && t->buffer == NULL) {
                         // view of a pre-allocated tensor
                         if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
-                            ok = false;
+                            t_failed = t;
                             break;
                         }
                     }
                 }
             }
-            if (!ok) {
+            if (t_failed != NULL) {
+                GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t_failed->name);
                 for (size_t b = 0; b < n_buffers; b++) {
                     ggml_backend_buffer_free(buffers[b]);
                 }
