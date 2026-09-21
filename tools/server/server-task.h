@@ -16,6 +16,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_SYSTEMONE,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
@@ -169,6 +170,9 @@ struct server_task {
     };
     slot_action slot_action;
 
+    // used by SERVER_TASK_TYPE_SYSTEMONE
+    std::vector<llama_token> systemone_labels; // option-label token ids, read from next-token logits
+
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
@@ -197,6 +201,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_SYSTEMONE:
                 return true;
             default:
                 return false;
@@ -468,6 +473,15 @@ struct server_task_result_embd : server_task_result {
 
 struct server_task_result_rerank : server_task_result {
     float score = -1e6;
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+// next-token logits of the option labels, one forward pass per question
+struct server_task_result_systemone : server_task_result {
+    std::vector<float> label_logits;
 
     int32_t n_tokens;
 

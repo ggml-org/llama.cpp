@@ -1,5 +1,8 @@
 # llama.cpp
 
+> [!WARNING]
+> This unofficial fork is for self-experimentation with a new API endpoint. It is not affiliated with the official llama.cpp or Jev projects.
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">

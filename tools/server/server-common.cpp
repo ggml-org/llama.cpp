@@ -1855,6 +1855,29 @@ server_tokens format_prompt_rerank(
     return result;
 }
 
+server_tokens format_prompt_systemone(
+        const llama_vocab * vocab,
+        mtmd_context * mctx,
+        const std::string & state,
+        const std::string & instructions,
+        const std::vector<std::string> & option_lines,
+        const mtmd_helper_init_opt & init_opt) {
+    std::string prompt = state + "\n\n" + instructions + "\nOptions:";
+    for (size_t i = 0; i < option_lines.size(); i++) {
+        prompt += "\n" + std::string(1, 'A' + i) + ". " + option_lines[i];
+    }
+    prompt += "\n\nAnswer:";
+
+    server_tokens result = {};
+    if (llama_vocab_get_add_bos(vocab)) {
+        result.push_back(llama_vocab_bos(vocab));
+    }
+    server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, false, init_opt);
+    result.push_back(tokens);
+
+    return result;
+}
+
 //
 // server_subproc
 //

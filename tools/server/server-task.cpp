@@ -1496,6 +1496,17 @@ json server_task_result_rerank::to_json() {
 }
 
 //
+// server_task_result_systemone
+//
+json server_task_result_systemone::to_json() {
+    return json {
+        {"index",            index},
+        {"label_logits",     label_logits},
+        {"tokens_evaluated", n_tokens},
+    };
+}
+
+//
 // server_task_result_error
 //
 json server_task_result_error::to_json() {

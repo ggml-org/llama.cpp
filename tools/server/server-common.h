@@ -550,6 +550,16 @@ server_tokens format_prompt_rerank(
         const std::string & doc,
         const mtmd_helper_init_opt & init_opt);
 
+// format systemone task: plain-text decision prompt ending with "Answer:"
+// the next-token logits at this position are read back as option scores
+server_tokens format_prompt_systemone(
+        const struct llama_vocab * vocab,
+        mtmd_context * mctx,
+        const std::string & state,
+        const std::string & instructions,
+        const std::vector<std::string> & option_lines,
+        const mtmd_helper_init_opt & init_opt);
+
 // simple implementation of a pipe
 // used for streaming data between threads
 template<typename T>

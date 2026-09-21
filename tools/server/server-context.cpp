@@ -18,6 +18,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -2225,6 +2226,38 @@ private:
         queue_results.send(std::move(res));
     }
 
+    void send_systemone(const server_slot & slot, const llama_batch & batch) {
+        auto res = std::make_unique<server_task_result_systemone>();
+        res->id       = slot.task->id;
+        res->index    = slot.task->index;
+        res->n_tokens = slot.task->n_tokens();
+
+        const auto & labels = slot.task->systemone_labels;
+        res->label_logits.reserve(labels.size());
+
+        for (int i = 0; i < batch.n_tokens; ++i) {
+            if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
+                continue;
+            }
+
+            const float * logits = llama_get_logits_ith(ctx_tgt, i);
+            if (logits == NULL) {
+                SLT_ERR(slot, "failed to get logits, token = %d, seq_id = %d\n", batch.token[i], batch.seq_id[i][0]);
+
+                res->label_logits.assign(labels.size(), -1e30f);
+                break;
+            }
+
+            for (llama_token t : labels) {
+                res->label_logits.push_back(logits[t]);
+            }
+        }
+
+        SLT_DBG(slot, "sending systemone result, n_labels = %d\n", (int) res->label_logits.size());
+
+        queue_results.send(std::move(res));
+    }
+
     //
     // Functions to process the task
     //
@@ -2384,6 +2417,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_SYSTEMONE:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -3831,6 +3865,13 @@ private:
                     return;
                 }
 
+                if (slot.task->type == SERVER_TASK_TYPE_SYSTEMONE) {
+                    send_systemone(slot, batch_view);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return;
+                }
+
                 GGML_ASSERT(slot.task->need_sampling());
 
                 // prompt evaluated for next-token prediction
@@ -5219,6 +5260,335 @@ void server_routes::init_routes() {
             is_tei_format,
             documents,
             top_n);
+
+        res->ok(root);
+        return res;
+    };
+
+    this->post_systemone = [this](const server_http_req & req) {
+        auto res = create_response();
+        if (params.embedding) {
+            res->error(format_error_response("This server does not support systemone scoring when started with --embedding", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        const json body = json::parse(req.body);
+
+        // clean model name for the API: alias or file name, never a path
+        std::string sys_model = meta->model_name;
+        const std::string model_stem = std::filesystem::path(params.model.path).filename().stem().string();
+        if (sys_model.find('/') != std::string::npos || sys_model.find('\\') != std::string::npos) {
+            sys_model = model_stem;
+        }
+
+        if (!body.contains("model") || !body.at("model").is_string() || body.at("model").get<std::string>().empty()) {
+            res->error(format_error_response("\"model\" must be a non-empty string", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // Jev-style contract: a state (string, object or array) plus typed questions,
+        // answered by reading option-label logits from one forward pass per question
+        if (!body.contains("state") || body.at("state").is_null()) {
+            res->error(format_error_response("\"state\" must be provided (string, object or array)", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        std::string state_text;
+        {
+            const json & state = body.at("state");
+            if (state.is_string()) {
+                state_text = state.get<std::string>();
+            } else if (state.is_object() || state.is_array()) {
+                state_text = state.dump();
+            } else {
+                res->error(format_error_response("\"state\" must be a string, object or array", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+
+        if (!body.contains("questions") || !body.at("questions").is_object() || body.at("questions").empty()) {
+            res->error(format_error_response("\"questions\" must be a non-empty object", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        auto render_value = [](const json & v) {
+            if (v.is_string()) {
+                return v.get<std::string>();
+            }
+            if (v.is_null()) {
+                return std::string();
+            }
+            return v.dump();
+        };
+
+        struct systemone_question {
+            std::string type;
+            json criteria;
+            std::vector<std::string> option_names;
+        };
+
+        std::vector<std::string>        q_ids;
+        std::vector<systemone_question> q_specs;
+
+        for (auto [id, spec] : body.at("questions").items()) {
+            if (!spec.is_object() || !spec.contains("type") || !spec.at("type").is_string()) {
+                res->error(format_error_response("question \"" + id + "\" must be an object with a \"type\" string", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+
+            const std::string type = spec.at("type").get<std::string>();
+            if (type != "choice" && type != "score" && type != "noul") {
+                res->error(format_error_response("question \"" + id + "\" has unsupported type \"" + type + "\" (expected choice, score or noul)", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+
+            systemone_question q;
+            q.type     = type;
+            q.criteria = json_value(spec, "criteria", json());
+
+            if (type == "noul") {
+                q.option_names = {"yes", "no"};
+            } else if (type == "choice") {
+                if (!q.criteria.is_object() || q.criteria.empty()) {
+                    res->error(format_error_response("question \"" + id + "\" needs a non-empty \"criteria\" object", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+                for (auto [name, desc] : q.criteria.items()) {
+                    q.option_names.push_back(name);
+                }
+            } else { // score
+                if (!q.criteria.is_array() || q.criteria.empty()) {
+                    res->error(format_error_response("question \"" + id + "\" needs a non-empty \"criteria\" array", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+                for (size_t i = 0; i < q.criteria.size(); i++) {
+                    q.option_names.push_back(std::to_string(i));
+                }
+            }
+
+            if (q.option_names.size() > 26) {
+                res->error(format_error_response("question \"" + id + "\" has more than 26 options", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+
+            q_ids.push_back(id);
+            q_specs.push_back(std::move(q));
+        }
+
+        // create and queue the tasks, one per question
+        auto & rd = res->rd;
+        {
+            // SemIf direct-readout system message
+            static const std::string systemone_system =
+                "Apply the supplied criterion to the supplied evidence. Choose exactly one listed option. "
+                "Respond with only its uppercase letter, with no explanation or reasoning.";
+
+            std::vector<server_task> tasks;
+            tasks.reserve(q_ids.size());
+
+            for (size_t qi = 0; qi < q_ids.size(); qi++) {
+                const auto & q = q_specs[qi];
+
+                std::string instructions = json_value(body.at("questions").at(q_ids[qi]), "instructions", std::string());
+                if (instructions.empty()) {
+                    instructions = q.type == "choice" ? "Choose the best option." :
+                                   q.type == "score"  ? "Select the level that best matches." :
+                                                        "Answer yes or no.";
+                }
+
+                std::vector<std::string> option_lines;
+                if (q.type == "choice") {
+                    for (const auto & name : q.option_names) {
+                        const std::string desc = render_value(q.criteria.at(name));
+                        option_lines.push_back(desc.empty() ? name : name + ": " + desc);
+                    }
+                } else if (q.type == "score") {
+                    for (size_t i = 0; i < q.criteria.size(); i++) {
+                        const std::string desc = render_value(q.criteria[i]);
+                        option_lines.push_back(desc.empty() ? "level " + std::to_string(i) : "level " + std::to_string(i) + ": " + desc);
+                    }
+                } else { // noul
+                    for (const auto & name : q.option_names) {
+                        const bool is_yes = name == "yes";
+                        const common_json desc_json = q.criteria.is_object() ? q.criteria.value(is_yes ? "true" : "false", common_json()) : common_json();
+                        const std::string desc = render_value(desc_json);
+                        option_lines.push_back(desc.empty() ? name : name + ": " + desc);
+                    }
+                }
+
+                if (option_lines.size() > 16) {
+                    res->error(format_error_response("question \"" + q_ids[qi] + "\" has more than 16 options (answer slots A-P)", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+
+                // rendered with the model chat template when available (SemIf direct method),
+                // otherwise falls back to a plain-text decision prompt
+                std::string prompt;
+                const bool use_chat = ctx_server.chat_params.tmpls != nullptr;
+                if (use_chat) {
+                    json payload = json::object();
+                    payload["evidence"]  = state_text;
+                    payload["criterion"] = instructions;
+                    payload["options"]   = json::array();
+                    for (size_t oi = 0; oi < option_lines.size(); oi++) {
+                        payload["options"].push_back(json {
+                            {"letter",      std::string(1, (char) ('A' + oi))},
+                            {"description", option_lines[oi]},
+                        });
+                    }
+
+                    json chat_body = json::object();
+                    chat_body["messages"] = json::array({
+                        json {{"role", "system"}, {"content", systemone_system}},
+                        json {{"role", "user"},   {"content", payload.dump()}},
+                    });
+                    // the letter must be the immediate next token, so thinking has to stay off
+                    chat_body["chat_template_kwargs"] = json {{"enable_thinking", false}};
+
+                    std::vector<raw_buffer> files;
+                    auto llama_params = oaicompat_chat_params_parse(chat_body, ctx_server.chat_params, files);
+                    prompt = llama_params.at("prompt").get<std::string>();
+                } else {
+                    prompt = state_text + "\n\n" + instructions + "\nOptions:";
+                    for (size_t oi = 0; oi < option_lines.size(); oi++) {
+                        prompt += "\n" + std::string(1, (char) ('A' + oi)) + ". " + option_lines[oi];
+                    }
+                    prompt += "\n\nAnswer:";
+                }
+
+                // answer slots must be single exact tokens that do not merge with the prompt
+                std::vector<llama_token> labels;
+                const auto prompt_tokens = common_tokenize(ctx_server.vocab, prompt, false, true);
+                for (size_t oi = 0; oi < option_lines.size(); oi++) {
+                    const char letter = (char) ('A' + oi);
+                    const std::string letter_str(1, letter);
+                    const auto letter_tokens = common_tokenize(ctx_server.vocab, letter_str, false, true);
+                    if (letter_tokens.size() != 1 || common_token_to_piece(ctx_server.vocab, letter_tokens[0]) != letter_str) {
+                        res->error(format_error_response("model vocabulary has no exact single-token answer slot \"" + letter_str + "\"", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    const auto with_letter = common_tokenize(ctx_server.vocab, prompt + letter_str, false, true);
+                    if (with_letter.size() != prompt_tokens.size() + 1 || with_letter.back() != letter_tokens[0]) {
+                        res->error(format_error_response("answer boundary changes tokenization for slot \"" + letter_str + "\"", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    labels.push_back(letter_tokens[0]);
+                }
+
+                server_tokens tmp;
+                if (use_chat) {
+                    auto prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+                    tmp = std::move(prompts[0]);
+                } else {
+                    tmp = format_prompt_systemone(ctx_server.vocab, ctx_server.mctx, state_text, instructions, option_lines, ctx_server.init_opt);
+                }
+
+                server_task task = server_task(SERVER_TASK_TYPE_SYSTEMONE);
+                task.id     = rd.get_new_id();
+                task.index  = qi;
+                task.tokens = std::move(tmp);
+                task.systemone_labels = std::move(labels);
+                tasks.push_back(std::move(task));
+            }
+
+            rd.post_tasks(std::move(tasks));
+        }
+
+        // wait for the results
+        auto all_results = rd.wait_for_all(req.should_stop);
+
+        // collect results
+        if (all_results.is_terminated) {
+            return res; // connection is closed
+        } else if (all_results.error) {
+            res->error(all_results.error->to_json());
+            return res;
+        }
+
+        json answers = json::object();
+        int64_t n_input_tokens  = 0;
+        int64_t n_output_tokens = 0;
+
+        for (size_t qi = 0; qi < q_ids.size(); qi++) {
+            GGML_ASSERT(dynamic_cast<server_task_result_systemone*>(all_results.results[qi].get()) != nullptr);
+            auto * r = static_cast<server_task_result_systemone*>(all_results.results[qi].get());
+
+            const auto & lg = r->label_logits;
+            GGML_ASSERT(lg.size() == q_specs[qi].option_names.size());
+
+            // softmax over the option-label logits
+            const float lmax = *std::max_element(lg.begin(), lg.end());
+
+            double sum = 0.0;
+            std::vector<double> probs(lg.size());
+            for (size_t k = 0; k < lg.size(); k++) {
+                probs[k] = std::exp(lg[k] - lmax);
+                sum += probs[k];
+            }
+
+            double entropy = 0.0;
+            for (size_t k = 0; k < lg.size(); k++) {
+                probs[k] /= sum;
+                if (probs[k] > 0.0) {
+                    entropy -= probs[k] * std::log(probs[k]);
+                }
+            }
+
+            const double confidence = lg.size() > 1 ? 1.0 - entropy / std::log((double) lg.size()) : 1.0;
+
+            const auto & q = q_specs[qi];
+
+            if (q.type == "choice") {
+                const size_t best = std::max_element(probs.begin(), probs.end()) - probs.begin();
+
+                json probabilities = json::object();
+                for (size_t k = 0; k < q.option_names.size(); k++) {
+                    probabilities[q.option_names[k]] = probs[k];
+                }
+
+                answers[q_ids[qi]] = {
+                    {"type",          "choice"},
+                    {"choice",        q.option_names[best]},
+                    {"probabilities", probabilities},
+                    {"confidence",    confidence},
+                };
+            } else if (q.type == "score") {
+                double score = 0.0;
+
+                json probabilities = json::object();
+                json legend = json::object();
+                for (size_t k = 0; k < q.option_names.size(); k++) {
+                    probabilities[q.option_names[k]] = probs[k];
+                    legend[q.option_names[k]] = q.criteria[k];
+                    score += probs[k] * (double) k;
+                }
+
+                answers[q_ids[qi]] = {
+                    {"type",          "score"},
+                    {"score",         score},
+                    {"probabilities", probabilities},
+                    {"legend",        legend},
+                    {"confidence",    confidence},
+                };
+            } else { // noul
+                answers[q_ids[qi]] = {
+                    {"type", "noul"},
+                    {"noul", probs[0]},
+                };
+            }
+
+            n_input_tokens  += r->n_tokens;
+            n_output_tokens += (int64_t) lg.size();
+        }
+
+        json root = {
+            {"model",   sys_model},
+            {"answers", answers},
+            {"usage",   {
+                {"input_tokens",  n_input_tokens},
+                {"output_tokens", n_output_tokens},
+            }},
+        };
 
         res->ok(root);
         return res;

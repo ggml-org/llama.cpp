@@ -793,6 +793,50 @@ curl http://127.0.0.1:8012/v1/rerank \
     }' | jq
 ```
 
+### POST `/v1/systemone`: Typed semantic decisions from option logits
+
+Runtime-defined decision scoring, in the shape of the Jev "System One" contract: answer
+typed questions about an unstructured state by reading the option-label logits in one
+forward pass per question. No token is sampled or generated, so there is no JSON to repair
+and no decoding loop. Works with any generative model loaded in the server (not available
+with `--embedding`).
+
+Each question is rendered with the model chat template (thinking disabled, answer slots
+`A`-`P` must be single exact tokens in the model vocabulary) and the next-token logits at
+the answer position are softmaxed over the option slots. Probabilities are conditional on
+the supplied options and are uncalibrated; validate them on your own workload.
+
+*Options:*
+
+`state`: A string, object or array describing the situation to evaluate.
+
+`questions`: An object mapping question ids to typed questions:
+- `choice`: `criteria` is an object mapping option names to descriptions. Returns `type`, `choice` (argmax), `probabilities` (sum to 1) and `confidence` (1 - normalized entropy).
+- `score`: `criteria` is an ordered array of level descriptions. Returns `type`, `score` (probability-weighted mean of the level index), `probabilities` and `legend` keyed `"0"`..`"n-1"`, and `confidence`.
+- `noul`: optional `criteria` object `{"true": description, "false": description}`. Returns `type` and `noul` (probability of yes).
+
+`instructions` is an optional free-text criterion per question. `model` is required; this
+server evaluates with its loaded model and returns that model's clean name (alias or file
+name), never a path.
+
+*Examples:*
+
+```shell
+curl http://127.0.0.1:8012/v1/systemone \
+    -H "Content-Type: application/json" \
+    -d '{
+        "state": "I ordered size 10 shoes but received size 8. Please send the right size.",
+        "model": "Qwen3.8-27B-UD-Q6_K_XL",
+        "questions": {
+            "department":  {"type": "choice", "instructions": "Which department handles this?",
+                            "criteria": {"returns": "Returns and exchanges", "shipping": "Delivery issues", "billing": "Charges and refunds"}},
+            "severity":    {"type": "score",  "instructions": "How severe is the problem?",
+                            "criteria": ["minor", "moderate: wrong item", "major: safety or financial loss"]},
+            "wants_refund":{"type": "noul",   "instructions": "Is the customer asking for a refund to their card?"}
+        }
+    }' | jq
+```
+
 ### POST `/infill`: For code infilling.
 
 Takes a prefix and a suffix and returns the predicted completion as stream.
