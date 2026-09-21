@@ -217,7 +217,12 @@ export class ModelPropsManager {
 		const props = this.getModelProps(modelId);
 		const nCtx = props?.default_generation_settings?.n_ctx;
 
-		return typeof nCtx === 'number' ? nCtx : null;
+		if (typeof nCtx === 'number') return nCtx;
+
+		// external backends report the context in their model listing, when they report one
+		const model = this.host.activeModels.find((m) => m.model === modelId || m.id === modelId);
+
+		return model?.contextLength ?? null;
 	}
 
 	getModelModalities(modelId: string): ModelModalities | null {

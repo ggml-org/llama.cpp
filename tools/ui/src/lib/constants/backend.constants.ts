@@ -56,6 +56,17 @@ export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
 	openai: { maxTokensField: 'max_tokens', supportsUsageInStreaming: true }
 };
 
+/**
+ * Fields that may carry a model's context size in an OpenAI-compatible model
+ * listing. Providers pick their own name, and most report nothing at all.
+ */
+export const MODEL_CONTEXT_LENGTH_FIELDS = [
+	'context_length',
+	'context_window',
+	'max_context_length',
+	'max_position_embeddings'
+] as const;
+
 /** Favicon extract keyed by domain, for backends with no bundled mark. */
 export const FAVICON_SERVICE_URL = 'https://www.google.com/s2/favicons?domain=';
 

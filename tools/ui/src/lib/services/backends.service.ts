@@ -11,7 +11,7 @@ import type { ApiModelsListResponse, Backend, ModelOption } from '$lib/types';
 import { isAbortError } from '$lib/utils/abort';
 import { apiUrl } from '$lib/utils/api-base';
 import { getAuthHeadersForBackend } from '$lib/utils/api-headers';
-import { backendModelsUrl } from '$lib/utils/backend';
+import { backendModelsUrl, readModelContextLength } from '$lib/utils/backend';
 
 /** Models returned by a backend, plus the failure detail when the call fails. */
 export interface BackendModelsResult {
@@ -66,8 +66,8 @@ export class BackendsService {
 			const body = (await response.json()) as { data?: unknown };
 			const entries = Array.isArray(body?.data) ? body.data : [];
 			const models = entries.flatMap((entry) => normalizeBackendModel(entry));
-			// only the local server needs its raw rows: they carry the load status
-			const raw = backend.id === LOCAL_BACKEND_ID ? (body as ApiModelsListResponse) : undefined;
+			// the local rows carry load status, external ones carry the context size
+			const raw = body as ApiModelsListResponse;
 
 			return { models, ok: true, raw, status: response.status };
 		} catch (error) {
@@ -130,5 +130,7 @@ function normalizeBackendModel(entry: unknown): ModelOption[] {
 
 	if (!id) return [];
 
-	return [{ capabilities: [], id, model: id, name: id }];
+	return [
+		{ capabilities: [], contextLength: readModelContextLength(raw), id, model: id, name: id }
+	];
 }

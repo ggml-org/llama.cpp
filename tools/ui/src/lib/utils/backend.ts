@@ -15,7 +15,8 @@ import {
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
 	FAVICON_SERVICE_URL,
-	LOCAL_BACKEND_ID
+	LOCAL_BACKEND_ID,
+	MODEL_CONTEXT_LENGTH_FIELDS
 } from '$lib/constants';
 import type {
 	Backend,
@@ -219,4 +220,27 @@ function parseBackendHeaders(raw: unknown): Record<string, string> | undefined {
 
 function parseOptionalPath(raw: unknown): string | undefined {
 	return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined;
+}
+
+/**
+ * Read a model's context size out of one `/v1/models` entry. Providers use
+ * different field names, and OpenRouter nests the authoritative value under
+ * `top_provider`, so try the flat fields first and the nested one after.
+ */
+export function readModelContextLength(entry: Record<string, unknown>): number | undefined {
+	for (const field of MODEL_CONTEXT_LENGTH_FIELDS) {
+		const value = entry[field];
+
+		if (typeof value === 'number' && value > 0) return value;
+	}
+
+	const topProvider = entry.top_provider;
+
+	if (topProvider && typeof topProvider === 'object') {
+		const value = (topProvider as Record<string, unknown>).context_length;
+
+		if (typeof value === 'number' && value > 0) return value;
+	}
+
+	return undefined;
 }
