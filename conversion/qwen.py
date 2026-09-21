@@ -927,6 +927,7 @@ class DFlashModel(Qwen3Model):
     "DSparkSpeculator",
     "Lfm2DSparkDraftModel",
     "LingDSparkModel",
+    "Xing4_0DSparkDraftModel",
 )
 @ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
