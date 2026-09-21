@@ -4,7 +4,6 @@
 
 #include <memory>
 #include <openvino/op/add.hpp>
-#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/multiply.hpp>
@@ -33,23 +32,26 @@ OutputVector translate_rms_norm(const NodeContext & context) {
         // The GDN op packs [attn | new_state] along the row axis; the state occupies the last
         // ssm_state_size * n_seqs rows. Slice it off (scaling by the active sequence count) to keep
         // just the attention output.
-        auto input_shape = context.get_input_shape(0).to_shape();
-        auto n_seqs = context.has_input("s_copy_active_slot_len") ?
-                          context.get_input("s_copy_active_slot_len") :
-                          ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) input_shape[0]});
-        auto state_rows = std::make_shared<ov::op::v1::Multiply>(
-            ov::op::v0::Constant::create(ov::element::i64, {1}, {ssm_state_size}), n_seqs);
-        auto state_end = std::make_shared<ov::op::v0::Negative>(state_rows);
+        ov::Output<ov::Node> state_end;
+        if (context.has_input("s_copy_active_slot_len")) {
+            auto len = context.get_input("s_copy_active_slot_len");
+            auto state_rows = std::make_shared<ov::op::v1::Multiply>(
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {ssm_state_size}), len);
+            state_end = std::make_shared<ov::op::v0::Negative>(state_rows);
+        } else {
+            state_end = ov::op::v0::Constant::create(ov::element::i64, {1}, {-ssm_state_size});
+        }
         auto gdn_attn_output = std::make_shared<ov::op::v8::Slice>(
             context.get_input(0), ov::op::v0::Constant::create(ov::element::i64, {1}, {0}), state_end,
             ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
             ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
 
-        auto shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{
-            n_seqs, ov::op::v0::Constant::create(ov::element::i64, {3},
-                std::vector<int64_t>{-1, (int64_t) input_shape[2], (int64_t) input_shape[3]})}, 0);
+        auto input_shape = context.get_input_shape(0).to_shape();
         input_node = std::make_shared<ov::op::v1::Reshape>(
-            gdn_attn_output, shape, false);
+            gdn_attn_output,
+            ov::op::v0::Constant::create(
+                ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) input_shape[2], (int64_t) input_shape[3]}),
+            false);
 
     } else {
         input_node = process_view_input_new(context, 0);

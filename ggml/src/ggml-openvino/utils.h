@@ -20,7 +20,6 @@ struct graph_key {
     std::string first_node_name;
     std::string last_node_name;
     std::vector<std::string> input_src_names;
-    std::vector<int> output_nodes; // Hidden-state capture changes outputs without changing the graph topology.
 
     graph_key(const ggml_cgraph * cgraph) : n_nodes(cgraph->n_nodes) {
         if (n_nodes > 0) {
@@ -41,9 +40,6 @@ struct graph_key {
         node_names.reserve(cgraph->n_nodes);
         for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
             node_names.emplace_back(cgraph->nodes[node_idx]->name);
-            if (cgraph->nodes[node_idx]->flags & GGML_TENSOR_FLAG_OUTPUT) {
-                output_nodes.push_back(node_idx);
-            }
         }
 
         for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
@@ -69,7 +65,7 @@ struct graph_key {
 
     bool operator==(const graph_key & other) const {
         return n_nodes == other.n_nodes && first_node_name == other.first_node_name &&
-               last_node_name == other.last_node_name && input_src_names == other.input_src_names && output_nodes == other.output_nodes;
+               last_node_name == other.last_node_name && input_src_names == other.input_src_names;
     }
 };
 
@@ -82,9 +78,6 @@ struct graph_key_hash {
         }
         for (const auto & input_src_name : key.input_src_names) {
             hash ^= std::hash<std::string>{}(input_src_name) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
-        }
-        for (int node_idx : key.output_nodes) {
-            hash ^= std::hash<int>{}(node_idx) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         }
         return hash;
     }

@@ -1230,8 +1230,7 @@ void GgmlOvDecoder::compute_model_outputs() {
                     }
                 }
             }
-            // Requested outputs must remain readable even when all consumers are in this graph.
-            if (input_use_count == cur_node_use_count && !(cur_node->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+            if (input_use_count == cur_node_use_count) {
                 cur_node = nullptr;
             }
         }
@@ -2017,9 +2016,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         break;
                     }
                 }
-                // A full-span view can split the token axis into tokens per sequence and sequences.
-                if (m_node_dynamic_dims[node] != -1 && dynamic_dim_value != node->ne[m_node_dynamic_dims[node]] &&
-                    (ggml_nelements(node) != ggml_nelements(node->src[0]) || node->view_offs != node->src[0]->view_offs)) {
+                if (m_node_dynamic_dims[node] != -1 && dynamic_dim_value != node->ne[m_node_dynamic_dims[node]]) {
                     m_node_dynamic_dims[node] = -1;
                     GGML_LOG_WARN("ggml-openvino: dynamic dim value mismatch for VIEW node '%s', src[0]: '%s'\n",
                                   node->name, node->src[0]->name);
@@ -2039,13 +2036,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             // dimension whose flat-memory boundary aligns with the source dynamic
             // boundary. This is unambiguous (result strides are strictly monotone)
             // and handles merged-lower-dim cases that ne-value matching misses.
-            // Do not require equal axis sizes: reshaping can merge tokens and sequences.
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {
                 auto dynamic_dim_idx = m_node_dynamic_dims[node->src[0]];
                 auto dynamic_dim_stride = node->src[0]->nb[dynamic_dim_idx];
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                    if (node->nb[i] == dynamic_dim_stride) {
+                    if (node->nb[i] == dynamic_dim_stride && node->ne[i] == node->src[0]->ne[dynamic_dim_idx]) {
                         m_node_dynamic_dims[node] = i;
                         break;
                     }
@@ -2091,13 +2087,12 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         src_logical_nb[i] = src_logical_nb[i - 1] * node->src[0]->ne[i - 1];
                     }
 
-                    // CONT can merge tokens and sequences, changing the size of the dynamic axis.
                     auto dynamic_dim_stride = src_logical_nb[dynamic_dim_idx] / ggml_type_size(node->src[0]->type) *
                                               ggml_type_size(node->type);
                     int matched_dim_count = 0;
                     int first_matched_dim = -1;
                     for (int i = 0; i < GGML_MAX_DIMS; i++) {
-                        if (node->nb[i] == dynamic_dim_stride) {
+                        if (node->nb[i] == dynamic_dim_stride && node->ne[i] == node->src[0]->ne[dynamic_dim_idx]) {
                             if (first_matched_dim == -1) {
                                 first_matched_dim = i;
                             }
