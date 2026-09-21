@@ -1877,8 +1877,22 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                          static_cast<unsigned long long>(prefill_fp));
                 snprintf(decode_bank, sizeof(decode_bank), "ggml-sc-decode-%016llx",
                          static_cast<unsigned long long>(decode_fp));
-                mc_config["NPUW_WEIGHTS_BANK"] = std::string(prefill_bank);
-                mc_decode_config["NPUW_WEIGHTS_BANK"] = std::string(decode_bank);
+                if (ggml_openvino_getenv_int("GGML_OPENVINO_NPU_SHARED_BANK")) {
+                    // Share ONE weights bank between prefill and decode. Both decoders are built
+                    // from the same model_weights map, so NPUW dedups them into a single in-process
+                    // bank; on warm import the shared blob's identical (uid,tensor) pairs are
+                    // content-verified and reused (patched NPUW weights_bank). Halves the resident
+                    // compiled-weight footprint (~2 GiB) at the cost of larger per-graph blobs.
+                    char shared_bank[96];
+                    snprintf(shared_bank, sizeof(shared_bank), "ggml-sc-shared-%016llx-%016llx",
+                             static_cast<unsigned long long>(prefill_fp),
+                             static_cast<unsigned long long>(decode_fp));
+                    mc_config["NPUW_WEIGHTS_BANK"] = std::string(shared_bank);
+                    mc_decode_config["NPUW_WEIGHTS_BANK"] = std::string(shared_bank);
+                } else {
+                    mc_config["NPUW_WEIGHTS_BANK"] = std::string(prefill_bank);
+                    mc_decode_config["NPUW_WEIGHTS_BANK"] = std::string(decode_bank);
+                }
             }
 
             auto blob_valid = [&](uint64_t fp) {
