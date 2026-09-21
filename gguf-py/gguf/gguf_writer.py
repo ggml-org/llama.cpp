@@ -1019,6 +1019,9 @@ class GGUFWriter:
     def add_block_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
 
+    def add_dflash_gemma4_backbone(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.DFLASH_GEMMA4_BACKBONE.format(arch=self.arch), value)
+
     def add_conv_kernel_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.CONV_KERNEL_SIZE.format(arch=self.arch), value)
 
