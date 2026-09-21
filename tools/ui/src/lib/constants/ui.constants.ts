@@ -53,6 +53,9 @@ export const MODEL_SELECTOR_ICON = Package;
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 
+/** Recently used models kept per browser, most recent first. */
+export const RECENT_MODEL_LIMIT = 20;
+
 /** Model selector views: the favorites of every backend, the local server, the remote backends. */
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;

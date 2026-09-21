@@ -152,7 +152,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			sectionOptions,
 			remoteProviders,
 			// a drill-in or a search reaches every model, the sections stay short
-			providerViewId || searchTerm ? Infinity : REMOTE_PROVIDER_MODEL_LIMIT
+			providerViewId || searchTerm ? Infinity : REMOTE_PROVIDER_MODEL_LIMIT,
+			modelsStore.recentModelIds
 		)
 	);
 	const groupedFilteredOptions = $derived.by(() => {
