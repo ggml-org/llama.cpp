@@ -81,6 +81,7 @@ struct ggml_webgpu_shader_lib_context {
     ggml_tensor * src4;
     ggml_tensor * src5;
     ggml_tensor * dst;
+    ggml_tensor * dst_fuse;
 
     uint32_t    max_wg_size;
     size_t      wg_mem_limit_bytes       = 0;
@@ -104,6 +105,11 @@ struct webgpu_pipeline {
 struct ggml_webgpu_generic_shader_decisions {
     uint32_t wg_size = 0;
     bool     inplace = false;
+};
+
+struct ggml_webgpu_get_rows_shader_decisions {
+    uint32_t wg_size    = 0;
+    bool     vectorized = false;
 };
 
 struct ggml_webgpu_binary_shader_decisions {
@@ -407,12 +413,13 @@ struct ggml_webgpu_im2col_pipeline_key_hash {
 
 /** Gated Delta Net **/
 struct ggml_webgpu_gated_delta_net_pipeline_key {
-    int type;
-    int s_v;
-    int kda;
+    int  type;
+    int  s_v;
+    int  kda;
+    bool fused_cache;
 
     bool operator==(const ggml_webgpu_gated_delta_net_pipeline_key & other) const {
-        return type == other.type && s_v == other.s_v && kda == other.kda;
+        return type == other.type && s_v == other.s_v && kda == other.kda && fused_cache == other.fused_cache;
     }
 };
 
@@ -1551,8 +1558,8 @@ class ggml_webgpu_shader_lib {
         return argsort_merge_pipelines[order];
     }
 
-    webgpu_pipeline get_get_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
-        const bool vectorized                 = context.src0->type == GGML_TYPE_F32 && context.dst->ne[0] % 4 == 0;
+    webgpu_pipeline get_get_rows_pipeline(const ggml_webgpu_shader_lib_context & context, bool vec4_aligned) {
+        const bool vectorized = context.src0->type == GGML_TYPE_F32 && context.dst->ne[0] % 4 == 0 && vec4_aligned;
         ggml_webgpu_get_rows_pipeline_key key = {};
         key.src_type                          = context.src0->type;
         key.vectorized                        = (int) vectorized;
@@ -1669,8 +1676,9 @@ class ggml_webgpu_shader_lib {
         defines.push_back("WG_SIZE=" + std::to_string(context.max_wg_size));
 
         auto processed           = preprocessor.preprocess(wgsl_get_rows, defines);
-        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        auto decisions           = std::make_shared<ggml_webgpu_get_rows_shader_decisions>();
         decisions->wg_size       = context.max_wg_size;
+        decisions->vectorized    = vectorized;
         webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context         = decisions;
         get_rows_pipelines[key]  = pipeline;
@@ -1859,6 +1867,7 @@ class ggml_webgpu_shader_lib {
         key.type                                     = context.dst->type;
         key.s_v                                      = (int) context.src2->ne[0];
         key.kda                                      = context.src3->ne[0] == context.src2->ne[0];
+        key.fused_cache                              = context.dst_fuse != nullptr;
 
         auto it = gated_delta_net_pipelines.find(key);
         if (it != gated_delta_net_pipelines.end()) {
@@ -1879,6 +1888,11 @@ class ggml_webgpu_shader_lib {
         if (key.kda) {
             defines.push_back("KDA");
             variant += "_kda";
+        }
+
+        if (key.fused_cache) {
+            defines.push_back("FUSED_CACHE");
+            variant += "_fused_cache";
         }
 
         defines.push_back("S_V=" + std::to_string(key.s_v) + "u");
