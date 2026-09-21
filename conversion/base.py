@@ -1505,6 +1505,16 @@ class TextModel(ModelBase):
 
         return seems_special
 
+    def does_token_look_byte(self, token: str | bytes) -> bool:
+        if isinstance(token, (bytes, bytearray)):
+            token_text = token.decode(encoding="utf-8")
+        elif isinstance(token, memoryview):
+            token_text = token.tobytes().decode(encoding="utf-8")
+        else:
+            token_text = token
+
+        return bool(re.fullmatch(r"<0x[0-9A-Fa-f]{2}>", token_text))
+
     # used for GPT-2 BPE and WordPiece vocabs
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
@@ -1537,7 +1547,9 @@ class TextModel(ModelBase):
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                    if self.does_token_look_byte(token):
+                        toktypes.append(gguf.TokenType.BYTE)
+                    elif added_tokens_decoder[i].special or self.does_token_look_special(token):
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         # NOTE: this was added for Gemma.
