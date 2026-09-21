@@ -78,6 +78,8 @@ add_library(${TARGET}
     download.h
     fit.cpp
     fit.h
+    file-lock.cpp
+    file-lock.h
     hf-cache.cpp
     hf-cache.h
     http.h
@@ -184,3 +186,8 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+if (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # AIX's flock() function comes from libbsd.a
+    target_link_libraries(${TARGET} PRIVATE -lbsd)
+endif()
