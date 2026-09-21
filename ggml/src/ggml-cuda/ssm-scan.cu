@@ -342,7 +342,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     }
 }
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_HIP)
 // ============================================================================
 // SSD (State Space Duality) kernels for Mamba-2 prefill (n_tok > SSM_SSD_MIN_TOKENS)
 //
@@ -821,7 +821,7 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src5->nb[2] <= (size_t)INT_MAX);
     GGML_ASSERT(src5->nb[3] <= (size_t)INT_MAX);
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_HIP)
     // Mamba-2 with scalar A per head: use SSD matmul path for long sequences.
     // Requires NVIDIA Turing+ otherwise fallback to scan.
     const bool is_mamba2 = (src3->nb[1] == sizeof(float));
