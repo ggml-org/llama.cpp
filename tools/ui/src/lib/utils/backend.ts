@@ -227,7 +227,10 @@ function parseOptionalPath(raw: unknown): string | undefined {
  * different field names, and OpenRouter nests the authoritative value under
  * `top_provider`, so try the flat fields first and the nested one after.
  */
-export function readModelContextLength(entry: Record<string, unknown>): number | undefined {
+export function readModelContextLength(value: unknown): number | undefined {
+	if (!value || typeof value !== 'object') return undefined;
+
+	const entry = value as Record<string, unknown>;
 	const flat = readContextField(entry);
 
 	if (flat !== undefined) return flat;
