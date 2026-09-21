@@ -143,9 +143,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
 
     get_offsets(a_offset, b_offset, d_offset);
     const bool is_aligned_nonquant =
-        p.batch_stride_b % 4 == 0 && b_offset % 4 == 0 &&
-        p.ncols % 4 == 0 && BLOCK_SIZE % 4 == 0 &&
-        K_PER_ITER == 4;
+        p.batch_stride_b % 4 == 0 && p.ncols % 4 == 0 &&
+        a_offset % 4 == 0 && b_offset % 4 == 0 &&
+        BLOCK_SIZE % 4 == 0 && K_PER_ITER == 4;
 
     y_offset = QUANT_R == 1 ? 1 : QUANT_K/2;
 

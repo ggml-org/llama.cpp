@@ -16,8 +16,9 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
                 data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
 }
 vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
-    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
-                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+    const vec2 a = data_a_packed64[(a_offset + ib)/2];
+    const vec2 b = data_a_packed64[(a_offset + ib)/2 + 1];
+    return vec4(a, b);
 }
 
 #endif
