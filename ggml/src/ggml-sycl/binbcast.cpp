@@ -6,6 +6,7 @@
 #include <sycl/sycl.hpp>
 
 #include "ggml.h"
+#include "ggml-impl.h"
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
@@ -273,6 +274,11 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
              ne02, ne03, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13,
              nb0, nb1, nb2, nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_permuted(src0), ggml_is_permuted(src1),
              main_stream);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+        op()((const float *) src0->data, (const sycl::half *) src1->data, (float *) dst->data, ne00, ne01, ne02, ne03,
+             ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2,
+             nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_permuted(src0), ggml_is_permuted(src1),
+             main_stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
         op()((const sycl::half *) src0->data, (const float *) src1->data, (sycl::half *) dst->data, ne00, ne01, ne02,
              ne03, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1,
@@ -305,6 +311,99 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
         GGML_ABORT("fatal error");
     }
+}
+
+bool ggml_sycl_cast_add_shape(const ggml_cgraph * cgraph, int i, int * span) {
+    if (i + 1 >= cgraph->n_nodes) {
+        return false;
+    }
+
+    ggml_tensor * cast = cgraph->nodes[i];
+    if (cast->op != GGML_OP_CPY || cast->type != GGML_TYPE_F32 || cast->src[0]->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (cast->view_src || !ggml_is_contiguous(cast) || !ggml_is_contiguous(cast->src[0])) {
+        return false;
+    }
+
+    int n = 0;
+    ggml_tensor * rhs = nullptr;
+    if (cgraph->nodes[i + 1]->op == GGML_OP_RESHAPE) {
+        n = 3;
+        rhs = cgraph->nodes[i + 1];
+        if (rhs->src[0] != cast || rhs->view_src != cast || !ggml_is_contiguous(rhs)) {
+            return false;
+        }
+        if (ggml_node_get_use_count(cgraph, i + 1) != 1) {
+            return false;
+        }
+    } else {
+        n = 2;
+        rhs = cast;
+    }
+    if (i + n > cgraph->n_nodes) {
+        return false;
+    }
+
+    const int32_t self_ref = cast->src[1] == cast ? 1 : 0;
+    if (ggml_node_get_use_count(cgraph, i) != 1 + self_ref) {
+        return false;
+    }
+
+    for (int k = 0; k < n - 1; ++k) {
+        ggml_tensor * node = cgraph->nodes[i + k];
+        if (node->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_INPUT)) {
+            return false;
+        }
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            return false;
+        }
+    }
+
+    ggml_tensor * add = cgraph->nodes[i + n - 1];
+    if (add->op != GGML_OP_ADD || (add->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+        return false;
+    }
+
+    ggml_tensor * acc = add->src[0];
+    if (add->src[1] != rhs || acc == rhs || acc == cast) {
+        return false;
+    }
+    if (acc->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 || rhs->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(rhs) || ggml_nelements(rhs) != ggml_nelements(cast->src[0])) {
+        return false;
+    }
+
+    if (span) {
+        *span = n;
+    }
+    return true;
+}
+
+bool ggml_sycl_can_fuse_cast_add(const ggml_cgraph * cgraph, int i, int * span) {
+    return g_ggml_sycl_enable_fusion && ggml_sycl_cast_add_shape(cgraph, i, span);
+}
+
+int ggml_sycl_fuse_cast_add(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i) {
+    int n = 0;
+    if (!ggml_sycl_can_fuse_cast_add(cgraph, i, &n)) {
+        return 0;
+    }
+
+    ggml_tensor * cast = cgraph->nodes[i];
+    ggml_tensor * add  = cgraph->nodes[i + n - 1];
+    ggml_tensor rhs_f16 = *add->src[1];
+    rhs_f16.type = GGML_TYPE_F16;
+    rhs_f16.data = cast->src[0]->data;
+    rhs_f16.nb[0] = ggml_type_size(GGML_TYPE_F16);
+    rhs_f16.nb[1] = rhs_f16.nb[0] * rhs_f16.ne[0];
+    rhs_f16.nb[2] = rhs_f16.nb[1] * rhs_f16.ne[1];
+    rhs_f16.nb[3] = rhs_f16.nb[2] * rhs_f16.ne[2];
+
+    ggml_sycl_op_bin_bcast<bin_bcast_sycl<op_add>>(ctx, add->src[0], &rhs_f16, add);
+    return n - 1;
 }
 
 inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
@@ -647,4 +746,3 @@ void ggml_sycl_op_add_add_fused(ggml_backend_sycl_context & ctx, ggml_tensor * a
         GGML_ABORT("fatal error");
     }
 }
-

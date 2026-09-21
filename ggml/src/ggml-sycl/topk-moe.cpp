@@ -5,6 +5,10 @@
 #include "ggml.h"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "binbcast.hpp"
+#include "getrows.hpp"
+#include "qsa-score.hpp"
+#include "topk-radix.hpp"
 #include "topk-moe.hpp"
 
 // SYCL port of ggml-cuda/topk-moe.cu. The kernel is a translation of the CUDA no-bias, no-PDL
@@ -544,6 +548,18 @@ int ggml_sycl_fuse(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i)
         return 0;
     }
 
+    if (const int n = ggml_sycl_fuse_qsa_score(ctx, cgraph, i)) {
+        return n;
+    }
+    if (const int n = ggml_sycl_fuse_qsa_topk(ctx, cgraph, i)) {
+        return n;
+    }
+    if (const int n = ggml_sycl_fuse_qsa_gather(ctx, cgraph, i)) {
+        return n;
+    }
+    if (const int n = ggml_sycl_fuse_cast_add(ctx, cgraph, i)) {
+        return n;
+    }
     return ggml_sycl_fuse_topk_moe(ctx, cgraph, i);
 }
 

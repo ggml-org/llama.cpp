@@ -65,5 +65,8 @@ inline bool ggml_sycl_add_kernel_supports(enum ggml_type src0, enum ggml_type sr
     return false;
 }
 
-#endif //GGML_SYCL_BINBCAST_HPP
+bool ggml_sycl_cast_add_shape(const ggml_cgraph * cgraph, int i, int * span);
+bool ggml_sycl_can_fuse_cast_add(const ggml_cgraph * cgraph, int i, int * span);
+int  ggml_sycl_fuse_cast_add(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i);
 
+#endif //GGML_SYCL_BINBCAST_HPP
