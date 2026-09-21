@@ -3854,11 +3854,13 @@ bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
 
 ssize_t write_request_line(Stream &strm, const std::string &method,
                                   const std::string &path) {
-  // A request target must not carry CR/LF (or other control octets); otherwise
-  // a value smuggled into it splits the request line and injects headers or a
-  // whole request. The same field-value check already guards header values in
-  // check_and_write_headers and the request target in
-  // perform_websocket_handshake; apply it here too.
+  // Neither the method nor the request target may carry CR/LF (or other
+  // control octets); otherwise a value smuggled into either splits the request
+  // line and injects headers or a whole request. The method must be a token
+  // (RFC 9110 Section 9.1), which also rejects an empty method and embedded
+  // spaces. The target gets the same field-value check that already guards
+  // header values in check_and_write_headers.
+  if (!fields::is_token(method)) { return -1; }
   if (!fields::is_field_value(path)) { return -1; }
 
   std::string s = method;
@@ -11105,9 +11107,10 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
 
     // Write request line and headers
     if (detail::write_request_line(bstrm, req.method, path_with_query) < 0) {
-      // A rejected target (e.g. CR/LF smuggled in via a decoded redirect
-      // Location under set_path_encode(false)) must fail the request cleanly
-      // instead of emitting a request-line-less, header-injecting request.
+      // A rejected method (not a token, e.g. carrying CR/LF) or target (e.g.
+      // CR/LF smuggled in via a decoded redirect Location under
+      // set_path_encode(false)) must fail the request cleanly instead of
+      // emitting a request-line-less, header-injecting request.
       error = Error::Write;
       output_error_log(error, &req);
       return false;
