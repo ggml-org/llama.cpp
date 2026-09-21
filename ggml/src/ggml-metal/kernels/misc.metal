@@ -374,10 +374,10 @@ template [[host_name("kernel_snake_f16")]]  kernel void kernel_snake<half>(const
 template [[host_name("kernel_snake_bf16")]] kernel void kernel_snake<bfloat>(constant ggml_metal_kargs_snake &, device const bfloat *, device const float *, device const float *, device bfloat *, uint, uint, uint);
 #endif
 
-template<int N>
-kernel void kernel_fwht_f32(
+template<int N, typename src_t>
+kernel void kernel_fwht(
         constant ggml_metal_kargs_fwht & args,
-        device const float * src,
+        device const src_t * src,
         device float * dst,
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort sgitg[[simdgroup_index_in_threadgroup]],
@@ -402,13 +402,13 @@ kernel void kernel_fwht_f32(
 
     float reg[NE];
     for (int i = 0; i < NE; i++) {
-        reg[i] = src[i*NW + lane]*scale;
+        reg[i] = float(src[i*NW + lane])*scale;
     }
     for (int i = 1; i < NW; i *= 2) {
         for (int j = 0; j < NE; j++) {
             const float val = reg[j];
             const float val2 = simd_shuffle_xor(val, i);
-            reg[j] = (lane & i) == 0 ? val2 + val : val2 - val;
+            reg[j] = val2 - val + 2*((lane & i) == 0)*val;
         }
     }
 
@@ -429,12 +429,20 @@ kernel void kernel_fwht_f32(
     }
 }
 
-typedef decltype(kernel_fwht_f32<64>) kernel_fwht_t;
+typedef decltype(kernel_fwht<64, float>) kernel_fwht_f32_t;
+typedef decltype(kernel_fwht<64, half>)  kernel_fwht_f16_t;
 
-template [[host_name("kernel_fwht_f32_64")]]  kernel kernel_fwht_t kernel_fwht_f32<64>;
-template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_t kernel_fwht_f32<128>;
-template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f32<256>;
-template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
+template [[host_name("kernel_fwht_f32_64")]]  kernel kernel_fwht_f32_t kernel_fwht<64,  float>;
+template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_f32_t kernel_fwht<128, float>;
+template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_f32_t kernel_fwht<256, float>;
+template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_f32_t kernel_fwht<512, float>;
+
+template [[host_name("kernel_fwht_f16_64")]]  kernel kernel_fwht_f16_t kernel_fwht<64,  half>;
+template [[host_name("kernel_fwht_f16_128")]] kernel kernel_fwht_f16_t kernel_fwht<128, half>;
+template [[host_name("kernel_fwht_f16_256")]] kernel kernel_fwht_f16_t kernel_fwht<256, half>;
+template [[host_name("kernel_fwht_f16_512")]] kernel kernel_fwht_f16_t kernel_fwht<512, half>;
+
+constant int FC_dsv4_hc_n_hc [[function_constant(FC_DSV4_HC + 0)]];
 
 kernel void kernel_dsv4_hc_comb_f32(
         constant ggml_metal_kargs_dsv4_hc_comb & args,
@@ -506,20 +514,8 @@ kernel void kernel_dsv4_hc_pre_f32(
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
-    constexpr ushort hc = 4;
-
     const int it = tgpig.y;
     const int i0 = ((int) tgpig.x*ntg.y + sgitg)*32 + tiisg;
-
-    float weight_lane = 0.0f;
-    if (tiisg < hc) {
-        weight_lane = *(device const float *) (weights + tiisg*args.nb_w0 + it*args.nb_w1);
-    }
-
-    float w[hc];
-    FOR_UNROLL (ushort ih = 0; ih < hc; ++ih) {
-        w[ih] = simd_shuffle(weight_lane, ih);
-    }
 
     if (i0 >= args.n_embd) {
         return;
@@ -527,8 +523,10 @@ kernel void kernel_dsv4_hc_pre_f32(
 
     device const char * xb = x + i0*args.nb_x0 + it*args.nb_x2;
     float result = 0.0f;
-    FOR_UNROLL (ushort ih = 0; ih < hc; ++ih) {
-        result = fma(*(device const float *) (xb + ih*args.nb_x1), w[ih], result);
+    FOR_UNROLL (int ih = 0; ih < FC_dsv4_hc_n_hc; ++ih) {
+        const float xv = *(device const float *) (xb + ih*args.nb_x1);
+        const float wv = *(device const float *) (weights + ih*args.nb_w0 + it*args.nb_w1);
+        result = fma(xv, wv, result);
     }
 
     *(device float *) (dst + i0*args.nb_d0 + it*args.nb_d1) = args.scale*result;
@@ -543,8 +541,6 @@ kernel void kernel_dsv4_hc_pre_gated_f32(
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
-    constexpr ushort hc = 4;
-
     const int it = tgpig.y;
     const int i0 = ((int) tgpig.x*ntg.y + sgitg)*32 + tiisg;
 
@@ -555,9 +551,10 @@ kernel void kernel_dsv4_hc_pre_gated_f32(
     device const char * xb = x    + i0*args.nb_x0 + it*args.nb_x2;
     device const char * gb = gate + i0*args.nb_w0 + it*args.nb_w2;
     float result = 0.0f;
-    FOR_UNROLL (ushort ih = 0; ih < hc; ++ih) {
-        const float g = 1.0f/(1.0f + exp(-*(device const float *) (gb + ih*args.nb_w1)));
-        result = fma(*(device const float *) (xb + ih*args.nb_x1), g, result);
+    FOR_UNROLL (int ih = 0; ih < FC_dsv4_hc_n_hc; ++ih) {
+        const float g  = 1.0f/(1.0f + exp(-*(device const float *) (gb + ih*args.nb_w1)));
+        const float xv = *(device const float *) (xb + ih*args.nb_x1);
+        result = fma(xv, g, result);
     }
 
     *(device float *) (dst + i0*args.nb_d0 + it*args.nb_d1) = args.scale*result;

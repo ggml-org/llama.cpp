@@ -21,6 +21,10 @@ static inline void * htp_tensor_data(const struct htp_tensor * t) {
     return (void *) (uintptr_t) t->data;
 }
 
+static inline bool htp_tensor_is_extended(const struct htp_tensor * t) {
+    return t && (t->data >> 32) != 0;
+}
+
 static inline uint32_t * htp_tensor_flags(const struct htp_tensor * t) {
     return (uint32_t *) &t->flags;
 }
@@ -126,6 +130,7 @@ static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
         case HTP_TYPE_F32:  return ne00 * 4;
         case HTP_TYPE_F16:  return ne00 * 2;
         case HTP_TYPE_Q8_0: return (ne00 / 32) * 34;
+        case HTP_TYPE_I32:  return ne00 * 4;
         default:            return 0;
     }
 }

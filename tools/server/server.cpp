@@ -102,6 +102,8 @@ int llama_server(int argc, char ** argv) {
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
     server_stream_session_manager_start();
 
+    SRV_INF("%s", "initializing ...\n");
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -322,11 +324,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     };
 
     if (params.cors_origins == "*" && params.api_keys.empty()) {
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
-        SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
-        SRV_WRN("%s", "more info: https://github.com/ggml-org/llama.cpp/pull/25655\n");
-        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)\n");
     }
 
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
@@ -374,14 +372,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(res_403));
     }
 
-    if (warn_names.size() > 0) {
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "the following feature(s) are enabled:\n");
+    if (!warn_names.empty()) {
+        std::string features;
         for (const auto & name : warn_names) {
-            SRV_WRN("    %s\n", name.c_str());
+            if (!features.empty()) features += ", ";
+            features += name;
         }
-        SRV_WRN("%s", "do not expose the server to untrusted environments\n");
-        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("security: %s enabled - do not expose to untrusted environments\n", features.c_str());
     }
 
     //
@@ -515,10 +512,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     // TODO: remove this in the future
-    // Unix sockets do not use the TCP port.
+    // check the string to also handle the .sock case
     if (std::any_of(ctx_http.listening_addresses.begin(), ctx_http.listening_addresses.end(), [](const std::string & address) { return string_ends_with(address, ":8080"); })) {
-        SRV_WRN("%s", "NOTICE: server default port will be changed to :9931 in a future release\n");
-        SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
+        SRV_WRN("%s", "notice: server default port will be changed to :9931 in a future release (ref: https://github.com/ggml-org/llama.cpp/pull/26508)\n");
     }
 
     if (is_router_server) {

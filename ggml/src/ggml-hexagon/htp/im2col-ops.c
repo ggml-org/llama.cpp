@@ -14,7 +14,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hex-profile.h"
 #include "htp-vtcm.h"
 #include "htp-tensor.h"
@@ -86,8 +86,8 @@ static inline void htp_im2col_vtcm_layout_build(struct htp_im2col_vtcm_layout * 
         const uint32_t OH                       = is_2D ? dst->ne[2] : 1;                                  \
         const uint32_t OW                       = dst->ne[1];                                              \
         const uint32_t patch_stride             = IC * KH * KW;                                            \
-        const float * restrict src_data         = (const float *) src1->data;                              \
-        DST_CTYPE * restrict dst_data           = (DST_CTYPE *) dst->data;                                 \
+        const float * restrict src_data         = (const float *) (uintptr_t) src1->data;                  \
+        DST_CTYPE * restrict dst_data           = (DST_CTYPE *) (uintptr_t) dst->data;                     \
         const uint32_t patch_end                = ictx->patch_base + ictx->npatches;                       \
         const uint32_t patch_start              = ictx->patch_base + ictx->npatches_per_thread * ith;      \
         const uint32_t patch_stop               = MIN(patch_start + ictx->npatches_per_thread, patch_end); \
@@ -153,155 +153,156 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx
 // this block's store-out) waits for both - safe because the ring is strict
 // FIFO and each buffer slot is only reused after its prior consumer (compute
 // or store-out) already finished in program order.
-#define IM2COL_BLOCKED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                                  \
-    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
-        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
-        struct htp_ops_context *    octx        = ictx->octx;                                                        \
-        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                            \
-        const struct htp_tensor * restrict src1 = octx->src[1];                                                      \
-        const struct htp_tensor * restrict dst  = octx->dst;                                                         \
-        const int32_t  s0 = octx->op_params[0], s1 = octx->op_params[1];                                             \
-        const int32_t  p0 = octx->op_params[2], p1 = octx->op_params[3];                                             \
-        const int32_t  d0 = octx->op_params[4], d1 = octx->op_params[5];                                             \
-        const int32_t  is_2D = octx->op_params[6] == 1;                                                              \
-        const uint32_t N     = is_2D ? src1->ne[3] : src1->ne[2];                                                    \
-        const uint32_t IC    = is_2D ? src1->ne[2] : src1->ne[1];                                                    \
-        const uint32_t IH    = is_2D ? src1->ne[1] : 1;                                                              \
-        const uint32_t IW    = src1->ne[0];                                                                          \
-        const uint32_t KH    = is_2D ? octx->src[0]->ne[1] : 1;                                                      \
-        const uint32_t KW    = octx->src[0]->ne[0];                                                                  \
-        const uint32_t OH    = is_2D ? dst->ne[2] : 1;                                                               \
-        const uint32_t OW    = dst->ne[1];                                                                           \
-        const uint32_t owb = ictx->pe_owb, Wb = ictx->pe_wb;                                                         \
-        const uint32_t patch_stride     = IC * KH * KW;                                                              \
-        const float * restrict src_data = (const float *) src1->data;                                                \
-        DST_CTYPE * restrict dst_data   = (DST_CTYPE *) dst->data;                                                   \
-        dma_queue *    dmaq             = octx->ctx->dma[ith];                                                       \
-        uint8_t *      srcb_base        = ictx->pe_vtcm_src + ith * ictx->pe_src_size_per_thread;                    \
-        uint8_t *      dstb_base        = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;                    \
-        float *        srcb2[2]         = { (float *) srcb_base, (float *) (srcb_base + ictx->pe_src_row_bytes) };   \
-        DST_CTYPE *    dstb2[2]   = { (DST_CTYPE *) dstb_base, (DST_CTYPE *) (dstb_base + ictx->pe_dst_row_bytes) }; \
-        const uint32_t nrows      = N * OH;                                                                          \
-        const uint32_t per_thread = ictx->pe_rows_per_thread;                                                        \
-        const uint32_t row_start  = per_thread * ith;                                                                \
-        const uint32_t row_end    = MIN(row_start + per_thread, nrows);                                              \
-        if (row_start >= row_end)                                                                                    \
-            return;                                                                                                  \
-        const uint32_t nbpr         = (OW + owb - 1) / owb;                                                          \
-        const uint32_t nrows_local  = row_end - row_start;                                                           \
-        const uint32_t total_blocks = nrows_local * nbpr;                                                            \
-        for (uint32_t bi = 0; bi < total_blocks; bi++) {                                                             \
-            const uint32_t buf  = bi & 1u;                                                                           \
-            float *        srcb = srcb2[buf];                                                                        \
-            DST_CTYPE *    dstb = dstb2[buf];                                                                        \
-            const uint32_t r    = row_start + bi / nbpr;                                                             \
-            const uint32_t in   = r / OH;                                                                            \
-            const uint32_t ioh  = r % OH;                                                                            \
-            const uint32_t c0   = (bi % nbpr) * owb;                                                                 \
-            const uint32_t nb   = MIN(owb, OW - c0);                                                                 \
-            const int32_t  win0 = (int32_t) c0 * s0 - p0;                                                            \
-            if (bi == 0) {                                                                                           \
-                /* prologue: stage block 0 and wait - nothing to overlap with yet */                                 \
-                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
-                    const int32_t iih = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;                                \
-                    if (iih < 0 || iih >= (int32_t) IH)                                                              \
-                        continue;                                                                                    \
-                    const int32_t lo = win0 < 0 ? -win0 : 0;                                                         \
-                    int32_t       hi = (int32_t) IW - win0;                                                          \
-                    if (hi > (int32_t) Wb)                                                                           \
-                        hi = (int32_t) Wb;                                                                           \
-                    if (hi <= lo)                                                                                    \
-                        continue;                                                                                    \
-                    const uint32_t cpw  = (uint32_t) (hi - lo);                                                      \
-                    float *        vdst = srcb + (uint64_t) ikh * Wb + (uint32_t) lo;                                \
-                    const float *  vsrc = src_data + ((uint64_t) (in * IC) * IH + iih) * IW + (win0 + lo);           \
-                    while (!dma_queue_push(dmaq, dma_make_ptr((uint8_t *) vdst, (const uint8_t *) vsrc),             \
-                                           (size_t) KH * Wb * sizeof(float), (size_t) IH * IW * sizeof(float),       \
-                                           cpw * sizeof(float), IC)) {                                               \
-                        dma_queue_pop(dmaq);                                                                         \
-                    }                                                                                                \
-                }                                                                                                    \
-                dma_queue_flush(dmaq);                                                                               \
-            }                                                                                                        \
-            if (bi + 1 < total_blocks) {                                                                             \
-                /* prefetch: stage block bi+1 into the other slot; overlaps with this block's compute below */       \
-                const uint32_t nbuf  = 1u - buf;                                                                     \
-                float *        nsrcb = srcb2[nbuf];                                                                  \
-                const uint32_t nr    = row_start + (bi + 1) / nbpr;                                                  \
-                const uint32_t nin   = nr / OH;                                                                      \
-                const uint32_t nioh  = nr % OH;                                                                      \
-                const uint32_t nc0   = ((bi + 1) % nbpr) * owb;                                                      \
-                const int32_t  nwin0 = (int32_t) nc0 * s0 - p0;                                                      \
-                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
-                    const int32_t iih = (int32_t) nioh * s1 + (int32_t) ikh * d1 - p1;                               \
-                    if (iih < 0 || iih >= (int32_t) IH)                                                              \
-                        continue;                                                                                    \
-                    const int32_t lo = nwin0 < 0 ? -nwin0 : 0;                                                       \
-                    int32_t       hi = (int32_t) IW - nwin0;                                                         \
-                    if (hi > (int32_t) Wb)                                                                           \
-                        hi = (int32_t) Wb;                                                                           \
-                    if (hi <= lo)                                                                                    \
-                        continue;                                                                                    \
-                    const uint32_t cpw  = (uint32_t) (hi - lo);                                                      \
-                    float *        vdst = nsrcb + (uint64_t) ikh * Wb + (uint32_t) lo;                               \
-                    const float *  vsrc = src_data + ((uint64_t) (nin * IC) * IH + iih) * IW + (nwin0 + lo);         \
-                    while (!dma_queue_push(dmaq, dma_make_ptr((uint8_t *) vdst, (const uint8_t *) vsrc),             \
-                                           (size_t) KH * Wb * sizeof(float), (size_t) IH * IW * sizeof(float),       \
-                                           cpw * sizeof(float), IC)) {                                               \
-                        dma_queue_pop(dmaq);                                                                         \
-                    }                                                                                                \
-                }                                                                                                    \
-            }                                                                                                        \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                    \
-            for (uint32_t j = 0; j < nb; j++) {                                                                      \
-                const uint32_t iow       = c0 + j;                                                                   \
-                DST_CTYPE *    dst_patch = dstb + (uint64_t) j * patch_stride;                                       \
-                const int32_t  iiw0      = (int32_t) iow * s0 - p0;                                                  \
-                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
-                    const int32_t iih = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;                                \
-                    const int     okh = (iih >= 0 && iih < (int32_t) IH);                                            \
-                    for (uint32_t iic = 0; iic < IC; iic++) {                                                        \
-                        DST_CTYPE * out_run = dst_patch + iic * (KH * KW) + ikh * KW;                                \
-                        if (!okh) {                                                                                  \
-                            SPLAT_FN(out_run, 0.0f, KW);                                                             \
-                            continue;                                                                                \
-                        }                                                                                            \
-                        const float * vrow = srcb + ((uint64_t) (iic * KH + ikh)) * Wb; /* col win0 at idx 0*/       \
-                        if (d0 == 1) {                                                                               \
-                            /* contiguous run within the staged window: [lo,hi) in-bounds, tails zero pad */         \
-                            const int32_t lo = iiw0 < 0 ? -iiw0 : 0;                                                 \
-                            int32_t       hi = (int32_t) IW - iiw0;                                                  \
-                            if (hi > (int32_t) KW) {                                                                 \
-                                hi = (int32_t) KW;                                                                   \
-                            }                                                                                        \
-                            if (hi <= lo) {                                                                          \
-                                SPLAT_FN(out_run, 0.0f, KW);                                                         \
-                            } else {                                                                                 \
-                                if (lo > 0) {                                                                        \
-                                    SPLAT_FN(out_run, 0.0f, (uint32_t) lo);                                          \
-                                }                                                                                    \
-                                COPY_FN((uint8_t *) (out_run + lo), (const uint8_t *) (vrow + (iiw0 + lo - win0)),   \
-                                        (uint32_t) (hi - lo));                                                       \
-                                if (hi < (int32_t) KW) {                                                             \
-                                    SPLAT_FN(out_run + hi, 0.0f, (KW - (uint32_t) hi));                              \
-                                }                                                                                    \
-                            }                                                                                        \
-                            continue;                                                                                \
-                        }                                                                                            \
-                        for (uint32_t ikw = 0; ikw < KW; ikw++) {                                                    \
-                            const int32_t iiw = iiw0 + (int32_t) ikw * d0;                                           \
-                            out_run[ikw] =                                                                           \
-                                (iiw < 0 || iiw >= (int32_t) IW) ? (DST_CTYPE) 0.0f : (DST_CTYPE) vrow[iiw - win0];  \
-                        }                                                                                            \
-                    }                                                                                                \
-                }                                                                                                    \
-            }                                                                                                        \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                     \
-            DST_CTYPE * ddr = dst_data + ((uint64_t) (in * OH + ioh) * OW + c0) * patch_stride;                      \
-            dma_queue_push_vtcm_to_ddr(dmaq, dma_make_ptr((uint8_t *) ddr, (uint8_t *) dstb),                        \
-                                       nb * patch_stride * (DST_ELEM), nb * patch_stride * (DST_ELEM), 1);           \
-            dma_queue_flush(dmaq);                                                                                   \
-        }                                                                                                            \
+#define IM2COL_BLOCKED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                                            \
+    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                                       \
+        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                          \
+        struct htp_ops_context *    octx        = ictx->octx;                                                                  \
+        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                                      \
+        const struct htp_tensor * restrict src1 = octx->src[1];                                                                \
+        const struct htp_tensor * restrict dst  = octx->dst;                                                                   \
+        const int32_t  s0 = octx->op_params[0], s1 = octx->op_params[1];                                                       \
+        const int32_t  p0 = octx->op_params[2], p1 = octx->op_params[3];                                                       \
+        const int32_t  d0 = octx->op_params[4], d1 = octx->op_params[5];                                                       \
+        const int32_t  is_2D = octx->op_params[6] == 1;                                                                        \
+        const uint32_t N     = is_2D ? src1->ne[3] : src1->ne[2];                                                              \
+        const uint32_t IC    = is_2D ? src1->ne[2] : src1->ne[1];                                                              \
+        const uint32_t IH    = is_2D ? src1->ne[1] : 1;                                                                        \
+        const uint32_t IW    = src1->ne[0];                                                                                    \
+        const uint32_t KH    = is_2D ? octx->src[0]->ne[1] : 1;                                                                \
+        const uint32_t KW    = octx->src[0]->ne[0];                                                                            \
+        const uint32_t OH    = is_2D ? dst->ne[2] : 1;                                                                         \
+        const uint32_t OW    = dst->ne[1];                                                                                     \
+        const uint32_t owb = ictx->pe_owb, Wb = ictx->pe_wb;                                                                   \
+        const uint32_t patch_stride     = IC * KH * KW;                                                                        \
+        const dma_addr_t src_data       = src1->data;                                                                          \
+        const dma_addr_t dst_data       = dst->data;                                                                           \
+        dma_queue *    dmaq             = octx->ctx->dma[ith];                                                                 \
+        uint8_t *      srcb_base        = ictx->pe_vtcm_src + ith * ictx->pe_src_size_per_thread;                              \
+        uint8_t *      dstb_base        = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;                              \
+        float *        srcb2[2]         = { (float *) srcb_base, (float *) (srcb_base + ictx->pe_src_row_bytes) };             \
+        DST_CTYPE *    dstb2[2]   = { (DST_CTYPE *) dstb_base, (DST_CTYPE *) (dstb_base + ictx->pe_dst_row_bytes) };           \
+        const uint32_t nrows      = N * OH;                                                                                    \
+        const uint32_t per_thread = ictx->pe_rows_per_thread;                                                                  \
+        const uint32_t row_start  = per_thread * ith;                                                                          \
+        const uint32_t row_end    = MIN(row_start + per_thread, nrows);                                                        \
+        if (row_start >= row_end)                                                                                              \
+            return;                                                                                                            \
+        const uint32_t nbpr         = (OW + owb - 1) / owb;                                                                    \
+        const uint32_t nrows_local  = row_end - row_start;                                                                     \
+        const uint32_t total_blocks = nrows_local * nbpr;                                                                      \
+        for (uint32_t bi = 0; bi < total_blocks; bi++) {                                                                       \
+            const uint32_t buf  = bi & 1u;                                                                                     \
+            float *        srcb = srcb2[buf];                                                                                  \
+            DST_CTYPE *    dstb = dstb2[buf];                                                                                  \
+            const uint32_t r    = row_start + bi / nbpr;                                                                       \
+            const uint32_t in   = r / OH;                                                                                      \
+            const uint32_t ioh  = r % OH;                                                                                      \
+            const uint32_t c0   = (bi % nbpr) * owb;                                                                           \
+            const uint32_t nb   = MIN(owb, OW - c0);                                                                           \
+            const int32_t  win0 = (int32_t) c0 * s0 - p0;                                                                      \
+            if (bi == 0) {                                                                                                     \
+                /* prologue: stage block 0 and wait - nothing to overlap with yet */                                           \
+                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                                      \
+                    const int32_t iih = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;                                          \
+                    if (iih < 0 || iih >= (int32_t) IH)                                                                        \
+                        continue;                                                                                              \
+                    const int32_t lo = win0 < 0 ? -win0 : 0;                                                                   \
+                    int32_t       hi = (int32_t) IW - win0;                                                                    \
+                    if (hi > (int32_t) Wb)                                                                                     \
+                        hi = (int32_t) Wb;                                                                                     \
+                    if (hi <= lo)                                                                                              \
+                        continue;                                                                                              \
+                    const uint32_t cpw  = (uint32_t) (hi - lo);                                                                \
+                    float *        vdst = srcb + (size_t) ikh * Wb + lo;                                                       \
+                    const dma_addr_t vsrc = src_data + (size_t) (((in * IC) * IH + iih) * IW + (win0 + lo)) * sizeof(float);   \
+                    while (!dma_queue_push(dmaq, dma_make_data(vdst, vsrc),                                                    \
+                                           (size_t) KH * Wb * sizeof(float), (size_t) IH * IW * sizeof(float),                 \
+                                           cpw * sizeof(float), IC)) {                                                         \
+                        dma_queue_pop(dmaq);                                                                                   \
+                    }                                                                                                          \
+                }                                                                                                              \
+                dma_queue_flush(dmaq);                                                                                         \
+            }                                                                                                                  \
+            if (bi + 1 < total_blocks) {                                                                                       \
+                /* prefetch: stage block bi+1 into the other slot; overlaps with this block's compute below */                 \
+                const uint32_t nbuf  = 1u - buf;                                                                               \
+                float *        nsrcb = srcb2[nbuf];                                                                            \
+                const uint32_t nr    = row_start + (bi + 1) / nbpr;                                                            \
+                const uint32_t nin   = nr / OH;                                                                                \
+                const uint32_t nioh  = nr % OH;                                                                                \
+                const uint32_t nc0   = ((bi + 1) % nbpr) * owb;                                                                \
+                const int32_t  nwin0 = (int32_t) nc0 * s0 - p0;                                                                \
+                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                                      \
+                    const int32_t iih = (int32_t) nioh * s1 + (int32_t) ikh * d1 - p1;                                         \
+                    if (iih < 0 || iih >= (int32_t) IH)                                                                        \
+                        continue;                                                                                              \
+                    const int32_t lo = nwin0 < 0 ? -nwin0 : 0;                                                                 \
+                    int32_t       hi = (int32_t) IW - nwin0;                                                                   \
+                    if (hi > (int32_t) Wb)                                                                                     \
+                        hi = (int32_t) Wb;                                                                                     \
+                    if (hi <= lo)                                                                                              \
+                        continue;                                                                                              \
+                    const uint32_t cpw  = (uint32_t) (hi - lo);                                                                \
+                    float *        vdst = nsrcb + (size_t) ikh * Wb + lo;                                                      \
+                    const dma_addr_t vsrc = src_data + (size_t) (((nin * IC) * IH + iih) * IW + (nwin0 + lo)) * sizeof(float); \
+                    while (!dma_queue_push(dmaq, dma_make_data(vdst, vsrc),                                                    \
+                                           (size_t) KH * Wb * sizeof(float), (size_t) IH * IW * sizeof(float),                 \
+                                           cpw * sizeof(float), IC)) {                                                         \
+                        dma_queue_pop(dmaq);                                                                                   \
+                    }                                                                                                          \
+                }                                                                                                              \
+            }                                                                                                                  \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                              \
+            for (uint32_t j = 0; j < nb; j++) {                                                                                \
+                const uint32_t iow       = c0 + j;                                                                             \
+                DST_CTYPE *    dst_patch = dstb + (uint64_t) j * patch_stride;                                                 \
+                const int32_t  iiw0      = (int32_t) iow * s0 - p0;                                                            \
+                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                                      \
+                    const int32_t iih = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;                                          \
+                    const int     okh = (iih >= 0 && iih < (int32_t) IH);                                                      \
+                    for (uint32_t iic = 0; iic < IC; iic++) {                                                                  \
+                        DST_CTYPE * out_run = dst_patch + iic * (KH * KW) + ikh * KW;                                          \
+                        if (!okh) {                                                                                            \
+                            SPLAT_FN(out_run, 0.0f, KW);                                                                       \
+                            continue;                                                                                          \
+                        }                                                                                                      \
+                        const float * vrow = srcb + ((uint64_t) (iic * KH + ikh)) * Wb; /* col win0 at idx 0*/                 \
+                        if (d0 == 1) {                                                                                         \
+                            /* contiguous run within the staged window: [lo,hi) in-bounds, tails zero pad */                   \
+                            const int32_t lo = iiw0 < 0 ? -iiw0 : 0;                                                           \
+                            int32_t       hi = (int32_t) IW - iiw0;                                                            \
+                            if (hi > (int32_t) KW) {                                                                           \
+                                hi = (int32_t) KW;                                                                             \
+                            }                                                                                                  \
+                            if (hi <= lo) {                                                                                    \
+                                SPLAT_FN(out_run, 0.0f, KW);                                                                   \
+                            } else {                                                                                           \
+                                if (lo > 0) {                                                                                  \
+                                    SPLAT_FN(out_run, 0.0f, (uint32_t) lo);                                                    \
+                                }                                                                                              \
+                                COPY_FN((uint8_t *) (out_run + lo), (const uint8_t *) (vrow + (iiw0 + lo - win0)),             \
+                                        (uint32_t) (hi - lo));                                                                 \
+                                if (hi < (int32_t) KW) {                                                                       \
+                                    SPLAT_FN(out_run + hi, 0.0f, (KW - (uint32_t) hi));                                        \
+                                }                                                                                              \
+                            }                                                                                                  \
+                            continue;                                                                                          \
+                        }                                                                                                      \
+                        for (uint32_t ikw = 0; ikw < KW; ikw++) {                                                              \
+                            const int32_t iiw = iiw0 + (int32_t) ikw * d0;                                                     \
+                            out_run[ikw] =                                                                                     \
+                                (iiw < 0 || iiw >= (int32_t) IW) ? (DST_CTYPE) 0.0f : (DST_CTYPE) vrow[iiw - win0];            \
+                        }                                                                                                      \
+                    }                                                                                                          \
+                }                                                                                                              \
+            }                                                                                                                  \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                               \
+            const dma_addr_t ddr = dst_data + (size_t) ((in * OH + ioh) * OW + c0) * patch_stride * (DST_ELEM);                \
+            dma_queue_push(dmaq, dma_make_data(ddr, dstb),                                                                     \
+                           nb * patch_stride * (DST_ELEM), nb * patch_stride * (DST_ELEM),                                     \
+                           nb * patch_stride * (DST_ELEM), 1);                                                                 \
+            dma_queue_flush(dmaq);                                                                                             \
+        }                                                                                                                      \
     }
 IM2COL_BLOCKED_DMA_BODY(im2col_blocked_dma_thread,     __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "blk-dma-f16")
 IM2COL_BLOCKED_DMA_BODY(im2col_blocked_dma_f32_thread, float,  hvx_copy_f32_uu,     hvx_splat_f32_u, sizeof(float),  "blk-dma-f32")
@@ -309,75 +310,76 @@ IM2COL_BLOCKED_DMA_BODY(im2col_blocked_dma_f32_thread, float,  hvx_copy_f32_uu, 
 // Exact-tiling patch-embed DMA fast path (s0==KW, p0=0, d0=1; and 2D s1==KH,
 // p1=0, d1=1). Intentionally reads no stride/pad/dilation params so the inner
 // copy stays tight and fully hoisted - do NOT graft the general gather in here.
-#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                               \
-    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
-        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
-        struct htp_ops_context *    octx        = ictx->octx;                                                        \
-        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                            \
-        const struct htp_tensor * restrict src1 = octx->src[1];                                                      \
-        const struct htp_tensor * restrict dst  = octx->dst;                                                         \
-        const int32_t  is_2D                    = octx->op_params[6] == 1;                                           \
-        const uint32_t N                        = is_2D ? src1->ne[3] : src1->ne[2];                                 \
-        const uint32_t IC                       = is_2D ? src1->ne[2] : src1->ne[1];                                 \
-        const uint32_t IH                       = is_2D ? src1->ne[1] : 1;                                           \
-        const uint32_t IW                       = src1->ne[0];                                                       \
-        const uint32_t KH                       = is_2D ? octx->src[0]->ne[1] : 1;                                   \
-        const uint32_t KW                       = octx->src[0]->ne[0];                                               \
-        const uint32_t OH                       = is_2D ? dst->ne[2] : 1;                                            \
-        const uint32_t OW                       = dst->ne[1];                                                        \
-        const uint32_t patch_stride             = IC * KH * KW;                                                      \
-        const float * restrict src_data         = (const float *) src1->data;                                        \
-        DST_CTYPE * restrict dst_data           = (DST_CTYPE *) dst->data;                                           \
-        dma_queue *    dmaq                     = octx->ctx->dma[ith];                                               \
-        uint8_t *      src_base                 = ictx->pe_vtcm_src + ith * ictx->pe_src_size_per_thread;            \
-        uint8_t *      dst_base                 = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;            \
-        float *        srcb                     = (float *) src_base;                                                \
-        DST_CTYPE *    dstb                     = (DST_CTYPE *) dst_base;                                            \
-        const uint32_t row_end_max              = ictx->pe_row_base + ictx->pe_nrows;                                \
-        const uint32_t per_thread               = ictx->pe_rows_per_thread;                                          \
-        const uint32_t row_start                = ictx->pe_row_base + per_thread * ith;                              \
-        const uint32_t row_end                  = MIN(row_start + per_thread, row_end_max);                          \
-        if (row_start >= row_end)                                                                                    \
-            return;                                                                                                  \
-        for (uint32_t r = row_start; r < row_end; r++) {                                                             \
-            const uint32_t in  = r / OH;                                                                             \
-            const uint32_t ioh = r % OH;                                                                             \
-            for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                                \
-                int32_t iih = (int32_t) ioh * (int32_t) KH + (int32_t) ikh;                                          \
-                int     ok  = (iih >= 0 && iih < (int32_t) IH);                                                      \
-                for (uint32_t iic = 0; iic < IC; iic++) {                                                            \
-                    float *       vdst = srcb + ((uint64_t) (iic * KH + ikh)) * IW;                                  \
-                    const float * _vsrc =                                                                            \
-                        ok ? (src_data + ((uint64_t) (in * IC + iic) * IH + iih) * IW) : (const float *) vdst;       \
-                    dma_queue_push_ddr_to_vtcm(                                                                      \
-                        dmaq, dma_make_ptr((uint8_t *) vdst, ok ? (const uint8_t *) _vsrc : (const uint8_t *) vdst), \
-                        IW * sizeof(float), IW * sizeof(float), ok ? 1 : 0);                                         \
-                }                                                                                                    \
-            }                                                                                                        \
-            for (uint32_t i = 0; i < IC * KH; i++)                                                                   \
-                dma_queue_pop(dmaq);                                                                                 \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                    \
-            for (uint32_t iow = 0; iow < OW; iow++) {                                                                \
-                DST_CTYPE * dst_patch = dstb + (uint64_t) iow * patch_stride;                                        \
-                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
-                    int32_t iih = (int32_t) ioh * (int32_t) KH + (int32_t) ikh;                                      \
-                    for (uint32_t iic = 0; iic < IC; iic++) {                                                        \
-                        DST_CTYPE * out_run = dst_patch + iic * (KH * KW) + ikh * KW;                                \
-                        if (iih < 0 || iih >= (int32_t) IH) {                                                        \
-                            SPLAT_FN(out_run, 0.0f, KW);                                                             \
-                            continue;                                                                                \
-                        }                                                                                            \
-                        const float * src_run = srcb + ((uint64_t) (iic * KH + ikh)) * IW + (uint64_t) iow * KW;     \
-                        COPY_FN((uint8_t *) out_run, (const uint8_t *) src_run, KW);                                 \
-                    }                                                                                                \
-                }                                                                                                    \
-            }                                                                                                        \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                     \
-            DST_CTYPE * ddr_row = dst_data + ((uint64_t) (in * OH + ioh) * OW) * patch_stride;                       \
-            dma_queue_push_vtcm_to_ddr(dmaq, dma_make_ptr((uint8_t *) ddr_row, (uint8_t *) dstb),                    \
-                                       OW * patch_stride * (DST_ELEM), OW * patch_stride * (DST_ELEM), 1);           \
-            dma_queue_flush(dmaq);                                                                                   \
-        }                                                                                                            \
+#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                           \
+    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                         \
+        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                            \
+        struct htp_ops_context *    octx        = ictx->octx;                                                    \
+        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                        \
+        const struct htp_tensor * restrict src1 = octx->src[1];                                                  \
+        const struct htp_tensor * restrict dst  = octx->dst;                                                     \
+        const int32_t  is_2D                    = octx->op_params[6] == 1;                                       \
+        const uint32_t N                        = is_2D ? src1->ne[3] : src1->ne[2];                             \
+        const uint32_t IC                       = is_2D ? src1->ne[2] : src1->ne[1];                             \
+        const uint32_t IH                       = is_2D ? src1->ne[1] : 1;                                       \
+        const uint32_t IW                       = src1->ne[0];                                                   \
+        const uint32_t KH                       = is_2D ? octx->src[0]->ne[1] : 1;                               \
+        const uint32_t KW                       = octx->src[0]->ne[0];                                           \
+        const uint32_t OH                       = is_2D ? dst->ne[2] : 1;                                        \
+        const uint32_t OW                       = dst->ne[1];                                                    \
+        const uint32_t patch_stride             = IC * KH * KW;                                                  \
+        const dma_addr_t src_data       = src1->data;                                                            \
+        const dma_addr_t dst_data       = dst->data;                                                             \
+        dma_queue *    dma_q            = octx->ctx->dma[ith];                                                   \
+        uint8_t *      src_base         = ictx->pe_vtcm_src + ith * ictx->pe_src_size_per_thread;                \
+        uint8_t *      dst_base         = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;                \
+        float *        srcb             = (float *) src_base;                                                    \
+        DST_CTYPE *    dstb             = (DST_CTYPE *) dst_base;                                                \
+        const uint32_t row_end_max              = ictx->pe_row_base + ictx->pe_nrows;                            \
+        const uint32_t per_thread               = ictx->pe_rows_per_thread;                                      \
+        const uint32_t row_start                = ictx->pe_row_base + per_thread * ith;                          \
+        const uint32_t row_end                  = MIN(row_start + per_thread, row_end_max);                      \
+        if (row_start >= row_end)                                                                                \
+            return;                                                                                              \
+        for (uint32_t r = row_start; r < row_end; r++) {                                                         \
+            const uint32_t in  = r / OH;                                                                         \
+            const uint32_t ioh = r % OH;                                                                         \
+            for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
+                int32_t iih = (int32_t) ioh * (int32_t) KH + (int32_t) ikh;                                      \
+                int     ok  = (iih >= 0 && iih < (int32_t) IH);                                                  \
+                for (uint32_t iic = 0; iic < IC; iic++) {                                                        \
+                    float *       vdst = srcb + (size_t) (iic * KH + ikh) * IW;                                  \
+                    const dma_addr_t vsrc = ok                                                                   \
+                        ? (src_data + (size_t) ((in * IC + iic) * IH + iih) * IW * sizeof(float))                \
+                        : src_data;                                                                              \
+                    dma_queue_push(dma_q, dma_make_data(vdst, vsrc),                                             \
+                                   IW * sizeof(float), IW * sizeof(float), IW * sizeof(float), ok ? 1 : 0);      \
+                }                                                                                                \
+            }                                                                                                    \
+            for (uint32_t i = 0; i < IC * KH; i++)                                                               \
+                dma_queue_pop(dma_q);                                                                            \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                \
+            for (uint32_t iow = 0; iow < OW; iow++) {                                                            \
+                DST_CTYPE * dst_patch = dstb + (uint64_t) iow * patch_stride;                                    \
+                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                        \
+                    int32_t iih = (int32_t) ioh * (int32_t) KH + (int32_t) ikh;                                  \
+                    for (uint32_t iic = 0; iic < IC; iic++) {                                                    \
+                        DST_CTYPE * out_run = dst_patch + iic * (KH * KW) + ikh * KW;                            \
+                        if (iih < 0 || iih >= (int32_t) IH) {                                                    \
+                            SPLAT_FN(out_run, 0.0f, KW);                                                         \
+                            continue;                                                                            \
+                        }                                                                                        \
+                        const float * src_run = srcb + ((uint64_t) (iic * KH + ikh)) * IW + (uint64_t) iow * KW; \
+                        COPY_FN((uint8_t *) out_run, (const uint8_t *) src_run, KW);                             \
+                    }                                                                                            \
+                }                                                                                                \
+            }                                                                                                    \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                 \
+            const dma_addr_t ddr_row = dst_data + (size_t) (in * OH + ioh) * OW * patch_stride * (DST_ELEM);     \
+            dma_queue_push(dma_q, dma_make_data(ddr_row, dstb),                                                  \
+                           OW * patch_stride * (DST_ELEM), OW * patch_stride * (DST_ELEM),                       \
+                           OW * patch_stride * (DST_ELEM), 1);                                                   \
+            dma_queue_flush(dma_q);                                                                              \
+        }                                                                                                        \
     }
 
 IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_thread,     __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "pe-dma-f16")
@@ -496,10 +498,6 @@ int op_im2col(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
-    }
-
     const int32_t  is_2D         = octx->op_params[6] == 1;
     const uint32_t N             = is_2D ? src1->ne[3] : src1->ne[2];
     const uint32_t OH            = is_2D ? dst->ne[2] : 1;
@@ -571,10 +569,12 @@ int op_im2col(struct htp_ops_context * octx) {
         }
     }
     // Fall through to pure-DDR.
-
-
     if (npatches == 0) {
         return HTP_STATUS_OK;
+    }
+
+    if (htp_tensor_is_extended(src1) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
     }
 
     if (dst->type == HTP_TYPE_F16) {

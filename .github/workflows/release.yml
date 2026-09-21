@@ -330,13 +330,13 @@ jobs:
             defines: '-DGGML_CUDA_CUB_3DOT2=ON'
           - build: 'x64'
             os: ubuntu-24.04
-            cuda: '13.3.1'
-            label: '13.3'
+            cuda: '13.4.1'
+            label: '13.4'
             defines: ''
           - build: 'arm64'
             os: ubuntu-24.04-arm
-            cuda: '13.3.1'
-            label: '13.3'
+            cuda: '13.4.1'
+            label: '13.4'
             defines: ''
 
     runs-on: ${{ matrix.os }}
@@ -1854,8 +1854,8 @@ jobs:
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
             - [Ubuntu x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz) - [CUDA 12.8 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-12.8-x64.tar.gz)
-            - [Ubuntu x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-x64.tar.gz)
-            - [Ubuntu arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz) - [CUDA 13.3 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.3-arm64.tar.gz)
+            - [Ubuntu x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-x64.tar.gz) - [CUDA 13.4 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-x64.tar.gz)
+            - [Ubuntu arm64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-arm64.tar.gz) - [CUDA 13.4 libraries](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-${{ steps.tag.outputs.name }}-bin-ubuntu-cuda-13.4-arm64.tar.gz)
             - [Ubuntu x64 (ROCm 10.0)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-10.0-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)

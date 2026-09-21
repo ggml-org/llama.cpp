@@ -23,7 +23,12 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,         hparams.indexer_top_k);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks);
-    msa_p = { (int) hparams.indexer_block_size, (int) hparams.indexer_top_k, (int) hparams.indexer_local_blocks };
+
+    msa_p = {
+        /*.blk          =*/ (int) hparams.indexer_block_size,
+        /*.topk_blocks  =*/ (int) hparams.indexer_top_k,
+        /*.local        =*/ (int) hparams.indexer_local_blocks,
+    };
 
     GGML_ASSERT(hparams.indexer_block_size > 0); // avoid div by zero
 
