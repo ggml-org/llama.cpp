@@ -650,6 +650,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GEMMA3N   = auto()
     GEMMA3    = auto()
     QWEN3VL   = auto()
+    LING3VL   = auto()
     STEP3VL   = auto()
     COGVLM    = auto()
 
@@ -1407,6 +1408,7 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
     VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
     VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
     VISION_PROJECTOR_TYPE.QWEN3VL:   "qwen3vl_merger",
+    VISION_PROJECTOR_TYPE.LING3VL:   "ling3vl",
     VISION_PROJECTOR_TYPE.STEP3VL:   "step3vl",
 }
 
@@ -5825,6 +5827,7 @@ class VisionProjectorType:
     QWEN25VL = "qwen2.5vl_merger"
     EXAONE4_5 = "exaone4_5"
     QWEN3VL = "qwen3vl_merger"
+    LING3VL = "ling3vl"
     STEP3VL = "step3vl"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"

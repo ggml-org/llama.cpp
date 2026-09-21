@@ -694,6 +694,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_LING3VL:
             case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
