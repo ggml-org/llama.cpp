@@ -898,60 +898,6 @@ bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor) {
     return ctx->is_remote;
 }
 
-bool ggml_openvino_buffer_is_external(const ggml_tensor * tensor) {
-    if (tensor == nullptr || tensor->buffer == nullptr || !ggml_backend_buffer_is_openvino(tensor->buffer)) {
-        return false;
-    }
-    auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
-    return ctx->external_memory;
-}
-
-size_t ggml_openvino_buffer_release_external_pages(const ggml_tensor * tensor) {
-    if (tensor == nullptr || tensor->buffer == nullptr || !ggml_backend_buffer_is_openvino(tensor->buffer)) {
-        return 0;
-    }
-
-    auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
-    if (!ctx->external_memory || ctx->data == nullptr || ctx->size == 0) {
-        return 0;
-    }
-
-#ifdef _WIN32
-    // VirtualUnlock removes unlocked pages from the process working set and
-    // reports ERROR_NOT_LOCKED. The file mapping remains valid and refaultable.
-    SetLastError(ERROR_SUCCESS);
-    const BOOL unlocked = VirtualUnlock(ctx->data, ctx->size);
-    const DWORD error = GetLastError();
-    if (!unlocked && error != ERROR_NOT_LOCKED) {
-        GGML_LOG_WARN("%s: VirtualUnlock(%zu bytes) failed: error %lu\n", __func__, ctx->size,
-                      static_cast<unsigned long>(error));
-        return 0;
-    }
-    // Windows has no reliable mapped-file equivalent of MADV_DONTNEED.
-    // Trim the current process after identifying the external GGUF range;
-    // mappings remain valid and pages required later fault back on demand.
-    if (!SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1))) {
-        GGML_LOG_WARN("%s: SetProcessWorkingSetSize failed: error %lu\n", __func__,
-                      static_cast<unsigned long>(GetLastError()));
-        return 0;
-    }
-#else
-    const long page_size = sysconf(_SC_PAGESIZE);
-    if (page_size <= 0) {
-        return 0;
-    }
-    const uintptr_t page_mask = static_cast<uintptr_t>(page_size - 1);
-    const uintptr_t begin = reinterpret_cast<uintptr_t>(ctx->data) & ~page_mask;
-    const uintptr_t end = (reinterpret_cast<uintptr_t>(ctx->data) + ctx->size + page_mask) & ~page_mask;
-    if (madvise(reinterpret_cast<void *>(begin), end - begin, MADV_DONTNEED) != 0) {
-        GGML_LOG_WARN("%s: madvise(%zu bytes) failed: %s\n", __func__, ctx->size, strerror(errno));
-        return 0;
-    }
-#endif
-
-    return ctx->size;
-}
-
 void ggml_openvino_buffer_register_extra(ggml_tensor * tensor, ggml_openvino_extra_base * extra) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(tensor->buffer != nullptr);
