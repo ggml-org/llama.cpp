@@ -71,6 +71,7 @@ extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
 extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_graph_eviction_timeout;
 
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -497,12 +498,13 @@ struct ggml_backend_sycl_context {
 
     ggml_sycl_graph * sycl_graph(const void * first_node_ptr) {
         const int64_t time_now = ggml_time_us();
+        const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
 
-        // sweep every 5s, evicting graphs unused for >=10s
-        if (time_now - last_graph_eviction_sweep >= 5'000'000) {
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout
+        if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
             last_graph_eviction_sweep = time_now;
             for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
-                if (time_now - it->second->last_used_time >= 10'000'000) {
+                if (time_now - it->second->last_used_time >= eviction_timeout_us) {
                     it = sycl_graphs.erase(it);
                 } else {
                     ++it;
