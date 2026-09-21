@@ -513,6 +513,192 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     vec_case(ctx, dst);
 }
 
+
+namespace {
+struct mma_span_launch {
+    dim3 blocks;
+    int ntiles_x = 0;
+    int ntiles_z_gqa = 0;
+    int ntiles_dst = 0;
+    int ntiles_kv = 0;
+    int gqa_ratio = 0;
+    size_t shared_bytes = 0;
+    size_t span_shared_offset = 0;
+    size_t descriptor_bytes = 0;
+    size_t fixup_bytes = 0;
+    size_t bytes = 0;
+};
+
+// Reproduce stock Stream-K planning while accounting for descriptors in caller-owned scratch.
+static bool mma_span_launch_make(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * dst,
+        size_t span_count, mma_span_launch & output) {
+    if (!dst || dst->op != GGML_OP_FLASH_ATTN_EXT || !span_count || span_count > INT_MAX) return false;
+    const auto * q = dst->src[0];
+    const auto * k = dst->src[1];
+    const auto * v = dst->src[2];
+    const auto * mask = dst->src[3];
+    if (!q || !k || !v || !mask || dst->src[4] ||
+            q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16 ||
+            dst->type != GGML_TYPE_F32 || q->ne[0] != 256 || v->ne[0] != 256 ||
+            k->ne[0] != 256 || (q->ne[1] != 3 && q->ne[1] != 4) ||
+            q->ne[2] != 4 || k->ne[2] != 2 || v->ne[2] != 2 ||
+            q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 ||
+            k->ne[1] != v->ne[1] || k->ne[1] <= 0 || k->ne[1] > INT_MAX ||
+            mask->type != GGML_TYPE_F16 || mask->ne[0] < k->ne[1] ||
+            mask->ne[1] < q->ne[1] || mask->ne[2] != 1 || mask->ne[3] != 1) return false;
+    float params[3];
+    memcpy(params,dst->op_params,sizeof(params));
+    if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
+
+    constexpr int DKQ = 256, DV = 256, ncols1 = 4, ncols2 = 2, ncols = 8;
+    const int cc = ggml_cuda_info().devices[ctx.device].cc;
+    if (!turing_mma_available(cc)) return false;
+    const int nthreads = ggml_cuda_fattn_mma_get_nthreads(DKQ,DV,ncols,cc);
+    const int nbatch_fa = ggml_cuda_fattn_mma_get_nbatch_fa(DKQ,DV,ncols,cc);
+    const int nbatch_K2 = ggml_cuda_fattn_mma_get_nbatch_K2(DKQ,DV,ncols,cc);
+    const int nbatch_V2 = ggml_cuda_fattn_mma_get_nbatch_V2(DKQ,DV,ncols,cc);
+    const int nbatch_combine = ggml_cuda_fattn_mma_get_nbatch_combine(DKQ,DV,ncols,cc);
+    const bool q_in_reg = ggml_cuda_fattn_mma_get_Q_in_reg(DKQ,DV,ncols,cc);
+    const int cols_per_warp = std::min(ncols,get_cols_per_warp(cc));
+    const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+    const int nwarps = nthreads/warp_size;
+    const int nstages = ggml_cuda_fattn_mma_get_nstages(DKQ,DV,ncols1,ncols2,cc);
+    const size_t shared_kv_one = size_t(nbatch_fa)*std::max(nbatch_K2+4,nbatch_V2+4)*sizeof(half2);
+    const size_t shared_kv_two = size_t(nbatch_fa)*(nbatch_K2+4+nbatch_V2+4)*sizeof(half2);
+    const size_t shared_kv = nstages <= 1 ? shared_kv_one : shared_kv_two;
+    const size_t shared_q = size_t(ncols)*(DKQ/2+4)*sizeof(half2);
+    const size_t shared_mask = size_t(ncols1)*(nbatch_fa/2+4)*sizeof(half2);
+    const size_t shared_combine = size_t(nwarps)*cols_per_warp*(nbatch_combine+4)*sizeof(half2);
+
+    mma_span_launch next;
+    next.shared_bytes = std::max(shared_combine,q_in_reg ?
+        std::max(shared_q,shared_kv+shared_mask) : shared_q+shared_kv+shared_mask);
+    if (span_count <= 3) {
+        next.span_shared_offset = (next.shared_bytes+15)/16*16;
+        next.shared_bytes = next.span_shared_offset+3*sizeof(ggml_cuda_kv_span);
+    }
+    next.ntiles_x = 1;
+    next.gqa_ratio = int(q->ne[2]/k->ne[2]);
+    next.ntiles_z_gqa = (next.gqa_ratio+ncols2-1)/ncols2;
+    next.ntiles_dst = next.ntiles_x*next.ntiles_z_gqa*int(k->ne[2])*int(q->ne[3]);
+    next.ntiles_kv = (int(k->ne[1])+nbatch_fa-1)/nbatch_fa;
+
+    fattn_kernel_t ordinary = flash_attn_ext_f16<DKQ,DV,ncols1,ncols2,false,false>;
+    CUDA_CHECK(cudaFuncSetAttribute(
+        ordinary,cudaFuncAttributeMaxDynamicSharedMemorySize,int(next.shared_bytes)));
+    int max_blocks_per_sm = 0;
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &max_blocks_per_sm,ordinary,nthreads,next.shared_bytes));
+    if (!max_blocks_per_sm) return false;
+    const int max_blocks = max_blocks_per_sm*ggml_cuda_info().devices[ctx.device].nsm;
+    const int tiles_nwaves = (next.ntiles_dst+max_blocks-1)/max_blocks;
+    const int tiles_efficiency = 100*next.ntiles_dst/(max_blocks*tiles_nwaves);
+    const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || tiles_efficiency < 75;
+    int blocks = next.ntiles_dst;
+    if (use_stream_k) {
+        const int raw = std::min(max_blocks,next.ntiles_kv*next.ntiles_dst);
+        const int rounded = (raw/next.ntiles_dst)*next.ntiles_dst;
+        const int loss = rounded > 0 ? 100*(raw-rounded)/raw : 100;
+        blocks = loss <= 5 ? rounded : raw;
+    }
+    if (blocks <= 0) return false;
+    next.blocks = {unsigned(blocks),1,1};
+    if (span_count > (SIZE_MAX-127)/sizeof(ggml_cuda_kv_span)) return false;
+    next.descriptor_bytes = (span_count*sizeof(ggml_cuda_kv_span)+127)/128*128;
+    if (next.ntiles_dst%blocks != 0) {
+        const size_t entries = size_t(blocks)*ncols*(2+DV/2);
+        if (entries > (SIZE_MAX-next.descriptor_bytes)/sizeof(float2)) return false;
+        next.fixup_bytes = entries*sizeof(float2);
+    }
+    next.bytes = next.descriptor_bytes+next.fixup_bytes;
+    output = next;
+    return true;
+}
+} // namespace
+
+size_t ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * dst, size_t spans) {
+    mma_span_launch plan;
+    return mma_span_launch_make(ctx,dst,spans,plan) ? plan.bytes : 0;
+}
+
+bool ggml_cuda_flash_attn_ext_mma_f16_spans(
+        ggml_backend_cuda_context & ctx, ggml_tensor * dst,
+        const ggml_cuda_kv_span * spans, size_t count,
+        void * workspace, size_t workspace_bytes) {
+    mma_span_launch plan;
+    if (!spans || !workspace || !mma_span_launch_make(ctx,dst,count,plan) ||
+            workspace_bytes < plan.bytes || uintptr_t(workspace)%128) return false;
+    constexpr int DKQ = 256, DV = 256, ncols1 = 4, ncols2 = 2;
+    constexpr bool softcap = false, v_is_k = false;
+    auto kernel = flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k>;
+    CUDA_CHECK(cudaFuncSetAttribute(
+        kernel,cudaFuncAttributeMaxDynamicSharedMemorySize,int(plan.shared_bytes)));
+    auto * device_spans = static_cast<ggml_cuda_kv_span *>(workspace);
+    CUDA_CHECK(cudaMemcpyAsync(
+        device_spans,spans,count*sizeof(*spans),cudaMemcpyHostToDevice,ctx.stream()));
+    auto * meta = reinterpret_cast<float2 *>(static_cast<char *>(workspace)+plan.descriptor_bytes);
+
+    auto * q = dst->src[0];
+    auto * k = dst->src[1];
+    auto * v = dst->src[2];
+    auto * mask = dst->src[3];
+    float scale;
+    memcpy(&scale,dst->op_params,sizeof(scale));
+    const uint3 ne01 = init_fastdiv_values(q->ne[1]);
+    const int nthreads = ggml_cuda_fattn_mma_get_nthreads(DKQ,DV,ncols1*ncols2,ggml_cuda_info().devices[ctx.device].cc);
+    const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+    const ggml_cuda_kernel_launch_params launch(
+        plan.blocks,{unsigned(warp_size),unsigned(nthreads/warp_size),1},
+        plan.shared_bytes,ctx.stream());
+    ggml_cuda_kernel_launch(kernel,launch,
+        static_cast<const char *>(q->data),spans[0].k,spans[0].v,
+        static_cast<const char *>(mask->data),(const char *)nullptr,(const int *)nullptr,
+        static_cast<float *>(dst->data),meta,
+        scale,0.0f,1.0f,1.0f,uint32_t(1),0.0f,
+        int32_t(q->ne[0]),ne01,int32_t(q->ne[2]),int32_t(q->ne[3]),
+        int32_t(q->nb[1]),int32_t(q->nb[2]),int32_t(q->nb[3]),
+        int32_t(k->ne[0]),int32_t(k->ne[1]),int32_t(k->ne[2]),int32_t(k->ne[3]),
+        int32_t(k->nb[1]),int32_t(k->nb[2]),int64_t(k->nb[3]),
+        int32_t(v->nb[1]),int32_t(v->nb[2]),int64_t(v->nb[3]),
+        int32_t(mask->ne[1]),int32_t(mask->ne[2]),int32_t(mask->ne[3]),
+        int32_t(mask->nb[1]),int32_t(mask->nb[2]),int64_t(mask->nb[3]),
+        device_spans,int(count),int(plan.span_shared_offset));
+    CUDA_CHECK(cudaGetLastError());
+
+    const int blocks = int(plan.blocks.x);
+    if (blocks%plan.ntiles_dst == 0 && blocks > plan.ntiles_dst) {
+        const int bpt = blocks/plan.ntiles_dst;
+        const uint3 fd0 = init_fastdiv_values(plan.ntiles_x*plan.ntiles_z_gqa*k->ne[2]);
+        const uint3 fd1 = init_fastdiv_values(plan.ntiles_x*plan.ntiles_z_gqa);
+        const uint3 fd2 = init_fastdiv_values(plan.ntiles_x);
+        const ggml_cuda_kernel_launch_params fixup(
+            {unsigned(plan.ntiles_dst),ncols1,ncols2},{DV,1,1},0,ctx.stream());
+        ggml_cuda_kernel_launch(
+            flash_attn_stream_k_fixup_uniform<DV,ncols1,ncols2>,fixup,
+            static_cast<float *>(dst->data),meta,
+            q->ne[1],q->ne[2],k->ne[2],blocks,
+            plan.gqa_ratio,bpt,fd0,fd1,fd2);
+    } else if (plan.ntiles_dst%blocks != 0) {
+        const int total_work = plan.ntiles_kv*plan.ntiles_dst;
+        const uint3 fd0 = init_fastdiv_values(
+            plan.ntiles_kv*plan.ntiles_x*plan.ntiles_z_gqa*k->ne[2]);
+        const uint3 fd1 = init_fastdiv_values(
+            plan.ntiles_kv*plan.ntiles_x*plan.ntiles_z_gqa);
+        const uint3 fd2 = init_fastdiv_values(plan.ntiles_kv*plan.ntiles_x);
+        const uint3 fd3 = init_fastdiv_values(plan.ntiles_kv);
+        const ggml_cuda_kernel_launch_params fixup(
+            {unsigned(blocks),ncols1,ncols2},{DV,1,1},0,ctx.stream());
+        ggml_cuda_kernel_launch(
+            flash_attn_stream_k_fixup_general<DV,ncols1,ncols2>,fixup,
+            static_cast<float *>(dst->data),meta,
+            q->ne[1],q->ne[2],plan.gqa_ratio,total_work,fd0,fd1,fd2,fd3);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+
 // Best FlashAttention kernel for a specific GPU:
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE    =   0,

@@ -59,6 +59,46 @@ fattn_kernel_t ggml_cuda_kv_stream_vector_kernel_@KV_STREAM_KEY@(ggml_type value
 #endif
 }
 
+// Fixed one/two/three-span vector specialization keeps one stock reduction and launch.
+ggml_kv_vector_span_kernel_t ggml_cuda_kv_stream_vector_span_kernel_@KV_STREAM_KEY@(
+        ggml_type value, uint32_t queries, uint32_t spans) {
+#ifdef GGML_CUDA_NO_FA
+    GGML_UNUSED(value); GGML_UNUSED(queries); GGML_UNUSED(spans);
+    return nullptr;
+#elif defined(GGML_CUDA_FA_ALL_QUANTS)
+#define KV_STREAM_VALUE_N(V, N) case GGML_TYPE_##V: return queries == 1 ? \
+            flash_attn_ext_vec_spans<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_##V,N> : nullptr;
+#define KV_STREAM_VALUES(N) \
+        KV_STREAM_VALUE_N(F16, N) \
+        KV_STREAM_VALUE_N(BF16, N) \
+        KV_STREAM_VALUE_N(Q4_0, N) \
+        KV_STREAM_VALUE_N(Q4_1, N) \
+        KV_STREAM_VALUE_N(Q5_0, N) \
+        KV_STREAM_VALUE_N(Q5_1, N) \
+        KV_STREAM_VALUE_N(Q8_0, N)
+        if (spans == 1) { switch (value) { KV_STREAM_VALUES(1) default: return nullptr; } }
+        if (spans == 2) { switch (value) { KV_STREAM_VALUES(2) default: return nullptr; } }
+        if (spans == 3) { switch (value) { KV_STREAM_VALUES(3) default: return nullptr; } }
+        if (spans == 4) { switch (value) { KV_STREAM_VALUES(4) default: return nullptr; } }
+#undef KV_STREAM_VALUES
+#undef KV_STREAM_VALUE_N
+    return nullptr;
+#elif @KV_STREAM_DEFAULT_NATIVE@
+#define KV_STREAM_NATIVE(N) return queries == 1 ? \
+        flash_attn_ext_vec_spans<256,1,GGML_TYPE_@KV_STREAM_KEY@,GGML_TYPE_@KV_STREAM_KEY@,N> : nullptr
+    if (value != GGML_TYPE_@KV_STREAM_KEY@) return nullptr;
+    if (spans == 1) { KV_STREAM_NATIVE(1); }
+    if (spans == 2) { KV_STREAM_NATIVE(2); }
+    if (spans == 3) { KV_STREAM_NATIVE(3); }
+    if (spans == 4) { KV_STREAM_NATIVE(4); }
+#undef KV_STREAM_NATIVE
+    return nullptr;
+#else
+    GGML_UNUSED(value); GGML_UNUSED(queries); GGML_UNUSED(spans);
+    return nullptr;
+#endif
+}
+
 // One translation unit per key type keeps native-pair compilation parallel and bounded.
 ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel_@KV_STREAM_KEY@(ggml_type value, uint32_t queries) {
 #ifdef GGML_CUDA_NO_FA

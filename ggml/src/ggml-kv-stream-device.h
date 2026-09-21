@@ -48,9 +48,12 @@ struct ggml_kv_stream_partial_ops {
     // No allocation; scratch is caller-owned and retains per-thread state until the final span publishes output.
     bool (*resume)(ggml_backend_t backend, const ggml_tensor * attention, ggml_backend_buffer_t workspace,
             const ggml_kv_stream_resume_plan & plan, size_t tokens, size_t first, bool last) = nullptr;
-    // Consume a retained stage-7 span plan without gathering or resetting vector softmax state.
+    // Consume a retained stage-7 span plan without gathering or resetting attention state.
     bool (*spans)(ggml_backend_t backend, const ggml_tensor * attention,
             ggml_kv_stream_span_plan_t spans, ggml_backend_buffer_t workspace) = nullptr;
+    // Version 7: exact bounded workspace for either vector or F16 MMA span execution.
+    bool (*spans_workspace)(ggml_backend_t backend, const ggml_tensor * attention,
+            ggml_kv_stream_span_plan_t spans, size_t & bytes) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 

@@ -1,5 +1,6 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
+#include "kv-stream-span.h"
 
 static int ggml_cuda_fattn_vec_get_nthreads_host(const int cc) {
     return 128;
@@ -39,7 +40,8 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
-        float * resume_state, int chunk_first, int chunk_end, bool reset_state, bool finish_state) {
+        float * resume_state, int chunk_first, int chunk_end, bool reset_state, bool finish_state,
+        int work_y, int work_count, int output_y, int output_count) {
     // Ring reuse records an event after resumed launches, so they must not signal completion before their final read.
     if constexpr (!resumable) ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
@@ -143,7 +145,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     constexpr int state_stride = ncols*query_state_stride;
     float * saved = nullptr;
     if constexpr (resumable) {
-        saved = resume_state + (((size_t(blockIdx.z)*gridDim.x + blockIdx.x)*gridDim.y + blockIdx.y)*nthreads + tid)*state_stride;
+        saved = resume_state + (((size_t(blockIdx.z)*gridDim.x + blockIdx.x)*output_count + output_y)*nthreads + tid)*state_stride;
         if (!reset_state) {
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
@@ -268,15 +270,15 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
     }
 
     const int k_VKQ_max = resumable ? min(ne11,chunk_end) : (KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11);
-    const int first_owned = resumable ? chunk_first + ((int(blockIdx.y) - chunk_first/nthreads)%int(gridDim.y) + int(gridDim.y))%int(gridDim.y)*nthreads : int(blockIdx.y)*nthreads;
+    const int first_owned = resumable ? chunk_first + ((work_y - chunk_first/nthreads)%work_count + work_count)%work_count*nthreads : work_y*nthreads;
     const int local_first = first_owned - (resumable ? chunk_first : 0);
     K     += local_first * nb11;
     V     += local_first * nb21;
     // K/V addresses are span-local, while the causal mask retains global token coordinates.
     maskh += resumable ? first_owned : local_first;
-    for (int k_VKQ_0 = first_owned; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nthreads,
+    for (int k_VKQ_0 = first_owned; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += work_count*nthreads,
              // Increment pointers after each loop:
-             K += gridDim.y*nthreads*nb11, V += gridDim.y*nthreads*nb21, maskh += gridDim.y*nthreads) {
+             K += work_count*nthreads*nb11, V += work_count*nthreads*nb21, maskh += work_count*nthreads) {
 
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]; // KQ in registers.
@@ -421,7 +423,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
         }
     }
 
-    if (sinks && blockIdx.y == 0) {
+    if (sinks && output_y == 0) {
         const float sink = ((const float *) sinks)[head];
 
 #pragma unroll
@@ -540,10 +542,10 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
                         dst_val += float(KQ[w*V_cols_per_iter*D + v*D + i0 + tid]);
                     }
                 }
-                if (gridDim.y == 1) {
+                if (output_count == 1) {
                     dst_val /= KQ_sum[j_VKQ];
                 }
-                dst[(((sequence*int(ne01.z) + ic0 + j_VKQ)*ne02 + head)*gridDim.y + blockIdx.y)*D + i0 + tid] = dst_val;
+                dst[(((sequence*int(ne01.z) + ic0 + j_VKQ)*ne02 + head)*output_count + output_y)*D + i0 + tid] = dst_val;
             }
         }
 
@@ -553,8 +555,8 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 
     }
 
-    if (gridDim.y != 1 && tid < ncols && (ncols == 1 || ic0 + tid < int(ne01.z))) {
-        dst_meta[((sequence*int(ne01.z) + ic0 + tid)*ne02 + head)*gridDim.y + blockIdx.y] = make_float2(KQ_max[tid], KQ_sum[tid]);
+    if (output_count != 1 && tid < ncols && (ncols == 1 || ic0 + tid < int(ne01.z))) {
+        dst_meta[((sequence*int(ne01.z) + ic0 + tid)*ne02 + head)*output_count + output_y] = make_float2(KQ_max[tid], KQ_sum[tid]);
     }
 #else
     GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale,
@@ -565,7 +567,9 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
               nb11, nb12, nb13,
               nb21, nb22, nb23,
               ne31, ne32, ne33,
-              nb31, nb32, nb33);
+              nb31, nb32, nb33,
+        resume_state,chunk_first,chunk_end,reset_state,finish_state,
+        work_y,work_count,output_y,output_count);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }
@@ -596,7 +600,7 @@ static __global__ void flash_attn_ext_vec(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33) {
     flash_attn_ext_vec_impl<D,ncols,type_K,type_V,use_logit_softcap,false>(
-        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31, nb32, nb33, nullptr, 0, 0, true, true);
+        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,nullptr,0,0,true,true,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y));
 }
 
 // Save per-thread accumulators before native reductions; resume the same logical tile ownership.
@@ -626,7 +630,64 @@ static __global__ void flash_attn_ext_vec_resume(
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * state, int first, int end, bool reset, bool finish) {
     flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true>(
-        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31, nb32, nb33, state, first, end, reset, finish);
+        Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,state,first,end,reset,finish,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y));
+
+}
+
+// Map each output partial wholly onto one physical span, then run the untouched stock-vector body.
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, int nspans>
+__launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
+static __global__ void flash_attn_ext_vec_spans(
+        const char * Q_ptr, const char * K_ptr, const char * V_ptr, const char * mask_ptr,
+        const char * sinks_ptr, const int * KV_max_ptr, float * dst_ptr, float2 * dst_meta_ptr,
+        const float scale, const float max_bias, const float m0, const float m1,
+        const uint32_t n_head_log2, const float logit_softcap,
+        const int32_t ne00, const uint3 ne01, const int32_t ne02, const int32_t ne03,
+        const int32_t nb01, const int32_t nb02, const int32_t nb03,
+        const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
+        const int32_t nb11, const int32_t nb12, const int64_t nb13,
+        const int32_t nb21, const int32_t nb22, const int64_t nb23,
+        const int32_t ne31, const int32_t ne32, const int32_t ne33,
+        const int32_t nb31, const int32_t nb32, const int64_t nb33,
+        const ggml_cuda_kv_span * spans, int span_count,
+        int splits0, int splits1, int splits2, int splits3) {
+    GGML_UNUSED_VARS(K_ptr,V_ptr,KV_max_ptr,ne11,nb11,nb12,nb13,nb21,nb22,nb23,span_count);
+    int span_index = 0;
+    int span_begin = 0;
+    int span_splits = splits0;
+    if constexpr (nspans > 1) {
+        if (int(blockIdx.y) >= splits0) {
+            span_index = 1;
+            span_begin = splits0;
+            span_splits = splits1;
+        }
+    }
+    if constexpr (nspans > 2) {
+        if (int(blockIdx.y) >= splits0+splits1) {
+            span_index = 2;
+            span_begin = splits0+splits1;
+            span_splits = splits2;
+        }
+    }
+    if constexpr (nspans > 3) {
+        if (int(blockIdx.y) >= splits0+splits1+splits2) {
+            span_index = 3;
+            span_begin = splits0+splits1+splits2;
+            span_splits = splits3;
+        }
+    }
+    const auto physical = spans[span_index];
+    const char * span_mask = mask_ptr + int64_t(physical.first)*sizeof(half);
+    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,false>(
+        Q_ptr,physical.k,physical.v,span_mask,sinks_ptr,nullptr,dst_ptr,dst_meta_ptr,
+        scale,max_bias,m0,m1,n_head_log2,logit_softcap,
+        ne00,ne01,ne02,ne03,nb01,nb02,nb03,
+        ne10,physical.tokens,ne12,ne13,
+        int32_t(physical.k_token_stride),int32_t(physical.k_head_stride),0,
+        int32_t(physical.v_token_stride),int32_t(physical.v_head_stride),0,
+        ne31,ne32,ne33,nb31,nb32,nb33,
+        nullptr,0,0,true,true,
+        int(blockIdx.y)-span_begin,span_splits,int(blockIdx.y),int(gridDim.y));
 }
 
 #ifdef __clang__

@@ -1,7 +1,21 @@
 #pragma once
 #include "fattn-common.cuh"
+#include "kv-stream-span.h"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+
+using ggml_kv_vector_span_kernel_t = void (*)(
+        const char * Q_ptr, const char * K_ptr, const char * V_ptr, const char * mask_ptr,
+        const char * sinks_ptr, const int * KV_max_ptr, float * dst_ptr, float2 * dst_meta_ptr,
+        float scale, float max_bias, float m0, float m1, uint32_t n_head_log2, float logit_softcap,
+        int32_t ne00, uint3 ne01, int32_t ne02, int32_t ne03,
+        int32_t nb01, int32_t nb02, int32_t nb03,
+        int32_t ne10, int32_t ne11, int32_t ne12, int32_t ne13,
+        int32_t nb11, int32_t nb12, int64_t nb13,
+        int32_t nb21, int32_t nb22, int64_t nb23,
+        int32_t ne31, int32_t ne32, int32_t ne33,
+        int32_t nb31, int32_t nb32, int64_t nb33,
+        const ggml_cuda_kv_span * spans, int span_count, int splits0, int splits1, int splits2, int splits3);
 
 using ggml_kv_resume_kernel_t = void (*)(
         const char * Q_ptr,
@@ -43,6 +57,15 @@ KV_VECTOR_DECLARE(Q5_0)
 KV_VECTOR_DECLARE(Q5_1)
 KV_VECTOR_DECLARE(Q8_0)
 #undef KV_VECTOR_DECLARE
+#define KV_VECTOR_SPAN_DECLARE(K) ggml_kv_vector_span_kernel_t ggml_cuda_kv_stream_vector_span_kernel_##K(ggml_type value, uint32_t queries, uint32_t spans);
+KV_VECTOR_SPAN_DECLARE(F16)
+KV_VECTOR_SPAN_DECLARE(BF16)
+KV_VECTOR_SPAN_DECLARE(Q4_0)
+KV_VECTOR_SPAN_DECLARE(Q4_1)
+KV_VECTOR_SPAN_DECLARE(Q5_0)
+KV_VECTOR_SPAN_DECLARE(Q5_1)
+KV_VECTOR_SPAN_DECLARE(Q8_0)
+#undef KV_VECTOR_SPAN_DECLARE
 static inline fattn_kernel_t ggml_cuda_kv_stream_vector_kernel(ggml_type key, ggml_type value, uint32_t queries) {
     switch (key) {
 #define KV_VECTOR_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_vector_kernel_##K(value, queries);
@@ -57,6 +80,22 @@ static inline fattn_kernel_t ggml_cuda_kv_stream_vector_kernel(ggml_type key, gg
         default: return nullptr;
     }
 }
+static inline ggml_kv_vector_span_kernel_t ggml_cuda_kv_stream_vector_span_kernel(
+        ggml_type key, ggml_type value, uint32_t queries, uint32_t spans) {
+    switch (key) {
+#define KV_VECTOR_SPAN_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_vector_span_kernel_##K(value, queries, spans);
+        KV_VECTOR_SPAN_CASE(F16)
+        KV_VECTOR_SPAN_CASE(BF16)
+        KV_VECTOR_SPAN_CASE(Q4_0)
+        KV_VECTOR_SPAN_CASE(Q4_1)
+        KV_VECTOR_SPAN_CASE(Q5_0)
+        KV_VECTOR_SPAN_CASE(Q5_1)
+        KV_VECTOR_SPAN_CASE(Q8_0)
+#undef KV_VECTOR_SPAN_CASE
+        default: return nullptr;
+    }
+}
+
 static inline ggml_kv_resume_kernel_t ggml_cuda_kv_stream_resume_kernel(ggml_type key, ggml_type value, uint32_t queries) {
     switch (key) {
 #define KV_RESUME_CASE(K) case GGML_TYPE_##K: return ggml_cuda_kv_stream_resume_kernel_##K(value, queries);
