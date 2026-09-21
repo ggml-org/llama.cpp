@@ -338,6 +338,10 @@ enum ggml_cgraph_eval_order {
     GGML_CGRAPH_EVAL_ORDER_COUNT
 };
 
+#ifndef GGML_SCHED_MAX_COPIES
+#define GGML_SCHED_MAX_COPIES 4
+#endif
+
 struct ggml_cgraph {
     int size;    // maximum number of nodes/leafs/grads/grad_accs
     int n_nodes; // number of nodes currently in use
@@ -356,6 +360,8 @@ struct ggml_cgraph {
     // an optional identifier that can be utilized to recognize same graphs if two non-zero values match
     // a value of 0 means it is not set and should be ignored
     uint64_t uid;
+
+    int input_slot; // input buffer variant for backend graph caches; independent of uid
 };
 
 // returns a slice of cgraph with nodes [i0, i1)
