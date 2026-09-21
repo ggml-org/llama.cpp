@@ -1607,6 +1607,13 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("BLOCK_SIZE=1u");
                 variant += "_i32";
                 break;
+            case GGML_TYPE_BF16:
+                defines.push_back("BF16");
+                defines.push_back("SRC_TYPE=u32");
+                defines.push_back("DST_TYPE=f32");
+                defines.push_back("BLOCK_SIZE=1u");
+                variant += "_bf16";
+                break;
             default:
                 {
                     std::string type_upper = type_str;
@@ -1997,12 +2004,20 @@ class ggml_webgpu_shader_lib {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
                 defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_F32");
                 variant += "_f32";
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
                 defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_F16");
                 variant += "_f16";
+                break;
+            case GGML_TYPE_BF16:
+                defines.push_back("SRC0_INNER_TYPE=u32");
+                defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_BF16");
+                variant += "_bf16";
                 break;
             default:
                 {
@@ -2154,7 +2169,7 @@ class ggml_webgpu_shader_lib {
         switch (context.src0->type) {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
-                defines.push_back("FLOAT");
+                defines.push_back("TYPE_F32");
                 defines.push_back("MUL_ACC_FLOAT");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
@@ -2162,11 +2177,19 @@ class ggml_webgpu_shader_lib {
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
-                defines.push_back("FLOAT");
+                defines.push_back("TYPE_F16");
                 defines.push_back("MUL_ACC_FLOAT");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
                 variant += "_f16";
+                break;
+            case GGML_TYPE_BF16:
+                defines.push_back("SRC0_INNER_TYPE=u32");
+                defines.push_back("TYPE_BF16");
+                defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+                defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                variant += "_bf16";
                 break;
             default:
                 {
@@ -2338,13 +2361,22 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("SRC0_INNER_TYPE=f32");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                defines.push_back("TYPE_F32");
                 variant += "_f32";
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
                 defines.push_back("INIT_SRC0_SHMEM_FLOAT");
                 defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                defines.push_back("TYPE_F16");
                 variant += "_f16";
+                break;
+            case GGML_TYPE_BF16:
+                defines.push_back("SRC0_INNER_TYPE=u32");
+                defines.push_back("INIT_SRC0_SHMEM_FLOAT");
+                defines.push_back("INIT_SRC1_SHMEM_FLOAT");
+                defines.push_back("TYPE_BF16");
+                variant += "_bf16";
                 break;
             default:
                 {
@@ -2458,12 +2490,20 @@ class ggml_webgpu_shader_lib {
             case GGML_TYPE_F32:
                 defines.push_back("SRC0_INNER_TYPE=f32");
                 defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_F32");
                 variant += "_f32";
                 break;
             case GGML_TYPE_F16:
                 defines.push_back("SRC0_INNER_TYPE=f16");
                 defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_F16");
                 variant += "_f16";
+                break;
+            case GGML_TYPE_BF16:
+                defines.push_back("SRC0_INNER_TYPE=u32");
+                defines.push_back("MUL_ACC_FLOAT");
+                defines.push_back("TYPE_BF16");
+                variant += "_bf16";
                 break;
             default:
                 {
