@@ -17,6 +17,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf
 @ModelBase.example("XiaomiMiMo/MiMo-V2.5")
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
+    supports_mtp_export = True
 
     # MiMo V2-Flash, V2.5 and V2.5-Pro all ship 3 trained MTP layers under model.mtp.layers.{0,1,2}.
     # The HF config does not expose the count, so it's hardcoded to match the count found in the safetensors.
@@ -24,6 +25,9 @@ class MimoV2Model(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        if self.no_mtp:
+            return
 
         self.block_count = self.hparams["num_hidden_layers"] + self._n_nextn
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
@@ -146,7 +150,7 @@ class MimoV2Model(TextModel):
         n_head_kv_swa = self.hparams["swa_num_key_value_heads"]
         # Extend the per-layer pattern with SWA entries for the MTP blocks so the
         # runtime arrays (sized to extended block_count) are fully populated.
-        hybrid = list(self.hparams["hybrid_layer_pattern"]) + [1] * self._n_nextn
+        hybrid = list(self.hparams["hybrid_layer_pattern"]) + ([] if self.no_mtp else [1] * self._n_nextn)
         n_head_kv_arr = [n_head_kv_swa if use_swa == 1 else n_head_kv for use_swa in hybrid]
         self.gguf_writer.add_head_count_kv(n_head_kv_arr)
 
@@ -165,7 +169,21 @@ class MimoV2Model(TextModel):
         if v_scale is not None:
             self.gguf_writer.add_attn_value_scale(float(v_scale))
 
-        self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
+        if not self.no_mtp:
+            self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -176,7 +194,20 @@ class MimoV2Model(TextModel):
         if "attention_sink" in name and not name.endswith(".weight"):
             name += ".weight"
 
-        return super().filter_tensors((name, gen))
+        if (titem := super().filter_tensors((name, gen))) is None:
+            return None
+        name, gen = titem
+
+        is_mtp = (m := re.match(r"^model\.mtp\.layers\.", name)) is not None
+
+        if is_mtp and cls.no_mtp:
+            return None
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def modify_tensors(self, data_torch, name, bid):
         # Remap MTP/NextN tensors to additional layer slots so the standard tensor map handles them.
