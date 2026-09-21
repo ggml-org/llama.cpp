@@ -1563,6 +1563,75 @@ struct args_set_input_kq_mask {
     int64_t n_tps;
 };
 
+// optimize masking for unified-KV decode (one token per sequence): mark visible cells in a single cache scan
+template<typename T, bool is_2d>
+static bool set_input_kq_unified_decode(const args_set_input_kq_mask & args, T * data) {
+    const auto & ubatch  = args.ubatch;
+    const auto & v_cells = args.v_cells;
+
+    const int64_t n_kv = args.n_kv;
+
+    // fast path requires: a unified KV stream, and decode, with enough tokens to pay off.
+    if (v_cells.size() != 1 || args.n_stream != 1 || ubatch->n_tokens < 4 || ubatch->n_tokens != ubatch->n_seqs_unq) {
+        return false;
+    }
+
+    uint32_t query[64];
+    uint64_t active = 0;
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        const uint32_t seq_id = ubatch->seq_id[i][0];
+        if (seq_id >= 64 || (active & (UINT64_C(1) << seq_id))) {
+            return false;
+        }
+        query[seq_id] = i;
+        active |= UINT64_C(1) << seq_id;
+    }
+
+    const T mask_keep = llama_cast<T>(0.0f);
+    const T mask_drop = llama_cast<T>(-INFINITY);
+
+    // start fully masked, then unmask only the visible (cell, query) pairs found below;
+    // cells not owned by any sequence in this batch are never touched again after the fill.
+    std::fill(data, data + n_kv*ubatch->n_tokens, mask_drop);
+
+    const auto & cells = v_cells[0];
+    const llama_kv_cells::seq_set_t active_seqs(active);
+    for (uint32_t j = 0; j < n_kv; ++j) {
+        uint64_t selected = (cells.seq_get_all(j) & active_seqs).to_ullong();
+
+        // visit each active sequence that owns this cell (none for empty or idle-slot cells)
+        while (selected) {
+#if defined(__GNUC__) || defined(__clang__)
+            const uint32_t seq_id = __builtin_ctzll(selected);
+#else
+            uint32_t seq_id = 0;
+            while (!(selected & (UINT64_C(1) << seq_id))) {
+                ++seq_id;
+            }
+#endif
+            const uint32_t i = query[seq_id];
+            const llama_pos p0 = cells.pos_get(j);
+            const llama_pos p1 = ubatch->pos[i];
+            // Is the cell's token in the query token's past (or the token itself)?
+            bool keep = p0 <= p1;
+
+            // vision models (M-RoPE): all patches of an image have the same position, so p0 <= p1;
+            // can't tell them apart; use each patch's (row, col) to hide patches that come later.
+            if constexpr (is_2d) {
+                if (p0 == p1) {
+                    keep = !cells.ext_get(j).is_2d_gt(ubatch->pos[i + ubatch->n_tokens*2], ubatch->pos[i + ubatch->n_tokens]);
+                }
+            }
+            if (keep) {
+                data[n_kv*i + j] = mask_keep;
+            }
+            selected &= selected - 1;
+        }
+    }
+
+    return true;
+}
+
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data) {
   //const auto & hparams = args.hparams;
@@ -1580,6 +1649,12 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
     const T mask_keep = llama_cast<T>(0.0f);
     const T mask_drop = llama_cast<T>(-INFINITY);
+
+    if constexpr (causal && !swa && !alibi) {
+        if (set_input_kq_unified_decode<T, is_2d>(args, data)) {
+            return;
+        }
+    }
 
     // the min position in the batch for each sequence
     llama_pos seq_pos_min[LLAMA_MAX_SEQ];
