@@ -41,6 +41,9 @@
 	}: Props = $props();
 
 	const scrollClasses = $derived(limitToSingleRow ? 'first:ml-4 last:mr-4' : '');
+	// Carousel items must keep their width; wrapped attachments (message bubbles)
+	// shrink so wide images fit the bubble instead of overflowing it
+	const layoutClasses = $derived(limitToSingleRow ? 'flex-shrink-0' : 'min-w-0');
 
 	function toMcpResourceAttachment(
 		extra: DatabaseMessageExtraMcpResource,
@@ -92,7 +95,7 @@
 	/>
 {:else if item.isImage && item.preview}
 	<ChatAttachmentsListItemThumbnailImage
-		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
+		class="{layoutClasses} cursor-pointer {className} {scrollClasses}"
 		height={imageHeight}
 		id={item.id}
 		{imageClass}
