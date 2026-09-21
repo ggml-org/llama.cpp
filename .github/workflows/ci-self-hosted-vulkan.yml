@@ -1,0 +1,201 @@
+name: CI (self-hosted Vulkan backend)
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ci-self-hosted-vulkan.yml',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.comp',
+      '**/*.glsl'
+    ]
+
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/ci-self-hosted-vulkan.yml',
+      'ci/run.sh',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      'ggml/src/*',
+      'ggml/src/ggml-cpu/**',
+      'ggml/src/ggml-vulkan/**'
+    ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  gpu-vulkan-nvidia-cm:
+    # runs-on: "hf-jobs-t4-small:ubuntu26_04"
+    runs-on: [self-hosted, Linux, NVIDIA]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt update
+      #     sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   with:
+      #     restore: false
+      #     save: false
+
+      # - name: ccache-buckets-restore
+      #   uses: ./.github/actions/ccache-buckets
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm
+      #     folder: llama.cpp
+      #     hf_bucket: ggml-org/cache
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      # - name: ccache-buckets-save
+      #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      #   uses: ./.github/actions/ccache-buckets
+      #   env:
+      #     HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm
+      #     folder: llama.cpp
+      #     evict-old-files: 1d
+      #     hf_bucket: ggml-org/cache
+      #     save: true
+
+  gpu-vulkan-nvidia-cm2:
+    # runs-on: "hf-jobs-t4-small:ubuntu26_04"
+    runs-on: [self-hosted, Linux, NVIDIA, COOPMAT2]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      # - name: Install dependencies
+      #   run: |
+      #     sudo apt update
+      #     sudo apt install -y build-essential cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      # - name: ccache
+      #   uses: ggml-org/ccache-action@v1.2.24
+      #   with:
+      #     restore: false
+      #     save: false
+
+      # - name: ccache-buckets-restore
+      #   uses: ./.github/actions/ccache-buckets
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm2
+      #     folder: llama.cpp
+      #     hf_bucket: ggml-org/cache
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      # - name: ccache-buckets-save
+      #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      #   uses: ./.github/actions/ccache-buckets
+      #   env:
+      #     HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+      #   with:
+      #     key: self-hosted-vulkan-nvidia-cm2
+      #     folder: llama.cpp
+      #     evict-old-files: 1d
+      #     hf_bucket: ggml-org/cache
+      #     save: true
+
+  gpu-vulkan-apple:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  gpu-vulkan-intel-linux:
+    runs-on: [self-hosted, Linux, Intel]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  gpu-vulkan-intel-windows:
+    runs-on: [self-hosted, Windows, X64, Intel]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Test
+        id: ggml-ci
+        shell: C:\msys64\usr\bin\bash.exe --noprofile --norc -eo pipefail "{0}"
+        env:
+          MSYSTEM: UCRT64
+          CHERE_INVOKING: 1
+          PATH: C:\msys64\ucrt64\bin;C:\msys64\usr\bin;C:\Windows\System32;${{ env.PATH }}
+        run: |
+          vulkaninfo --summary
+          # Skip python related tests with GG_BUILD_LOW_PERF=1 since Windows MSYS2 UCRT64 currently fails to create
+          # a valid python environment for testing
+          LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
+
+  # TODO: provision AMD GPU machine
+  # amd-vulkan:
+  #   runs-on: [self-hosted, Linux, AMD]
+
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v6
+
+  #     - name: Test
+  #       id: ggml-ci
+  #       run: |
+  #         vulkaninfo --summary
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
