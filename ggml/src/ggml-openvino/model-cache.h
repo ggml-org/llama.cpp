@@ -7,12 +7,6 @@
 // After both blobs exist, GGML_OPENVINO_SELF_CONTAINED_MMAP=1 additionally wraps the
 // GGUF mmap instead of allocating the private OpenVINO model buffer. This mode is
 // import-only and fails clearly if either required blob is missing or invalid.
-// GGML_OPENVINO_SELF_CONTAINED_LAZY_IMPORT=1 narrows strict mmap warm runs to import
-// only the current phase blob, reducing peak working set at the cost of re-importing
-// on later phase switches.
-// GGML_OPENVINO_SELF_CONTAINED_RELEASE_MMAP_PAGES=1 drops resident GGUF mmap pages
-// immediately before a valid self-contained blob import while keeping the mapping
-// address valid for later on-demand faults.
 
 #include "ggml.h"
 
