@@ -328,7 +328,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
     //       a large value makes things deterministic since all data is selected by the indexer
     //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        UINT32_MAX);
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(131072));
 
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
