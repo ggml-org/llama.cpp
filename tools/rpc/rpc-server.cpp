@@ -12,9 +12,11 @@
 #  include <sys/stat.h>
 #endif
 #include <algorithm>
+#include <cinttypes>
 #include <clocale>
 #include <codecvt>
 #include <filesystem>
+#include <limits>
 #include <regex>
 #include <stdio.h>
 #include <string>
@@ -175,6 +177,7 @@ struct rpc_server_params {
     int                      port        = 50052;
     bool                     use_cache   = false;
     int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
+    uint64_t                 graph_cache_mib = 0;
     std::vector<std::string> devices;
 };
 
@@ -187,6 +190,8 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
+    fprintf(stderr, "      --graph-cache-mib N          graph cache budget per client session (default: %" PRIu64 ")\n",
+            params.graph_cache_mib);
     fprintf(stderr, "\n");
 }
 
@@ -234,6 +239,20 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             }
         } else if (arg == "-c" || arg == "--cache") {
             params.use_cache = true;
+        } else if (arg == "--graph-cache-mib") {
+            if (++i >= argc) {
+                return false;
+            }
+            try {
+                params.graph_cache_mib = std::stoull(argv[i]);
+            } catch (const std::exception &) {
+                fprintf(stderr, "error: invalid graph cache budget: %s\n", argv[i]);
+                return false;
+            }
+            if (params.graph_cache_mib > std::numeric_limits<uint64_t>::max() / (1024 * 1024)) {
+                fprintf(stderr, "error: graph cache budget is too large: %s\n", argv[i]);
+                return false;
+            }
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -333,12 +352,15 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    auto start_server_fn = (decltype(ggml_backend_rpc_start_server)*) ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server");
+    auto start_server_fn = (decltype(ggml_backend_rpc_start_server_with_graph_cache)*)
+        ggml_backend_reg_get_proc_address(reg, "ggml_backend_rpc_start_server_with_graph_cache");
     if (!start_server_fn) {
         fprintf(stderr, "Failed to obtain RPC backend start server function\n");
         return 1;
     }
 
-    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
+    const uint64_t graph_cache_bytes = params.graph_cache_mib * 1024 * 1024;
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, graph_cache_bytes,
+                    devices.size(), devices.data());
     return 0;
 }

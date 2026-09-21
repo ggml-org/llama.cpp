@@ -95,6 +95,36 @@ int main(int argc, char ** argv) {
 
     ggml_backend_buffer_free(replacement_buffer);
     ggml_free(replacement_ctx);
+
+    // Fill the one MiB test cache with a series of repeated, distinct graphs.
+    // The client must clear the remote cache when the next graph would exceed
+    // the advertised budget, then continue computing without disconnecting.
+    constexpr uint32_t overflow_nodes = 256;
+    ggml_init_params overflow_params = {
+        /* .mem_size   = */ overflow_nodes*ggml_tensor_overhead() +
+                            ggml_graph_overhead_custom(overflow_nodes, false),
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    ggml_context * overflow_ctx = ggml_init(overflow_params);
+    GGML_ASSERT(overflow_ctx != nullptr);
+    ggml_cgraph * overflow_graph = ggml_new_graph_custom(overflow_ctx, overflow_nodes, false);
+    for (uint32_t i = 0; i < overflow_nodes; ++i) {
+        overflow_graph->nodes[i] = ggml_new_tensor_1d(overflow_ctx, GGML_TYPE_F32, 1);
+    }
+    overflow_graph->n_nodes = overflow_nodes;
+    ggml_backend_buffer_t overflow_buffer = ggml_backend_alloc_ctx_tensors(overflow_ctx, backend_b);
+    GGML_ASSERT(overflow_buffer != nullptr);
+
+    for (uint64_t i = 0; i < 32; ++i) {
+        overflow_graph->uid = 0xfeed000000000000ULL + i;
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    }
+    ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
+    ggml_backend_buffer_free(overflow_buffer);
+    ggml_free(overflow_ctx);
+
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
     ggml_backend_free(backend_b);
