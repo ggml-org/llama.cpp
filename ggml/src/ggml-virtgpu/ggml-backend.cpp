@@ -47,6 +47,7 @@ static ggml_backend_i ggml_backend_remoting_interface = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .graph_optimize          = */ ggml_backend_remoting_graph_optimize,
+    /* .fusion_absorbs          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_remoting_guid() {

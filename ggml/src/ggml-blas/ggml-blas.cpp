@@ -276,6 +276,7 @@ static struct ggml_backend_i blas_backend_i = {
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
     /* .graph_optimize          = */ NULL,
+    /* .fusion_absorbs          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_blas_guid(void) {

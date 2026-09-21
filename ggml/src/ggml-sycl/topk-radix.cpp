@@ -519,6 +519,17 @@ bool ggml_sycl_can_fuse_qsa_topk(const ggml_cgraph * cgraph, int i) {
     return g_ggml_sycl_enable_fusion && ggml_sycl_qsa_topk_shape(cgraph, i, nullptr);
 }
 
+int ggml_sycl_qsa_topk_absorbs(const ggml_cgraph * cgraph, int node_idx) {
+    if (!g_ggml_sycl_enable_fusion) {
+        return 0;
+    }
+    qsa_topk_chain c;
+    if (!ggml_sycl_qsa_topk_shape(cgraph, node_idx, &c)) {
+        return 0;
+    }
+    return c.i_topk - c.i_cont_in;
+}
+
 // Runs the chain matched by ggml_sycl_can_fuse_qsa_topk(); returns the extra nodes consumed.
 int ggml_sycl_fuse_qsa_topk(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int i) {
     qsa_topk_chain c;

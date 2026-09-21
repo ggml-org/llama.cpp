@@ -225,4 +225,5 @@ static inline void top_k_radix_select_f32(
 // CONT(PERMUTE(score)) -> GET_ROWS -> PERMUTE -> CONT -> [f16 mask cast] -> ADD -> TOP_K:
 // the QSA indexer chain, taken by the top-k straight off the score and the mask.
 bool ggml_sycl_can_fuse_qsa_topk(const ggml_cgraph * cgraph, int node_idx);
+int  ggml_sycl_qsa_topk_absorbs(const ggml_cgraph * cgraph, int node_idx);
 int  ggml_sycl_fuse_qsa_topk(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int node_idx);

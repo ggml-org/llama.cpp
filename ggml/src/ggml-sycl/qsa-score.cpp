@@ -168,6 +168,17 @@ bool ggml_sycl_can_fuse_qsa_score(const ggml_cgraph * cgraph, int i) {
     return g_ggml_sycl_enable_fusion && ggml_sycl_qsa_score_shape(cgraph, i, nullptr);
 }
 
+int ggml_sycl_qsa_score_absorbs(const ggml_cgraph * cgraph, int node_idx) {
+    if (!g_ggml_sycl_enable_fusion) {
+        return 0;
+    }
+    qsa_score_chain c;
+    if (!ggml_sycl_qsa_score_shape(cgraph, node_idx, &c)) {
+        return 0;
+    }
+    return c.i_out - c.i_mm;
+}
+
 // dst[b, t0 + t, s] = sum over h of relu(tile[b, h, t, s])
 static void k_qsa_score_reduce(const float * tile, float * dst, int64_t n_blocks, int64_t n_heads,
                                int64_t nt, int64_t n_tps, int64_t t0, const sycl::nd_item<2> & item) {

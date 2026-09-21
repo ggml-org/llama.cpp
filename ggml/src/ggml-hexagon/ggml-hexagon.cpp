@@ -6497,6 +6497,7 @@ static struct ggml_backend_i hexagon_backend_i = {
     /* .event_record            = */ ggml_backend_hexagon_event_record,
     /* .event_wait              = */ ggml_backend_hexagon_event_wait,
     /* .graph_optimize          = */ ggml_backend_hexagon_graph_optimize,
+    /* .fusion_absorbs          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_hexagon_guid() {
