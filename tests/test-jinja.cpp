@@ -2,6 +2,10 @@
 #include <iostream>
 #include <random>
 #include <cstdlib>
+#include <algorithm>
+#include <atomic>
+#include <thread>
+#include <vector>
 
 #include "json.h"
 #include "subproc.h"
@@ -37,6 +41,7 @@ static void test_stats(testing & t);
 static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
+static void test_concurrent_execution(testing & t);
 
 static bool g_python_mode = false;
 
@@ -78,6 +83,7 @@ int main(int argc, char *argv[]) {
         t.test("caps", test_caps);
         t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
+        t.test("concurrent execution", test_concurrent_execution);
     }
 
     return t.summary();
@@ -2726,5 +2732,59 @@ static void test_fuzzing(testing & t) {
                 "{{ data|tojson(ensure_ascii=true) }}",
                 {{"data", std::string("hello\xfe\xffworld")}}
             ));
+    });
+}
+
+// A parsed program is shared read-only between threads (llama-server renders the same chat template from every HTTP
+// worker). Execution must not mutate the AST: {% filter %} used to move its filter node out and back, which raced
+// between threads and produced "Invalid filter expression" errors and use-after-free crashes.
+static void test_concurrent_execution(testing & t) {
+    t.test("shared program is executed from many threads", [](testing & t) {
+        // one filter node executed n times per render, so overlapping renders keep hitting the same node
+        const std::string tmpl = "{% for i in range(n) %}{% filter upper %}a{% endfilter %}{% endfor %}";
+        const int n = 200;
+        const std::string expect(n, 'A');
+
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+        const jinja::program ast = jinja::parse_from_tokens(lexer_res);
+
+        const int n_threads = 8;
+        const int n_iters   = 200;
+        std::atomic<int> n_failed{0};
+        std::vector<std::string> first_error(n_threads);
+        std::vector<std::thread> threads;
+        for (int ti = 0; ti < n_threads; ++ti) {
+            threads.emplace_back([&, ti]() {
+                for (int i = 0; i < n_iters; ++i) {
+                    try {
+                        jinja::context ctx(tmpl);
+                        jinja::global_from_json(ctx, json{{"n", n}}, true);
+                        jinja::runtime runtime(ctx);
+                        std::string out = runtime.gather_string_parts(runtime.execute(ast))->as_string().str();
+                        if (out != expect) {
+                            ++n_failed;
+                            if (first_error[ti].empty()) first_error[ti] = "wrong output: " + out.substr(0, 40);
+                        }
+                    } catch (const std::exception & e) {
+                        ++n_failed;
+                        if (first_error[ti].empty()) {
+                            std::string msg = e.what();
+                            std::replace(msg.begin(), msg.end(), '\n', ' ');
+                            first_error[ti] = msg.substr(0, 160);
+                        }
+                    }
+                }
+            });
+        }
+        for (auto & th : threads) {
+            th.join();
+        }
+
+        if (!t.assert_true("all renders succeeded", n_failed == 0)) {
+            for (int ti = 0; ti < n_threads; ++ti) {
+                if (!first_error[ti].empty()) t.log("thread " + std::to_string(ti) + ": " + first_error[ti]);
+            }
+        }
     });
 }
