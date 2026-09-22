@@ -24641,16 +24641,16 @@ static void ggml_cl_conv_3d(ggml_backend_t backend, const ggml_tensor * src0, co
         (cl_uint) dst->op_params[9],
         (cl_uint) dst->op_params[10],
     };
-    const cl_uint strides[] = {
-        (cl_uint) (nb01/ggml_type_size(src0->type)),
-        (cl_uint) (nb02/ggml_type_size(src0->type)),
-        (cl_uint) (nb03/ggml_type_size(src0->type)),
-        (cl_uint) (nb11/ggml_type_size(src1->type)),
-        (cl_uint) (nb12/ggml_type_size(src1->type)),
-        (cl_uint) (nb13/ggml_type_size(src1->type)),
-        (cl_uint) (nb1/ggml_type_size(dst->type)),
-        (cl_uint) (nb2/ggml_type_size(dst->type)),
-        (cl_uint) (nb3/ggml_type_size(dst->type)),
+    const cl_ulong strides[] = {
+        (cl_ulong) (nb01/ggml_type_size(src0->type)),
+        (cl_ulong) (nb02/ggml_type_size(src0->type)),
+        (cl_ulong) (nb03/ggml_type_size(src0->type)),
+        (cl_ulong) (nb11/ggml_type_size(src1->type)),
+        (cl_ulong) (nb12/ggml_type_size(src1->type)),
+        (cl_ulong) (nb13/ggml_type_size(src1->type)),
+        (cl_ulong) (nb1/ggml_type_size(dst->type)),
+        (cl_ulong) (nb2/ggml_type_size(dst->type)),
+        (cl_ulong) (nb3/ggml_type_size(dst->type)),
     };
 
     const cl_uint bs_k = 64, bs_npq = 64, bs_crs = 16, wg_k = 16, wg_npq = 8;
