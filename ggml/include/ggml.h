@@ -585,7 +585,6 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
-        GGML_OP_XING4_0_HC_COMB,
 
         GGML_OP_UNARY,
 
@@ -2694,6 +2693,18 @@ extern "C" {
             struct ggml_tensor  * scale,
             struct ggml_tensor  * base,
             float                 eps,
+            int32_t               n_iter);
+
+    //
+    // hc_comb variant with clamp to [-limit, limit] before softmax
+    //
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_comb_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            float                 eps,
+            float                 limit,
             int32_t               n_iter);
 
     // hc_pre: x [n_embd, hc, n_tokens], weights [hc, n_tokens] -> [n_embd, n_tokens]

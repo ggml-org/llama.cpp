@@ -567,10 +567,10 @@ ggml_tensor * llama_model_xing4_0::graph::build_hc_pre(
     *post = ggml_scale(ctx0, *post, 2.0f);
     cb(*post, "hc_post", il);
 
-    if (cparams.fused_xing4_0_hc_comb) {
-        *comb = ggml_xing4_0_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
-                (int32_t) hparams.dsv4_hc_sinkhorn_iters);
-        res->add_fused_node({LLM_FUSED_OP_XING4_0_HC_COMB, *comb, il});
+    if (cparams.fused_dsv4_hc_comb) {
+        *comb = ggml_dsv4_hc_comb_clamp(ctx0, mixes, hc_scale, hc_base, hparams.dsv4_hc_eps,
+                30.0f, (int32_t) hparams.dsv4_hc_sinkhorn_iters);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, *comb, il});
     } else {
         ggml_tensor * scale_comb = xing4_0_view_1d(ctx0, hc_scale, 1, 2);
         ggml_tensor * base_comb  = xing4_0_view_1d(ctx0, hc_base, hc*hc, 2*hc);
