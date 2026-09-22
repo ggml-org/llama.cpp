@@ -512,8 +512,10 @@ bool server_http_context::start() {
     pimpl->pool = std::make_unique<httplib::ThreadPool>(pimpl->n_threads_http, pimpl->n_threads_http + 1024);
     for (size_t i = 0; i < pimpl->servers.size(); ++i) {
         const auto & srv = pimpl->servers[i];
-        pimpl->threads.emplace_back([srv = srv.get()] {
-            srv->listen_after_bind();
+        pimpl->threads.emplace_back([srv = srv.get(), addr = listening_addresses[i]] {
+            if (!srv->listen_after_bind()) {
+                SRV_ERR("listener on %s stopped unexpectedly\n", addr.c_str());
+            }
         });
         srv->wait_until_ready();
         if (!srv->is_running()) {
@@ -669,8 +671,9 @@ void server_http_context::get(const std::string & path, const server_http_contex
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
     };
+    const std::string full_path = path_prefix + path;
     for (const auto & srv : pimpl->servers) {
-        srv->Get(path_prefix + path, callback);
+        srv->Get(full_path, callback);
     }
 }
 
@@ -719,8 +722,9 @@ void server_http_context::post(const std::string & path, const server_http_conte
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
     };
+    const std::string full_path = path_prefix + path;
     for (const auto & srv : pimpl->servers) {
-        srv->Post(path_prefix + path, callback);
+        srv->Post(full_path, callback);
     }
 }
 
@@ -739,8 +743,9 @@ void server_http_context::del(const std::string & path, const server_http_contex
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
     };
+    const std::string full_path = path_prefix + path;
     for (const auto & srv : pimpl->servers) {
-        srv->Delete(path_prefix + path, callback);
+        srv->Delete(full_path, callback);
     }
 }
 
