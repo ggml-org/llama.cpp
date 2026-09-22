@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { modelParamsLabel, modelSizeLabel } from './utils';
+	import { modelSizeLabel } from './utils';
 	import { Heart, Loader2, MoreHorizontal, Power } from '@lucide/svelte';
 	import { Logo, ModelAvatar, ModelId, ModelsSection } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
@@ -37,7 +37,7 @@
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	const rowGrid = 'grid grid-cols-[3.5rem_minmax(0,1fr)_5.5rem_3rem_4.5rem] items-center gap-3';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_5.5rem_3rem_4.5rem] items-center gap-3';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -54,7 +54,6 @@
 		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
 		!isOperationInProgress}
 	{@const isFailed = status === ServerModelStatus.FAILED}
-	{@const params = modelParamsLabel(option)}
 	{@const size = modelSizeLabel(option)}
 	{@const favorite = isFavorite(option)}
 
@@ -70,21 +69,12 @@
 			role="button"
 			tabindex="0"
 		>
-			<span
-				class="inline-flex h-6 w-6 items-center justify-center rounded-md bg-muted text-[10px] font-medium text-muted-foreground"
-			>
-				{params ?? '—'}
-			</span>
-
 			<span class="flex min-w-0 items-center gap-3">
 				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
 
 				<ModelId
 					aliases={option.aliases}
 					class="min-w-0 flex-1"
-					hideParameters
-					hideQuantization
-					hideTags
 					modalities={option.modalities}
 					modelId={option.model}
 					supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
@@ -167,8 +157,6 @@
 	<div
 		class="{rowGrid} shrink-0 border-y border-border/40 px-6 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
 	>
-		<span>Params</span>
-
 		<span>Model</span>
 
 		<span>Size</span>
