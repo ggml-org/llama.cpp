@@ -6357,6 +6357,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        // A tool call as the first message of the turn: "<|start|>assistant" is the
+        // generation prompt, so the output starts at " to=".
+        tst.test(" to=special_function<|message|>" + call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_call)
+            .run();
+
         // "Inform then act": the model answers the user and calls a tool in ONE generation,
         // closing the answer with <|eom|>. The answer must stop there rather than swallow it.
         tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eom|>"
