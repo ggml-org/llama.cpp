@@ -74,3 +74,9 @@ export { default as SettingsChatFields } from './SettingsChat/SettingsChatFields
  * server favicons and permission management controls.
  */
 export { default as SettingsChatToolsTab } from './SettingsChat/SettingsChatToolsTab.svelte';
+
+/**
+ * Providers panel for chat settings. Switches between the llama.cpp and
+ * OpenAI-compatible protocols and lists the endpoints configured for each.
+ */
+export { default as SettingsChatProvidersTab } from './SettingsChat/SettingsChatProvidersTab.svelte';
