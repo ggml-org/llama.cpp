@@ -1,19 +1,26 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
 	import { formatLastUsed } from './utils';
-	import { EyeOff, Heart, MoreHorizontal, Power } from '@lucide/svelte';
 	import {
+		Eye,
+		EyeOff,
+		Heart,
+		HeartOff,
+		MoreHorizontal,
+		Power,
+		Trash2,
+		Upload
+	} from '@lucide/svelte';
+	import {
+		DropdownMenuActions,
 		Logo,
 		ModelAvatar,
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
-		ModelRowActions,
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import { Button } from '$lib/components/ui/button';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
@@ -48,6 +55,45 @@
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
+	}
+
+	/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
+	function rowActions(
+		option: ModelOption,
+		canLoad: boolean,
+		isLoaded: boolean,
+		favorite: boolean,
+		isHidden: boolean
+	) {
+		return [
+			{
+				icon: favorite ? HeartOff : Heart,
+				label: favorite ? 'Remove from favorites' : 'Add to favorites',
+				onclick: () => modelsStore.toggleFavorite(option.model)
+			},
+			...(canLoad
+				? [
+						{
+							icon: isLoaded ? Upload : Power,
+							label: isLoaded ? 'Unload model' : 'Load model',
+							onclick: () => onToggleLoad(option)
+						},
+						{
+							icon: Trash2,
+							label: 'Delete from disk',
+							onclick: () => requestDelete(option),
+							separator: true,
+							variant: 'destructive' as const
+						}
+					]
+				: []),
+			{
+				icon: isHidden ? Eye : EyeOff,
+				label: isHidden ? 'Show in selector' : 'Hide from selector',
+				onclick: () => modelsStore.toggleHidden(option.id),
+				separator: true
+			}
+		];
 	}
 	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_7rem_5rem_3rem_4.5rem] items-center gap-3';
 
@@ -120,42 +166,14 @@
 				showRemoteMark
 			/>
 
-			<span class="flex items-center justify-end gap-1">
-				<ModelRowActions isFav={favorite} {isLoaded} {option} revealOnHover={false} />
-
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								aria-label="Model actions"
-								class="h-7 w-7 text-muted-foreground"
-								onclick={(event) => event.stopPropagation()}
-								size="icon"
-								variant="ghost"
-							>
-								<MoreHorizontal class="h-3.5 w-3.5" />
-							</Button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-
-					<DropdownMenu.Content align="end">
-						{#if canLoad}
-							<DropdownMenu.Item onclick={() => onToggleLoad(option)}>
-								{isLoaded ? 'Unload model' : 'Load model'}
-							</DropdownMenu.Item>
-
-							<DropdownMenu.Item onclick={() => requestDelete(option)}>
-								Delete from disk
-							</DropdownMenu.Item>
-						{/if}
-
-						<DropdownMenu.Item onclick={() => modelsStore.toggleHidden(option.id)}>
-							{isHidden ? 'Show in selector' : 'Hide from selector'}
-						</DropdownMenu.Item>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
-			</span>
+			<div class="flex items-center justify-end">
+				<DropdownMenuActions
+					actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
+					align="end"
+					triggerIcon={MoreHorizontal}
+					triggerTooltip="Model actions"
+				/>
+			</div>
 		</div>
 	</div>
 {/snippet}
