@@ -7,7 +7,6 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
-#include <set>
 
 namespace ov {
 namespace frontend {
@@ -153,7 +152,8 @@ OutputVector translate_view(const NodeContext & context) {
         return {input};
     }
 
-    int64_t src_elems = 1, dst_elems = 1;
+    int64_t src_elems = 1;
+    int64_t dst_elems = 1;
     for (int64_t i = 0; i < src_shape.rank().get_length(); ++i) {
         if (src_shape[i].is_dynamic()) {
             return {input};
