@@ -204,7 +204,12 @@
 				<button
 					aria-label="Back to all providers"
 					class="-ml-1 inline-flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
-					onclick={onProviderBack}
+					onclick={(event) => {
+						// the surrounding trigger toggles the section, the back control
+						// must not collapse the list it is leaving
+						event.stopPropagation();
+						onProviderBack?.();
+					}}
 					type="button"
 				>
 					<ChevronLeft class="h-3.5 w-3.5" />
