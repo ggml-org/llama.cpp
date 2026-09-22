@@ -2,6 +2,7 @@
 
 #include "json-schema.h"
 #include "json.h"
+#include "llama.h"
 
 #include <memory>
 #include <set>
@@ -180,6 +181,50 @@ inline common_peg_parse_flags operator&(common_peg_parse_flags a, common_peg_par
 inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
     return static_cast<common_peg_parse_flags>(~int(a));
 }
+
+struct common_peg_special_token {
+    std::string      text;
+    llama_token_attr attr;
+};
+
+// snapshot of the vocab's control and user-defined tokens
+struct common_peg_special_tokens {
+    std::unordered_map<llama_token, common_peg_special_token> tokens;
+    std::unordered_map<std::string, llama_token>              ids;
+
+    common_peg_special_tokens() = default;
+    explicit common_peg_special_tokens(const llama_vocab * vocab);
+
+    // LLAMA_TOKEN_NULL if text is not a special token
+    llama_token token_id(const std::string & text) const;
+
+    bool is_special(llama_token id) const;
+    bool is_control(llama_token id) const;
+    bool is_user_defined(llama_token id) const;
+};
+
+struct common_peg_input_token {
+    size_t      pos = std::string::npos;
+    llama_token id  = LLAMA_TOKEN_NULL;
+
+    bool valid() const { return id != LLAMA_TOKEN_NULL; }
+};
+
+// generated text, plus the rendered special tokens in it, in ascending pos order
+struct common_peg_input {
+    common_peg_special_tokens           special_tokens;
+    std::string                         text;
+    std::vector<common_peg_input_token> tokens;
+
+    common_peg_input() = default;
+    explicit common_peg_input(common_peg_special_tokens special_tokens) : special_tokens(std::move(special_tokens)) {}
+
+    // special tokens that are not rendered (empty piece) add nothing and are not recorded
+    void append(const std::string & piece, llama_token token);
+
+    // first token at or after pos, invalid if none
+    common_peg_input_token next_token(size_t pos) const;
+};
 
 struct common_peg_parse_context {
     std::string input;

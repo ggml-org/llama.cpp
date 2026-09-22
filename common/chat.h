@@ -213,23 +213,6 @@ struct common_chat_msg_delimiters {
     common_json to_json() const;
 };
 
-struct common_chat_special_token {
-    llama_token      id;
-    llama_token_attr attr;
-};
-
-// snapshot of the vocab's control and user-defined tokens, keyed by text
-struct common_chat_special_tokens {
-    std::map<std::string, common_chat_special_token> tokens;
-
-    common_chat_special_tokens() = default;
-    explicit common_chat_special_tokens(const llama_vocab * vocab);
-
-    bool is_special(const std::string & text) const;
-    bool is_control(const std::string & text) const;
-    bool is_user_defined(const std::string & text) const;
-};
-
 struct common_chat_tool {
     std::string name;
     std::string description;
