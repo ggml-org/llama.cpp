@@ -21,9 +21,7 @@ static std::string ggml_cl_q2_k_mm_options(const ggml_backend_opencl_context * b
 void ggml_cl_load_kernels_mul_mat(ggml_backend_opencl_context * backend_ctx) {
     cl_int err;
     const std::string & compile_opts = backend_ctx->kernel_compile_opts;
-    const auto opencl_c_std =
-        std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." +
-        std::to_string(backend_ctx->opencl_c_version.minor);
+
     // mul_mv_q4_0_f32
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -1110,14 +1108,13 @@ static void load_cl_kernels_gemm_coopk(ggml_backend_opencl_context * backend_ctx
 #endif
 
 void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_ctx) {
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     cl_int err;
     const std::string & compile_opts = backend_ctx->kernel_compile_opts;
     const auto opencl_c_std =
         std::string("CL") + std::to_string(backend_ctx->opencl_c_version.major) + "." +
         std::to_string(backend_ctx->opencl_c_version.minor);
 
-    // Adreno kernels
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // transpose
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -2888,6 +2885,8 @@ void ggml_cl_load_kernels_mul_mat_adreno(ggml_backend_opencl_context * backend_c
         GGML_LOG_CONT(".");
     }
     load_cl_kernels_gemm_coopk(backend_ctx);
+#else
+    GGML_UNUSED(backend_ctx);
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
 }
 
