@@ -1992,7 +1992,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
 #endif  // SVE compile-time end
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    // std::cout << "NEON called" << std::endl;
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
     const uint8x16_t mask_lo   = vdupq_n_u8(0x03);
@@ -2010,7 +2009,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
         acc_f32[1] = vdupq_n_f32(0);
 
         for (int b = 0; b < nb; b++) {
-            // print_neon_f16("h: ", vld1_f16((const __fp16 *) q6_ptr[b].d));
             float32x4_t q6_d_0     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d));      // d0 d1 d2 d3
             float32x4_t q6_d_1     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d + 4));  // d4 d5 d6 d7
             float32x4_t q8_d       = vdupq_n_f32(q8_ptr[b].d);
@@ -2067,7 +2065,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                 // Since q6_K scales are per 16 elements
                 // num sbs -> 256 elements / (16 elements/scale * 2 elements/byte * 2 halves)
                 for (int sb = 0; sb < QK_K / 64; sb++) {
-                    // auto tbegin_cp = std::chrono::high_resolution_clock::now();
                     const int8_t * q8_base_l = q8_ptr[b].qs + half * 128 + sb * 16;
                     const int8_t * q8_base_h = q8_base_l + 64;
 
@@ -2130,9 +2127,9 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         sb_acc_h           = vdotq_s32(sb_acc_h, q6_h1, q8_h[1]);
 
                         // Pairwise add to get per-column sums: [col0, col1]
-                        int32x2_t sum_l = vpadd_s32(vget_low_s32(sb_acc_l), vget_high_s32(sb_acc_l)); 
+                        int32x2_t sum_l = vpadd_s32(vget_low_s32(sb_acc_l), vget_high_s32(sb_acc_l));
                         int32x2_t sum_h = vpadd_s32(vget_low_s32(sb_acc_h), vget_high_s32(sb_acc_h));
-                        
+
                         const int scale_idx_l = half * 8 + sb;
                         const int scale_idx_h = half * 8 + sb + 4;
 
@@ -2170,7 +2167,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
         vst1q_f32(s + base, acc_f32[0]);
         vst1q_f32(s + base + 4, acc_f32[1]);
     }  // for x
-
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q6_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
@@ -5760,6 +5756,7 @@ void ggml_gemm_q8_0_4x8_q8_0(int                        n,
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     ggml_gemm_q8_0_4x8_q8_0_generic(n, s, bs, vx, vy, nr, nc);
 }
+
 void ggml_gemm_q1_0_4x4_q8_0(int                        n,
                              float * GGML_RESTRICT      s,
                              size_t                     bs,
