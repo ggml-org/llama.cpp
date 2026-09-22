@@ -491,7 +491,6 @@ bool server_http_context::start() {
             const auto bound_port = srv->bind_to_any_port(host);
             was_bound = bound_port >= 0;
             if (was_bound) {
-                // All TCP listeners use the port selected by the first bind.
                 port = bound_port;
             }
         } else {

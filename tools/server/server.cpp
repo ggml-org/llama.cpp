@@ -185,12 +185,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     // struct that contains llama context and inference
     server_context ctx_server;
 
-    server_http_context ctx_http;
-    if (!ctx_http.init(params)) {
-        SRV_ERR("%s", "failed to initialize HTTP server\n");
-        return 1;
-    }
-
     //
     // Router
     //
@@ -201,6 +195,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
     server_tools tools;
 
     std::optional<server_models_routes> models_routes{};
+
+    server_http_context ctx_http;
+    if (!ctx_http.init(params)) {
+        SRV_ERR("%s", "failed to initialize HTTP server\n");
+        return 1;
+    }
+
     if (is_router_server) {
         // setup server instances manager
         try {
