@@ -1159,8 +1159,7 @@ jobs:
             -D GGML_OPENMP=OFF ^
             -D GGML_HEXAGON=ON ^
             -D GGML_BACKEND_DL=ON ^
-            -D LLAMA_BUILD_BORINGSSL=ON ^
-            -D LLAMA_OPENSSL=OFF
+            -D LLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ggml-hexagon htp-v73 htp-v75 htp-v79 htp-v81
 
       - name: Pack artifacts
