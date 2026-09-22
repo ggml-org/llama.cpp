@@ -106,6 +106,9 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * />
  * ```
  */
+/**
+ * **DialogManageModels** - shell for model management, still to be designed.
+ */
 export { default as DialogManageModels } from './DialogManageModels.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
@@ -538,3 +541,13 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
+
+/**
+ * **DialogModelsDiscover** - full-screen model discovery dialog.
+ *
+ * Two-pane layout: searchable model list (Hugging Face + llama.app catalog)
+ * on the left, model details with download options on the right.
+ *
+ * @see ModelsDiscover in $lib/components/app/models/discover
+ */
+export { default as DialogModelsDiscover } from './DialogModelsDiscover.svelte';

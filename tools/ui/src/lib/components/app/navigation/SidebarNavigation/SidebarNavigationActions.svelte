@@ -25,6 +25,7 @@
 		searchQuery: string;
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
+		onDiscoverModelsClick?: () => void;
 		onManageModelsClick?: () => void;
 		onNewChat?: () => void;
 		onSettingsClick?: () => void;
@@ -34,6 +35,7 @@
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
+		onDiscoverModelsClick,
 		onManageModelsClick,
 		onNewChat,
 		onSearchClick,
@@ -121,18 +123,20 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.MANAGE_MODELS
-						? () => onManageModelsClick?.()
-						: item.action === SidebarAction.SETTINGS
-							? () => onSettingsClick?.()
-							: item.route
-								? () => {
-										onNewChat?.();
-										goto(item.route!);
-									}
-								: isSearchOnMobile
-									? undefined
-									: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.MANAGE_MODELS
+							? () => onManageModelsClick?.()
+							: item.action === SidebarAction.SETTINGS
+								? () => onSettingsClick?.()
+								: item.route
+									? () => {
+											onNewChat?.();
+											goto(item.route!);
+										}
+									: isSearchOnMobile
+										? undefined
+										: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -179,18 +183,20 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.MANAGE_MODELS
-						? () => onManageModelsClick?.()
-						: item.action === SidebarAction.SETTINGS
-							? () => onSettingsClick?.()
-							: item.route
-								? () => {
-										onNewChat?.();
-										goto(item.route!);
-									}
-								: isSearchOnMobile
-									? undefined
-									: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.MANAGE_MODELS
+							? () => onManageModelsClick?.()
+							: item.action === SidebarAction.SETTINGS
+								? () => onSettingsClick?.()
+								: item.route
+									? () => {
+											onNewChat?.();
+											goto(item.route!);
+										}
+									: isSearchOnMobile
+										? undefined
+										: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,

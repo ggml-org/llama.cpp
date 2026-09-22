@@ -6,6 +6,7 @@
 		ActionIcon,
 		DialogConversationRename,
 		DialogManageModels,
+		DialogModelsDiscover,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -95,6 +96,7 @@
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
 	let manageModelsOpen = $state(false);
+	let modelsDiscoverOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -391,6 +393,7 @@
 				bind:searchQuery
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
+				onDiscoverModelsClick={() => (modelsDiscoverOpen = true)}
 				onManageModelsClick={() => (manageModelsOpen = true)}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
@@ -456,6 +459,8 @@
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
 <DialogManageModels bind:open={manageModelsOpen} />
+
+<DialogModelsDiscover bind:open={modelsDiscoverOpen} />
 
 <style>
 	aside {
