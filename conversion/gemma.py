@@ -811,7 +811,7 @@ class Gemma4Model(Gemma3Model):
 
 
 @ModelBase.register("Gemma4DSparkModel")
-class Gemma4DSparkModel(TextModel):
+class Gemma4DSparkModel(DFlashModel):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
     def __init__(self, *args, **kwargs):
@@ -844,7 +844,7 @@ class Gemma4DSparkModel(TextModel):
             raise ValueError("Gemma4 DSpark requires default or proportional RoPE")
 
     def set_vocab(self):
-        DFlashModel.set_vocab(self)
+        super().set_vocab()
         mask_id = self.dflash_config.get("mask_token_id", self.hparams.get("mask_token_id"))
         if mask_id is None:
             raise ValueError("Gemma4 DSpark requires mask_token_id")
@@ -853,23 +853,19 @@ class Gemma4DSparkModel(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_dflash_gemma4_backbone(True)
-        head_dim = self.hparams["global_head_dim"]
+        head_dim = int(self.hparams["global_head_dim"])
         self.gguf_writer.add_head_count_kv(self.hparams["num_global_key_value_heads"])
         self.gguf_writer.add_key_length(head_dim)
         self.gguf_writer.add_value_length(head_dim)
         self.gguf_writer.add_rope_dimension_count(head_dim)
         self.gguf_writer.add_embedding_scale(self.hparams["hidden_size"] ** 0.5)
         self.gguf_writer.add_attention_scale(1.0)
+        self.gguf_writer.add_hidden_act("gelu_pytorch_tanh")
 
-        block_size = self.dflash_config.get("block_size", self.hparams["block_size"])
-        self.gguf_writer.add_block_size(block_size)
         self.gguf_writer.add_sample_from_anchor(self.hparams.get("sample_from_anchor", True))
         target_layers = self.dflash_config.get("target_layer_ids", self.hparams.get("target_layer_ids"))
         if not target_layers:
             raise ValueError("Gemma4 DSpark requires target_layer_ids")
-        self.gguf_writer.add_target_layers([i + 1 for i in target_layers])
-        self.gguf_writer.add_causal_attention(self.dflash_config.get("causal", False))
         self.gguf_writer.add_has_confidence_head(any("confidence_head.proj" in name for name in self.model_tensors))
 
         if self.hparams.get("final_logit_softcapping"):
@@ -879,8 +875,6 @@ class Gemma4DSparkModel(TextModel):
             window = self.dflash_config["swa_window_size"]
             if window <= 0:
                 raise ValueError("Gemma4 DSpark swa_window_size must be positive")
-            self.gguf_writer.add_sliding_window(window)
-            self.gguf_writer.add_sliding_window_pattern([True] * self.block_count)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -903,8 +897,11 @@ class Gemma4DSparkModel(TextModel):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if self.rope_parameters["rope_type"] == "proportional":
             # Keep the unrotated dimensions in place, as in the Gemma4 converter.
-            head_dim = self.hparams["global_head_dim"]
-            fraction = self.rope_parameters.get("partial_rotary_factor", 0.25)
+            head_dim = int(self.hparams["global_head_dim"])
+            fraction_value = self.rope_parameters.get("partial_rotary_factor", 0.25)
+            if not isinstance(fraction_value, (int, float)):
+                raise ValueError("Gemma4 DSpark partial_rotary_factor must be numeric")
+            fraction = float(fraction_value)
             n_rot = int(head_dim * fraction / 2)
             if not 0 < fraction <= 1 or head_dim * fraction != 2 * n_rot:
                 raise ValueError("Gemma4 DSpark rotary dimension count must be positive and even")

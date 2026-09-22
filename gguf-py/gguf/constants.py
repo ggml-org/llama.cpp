@@ -162,7 +162,6 @@ class Keys:
         TARGET_LAYERS                     = "{arch}.target_layers"
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
-        DFLASH_GEMMA4_BACKBONE             = "{arch}.gemma4_backbone"
         CONV_KERNEL_SIZE                  = "{arch}.conv_kernel_size"
         CONV_GROUP_SIZE                   = "{arch}.conv_group_size"
         SELECTOR_RANK                     = "{arch}.selector_rank"
