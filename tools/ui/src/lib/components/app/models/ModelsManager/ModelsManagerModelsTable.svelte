@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { ModelsListFilter, ModelsTableGroup } from './utils';
+	import type { ModelsTableGroup } from './utils';
 	import { modelParamsLabel, modelSizeLabel } from './utils';
-	import { ArrowUpDown, ChevronDown, Heart, Loader2, MoreHorizontal, Plus } from '@lucide/svelte';
-	import { ModelCapabilityIcons, ModelsSection } from '$lib/components/app';
+	import { ArrowUpDown, Heart, Loader2, MoreHorizontal, Plus } from '@lucide/svelte';
+	import { ModelAvatar, ModelId, ModelsSection } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
@@ -23,7 +23,6 @@
 		selectedId: string | null;
 		summary: string;
 		title: string;
-		view?: ModelsListFilter;
 	}
 
 	let {
@@ -38,8 +37,7 @@
 		onUseInNewChat,
 		selectedId,
 		summary,
-		title,
-		view = $bindable<ModelsListFilter>('all')
+		title
 	}: Props = $props();
 
 	let descending = $state(false);
@@ -51,9 +49,6 @@
 		})
 	);
 	let isEmpty = $derived(sortedGroups.every((group) => group.items.length === 0));
-	let chipClass =
-		'cursor-pointer rounded-full px-2.5 py-1 text-xs font-medium transition focus:outline-none focus-visible:ring-2 focus-visible:ring-ring';
-
 	const rowGrid = 'grid grid-cols-[3.5rem_minmax(0,1fr)_5.5rem_3rem_4.5rem] items-center gap-3';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
@@ -93,22 +88,22 @@
 				{params ?? '—'}
 			</span>
 
-			<span class="min-w-0">
-				<span class="flex items-center gap-1.5">
-					<span class="truncate text-sm font-medium">{option.name}</span>
+			<span class="flex min-w-0 items-center gap-3">
+				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
 
-					<ModelCapabilityIcons
-						modalities={option.modalities}
-						supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
-						supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
-					/>
-
-					<ChevronDown class="h-3 w-3 shrink-0 text-muted-foreground" />
-				</span>
-
-				<span class="block truncate text-xs text-muted-foreground">
-					{option.parsedId?.orgName ?? ''}
-				</span>
+				<ModelId
+					aliases={option.aliases}
+					class="min-w-0 flex-1"
+					hideParameters
+					hideQuantization
+					hideTags
+					modalities={option.modalities}
+					modelId={option.model}
+					supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
+					supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
+					tags={option.tags}
+					title={option.model}
+				/>
 			</span>
 
 			<span class="text-sm text-muted-foreground">{size ?? '—'}</span>
@@ -199,51 +194,6 @@
 
 	<div class="flex shrink-0 items-center gap-2 px-4 pb-3">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
-
-		<button
-			aria-pressed={view === 'all'}
-			class={[
-				chipClass,
-				view === 'all'
-					? 'bg-primary text-primary-foreground'
-					: 'border border-border text-muted-foreground hover:bg-muted'
-			]}
-			onclick={() => (view = 'all')}
-			type="button"
-		>
-			All
-		</button>
-
-		<button
-			aria-pressed={view === 'favorites'}
-			class={[
-				chipClass,
-				'inline-flex items-center gap-1',
-				view === 'favorites'
-					? 'bg-primary text-primary-foreground'
-					: 'border border-border text-muted-foreground hover:bg-muted'
-			]}
-			onclick={() => (view = 'favorites')}
-			type="button"
-		>
-			<Heart class="h-3 w-3" />
-
-			favorites
-		</button>
-
-		<button
-			aria-pressed={view === 'loaded'}
-			class={[
-				chipClass,
-				view === 'loaded'
-					? 'bg-primary text-primary-foreground'
-					: 'border border-border text-muted-foreground hover:bg-muted'
-			]}
-			onclick={() => (view = 'loaded')}
-			type="button"
-		>
-			loaded
-		</button>
 	</div>
 
 	<div

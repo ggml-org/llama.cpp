@@ -7,15 +7,16 @@
 		loadExtraArgs,
 		loadOverrides,
 		type ModelOverride,
-		type ModelsListFilter,
 		type ModelsTableGroup,
 		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import { backendsStore, conversationsStore, modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { formatFileSize } from '$lib/utils/formatters';
-	import { SvelteMap } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
@@ -26,7 +27,6 @@
 	let { onClose, onOpenDiscover }: Props = $props();
 
 	let filter = $state('');
-	let view = $state<ModelsListFilter>('all');
 	let selectedId = $state<string | null>(null);
 	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
@@ -42,20 +42,30 @@
 		return allModels.filter((option) => {
 			if (term && !`${option.name} ${option.model}`.toLowerCase().includes(term)) return false;
 
-			if (view === 'favorites' && !modelsStore.favoriteModelIds.has(option.model)) return false;
-
-			if (view === 'loaded' && !modelsStore.isModelLoaded(option.model)) return false;
-
 			return true;
 		});
 	});
-	// favorites lead the table, then one block per provider
+	// loaded models lead the table, then favorites, then one block per provider;
+	// a model is listed once, in the first group that claims it
 	let groups = $derived.by(() => {
-		const favorites = visible.filter((option) => modelsStore.favoriteModelIds.has(option.model));
-		const rest = visible.filter((option) => !modelsStore.favoriteModelIds.has(option.model));
+		// only llama-compat servers report a load state
+		const isLlamaCompat = (option: ModelOption) =>
+			getBackendCapabilities(getBackend(option.backendId)).loadUnload;
+		const loaded = visible.filter(
+			(option) => isLlamaCompat(option) && modelsStore.isModelLoaded(option.model)
+		);
+		const claimed = new SvelteSet(loaded.map((option) => option.id));
+		const favorites = visible.filter(
+			(option) => !claimed.has(option.id) && modelsStore.favoriteModelIds.has(option.model)
+		);
+
+		for (const option of favorites) claimed.add(option.id);
+
 		const byBackend = new SvelteMap<string, ModelOption[]>();
 
-		for (const option of rest) {
+		for (const option of visible) {
+			if (claimed.has(option.id)) continue;
+
 			const backendId = option.backendId ?? LOCAL_BACKEND_ID;
 
 			if (!byBackend.has(backendId)) byBackend.set(backendId, []);
@@ -63,9 +73,28 @@
 			byBackend.get(backendId)!.push(option);
 		}
 
-		const ordered: ModelsTableGroup[] = [
-			{ backendId: null, isLocal: false, items: favorites, key: 'favorites', label: 'Favorites' }
-		];
+		const ordered: ModelsTableGroup[] = [];
+
+		if (loaded.length) {
+			ordered.push({
+				backendId: null,
+				isLocal: false,
+				items: loaded,
+				key: 'loaded',
+				label: 'Loaded models'
+			});
+		}
+
+		if (favorites.length) {
+			ordered.push({
+				backendId: null,
+				isLocal: false,
+				items: favorites,
+				key: 'favorites',
+				label: 'Favorites'
+			});
+		}
+
 		const localItems = byBackend.get(LOCAL_BACKEND_ID);
 
 		if (localItems?.length) {
@@ -116,9 +145,6 @@
 			.filter(Boolean)
 			.join(' · ');
 	});
-	let title = $derived(
-		view === 'favorites' ? 'Favorites' : view === 'loaded' ? 'Loaded models' : 'All models'
-	);
 
 	function toggleFavorite(option: ModelOption): void {
 		modelsStore.toggleFavorite(option.model);
@@ -158,7 +184,6 @@
 	<div class="min-h-0">
 		<ModelsManagerModelsTable
 			bind:filter
-			bind:view
 			{groups}
 			{isFavorite}
 			onCopyId={copyId}
@@ -169,7 +194,7 @@
 			onUseInNewChat={(option) => void useInNewChat(option)}
 			{selectedId}
 			{summary}
-			{title}
+			title="All models"
 		/>
 	</div>
 

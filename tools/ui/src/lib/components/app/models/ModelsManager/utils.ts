@@ -36,8 +36,6 @@ export interface ModelOverride {
 
 export type ModelOverrideMap = Record<string, ModelOverride>;
 
-export type ModelsListFilter = 'all' | 'favorites' | 'loaded';
-
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
 	/** Null for the favorites group. */

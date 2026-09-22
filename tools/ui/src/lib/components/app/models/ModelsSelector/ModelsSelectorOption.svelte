@@ -1,5 +1,4 @@
 <script lang="ts">
-	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
@@ -11,14 +10,13 @@
 		PowerOff,
 		RotateCw
 	} from '@lucide/svelte';
-	import { ActionIcon, ModelId } from '$lib/components/app';
+	import { ActionIcon, ModelAvatar, ModelId } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
-	import { HF_BASE_MODEL_TAG_REGEX, ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
-	import { modelLoadFraction, modelLoadProgressText, orgOf } from '$lib/utils';
+	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
 
@@ -75,71 +73,6 @@
 	// list. Loaded models usually carry the `base_model` tag on the option; GGUF
 	// repos only known to HF are resolved lazily via the cached getBaseModel
 	// lookup.
-	let parsedId = $derived(ModelsService.parseModelId(option.model));
-	let orgName = $derived(parsedId.orgName);
-	let tagBaseModel = $derived(
-		(option.tags ?? [])
-			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
-			?.match(HF_BASE_MODEL_TAG_REGEX)?.[1] ?? null
-	);
-	let fetchedBaseModelOrg = $state<string | null>(null);
-	let baseModelOrg = $derived(orgOf(tagBaseModel) || fetchedBaseModelOrg);
-
-	// Long local lists mount hundreds of rows at once; resolving every base model
-	// up front means one Hugging Face request per row, so wait until a row is
-	// actually near the viewport.
-	let rowEl = $state<HTMLElement | null>(null);
-	let isNearViewport = $state(false);
-
-	$effect(() => {
-		if (isNearViewport || !rowEl) return;
-
-		if (typeof IntersectionObserver === 'undefined') {
-			isNearViewport = true;
-
-			return;
-		}
-
-		const observer = new IntersectionObserver(
-			(entries) => {
-				if (entries.some((entry) => entry.isIntersecting)) {
-					isNearViewport = true;
-					observer.disconnect();
-				}
-			},
-			{ rootMargin: '200px' }
-		);
-
-		observer.observe(rowEl);
-
-		return () => observer.disconnect();
-	});
-
-	$effect(() => {
-		fetchedBaseModelOrg = null;
-
-		if (!isNearViewport || !showBaseModelAvatar || !orgName || tagBaseModel) return;
-
-		// external provider ids (`~openai/gpt-...`, `deepseek/deepseek-chat`) are
-		// not HF repos; their org is already the provider slug, so the base model
-		// lookup would be a missed request for every row
-		const backend = getBackend(option.backendId);
-
-		if (backend && !getBackendCapabilities(backend).props) return;
-
-		let cancelled = false;
-
-		void HuggingFaceService.getBaseModel(option.model)
-			.then((base) => {
-				if (!cancelled && base?.org) fetchedBaseModelOrg = base.org;
-			})
-			// best-effort lookup: offline or unknown repos keep the repo org
-			.catch(() => {});
-
-		return () => {
-			cancelled = true;
-		};
-	});
 	let capabilities = $derived.by(() => ({
 		reasoning: modelsStore.props.checkModelSupportsThinking(option.model),
 		tools: option.capabilities.includes(ModelCapability.TOOL_USE)
@@ -147,7 +80,6 @@
 </script>
 
 <div
-	bind:this={rowEl}
 	aria-selected={isSelected || isHighlighted}
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
@@ -168,16 +100,7 @@
 	tabindex="0"
 	title={loadTitle}
 >
-	{#if orgName}
-		<ModelsDiscoverAvatar
-			class="mt-0"
-			org={baseModelOrg ?? orgName}
-			quantOrg={showBaseModelAvatar ? orgName : undefined}
-			quantPositionClass="-bottom-1 -right-1"
-			quantSize="h-3 w-3"
-			size="size-5"
-		/>
-	{/if}
+	<ModelAvatar {option} {showBaseModelAvatar} />
 
 	<ModelId
 		aliases={option.aliases}
