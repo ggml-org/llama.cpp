@@ -323,8 +323,6 @@ class Keys:
         CONV_KERNEL           = "{arch}.ctc.conv_kernel"
         SUBSAMPLE_LAYERS      = "{arch}.ctc.subsample_layers"       # 0-based block indices that subsample time by 2
         CONV_EXPANSION_FACTOR = "{arch}.ctc.conv_expansion_factor"  # conv module inner_dim = n_embd * this
-        NUM_SPECIAL_TOKENS    = "{arch}.ctc.num_special_tokens"     # decode: ids < this are dropped (blank)
-        TOKEN_ID_OFFSET       = "{arch}.ctc.token_id_offset"        # decode: subtracted to map to tokenizer ids
 
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"

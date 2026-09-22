@@ -737,12 +737,6 @@ class GGUFWriter:
     def add_ctc_conv_expansion_factor(self, value: int) -> None:
         self.add_uint32(Keys.CTC.CONV_EXPANSION_FACTOR.format(arch=self.arch), value)
 
-    def add_ctc_num_special_tokens(self, value: int) -> None:
-        self.add_uint32(Keys.CTC.NUM_SPECIAL_TOKENS.format(arch=self.arch), value)
-
-    def add_ctc_token_id_offset(self, value: int) -> None:
-        self.add_uint32(Keys.CTC.TOKEN_ID_OFFSET.format(arch=self.arch), value)
-
     def add_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_COUNT.format(arch=self.arch), length)
 
