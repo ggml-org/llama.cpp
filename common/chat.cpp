@@ -150,6 +150,30 @@ void common_chat_msg_delimiters::tokenize(const llama_vocab * vocab) {
     }
 }
 
+common_chat_special_tokens::common_chat_special_tokens(const llama_vocab * vocab) {
+    const llama_token n_tokens = llama_vocab_n_tokens(vocab);
+    for (llama_token id = 0; id < n_tokens; ++id) {
+        const auto attr = llama_vocab_get_attr(vocab, id);
+        if (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+            tokens.emplace(llama_vocab_get_text(vocab, id), common_chat_special_token{ id, attr });
+        }
+    }
+}
+
+bool common_chat_special_tokens::is_special(const std::string & text) const {
+    return tokens.find(text) != tokens.end();
+}
+
+bool common_chat_special_tokens::is_control(const std::string & text) const {
+    auto it = tokens.find(text);
+    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_CONTROL);
+}
+
+bool common_chat_special_tokens::is_user_defined(const std::string & text) const {
+    auto it = tokens.find(text);
+    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_USER_DEFINED);
+}
+
 common_chat_msg_spans common_chat_msg_delimiters::split(const llama_tokens & tokens, const std::map<size_t, size_t> & skips) const {
     std::vector<std::pair<common_chat_role, size_t>> matches;
 
@@ -340,6 +364,7 @@ struct common_chat_templates {
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
+    common_chat_special_tokens special_tokens;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -812,6 +837,7 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
     bool        add_eos   = false;
+    common_chat_special_tokens special_tokens;
     if (model) {
         const auto * vocab     = llama_model_get_vocab(model);
         const auto   get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
@@ -831,11 +857,13 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
         add_bos   = llama_vocab_get_add_bos(vocab);
         add_eos   = llama_vocab_get_add_eos(vocab);
+        special_tokens = common_chat_special_tokens(vocab);
     }
     common_chat_templates_ptr tmpls(new common_chat_templates());
     tmpls->has_explicit_template = has_explicit_template;
     tmpls->add_bos               = add_bos;
     tmpls->add_eos               = add_eos;
+    tmpls->special_tokens        = std::move(special_tokens);
     try {
         tmpls->template_default = std::make_unique<common_chat_template>(default_template_src, token_bos, token_eos);
     } catch (const std::exception & e) {
@@ -1248,6 +1276,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.add_bos               = tmpls->add_bos;
     params.add_eos               = tmpls->add_eos;
+    params.special_tokens        = tmpls->special_tokens;
 
     params.continue_final_message = inputs.continue_final_message;
     if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
