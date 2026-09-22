@@ -188,6 +188,27 @@ struct common_peg_recursion_error : std::invalid_argument {
     using std::invalid_argument::invalid_argument;
 };
 
+struct common_peg_special_token {
+    std::string      text;
+    llama_token_attr attr;
+};
+
+// snapshot of the vocab's control and user-defined tokens
+struct common_peg_special_tokens {
+    std::unordered_map<llama_token, common_peg_special_token> tokens;
+    std::unordered_map<std::string, llama_token>              ids;
+
+    common_peg_special_tokens() = default;
+    explicit common_peg_special_tokens(const llama_vocab * vocab);
+
+    // LLAMA_TOKEN_NULL if text is not a special token
+    llama_token token_id(const std::string & text) const;
+
+    bool is_special(llama_token id) const;
+    bool is_control(llama_token id) const;
+    bool is_user_defined(llama_token id) const;
+};
+
 struct common_peg_parse_context {
     std::string input;               // [h,   e,  l,  l,  o,  _,  w,  o,  r,  l,  d]
     std::vector<llama_token> tokens; // [id, -1, -1, -1, -1, id, -1, -1, -1, -1, -1]
