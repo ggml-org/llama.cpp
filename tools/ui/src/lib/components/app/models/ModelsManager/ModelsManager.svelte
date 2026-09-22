@@ -150,10 +150,6 @@
 			.join(' · ');
 	});
 
-	function toggleFavorite(option: ModelOption): void {
-		modelsStore.toggleFavorite(option.model);
-	}
-
 	async function toggleLoad(option: ModelOption): Promise<void> {
 		if (modelsStore.isModelLoaded(option.model)) {
 			await modelsStore.status.unload(option.model);
@@ -168,10 +164,6 @@
 		await modelsStore.selectModelById(option.id);
 		await conversationsStore.openNewChat();
 		onClose?.();
-	}
-
-	function copyId(option: ModelOption): void {
-		void navigator.clipboard.writeText(option.model).then(() => toast.success('Model id copied'));
 	}
 
 	function saveOverride(option: ModelOption, override: ModelOverride): void {
@@ -190,11 +182,7 @@
 			bind:filter
 			{groups}
 			{isFavorite}
-			onCopyId={copyId}
 			onSelect={(option) => (selectedId = option.id)}
-			onToggleFavorite={toggleFavorite}
-			onToggleLoad={(option) => void toggleLoad(option)}
-			onUseInNewChat={(option) => void useInNewChat(option)}
 			{selectedId}
 			{summary}
 		/>

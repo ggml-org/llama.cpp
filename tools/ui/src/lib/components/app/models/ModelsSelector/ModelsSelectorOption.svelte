@@ -1,18 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import {
-		CircleAlert,
-		Heart,
-		HeartOff,
-		Info,
-		Loader2,
-		Power,
-		PowerOff,
-		RotateCw
-	} from '@lucide/svelte';
-	import { ActionIcon, ModelAvatar, ModelId } from '$lib/components/app';
-	import { BackendIcon } from '$lib/components/app/backends';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ModelAvatar, ModelId, ModelLoadControl, ModelRowActions } from '$lib/components/app';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -115,154 +103,17 @@
 	/>
 
 	<div class="flex shrink-0 items-center gap-1">
-		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<!-- svelte-ignore a11y_click_events_have_key_events -->
-		<div
-			class="pointer-events-none flex items-center justify-center gap-1 pl-2 group-hover:pointer-events-auto [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100 {isFav
-				? ''
-				: 'opacity-0 group-hover:opacity-100'}"
-			onclick={(e) => e.stopPropagation()}
-		>
-			<!-- info button: only shown when model is loaded and callback is provided -->
-			{#if isLoaded && onInfoClick}
-				<!-- the wrapper above stays visible for a favorite, this one does not -->
-				<span class="flex opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100">
-					<ActionIcon
-						class="h-5 w-5 hover:text-foreground"
-						icon={Info}
-						iconSize="h-4 w-4"
-						onclick={() => onInfoClick(option.model)}
-						tooltip="Model information"
-						tooltipAsTitle
-					/>
-				</span>
-			{/if}
+		<ModelRowActions {isFav} {isLoaded} onInfo={onInfoClick} {option} />
 
-			{#if isFav}
-				<!-- a favorite keeps a colored stroke heart at rest; hovering the row
-				     swaps it for the crossed one -->
-				<span class="flex h-5 w-5 items-center justify-center">
-					<span class="flex group-hover:hidden [@media(pointer:coarse)]:hidden">
-						<ActionIcon
-							class="h-5 w-5 text-rose-500 hover:text-foreground"
-							icon={Heart}
-							iconSize="h-4 w-4"
-							onclick={() => modelsStore.toggleFavorite(option.model)}
-							tooltip="Remove from favorites"
-							tooltipAsTitle
-						/>
-					</span>
-
-					<span class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
-						<ActionIcon
-							class="h-5 w-5 hover:text-foreground"
-							icon={HeartOff}
-							iconSize="h-4 w-4"
-							onclick={() => modelsStore.toggleFavorite(option.model)}
-							tooltip="Remove from favorites"
-							tooltipAsTitle
-						/>
-					</span>
-				</span>
-			{:else}
-				<ActionIcon
-					class="h-5 w-5 hover:text-foreground"
-					icon={Heart}
-					iconSize="h-4 w-4"
-					onclick={() => modelsStore.toggleFavorite(option.model)}
-					tooltip="Add to favorites"
-					tooltipAsTitle
-				/>
-			{/if}
-		</div>
-
-		{#if !canLoad}
-			<!-- external providers carry no load state: the row shows the provider
-			     mark instead, which is what identifies it in a flat list -->
-			{#if rowBackend}
-				<div class="flex w-5 items-center justify-center">
-					<BackendIcon backend={rowBackend} class="h-3.5 w-3.5" />
-				</div>
-			{/if}
-		{:else if isLoading}
-			<div class="flex w-5 items-center justify-center">
-				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
-			</div>
-		{:else if isFailed}
-			<div class="flex w-5 items-center justify-center">
-				<CircleAlert
-					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
-				/>
-
-				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
-					<ActionIcon
-						class="h-5 w-5 text-red-500 hover:text-foreground"
-						icon={RotateCw}
-						iconSize="h-4 w-4"
-						onclick={() => modelsStore.status.load(option.model)}
-						stopPropagationOnClick
-						tooltip="Retry loading model"
-						tooltipAsTitle
-					/>
-				</div>
-			</div>
-		{:else if isSleeping}
-			<div class="flex w-5 items-center justify-center">
-				<span
-					class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden [@media(pointer:coarse)]:hidden"
-				></span>
-
-				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
-					<ActionIcon
-						class="h-5 w-5 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
-						icon={PowerOff}
-						iconSize="h-4 w-4"
-						onclick={(e) => {
-							e?.stopPropagation();
-							modelsStore.status.unload(option.model);
-						}}
-						tooltip="Unload model"
-						tooltipAsTitle
-					/>
-				</div>
-			</div>
-		{:else if isLoaded}
-			<div class="flex w-5 items-center justify-center">
-				<span
-					class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
-				></span>
-
-				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
-					<ActionIcon
-						class="h-5 w-5 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
-						icon={PowerOff}
-						iconSize="h-4 w-4"
-						onclick={() => modelsStore.status.unload(option.model)}
-						stopPropagationOnClick
-						tooltip="Unload model"
-						tooltipAsTitle
-					/>
-				</div>
-			</div>
-		{:else}
-			<div class="flex w-5 items-center justify-center">
-				<span
-					class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden [@media(pointer:coarse)]:hidden"
-				></span>
-
-				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
-					<ActionIcon
-						class="h-5 w-5 [@media(pointer:coarse)]:text-muted-foreground"
-						icon={Power}
-						iconSize="h-4 w-4"
-						onclick={() => modelsStore.status.load(option.model)}
-						stopPropagationOnClick
-						tooltip="Load model"
-						tooltipAsTitle
-					/>
-				</div>
-			</div>
-		{/if}
+		<ModelLoadControl
+			{canLoad}
+			{isFailed}
+			{isLoaded}
+			{isLoading}
+			{isSleeping}
+			{option}
+			showBackendMark
+		/>
 	</div>
 
 	{#if isLoading}

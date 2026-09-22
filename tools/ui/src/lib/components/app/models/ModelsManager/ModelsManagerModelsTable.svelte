@@ -1,24 +1,27 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
 	import { modelSizeLabel } from './utils';
-	import { Heart, Loader2, MoreHorizontal, Power } from '@lucide/svelte';
-	import { Logo, ModelAvatar, ModelId, ModelsSection } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { Heart, Power } from '@lucide/svelte';
+	import {
+		Logo,
+		ModelAvatar,
+		ModelId,
+		ModelLoadControl,
+		ModelRowActions,
+		ModelsSection
+	} from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 
 	interface Props {
 		filter?: string;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
-		onCopyId: (option: ModelOption) => void;
 		onSelect: (option: ModelOption) => void;
-		onToggleFavorite: (option: ModelOption) => void;
-		onToggleLoad: (option: ModelOption) => void;
-		onUseInNewChat: (option: ModelOption) => void;
 		selectedId: string | null;
 		summary: string;
 	}
@@ -27,11 +30,7 @@
 		filter = $bindable(''),
 		groups,
 		isFavorite,
-		onCopyId,
 		onSelect,
-		onToggleFavorite,
-		onToggleLoad,
-		onUseInNewChat,
 		selectedId,
 		summary
 	}: Props = $props();
@@ -54,10 +53,11 @@
 		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
 		!isOperationInProgress}
 	{@const isFailed = status === ServerModelStatus.FAILED}
+	{@const isSleeping = status === ServerModelStatus.SLEEPING}
 	{@const size = modelSizeLabel(option)}
 	{@const favorite = isFavorite(option)}
 
-	<div class="px-2">
+	<div>
 		<div
 			class={[
 				rowGrid,
@@ -86,69 +86,24 @@
 
 			<span class="text-sm text-muted-foreground">{size ?? '—'}</span>
 
-			<span class="flex justify-center">
-				{#if isLoading}
-					<Loader2 class="h-3.5 w-3.5 animate-spin text-amber-500" />
-				{:else if isFailed}
-					<span class="block h-2.5 w-2.5 rounded-full bg-destructive"></span>
-				{:else}
-					<span
-						class="block h-2.5 w-2.5 rounded-full {isLoaded
-							? 'bg-emerald-500'
-							: 'border border-muted-foreground/50'}"
-					></span>
-				{/if}
-			</span>
+			<ModelLoadControl
+				canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
+				{isFailed}
+				{isLoaded}
+				{isLoading}
+				{isSleeping}
+				{option}
+			/>
 
-			<span class="flex items-center justify-end gap-1">
-				<Button
-					aria-label={favorite ? 'Remove from favorites' : 'Add to favorites'}
-					class={['h-7 w-7', favorite ? 'text-foreground' : 'text-muted-foreground']}
-					onclick={(event) => {
-						event.stopPropagation();
-						onToggleFavorite(option);
-					}}
-					size="icon"
-					variant="ghost"
-				>
-					<Heart class={favorite ? 'h-3.5 w-3.5 fill-current' : 'h-3.5 w-3.5'} />
-				</Button>
-
-				<DropdownMenu.Root>
-					<DropdownMenu.Trigger>
-						{#snippet child({ props })}
-							<Button
-								{...props}
-								aria-label="More actions"
-								class="h-7 w-7 text-muted-foreground"
-								onclick={(event) => event.stopPropagation()}
-								size="icon"
-								variant="ghost"
-							>
-								<MoreHorizontal class="h-3.5 w-3.5" />
-							</Button>
-						{/snippet}
-					</DropdownMenu.Trigger>
-
-					<DropdownMenu.Content align="end">
-						<DropdownMenu.Item onclick={() => onUseInNewChat(option)}>
-							Use in New Chat
-						</DropdownMenu.Item>
-
-						<DropdownMenu.Item onclick={() => onToggleLoad(option)}>
-							{isLoaded ? 'Eject Model' : 'Load Model'}
-						</DropdownMenu.Item>
-
-						<DropdownMenu.Item onclick={() => onCopyId(option)}>Copy model id</DropdownMenu.Item>
-					</DropdownMenu.Content>
-				</DropdownMenu.Root>
+			<span class="flex items-center justify-end">
+				<ModelRowActions isFav={favorite} {isLoaded} {option} revealOnHover={false} />
 			</span>
 		</div>
 	</div>
 {/snippet}
 
 <div class="flex h-full min-h-0 flex-col">
-	<div class="flex shrink-0 items-center gap-2 px-4 py-3">
+	<div class="flex shrink-0 items-center gap-2 py-4">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
 
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
