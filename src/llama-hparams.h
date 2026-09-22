@@ -49,6 +49,13 @@ struct llama_hparams_convnext {
     uint32_t n_layer;
 };
 
+struct llama_hparams_ctc {
+    uint32_t context_size; // Shaw rel-pos block attention size
+    uint32_t max_pos_emb;  // Shaw rel-pos embedding table size
+    uint32_t conv_kernel;
+    uint32_t conv_expansion_factor; // conv module inner_dim = n_embd * this
+};
+
 struct llama_hparams {
     // note: use the `_impl` suffix to avoid name conflict between members and getters
     //       for example: n_embd_out() vs n_embd_out_impl
@@ -92,6 +99,9 @@ struct llama_hparams {
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
+
+    // for granite-speech-5 / ctc encoder
+    struct llama_hparams_ctc ctc;
 
     uint32_t n_shortconv_l_cache  = 0;
 
