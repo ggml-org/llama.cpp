@@ -1567,13 +1567,22 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     auto * t_embd    = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
     auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn() : nullptr;
 
+    // most encoder graphs produce exactly one output per input token, but an
+    // architecture is free to change the sequence length internally (e.g. time
+    // subsampling) - read the actual length off whichever output tensor the
+    // graph produced instead of assuming it matches n_tokens.
+    // `output_reserve(n_tokens)` above already sized the buffers to the upper
+    // bound, since a graph can only ever shrink the sequence, not grow it
+    const int64_t n_outputs_enc = t_logits ? t_logits->ne[1] : t_embd ? t_embd->ne[1] : n_tokens;
+    n_outputs = n_outputs_enc;
+
     // extract logits
     if (logits.data && t_logits) {
         ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits.data != nullptr);
 
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs_enc*n_vocab*sizeof(float));
     }
 
     // extract embeddings
@@ -1588,8 +1597,8 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
                     GGML_ASSERT(embd.data != nullptr);
                     const uint32_t n_embd_out = hparams.n_embd_out();
 
-                    GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd.size);
-                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_embd_out*sizeof(float));
+                    GGML_ASSERT(n_outputs_enc*n_embd_out <= (int64_t) embd.size);
+                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_outputs_enc*n_embd_out*sizeof(float));
                 } break;
             case LLAMA_POOLING_TYPE_MEAN:
             case LLAMA_POOLING_TYPE_CLS:
