@@ -2572,6 +2572,11 @@ class MmprojModel(ModelBase):
     has_vision_encoder: bool = True # by default
     has_audio_encoder: bool = False
 
+    # some mmproj files (e.g. a front-end-only preprocessor with no learned encoder, paired
+    # with a native, non-mmproj llama_model instead of a text LLM) are never paired with a
+    # text backbone at all - subclasses set this to False to skip the n_embd_text lookup below
+    has_text_backbone: bool = True
+
     # for models having multiple encoders, we need to separate their hparams
     hparams_vision: dict[str, Any] | None = None
     hparams_audio: dict[str, Any] | None = None
@@ -2583,6 +2588,8 @@ class MmprojModel(ModelBase):
             raise TypeError("MmprojModel must be subclassed with model_arch = gguf.MODEL_ARCH.MMPROJ")
 
         # get n_embd of the text model
+        if not self.has_text_backbone:
+            self.n_embd_text = 0
         if not self.is_mistral_format:
             if "text_config" not in self.hparams:
                 self.hparams["text_config"] = {}
@@ -2597,7 +2604,7 @@ class MmprojModel(ModelBase):
             # mistral native params.json: "dim" is the text hidden size ("hidden_dim" is the FFN intermediate size)
             self.n_embd_text = text_config.get("dim", 0)
 
-        assert self.n_embd_text > 0, "n_embd not found in hparams"
+        assert not self.has_text_backbone or self.n_embd_text > 0, "n_embd not found in hparams"
 
         # move vision config to the top level, while preserving the original hparams in global_config
         import copy
