@@ -2986,12 +2986,14 @@ static ggml_metal_tuning::fa_cfg_t ggml_metal_op_flash_attn_ext_cfg(const ggml_t
 
     const int64_t ne00 = op->src[0]->ne[0]; // DK
     const int64_t ne01 = op->src[0]->ne[1]; // number of queries
+    const int64_t ne02 = op->src[0]->ne[2]; // number of query heads
+    const int64_t ne03 = op->src[0]->ne[3]; // number of streams
     const int64_t ne11 = op->src[1]->ne[1]; // KV length
     const int64_t ne20 = op->src[2]->ne[0]; // DV
 
     const ggml_metal_tuning::fa_cfg_t baseline = { OP_FLASH_ATTN_EXT_NQPSG, 0 };
 
-    const ggml_metal_tuning::fa_cfg_t cfg = ggml_metal_tuning::fa_pick(props_dev->device_id, props_dev->gpu_family, (int) ne00, (int) ne20, ne11, ne01);
+    const ggml_metal_tuning::fa_cfg_t cfg = ggml_metal_tuning::fa_pick(props_dev->device_id, props_dev->gpu_family, (int) ne00, (int) ne20, ne11, ne01, ne02, ne03);
 
     // only Q = 16 with nsg = 4 or 8 is instantiated
     if (cfg.Q != 2*OP_FLASH_ATTN_EXT_NQPSG || (cfg.NSG != 4 && cfg.NSG != 8)) {

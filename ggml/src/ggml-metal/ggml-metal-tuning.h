@@ -77,6 +77,7 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
 // then under its family representative -> baseline.
 // ne01 < FA_NE01_MIN always uses baseline, and so does ne01 < FA_NE01_MIN_PARTIAL when the last wide tile
 // would be padded with more rows than the baseline tile.
+// a row applies from tiles_min dispatched wide tiles (ceil(ne01/16)*ne02*ne03), below that baseline is kept.
 constexpr int FA_NE11_BUCKETS[]   = { 4096, 8192, 16384, 32768, 65536 };
 constexpr int FA_NE01_MIN         = 64;
 constexpr int FA_NE01_MIN_PARTIAL = 256;
@@ -106,12 +107,13 @@ struct fa_cfg_t {
 struct fa_entry_t {
     fa_key_t key;
     fa_cfg_t cfg;
+    int16_t  tiles_min;
 };
 
 // test/tune-only override; when set, fa_pick returns it directly.
 void fa_set_override(fa_cfg_t cfg);
 void fa_clear_override();
 
-fa_cfg_t fa_pick(enum ggml_metal_device_id device_id, int gpu_family, int dk, int dv, int64_t ne11, int64_t ne01);
+fa_cfg_t fa_pick(enum ggml_metal_device_id device_id, int gpu_family, int dk, int dv, int64_t ne11, int64_t ne01, int64_t ne02, int64_t ne03);
 
 }  // namespace ggml_metal_tuning
