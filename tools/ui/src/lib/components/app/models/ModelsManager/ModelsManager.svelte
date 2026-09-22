@@ -21,10 +21,9 @@
 
 	interface Props {
 		onClose?: () => void;
-		onOpenDiscover?: () => void;
 	}
 
-	let { onClose, onOpenDiscover }: Props = $props();
+	let { onClose }: Props = $props();
 
 	let filter = $state('');
 	let selectedId = $state<string | null>(null);
@@ -187,14 +186,12 @@
 			{groups}
 			{isFavorite}
 			onCopyId={copyId}
-			onGetModels={() => onOpenDiscover?.()}
 			onSelect={(option) => (selectedId = option.id)}
 			onToggleFavorite={toggleFavorite}
 			onToggleLoad={(option) => void toggleLoad(option)}
 			onUseInNewChat={(option) => void useInNewChat(option)}
 			{selectedId}
 			{summary}
-			title="All models"
 		/>
 	</div>
 

@@ -458,13 +458,7 @@
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
-<DialogManageModels
-	bind:open={manageModelsOpen}
-	onOpenDiscover={() => {
-		manageModelsOpen = false;
-		modelsDiscoverOpen = true;
-	}}
-/>
+<DialogManageModels bind:open={manageModelsOpen} />
 
 <DialogModelsDiscover bind:open={modelsDiscoverOpen} />
 
