@@ -85,10 +85,40 @@
 	let fetchedBaseModelOrg = $state<string | null>(null);
 	let baseModelOrg = $derived(orgOf(tagBaseModel) || fetchedBaseModelOrg);
 
+	// Long local lists mount hundreds of rows at once; resolving every base model
+	// up front means one Hugging Face request per row, so wait until a row is
+	// actually near the viewport.
+	let rowEl = $state<HTMLElement | null>(null);
+	let isNearViewport = $state(false);
+
+	$effect(() => {
+		if (isNearViewport || !rowEl) return;
+
+		if (typeof IntersectionObserver === 'undefined') {
+			isNearViewport = true;
+
+			return;
+		}
+
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries.some((entry) => entry.isIntersecting)) {
+					isNearViewport = true;
+					observer.disconnect();
+				}
+			},
+			{ rootMargin: '200px' }
+		);
+
+		observer.observe(rowEl);
+
+		return () => observer.disconnect();
+	});
+
 	$effect(() => {
 		fetchedBaseModelOrg = null;
 
-		if (!showBaseModelAvatar || !orgName || tagBaseModel) return;
+		if (!isNearViewport || !showBaseModelAvatar || !orgName || tagBaseModel) return;
 
 		// external provider ids (`~openai/gpt-...`, `deepseek/deepseek-chat`) are
 		// not HF repos; their org is already the provider slug, so the base model
@@ -117,6 +147,7 @@
 </script>
 
 <div
+	bind:this={rowEl}
 	aria-selected={isSelected || isHighlighted}
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
