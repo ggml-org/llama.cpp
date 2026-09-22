@@ -154,32 +154,23 @@ class HunYuanMoEModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-def _fix_special_tokens(model) -> None:
-    """Fix EOS/EOT tokens that are incorrect in upstream configs.
-
-    Module-level and taking `model` explicitly: a draft model (e.g. DFlash) has
-    no tokenizer of its own and borrows the target's by calling the target
-    class' set_vocab() unbound with the draft instance, so this must not rely
-    on the instance being a HunYuanModel.
-    """
-    eod_id = model.hparams.get("eod_token_id")
-    if eod_id is not None:
-        model.gguf_writer.add_eos_token_id(eod_id)
-
-    gen_cfg = model.dir_model / "generation_config.json"
-    if gen_cfg.is_file():
-        with open(gen_cfg, encoding="utf-8") as f:
-            eos = json.load(f).get("eos_token_id")
-        if isinstance(eos, list) and len(eos) >= 2:
-            model.gguf_writer.add_eot_token_id(eos[0])
-
-
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
 @ModelBase.example("tencent/Hunyuan-4B-Instruct")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
     def set_vocab(self):
+        # The tokenizer below is read from dir_model, and a draft model (e.g.
+        # DFlash) points dir_model at its target for the duration of this call.
+        # Take the special token ids from that same config, so they describe the
+        # tokenizer being written: the draft has no eod_token_id, and the v1.0
+        # target uses pad_token_id=-1.
+        with open(self.dir_model / "config.json", encoding="utf-8") as f:
+            config = json.load(f)
+        config = {**config, **config.get("text_config", {})}
+        self.hparams["pad_token_id"] = config.get("pad_token_id")
+        self.hparams["eod_token_id"] = config.get("eod_token_id")
+
         if (self.dir_model / "tokenizer.json").is_file():
             tokens, toktypes, tokpre = self.get_vocab_base()
             self.gguf_writer.add_tokenizer_model("gpt2")
@@ -194,7 +185,6 @@ class HunYuanModel(TextModel):
                 token_types = ('bos', 'eos', 'unk', 'sep', 'cls', 'mask')
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True, special_token_types=token_types)
             special_vocab.add_to_gguf(self.gguf_writer)
-            _fix_special_tokens(self)
         else:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -246,7 +236,18 @@ class HunYuanModel(TextModel):
             # FIX for BOS token: Overwrite incorrect id read from config.json
             if self.hparams['hidden_size'] == 4096:
                 self.gguf_writer.add_bos_token_id(127958) # only for 7b dense, fix <|bos|> token
-            _fix_special_tokens(self)
+
+        # Fix EOS/EOT tokens that are incorrect in upstream configs.
+        eod_id = self.hparams.get("eod_token_id")
+        if eod_id is not None:
+            self.gguf_writer.add_eos_token_id(eod_id)
+
+        gen_cfg = self.dir_model / "generation_config.json"
+        if gen_cfg.is_file():
+            with open(gen_cfg, encoding="utf-8") as f:
+                eos = json.load(f).get("eos_token_id")
+            if isinstance(eos, list) and len(eos) >= 2:
+                self.gguf_writer.add_eot_token_id(eos[0])
 
     def set_gguf_parameters(self):
         # Some HunYuanVL variants set num_experts=1 (not real MoE);
