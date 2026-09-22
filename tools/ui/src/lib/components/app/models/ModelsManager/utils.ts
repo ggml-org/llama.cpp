@@ -45,7 +45,7 @@ export interface ModelsTableGroup {
 	items: ModelOption[];
 	key: string;
 	/** Picks the header icon; providers use their backend logo instead. */
-	kind: 'favorites' | 'loaded' | 'local' | 'provider';
+	kind: 'favorites' | 'hidden' | 'loaded' | 'local' | 'provider';
 	label: string;
 }
 

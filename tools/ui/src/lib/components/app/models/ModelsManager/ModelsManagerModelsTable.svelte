@@ -89,7 +89,7 @@
 				: []),
 			{
 				icon: isHidden ? Eye : EyeOff,
-				label: isHidden ? 'Show in selector' : 'Hide from selector',
+				label: isHidden ? 'Unhide model' : 'Hide model',
 				onclick: () => modelsStore.toggleHidden(option.id),
 				separator: true
 			}
@@ -132,10 +132,6 @@
 		>
 			<span class="flex min-w-0 items-center gap-3">
 				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
-
-				{#if isHidden}
-					<EyeOff class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-				{/if}
 
 				<ModelId
 					aliases={option.aliases}
@@ -214,6 +210,8 @@
 						<Heart class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === 'loaded'}
 						<Power class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'hidden'}
+						<EyeOff class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === 'local'}
 						<Logo class="shrink-0" style="--size: 0.875rem" />
 					{/if}
@@ -224,6 +222,7 @@
 					count={group.items.length}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					open={group.kind !== 'hidden'}
 					sticky
 				>
 					{#each group.items as option (option.id)}

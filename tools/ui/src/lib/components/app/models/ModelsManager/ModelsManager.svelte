@@ -51,11 +51,14 @@
 		// only llama-compat servers report a load state
 		const isLlamaCompat = (option: ModelOption) =>
 			getBackendCapabilities(getBackend(option.backendId)).loadUnload;
-		const loaded = visible.filter(
+		// hidden models drop out of the sections and get their own block at the end
+		const shown = visible.filter((option) => !modelsStore.isHidden(option.id));
+		const hidden = visible.filter((option) => modelsStore.isHidden(option.id));
+		const loaded = shown.filter(
 			(option) => isLlamaCompat(option) && modelsStore.isModelLoaded(option.model)
 		);
 		const claimed = new SvelteSet(loaded.map((option) => option.id));
-		const favorites = visible.filter(
+		const favorites = shown.filter(
 			(option) => !claimed.has(option.id) && modelsStore.favoriteModelIds.has(option.model)
 		);
 
@@ -63,7 +66,7 @@
 
 		const byBackend = new SvelteMap<string, ModelOption[]>();
 
-		for (const option of visible) {
+		for (const option of shown) {
 			if (claimed.has(option.id)) continue;
 
 			const backendId = option.backendId ?? LOCAL_BACKEND_ID;
@@ -125,6 +128,17 @@
 					label: backend.name
 				});
 			}
+		}
+
+		if (hidden.length) {
+			ordered.push({
+				backendId: null,
+				isLocal: false,
+				items: hidden,
+				key: 'hidden',
+				kind: 'hidden',
+				label: 'Hidden models'
+			});
 		}
 
 		return ordered;

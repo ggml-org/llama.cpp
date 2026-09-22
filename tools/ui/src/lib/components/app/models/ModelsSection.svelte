@@ -19,6 +19,8 @@
 		loading?: boolean;
 		/** Renders the back control, for a drilled-in provider. */
 		onBack?: () => void;
+		/** Start expanded; the manager collapses its hidden block. */
+		open?: boolean;
 		revealChevronOnHover?: boolean;
 		sectionHeaderClass?: string;
 		/** Sticks the header to the top of the scrollport. */
@@ -34,6 +36,7 @@
 		label,
 		loading = false,
 		onBack,
+		open = true,
 		revealChevronOnHover = false,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
 		sticky = false
@@ -46,7 +49,7 @@
 	let triggerStyle = $derived(sticky ? 'top: var(--dropdown-sticky-height, 0px)' : '');
 </script>
 
-<CollapsibleSection {revealChevronOnHover} {triggerClass} {triggerStyle}>
+<CollapsibleSection {open} {revealChevronOnHover} {triggerClass} {triggerStyle}>
 	{#snippet trigger()}
 		{#if onBack}
 			<button
