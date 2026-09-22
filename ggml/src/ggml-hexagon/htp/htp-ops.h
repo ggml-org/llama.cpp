@@ -71,6 +71,7 @@ enum htp_op_code {
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
+    HTP_OP_GLU_GEGLU_QUICK,
     HTP_OP_SOFTMAX,
     HTP_OP_ADD_ID,
     HTP_OP_ROPE,
@@ -81,6 +82,7 @@ enum htp_op_code {
     HTP_OP_CPY,
     HTP_OP_CPY_FENCE,
     HTP_OP_ARGSORT,
+    HTP_OP_TOP_K,
     HTP_OP_SQR,
     HTP_OP_SQRT,
     HTP_OP_SUM_ROWS,
@@ -131,10 +133,13 @@ enum htp_tensor_flags {
     HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
 };
 
+enum htp_buf_flags {
+    HTP_BUF_EXTENDED = (1U << 0),
+};
+
 // Tensor descriptor
 struct htp_tensor {
-    uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
-    uint32_t reserved;             // Reserved for alignment padding (must be multiple of 8)
+    uint64_t data;                 // Buffer offset in the messages, and data pointer on the NPU
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
     uint32_t type;                 // Data type
@@ -148,12 +153,12 @@ struct htp_tensor {
 struct htp_buf_desc {
     uint64_t base;     // base address
     uint64_t size;     // total size
-    uint32_t flags;    // buffer flags (unused)
+    uint32_t flags;    // HTP_BUF_*
     uint32_t fd;       // file descriptor
 };
 
 enum htp_op_flags {
-    HTP_OPFLAGS_SKIP_COMPUTE  = (1U << 0), // Skip actual computation (used for profiling)
+    HTP_OPFLAGS_STUB  = (1U << 0),
 };
 
 // Op descriptor
@@ -198,6 +203,14 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_FA_Q_PREP       = 28,
     HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
     HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
+
+    HTP_TRACE_EVT_HVX_GDN_PREP        = 31,
+    HTP_TRACE_EVT_HVX_GDN_SOLVE       = 32,
+    HTP_TRACE_EVT_HVX_GDN_V_PREP      = 33,
+    HTP_TRACE_EVT_HVX_GDN_D_PREP      = 34,
+    HTP_TRACE_EVT_HVX_GDN_OUT         = 35,
+    HTP_TRACE_EVT_HVX_GDN_STATE       = 36,
+    HTP_TRACE_EVT_HVX_GDN_REM         = 37,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };
