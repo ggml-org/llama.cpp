@@ -185,6 +185,9 @@ struct llama_hparams {
     // for hybrid state space models
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
+    // granite-speech-5: integer temporal subsample factor per-layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> subsample_factor_impl;
+
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
     uint32_t ssm_d_inner = 0;
@@ -398,6 +401,9 @@ struct llama_hparams {
 
     // whether or not the given layer is recurrent (for hybrid models)
     bool is_recr(uint32_t il) const;
+
+    // per-layer subsample factor
+    uint32_t subsample_factor(uint32_t il) const;
 
     uint32_t n_head(uint32_t il = 0) const;
 
