@@ -391,7 +391,6 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_debug_sparse_fa = ggml_sycl_get_env("GGML_SYCL_SPARSE_FA_DEBUG", 0);
         g_ggml_sycl_sparse_fa_margin = ggml_sycl_get_env("GGML_SYCL_SPARSE_FA_MARGIN", 256);
 
-
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
         GGML_LOG_INFO("Build with Macros:\n");
@@ -430,7 +429,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_SUPPORT_VMM: no\n");
 #endif
 
-//Print the running environment variables for SYCL backend
+        //Print the running environment variables for SYCL backend
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
         GGML_LOG_INFO("  GGML_SYCL_DEV_DEBUG: %d\n", g_ggml_sycl_dev_debug);
