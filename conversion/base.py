@@ -776,6 +776,36 @@ class ModelBase:
         raw = torch.cat((s.unsqueeze(-1), qs.to(torch.uint8)), dim=-1)
         return raw.reshape(rows, n_blocks * 17).cpu().numpy()
 
+    def _mxfp4_expert_tensor(self, loaders: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]):
+        """
+        One stacked [n_expert, rows, cols] MXFP4 tensor, built lazily.
+
+        gguf_writer holds every added tensor until the final write, so building
+        this eagerly (like the DeepSeek-V4 path does) keeps every expert in
+        memory at once. lazy means only the tensor being written is resident.
+        """
+        # meta shapes, so this does not read any weights
+        rows, packed_cols = loaders[0][0]().shape
+        n_blocks = (packed_cols * 2) // 32
+        byte_shape = (len(loaders), rows, n_blocks * 17)
+
+        def load(fns: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]) -> np.ndarray:
+            out = np.empty(byte_shape, dtype=np.uint8)
+            for eid, (packed_fn, scale_fn) in enumerate(fns):
+                out[eid] = self.repack_mxfp4_blocks(
+                    LazyTorchTensor.to_eager(packed_fn()),
+                    LazyTorchTensor.to_eager(scale_fn()),
+                )
+            return out
+
+        # loaders goes through args, not the closure, so that `func` matches
+        # LazyBase's single-argument shape
+        return gguf.LazyNumpyTensor(
+            meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(np.uint8, byte_shape),
+            args=(loaders,),
+            func=load,
+        )
+
     @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.

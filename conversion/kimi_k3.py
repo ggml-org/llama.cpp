@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, TYPE_CHECKING
+from typing import Iterable, Iterator, TYPE_CHECKING
 
-import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
+from .base import ModelBase, TextModel, gguf, logger
 
 from .kimi_linear import KimiLinearModel
 
@@ -103,36 +102,6 @@ class KimiK3Model(TextModel):
                 f"{len(stray)} MXFP4 tensor(s) outside the routed experts, e.g. {stray[0]!r}; "
                 "only the routed experts have a repack path"
             )
-
-    def _mxfp4_expert_tensor(self, loaders: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]):
-        """
-        One stacked [n_expert, rows, cols] MXFP4 tensor, built lazily.
-
-        gguf_writer holds every added tensor until the final write, so building
-        this eagerly (like the DeepSeek-V4 path does) keeps all ~1.38 TB of
-        experts in memory. lazy means only the tensor being written is resident.
-        """
-        # meta shapes, so this does not read any weights
-        rows, packed_cols = loaders[0][0]().shape
-        n_blocks = (packed_cols * 2) // 32
-        byte_shape = (len(loaders), rows, n_blocks * 17)
-
-        def load(fns: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]) -> np.ndarray:
-            out = np.empty(byte_shape, dtype=np.uint8)
-            for eid, (packed_fn, scale_fn) in enumerate(fns):
-                out[eid] = self.repack_mxfp4_blocks(
-                    LazyTorchTensor.to_eager(packed_fn()),
-                    LazyTorchTensor.to_eager(scale_fn()),
-                )
-            return out
-
-        # loaders goes through args, not the closure, so that `func` matches
-        # LazyBase's single-argument shape
-        return gguf.LazyNumpyTensor(
-            meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(np.uint8, byte_shape),
-            args=(loaders,),
-            func=load,
-        )
 
     def _write_mxfp4_experts(self) -> None:
         n_experts = self.hparams["num_experts"]

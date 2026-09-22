@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
@@ -167,6 +167,84 @@ class MimoV2Model(TextModel):
 
         self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
 
+    _MXFP4_EXPERT_RE = re.compile(
+        r"^model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(gate|up|down)_proj\.weight$"
+    )
+    _MXFP4_PROJ = {
+        "gate": gguf.MODEL_TENSOR.FFN_GATE_EXP,
+        "up":   gguf.MODEL_TENSOR.FFN_UP_EXP,
+        "down": gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+    }
+
+    def _is_mxfp4_packed(self) -> bool:
+        quant_config = self.hparams.get("quantization_config") or {}
+        if quant_config.get("store_dtype") != "mxfp4":
+            return False
+        # repack_mxfp4_blocks assumes ggml's 32-element group
+        block_size = quant_config.get("mxfp4_block_size", 32)
+        if block_size != 32:
+            raise NotImplementedError(
+                f"MXFP4 block size {block_size} is not ggml's QK_MXFP4 (32)")
+        return True
+
+    def _write_mxfp4_experts(self) -> None:
+        n_experts = self.hparams["n_routed_experts"]
+
+        # the FP8 half uses `weight_scale_inv` and is left to dequant_model
+        stray = [n for n in self.model_tensors
+                 if n.endswith(".weight_scale") and not self._MXFP4_EXPERT_RE.match(n.removesuffix("_scale"))]
+        if stray:
+            raise NotImplementedError(
+                f"{len(stray)} MXFP4 tensor(s) outside the routed experts, e.g. {stray[0]!r}; "
+                "only the routed experts have a repack path"
+            )
+
+        # (bid, proj) -> {expert id: (weight name, scale name)}
+        groups: dict[tuple[int, str], dict[int, tuple[str, str]]] = {}
+        for name in self.model_tensors:
+            m = self._MXFP4_EXPERT_RE.match(name)
+            if m is None:
+                continue
+            bid, eid, proj = int(m.group(1)), int(m.group(2)), m.group(3)
+            scale_name = name + "_scale"
+            if scale_name not in self.model_tensors:
+                raise KeyError(f"missing {scale_name} for {name}")
+            groups.setdefault((bid, proj), {})[eid] = (name, scale_name)
+
+        consumed: list[str] = []
+        for (bid, proj), experts in sorted(groups.items()):
+            missing = [e for e in range(n_experts) if e not in experts]
+            if missing or len(experts) != n_experts:
+                raise KeyError(
+                    f"layer {bid} {proj}_proj: {len(experts)} of {n_experts} experts present"
+                    + (f", first missing is {missing[0]}" if missing else "")
+                )
+
+            loaders = []
+            for eid in range(n_experts):
+                weight_name, scale_name = experts[eid]
+                loaders.append((self.model_tensors[weight_name], self.model_tensors[scale_name]))
+                consumed += [weight_name, scale_name]
+
+            data = self._mxfp4_expert_tensor(loaders)
+            new_name = self.format_tensor_name(self._MXFP4_PROJ[proj], bid)
+            shape = gguf.quant_shape_from_byte_shape(data.shape, gguf.GGMLQuantizationType.MXFP4)
+            logger.info(
+                f"{new_name}: repacked {n_experts} experts to MXFP4, "
+                f"shape = {{{', '.join(str(n) for n in reversed(shape))}}}"
+            )
+            self.gguf_writer.add_tensor(new_name, data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
+
+        for name in consumed:
+            del self.model_tensors[name]
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # not a generator on purpose: base.py chains this with get_tensors(), so the
+        # tensors used here must be removed from model_tensors before that starts
+        if self._is_mxfp4_packed():
+            self._write_mxfp4_experts()
+        return ()
+
     _experts: list[dict[str, Tensor]] | None = None
 
     @classmethod
@@ -192,7 +270,7 @@ class MimoV2Model(TextModel):
             bid = new_bid
 
         # process the experts separately
-        if name.find("mlp.experts") != -1:
+        if ".mlp.experts." in name and name.endswith(".weight"):
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
@@ -228,6 +306,10 @@ class MimoV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+        if self._is_mxfp4_packed():
+            self._is_mxfp4 = True
+            self.ftype = gguf.LlamaFileType.MOSTLY_MXFP4_MOE
 
 
 @ModelBase.register("MiMoV2ForCausalLM")
@@ -382,6 +464,8 @@ class MiMoV2VisionAudioModel(MmprojModel):
             "_codebook.inited",
         )
         for name, tensor in state_dict.items():
+            if name.startswith("decoder."):
+                continue
             if name.endswith(skip_suffixes):
                 continue
             if m := codebook_re.match(name):
