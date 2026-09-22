@@ -38,11 +38,13 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 
 export type ModelsListFilter = 'all' | 'favorites' | 'loaded';
 
-/** One backend, as listed in the manager's provider rail. */
-export interface ModelsProviderGroup {
-	backendId: string;
-	count: number;
+/** One collapsible block of the manager's table. */
+export interface ModelsTableGroup {
+	/** Null for the favorites group. */
+	backendId: string | null;
 	isLocal: boolean;
+	items: ModelOption[];
+	key: string;
 	label: string;
 }
 

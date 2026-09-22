@@ -1,6 +1,5 @@
 <script lang="ts">
 	import ModelsManagerModelSettings from './ModelsManagerModelSettings.svelte';
-	import ModelsManagerModelsList from './ModelsManagerModelsList/ModelsManagerModelsList.svelte';
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
 		isCustomized,
@@ -9,7 +8,7 @@
 		loadOverrides,
 		type ModelOverride,
 		type ModelsListFilter,
-		type ModelsProviderGroup,
+		type ModelsTableGroup,
 		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
@@ -28,7 +27,6 @@
 
 	let filter = $state('');
 	let view = $state<ModelsListFilter>('all');
-	let selectedBackendId = $state<string | null>(null);
 	let selectedId = $state<string | null>(null);
 	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
@@ -51,23 +49,31 @@
 			return true;
 		});
 	});
-	let providers = $derived.by(() => {
-		const counts = new SvelteMap<string, number>();
+	// favorites lead the table, then one block per provider
+	let groups = $derived.by(() => {
+		const favorites = visible.filter((option) => modelsStore.favoriteModelIds.has(option.model));
+		const rest = visible.filter((option) => !modelsStore.favoriteModelIds.has(option.model));
+		const byBackend = new SvelteMap<string, ModelOption[]>();
 
-		for (const option of visible) {
+		for (const option of rest) {
 			const backendId = option.backendId ?? LOCAL_BACKEND_ID;
 
-			counts.set(backendId, (counts.get(backendId) ?? 0) + 1);
+			if (!byBackend.has(backendId)) byBackend.set(backendId, []);
+
+			byBackend.get(backendId)!.push(option);
 		}
 
-		const ordered: ModelsProviderGroup[] = [];
-		const localCount = counts.get(LOCAL_BACKEND_ID);
+		const ordered: ModelsTableGroup[] = [
+			{ backendId: null, isLocal: false, items: favorites, key: 'favorites', label: 'Favorites' }
+		];
+		const localItems = byBackend.get(LOCAL_BACKEND_ID);
 
-		if (localCount) {
+		if (localItems?.length) {
 			ordered.push({
 				backendId: LOCAL_BACKEND_ID,
-				count: localCount,
 				isLocal: true,
+				items: localItems,
+				key: LOCAL_BACKEND_ID,
 				label: 'This server'
 			});
 		}
@@ -75,13 +81,14 @@
 		for (const backend of backendsStore.enabled) {
 			if (backend.id === LOCAL_BACKEND_ID) continue;
 
-			const count = counts.get(backend.id);
+			const items = byBackend.get(backend.id);
 
-			if (count) {
+			if (items?.length) {
 				ordered.push({
 					backendId: backend.id,
-					count,
 					isLocal: false,
+					items,
+					key: backend.id,
 					label: backend.name
 				});
 			}
@@ -89,11 +96,8 @@
 
 		return ordered;
 	});
-	let matches = $derived(
-		selectedBackendId === null
-			? visible
-			: visible.filter((option) => (option.backendId ?? LOCAL_BACKEND_ID) === selectedBackendId)
-	);
+	let matches = $derived(groups.flatMap((group) => group.items));
+
 	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
 	let summary = $derived.by(() => {
 		const local = matches.filter(isLocalOption);
@@ -113,12 +117,7 @@
 			.join(' · ');
 	});
 	let title = $derived(
-		view === 'favorites'
-			? 'Favorites'
-			: view === 'loaded'
-				? 'Loaded models'
-				: (providers.find((provider) => provider.backendId === selectedBackendId)?.label ??
-					'All models')
+		view === 'favorites' ? 'Favorites' : view === 'loaded' ? 'Loaded models' : 'All models'
 	);
 
 	function toggleFavorite(option: ModelOption): void {
@@ -154,23 +153,14 @@
 
 <div
 	class="grid min-h-0 flex-1"
-	style="grid-template-columns: 16rem minmax(0, 1fr){selected ? ' 30rem' : ''};"
+	style="grid-template-columns: minmax(0, 1fr){selected ? ' 30rem' : ''};"
 >
-	<div class="min-h-0 border-r border-border/40 px-2 py-3">
-		<ModelsManagerModelsList
-			onSelect={(backendId) => (selectedBackendId = backendId)}
-			{providers}
-			{selectedBackendId}
-			totalCount={visible.length}
-		/>
-	</div>
-
 	<div class="min-h-0">
 		<ModelsManagerModelsTable
 			bind:filter
 			bind:view
+			{groups}
 			{isFavorite}
-			models={matches}
 			onCopyId={copyId}
 			onGetModels={() => onOpenDiscover?.()}
 			onSelect={(option) => (selectedId = option.id)}
