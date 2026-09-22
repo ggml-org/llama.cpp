@@ -30,8 +30,7 @@ class SenseNovaU1Model(Qwen2Model):
         if self.hparams.get("use_sliding_window", False):
             raise ValueError("SenseNova U1 sliding attention is not supported")
         super().set_gguf_parameters()
-        self.gguf_writer.add_float32(
-            "sensenova_u1.rope.freq_base_spatial", self.hparams["rope_theta_hw"])
+        self.gguf_writer.add_rope_freq_base_spatial(self.hparams["rope_theta_hw"])
 
     def get_tensors(self):
         for name, gen in self.model_tensors.items():

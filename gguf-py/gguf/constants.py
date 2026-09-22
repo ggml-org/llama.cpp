@@ -252,6 +252,7 @@ class Keys:
         DIMENSION_COUNT_SWA       = "{arch}.rope.dimension_count_swa"
         DIMENSION_SECTIONS        = "{arch}.rope.dimension_sections"
         FREQ_BASE                 = "{arch}.rope.freq_base"
+        FREQ_BASE_SPATIAL         = "{arch}.rope.freq_base_spatial"
         FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
         SCALING_TYPE              = "{arch}.rope.scaling.type"
         SCALING_FACTOR            = "{arch}.rope.scaling.factor"
@@ -5919,6 +5920,7 @@ KEY_ATTENTION_LAYERNORM_RMS_EPS = Keys.Attention.LAYERNORM_RMS_EPS
 # RoPE
 KEY_ROPE_DIMENSION_COUNT           = Keys.Rope.DIMENSION_COUNT
 KEY_ROPE_FREQ_BASE                 = Keys.Rope.FREQ_BASE
+KEY_ROPE_FREQ_BASE_SPATIAL          = Keys.Rope.FREQ_BASE_SPATIAL
 KEY_ROPE_SCALING_TYPE              = Keys.Rope.SCALING_TYPE
 KEY_ROPE_SCALING_FACTOR            = Keys.Rope.SCALING_FACTOR
 KEY_ROPE_SCALING_ORIG_CTX_LEN      = Keys.Rope.SCALING_ORIG_CTX_LEN

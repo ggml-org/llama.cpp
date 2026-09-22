@@ -9,6 +9,8 @@ public:
         if (ubatch->pos && pos) {
             const int64_t n_tokens = ubatch->n_tokens;
 
+            // U1 expects text-token positions in the temporal plane only: [t, 0, 0, 0].
+            // The generic M-RoPE input uses [t, t, t, 0], so U1 needs a custom input class.
             if (ubatch->token) {
                 std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd, 0);
                 for (int i = 0; i < n_tokens; ++i) {
@@ -26,7 +28,7 @@ public:
 void llama_model_sensenova_u1::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    ml.get_key("sensenova_u1.rope.freq_base_spatial", rope_freq_base_spatial);
+    ml.get_key(LLM_KV_ROPE_FREQ_BASE_SPATIAL, rope_freq_base_spatial);
     if (hparams.n_embd_head_k() % 4 != 0 || hparams.n_embd_head_v() != hparams.n_embd_head_k()) {
         throw std::runtime_error("SenseNova U1 requires equal Q/K/V head sizes divisible by four");
     }
