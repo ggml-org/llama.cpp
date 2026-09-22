@@ -7,6 +7,24 @@
 
 #include <vector>
 
+// must stay in sync with the kernel_fwht_<type>_<N> templates in misc.metal
+static bool ggml_metal_fwht_supported_size(int64_t n) {
+    return n == 64 || n == 128 || n == 256 || n == 512;
+}
+
+// the FWHT kernels handle a Hadamard-hinted MUL_MAT only under these conditions. supports_op
+// and the dispatch must ask the same question: an F16 src1 that is admitted but then falls
+// through reaches the generic path, which has no F32 src0 by F16 src1 kernel.
+bool ggml_metal_op_mul_mat_use_fwht(const struct ggml_tensor * op) {
+    return ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+           op->type == GGML_TYPE_F32 &&
+           (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
+           ggml_is_contiguous(op->src[1]) &&
+           ggml_is_contiguous(op) &&
+           ggml_are_same_shape(op->src[1], op) &&
+           ggml_metal_fwht_supported_size(op->src[1]->ne[0]);
+}
+
 bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
     const int64_t ne00 = op->src[0]->ne[0];
     const int64_t ne11 = op->src[1]->ne[1];
@@ -222,38 +240,63 @@ struct node_info {
     void add_fused(ggml_tensor * t) {
         fused.push_back(t);
     }
+
+    bool is_output(const ggml_tensor * t) const {
+        if (t == node) {
+            return true;
+        }
+        for (const auto * f : fused) {
+            if (t == f) {
+                return true;
+            }
+        }
+        return false;
+    }
 };
 
 static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node_info> & nodes) {
     // helper to add node src and dst ranges
     const auto & h_add = [](ggml_mem_ranges_t mrs, const node_info & node) {
+        // only external sources matter: sources produced by the fused group are internal
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_add_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_add_src(mrs, src)) {
                     return false;
                 }
             }
         }
 
-        // keep track of the sources of the fused nodes as well
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_add_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_add_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_add_dst(mrs, node.dst());
+        // all fused tensors are produced by the fused kernel
+        if (!ggml_mem_ranges_add_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_add_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // helper to check if a node can run concurrently with the existing set of nodes
     const auto & h_check = [](ggml_mem_ranges_t mrs, const node_info & node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
-            if (node.node->src[i]) {
-                if (!ggml_mem_ranges_check_src(mrs, node.node->src[i])) {
+            const ggml_tensor * src = node.node->src[i];
+            if (src && !node.is_output(src)) {
+                if (!ggml_mem_ranges_check_src(mrs, src)) {
                     return false;
                 }
             }
@@ -261,15 +304,25 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
         for (const auto * fused : node.fused) {
             for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (fused->src[i]) {
-                    if (!ggml_mem_ranges_check_src(mrs, fused->src[i])) {
+                const ggml_tensor * src = fused->src[i];
+                if (src && !node.is_output(src)) {
+                    if (!ggml_mem_ranges_check_src(mrs, src)) {
                         return false;
                     }
                 }
             }
         }
 
-        return ggml_mem_ranges_check_dst(mrs, node.dst());
+        if (!ggml_mem_ranges_check_dst(mrs, node.node)) {
+            return false;
+        }
+        for (const auto * fused : node.fused) {
+            if (!ggml_mem_ranges_check_dst(mrs, fused)) {
+                return false;
+            }
+        }
+
+        return true;
     };
 
     // perform reorders only across these types of ops
