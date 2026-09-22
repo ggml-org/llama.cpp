@@ -2248,10 +2248,6 @@ struct clip_model_loader {
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
         model.patch_embeddings_1 = get_tensor(TN_PATCH_EMBD_1, false);
-        if (model.proj_type == PROJECTOR_TYPE_SENSENOVA_U1 &&
-            (!model.patch_embeddings_0 || !model.patch_bias)) {
-            throw std::runtime_error("SenseNova U1 projector requires patch embedding weights and biases");
-        }
 
         model.norm_embd_w = get_tensor(string_format(TN_NORM_EMBD, "weight"), false);
         model.norm_embd_b = get_tensor(string_format(TN_NORM_EMBD, "bias"),   false);
