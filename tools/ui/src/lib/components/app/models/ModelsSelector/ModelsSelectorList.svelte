@@ -1,9 +1,8 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { ChevronLeft, CircleAlert, Heart, Loader2 } from '@lucide/svelte';
+	import { Heart } from '@lucide/svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
-	import { CollapsibleSection } from '$lib/components/app';
-	import { BackendIcon } from '$lib/components/app/backends';
+	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
 	import {
@@ -14,7 +13,6 @@
 	import { MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
-	import { getBackend } from '$lib/utils/api-base';
 
 	interface Props {
 		groups: GroupedModelOptions;
@@ -129,21 +127,15 @@
 		{/each}
 	{:else}
 		<!-- Favorites come first; the sections below skip them -->
-		<CollapsibleSection
-			revealChevronOnHover
-			triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
-			triggerStyle={headerStyle}
-		>
-			{#snippet trigger()}
+		<ModelsSection label="Favorites" revealChevronOnHover sticky>
+			{#snippet icon()}
 				<Heart class="h-3.5 w-3.5 shrink-0" />
-
-				Favorites
 			{/snippet}
 
 			{#each favorites as item (`fav-${item.option.id}`)}
 				{@render render(item, !showOrgName)}
 			{/each}
-		</CollapsibleSection>
+		</ModelsSection>
 	{/if}
 {/if}
 
@@ -176,57 +168,27 @@
 	{#if localOnly}
 		{@render localRows()}
 	{:else}
-		<CollapsibleSection
-			revealChevronOnHover
-			triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
-			triggerStyle={headerStyle}
-		>
-			{#snippet trigger()}
+		<ModelsSection label="Local models" revealChevronOnHover sticky>
+			{#snippet icon()}
 				<Logo class="shrink-0" style="--size: 0.875rem" />
-
-				Local models
 			{/snippet}
 
 			{@render localRows()}
-		</CollapsibleSection>
+		</ModelsSection>
 	{/if}
 {/if}
 
 <!-- One section per remote provider. -->
 {#each groups.providers as provider (provider.backendId)}
-	<CollapsibleSection
+	<ModelsSection
+		backendId={provider.backendId}
+		error={Boolean(provider.error)}
+		label={provider.name}
+		loading={provider.loading}
+		onBack={onProviderBack}
 		revealChevronOnHover
-		triggerClass="{headerClass} flex w-full cursor-pointer items-center gap-1.5 text-left"
-		triggerStyle={headerStyle}
+		sticky
 	>
-		{#snippet trigger()}
-			{#if onProviderBack}
-				<button
-					aria-label="Back to all providers"
-					class="-ml-1 inline-flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
-					onclick={(event) => {
-						// the surrounding trigger toggles the section, the back control
-						// must not collapse the list it is leaving
-						event.stopPropagation();
-						onProviderBack?.();
-					}}
-					type="button"
-				>
-					<ChevronLeft class="h-3.5 w-3.5" />
-				</button>
-			{/if}
-
-			<BackendIcon backend={getBackend(provider.backendId)} class="h-3.5 w-3.5" />
-
-			{provider.name}
-
-			{#if provider.loading}
-				<Loader2 class="h-3 w-3 animate-spin" />
-			{:else if provider.error}
-				<CircleAlert class="h-3 w-3 text-destructive" />
-			{/if}
-		{/snippet}
-
 		{#if provider.items.length > 0}
 			{#each provider.items as item (`${provider.backendId}-${item.option.id}`)}
 				{@render render(item, !showOrgName)}
@@ -247,7 +209,7 @@
 				{provider.error ?? (provider.loading ? 'Loading models...' : 'No models')}
 			</p>
 		{/if}
-	</CollapsibleSection>
+	</ModelsSection>
 {/each}
 
 <DialogConfirmDownload
