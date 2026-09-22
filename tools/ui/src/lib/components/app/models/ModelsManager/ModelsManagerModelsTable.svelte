@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
 	import { modelParamsLabel, modelSizeLabel } from './utils';
-	import { Heart, Loader2, MoreHorizontal } from '@lucide/svelte';
-	import { ModelAvatar, ModelId, ModelsSection } from '$lib/components/app';
+	import { Heart, Loader2, MoreHorizontal, Power } from '@lucide/svelte';
+	import { Logo, ModelAvatar, ModelId, ModelsSection } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
@@ -181,18 +181,23 @@
 	<div class="min-h-0 flex-1 overflow-y-auto py-2">
 		{#each groups as group (group.key)}
 			{#if group.items.length > 0}
+				{#snippet groupIcon()}
+					{#if group.kind === 'favorites'}
+						<Heart class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'loaded'}
+						<Power class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'local'}
+						<Logo class="shrink-0" style="--size: 0.875rem" />
+					{/if}
+				{/snippet}
+
 				<ModelsSection
-					backendId={group.backendId ?? undefined}
+					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					count={group.items.length}
+					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
 					sticky
 				>
-					{#snippet icon()}
-						{#if group.backendId === null}
-							<Heart class="h-3.5 w-3.5 shrink-0" />
-						{/if}
-					{/snippet}
-
 					{#each group.items as option (option.id)}
 						{@render row(option)}
 					{/each}

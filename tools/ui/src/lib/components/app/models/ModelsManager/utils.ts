@@ -38,11 +38,13 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
-	/** Null for the favorites group. */
+	/** Null for the loaded and favorites groups. */
 	backendId: string | null;
 	isLocal: boolean;
 	items: ModelOption[];
 	key: string;
+	/** Picks the header icon; providers use their backend logo instead. */
+	kind: 'favorites' | 'loaded' | 'local' | 'provider';
 	label: string;
 }
 

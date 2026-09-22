@@ -20,10 +20,11 @@
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
+		class?: string;
 		onClose?: () => void;
 	}
 
-	let { onClose }: Props = $props();
+	let { class: className, onClose }: Props = $props();
 
 	let filter = $state('');
 	let selectedId = $state<string | null>(null);
@@ -80,6 +81,7 @@
 				isLocal: false,
 				items: loaded,
 				key: 'loaded',
+				kind: 'loaded',
 				label: 'Loaded models'
 			});
 		}
@@ -90,6 +92,7 @@
 				isLocal: false,
 				items: favorites,
 				key: 'favorites',
+				kind: 'favorites',
 				label: 'Favorites'
 			});
 		}
@@ -102,7 +105,8 @@
 				isLocal: true,
 				items: localItems,
 				key: LOCAL_BACKEND_ID,
-				label: 'This server'
+				kind: 'local',
+				label: 'Local models'
 			});
 		}
 
@@ -117,6 +121,7 @@
 					isLocal: false,
 					items,
 					key: backend.id,
+					kind: 'provider',
 					label: backend.name
 				});
 			}
@@ -177,7 +182,7 @@
 </script>
 
 <div
-	class="grid min-h-0 flex-1"
+	class={['grid min-h-0 flex-1', className]}
 	style="grid-template-columns: minmax(0, 1fr){selected ? ' 30rem' : ''};"
 >
 	<div class="min-h-0">
