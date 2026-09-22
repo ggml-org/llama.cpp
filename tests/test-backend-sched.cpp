@@ -174,10 +174,11 @@ struct sched_check {
     std::string   name;
 };
 
-// executes the graph and evaluates results
+// executes the graph, then checks the number of splits and the results
 static bool run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
         const std::vector<sched_backend_caps> & backends_w_caps, const std::vector<sched_check> & checks, int64_t ne) {
 
+    // to later check if any further graph logic alters the number of splits
     int n_splits_expected = g.nodes.empty() ? 0 : 1;
     for (size_t i = 1; i < g.backend_id.size(); i++) {
         n_splits_expected += g.backend_id[i] != g.backend_id[i - 1];
@@ -256,6 +257,7 @@ struct backend_consts {
             ggml_format_name(o, "one_%s", ggml_backend_name(backends_w_caps[b].backend));
 
             ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backends_w_caps[b].backend);
+            GGML_ASSERT(buf != nullptr);
 
             std::fill(data.begin(), data.end(), 0.0f);
             ggml_backend_tensor_set(z, data.data(), 0, ggml_nbytes(z));
@@ -348,6 +350,7 @@ static bool stress_test_linked_list(const std::vector<sched_backend_caps> & back
         }
 
         bufs_input[b] = ggml_backend_alloc_ctx_tensors(ctxs_input[b], backends_w_caps[b].backend);
+        GGML_ASSERT(bufs_input[b] != nullptr);
 
         for (int i : inputs_of[b]) {
             std::fill(data.begin(), data.end(), float(input_value[i]));
@@ -518,11 +521,17 @@ static bool stress_test_dag(const std::vector<sched_backend_caps> & backends_w_c
 
     check_lanes();
 
+    bool ok = true;
     for (const sched_check & c : checks) {
-        GGML_ASSERT(c.expected < float(1 << 24)); // the counts have to stay exact in f32
+        if (c.expected >= float(1 << 24)) { // the counts have to stay exact in f32
+            ok = fail("expected result %.0f does not fit into the f32 mantissa, lower n_rounds", c.expected);
+            break;
+        }
     }
 
-    const bool ok = run_and_check(sched, g, backends_w_caps, checks, tensor_len);
+    if (ok) {
+        ok = run_and_check(sched, g, backends_w_caps, checks, tensor_len);
+    }
 
     ggml_backend_sched_free(sched);
     ggml_free(ctx_compute);
@@ -571,6 +580,7 @@ static bool test_inputless_splits_scheduling(const sched_backend_caps & gpu, con
     ggml_set_name(val66_cpu, "val66_cpu");
 
     ggml_backend_buffer_t buf_cpu = ggml_backend_alloc_ctx_tensors(ctx_cpu, cpu.backend);
+    GGML_ASSERT(buf_cpu != nullptr);
 
     ggml_context * ctx_gpu = ggml_init(params_static);
 
@@ -584,6 +594,7 @@ static bool test_inputless_splits_scheduling(const sched_backend_caps & gpu, con
     ggml_set_name(val44_gpu, "val44_gpu");
 
     ggml_backend_buffer_t buf_gpu = ggml_backend_alloc_ctx_tensors(ctx_gpu, gpu.backend);
+    GGML_ASSERT(buf_gpu != nullptr);
 
     std::vector<float> data(tensor_len);
 
@@ -707,7 +718,7 @@ static bool test_chain_all_backends(const std::vector<sched_backend_caps> & back
 }
 
 // Tests data transfer between all combinations of backend pairs
-// Always tests between two backends only with a single activation and 4 parallel user inputs.
+// The receiving split takes one activation from the sender plus n_inputs user inputs
 static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backends_w_caps, int b_send, int b_recv, int64_t tensor_len,
         int n_inputs, bool inputs_on_sender, bool parallel, bool use_device_host_buft) {
 
@@ -737,6 +748,7 @@ static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backen
     }
 
     ggml_backend_buffer_t buf_inputs = ggml_backend_alloc_ctx_tensors(ctx_inputs, backends_w_caps[b_inputs].backend);
+    GGML_ASSERT(buf_inputs != nullptr);
 
     std::vector<float> data(tensor_len);
     std::fill(data.begin(), data.end(), 1.0f);
@@ -784,8 +796,7 @@ static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backen
 }
 
 // Tests Y-shaped scheduling: two parallel lanes merging into 1. Lane A and B, merging into a single split.
-// The lanes join in a final split on b_send that receives one activation from each of the two b_recv splits.
-// TODO improve function signature + hoist backend_consts out of it?
+// The lanes join in a final split on backend_a that receives one activation from each of the two backend_b splits.
 static bool test_y_shaped_graph(const std::vector<sched_backend_caps> & backends_w_caps, int backend_a, int backend_b, int64_t tensor_len,
         bool use_device_host_buft) {
 
@@ -817,7 +828,7 @@ static bool test_y_shaped_graph(const std::vector<sched_backend_caps> & backends
     ggml_tensor * lane_b = g.add(ggml_add(ctx_compute, seed_b, consts.one[backend_b]), backend_b);
     ggml_set_name(lane_b, "lane_b");
 
-    // neither lane ends on b_send, so both activations are inputs of the last split
+    // neither lane ends on backend_a, so both activations are inputs of the last split
     ggml_tensor * out = g.add(ggml_add(ctx_compute, lane_a, lane_b), backend_a);
     ggml_set_name(out, "out");
     ggml_set_output(out);
@@ -868,7 +879,7 @@ static bool initialize_backends(std::vector<sched_backend_caps> & backends_w_cap
 
     if (backends_w_caps.empty()) {
         printf("no non-CPU backend found, skipping\n");
-        return 0;
+        return false;
     }
 
     // ggml_backend_sched_new requires the CPU backend to be the last one
@@ -885,7 +896,7 @@ static bool initialize_backends(std::vector<sched_backend_caps> & backends_w_cap
                 sched_back_caps.have_device_host_buft, sched_back_caps.have_sleep, ggml_backend_dev_description(dev));
     }
     log_maybe("\n");
-    return 1;
+    return true;
 }
 
 
@@ -906,10 +917,9 @@ int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
     std::vector<sched_backend_caps> backends_w_caps;
-    bool non_cpu_backends_initialized = initialize_backends(backends_w_caps);
 
     // nothing to test with synchronous CPU backend only
-    if (!non_cpu_backends_initialized || backends_w_caps.size() < 2) {
+    if (!initialize_backends(backends_w_caps)) {
         return 0;
     }
 
@@ -990,7 +1000,6 @@ int main(int argc, char ** argv) {
                 for (bool inputs_on_sender : { false, true }) {
                     for (bool parallel : { false, true }) {
                         for (int tensor_len : { 1, 4096 }) {
-                            // todo aendk fix up.
                             case_begin("test_pair_user_inputs     %-8s -> %-8s inputs on %-8s parallel = %d, tensor_len = %4d",
                                     name_send, name_recv, inputs_on_sender ? "sender" : "receiver", parallel, tensor_len);
                             case_end(test_pair_user_inputs(backends_w_caps, (int) b_send, (int) b_recv, tensor_len,
