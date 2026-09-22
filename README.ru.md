@@ -4,11 +4,11 @@
 
 <div align="center">
 
-<b>LLM inference in C/C++</b>
+<b>Инференс LLM на C/C++</b>
 
 <p>
-  <b>English</b> ·
-  <a href="README.ru.md">Русский</a>
+  <a href="README.md">English</a> ·
+  <strong>Русский</strong>
 </p>
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
@@ -24,14 +24,14 @@
 
 ## Quick start
 
-A few options to get `llama.cpp` installed on your machine:
+Несколько способов установить `llama.cpp`:
 
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+- Откройте https://llama.app и следуйте инструкциям
+- Запуск через Docker — см. [Docker documentation](docs/docker.md)
+- Скачайте pre-built binaries со [страницы релизов](https://github.com/ggml-org/llama.cpp/releases)
+- Соберите из исходников, склонировав репозиторий — [build guide](docs/build.md)
 
-Once installed:
+После установки:
 
 ```sh
 # Download and run a model directly from Hugging Face
@@ -45,30 +45,29 @@ llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
     <tr>
         <td align="center" width=50%>
             <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/88726b48-1713-48aa-a525-95a02e78afc4" />
-            <i>VLM session with <b>llama cli</b></i>
+            <i>VLM-сессия с <b>llama cli</b></i>
         </td>
         <td align="center">
             <img width="1392" height="958" alt="Built-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
-            <i>Built-in web UI against <b>llama serve</b></i>
+            <i>Встроенный web UI у <b>llama serve</b></i>
         </td>
     </tr>
 <table>
 
 ## Description
 
-The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
-a wide range of hardware - locally and in the cloud.
+Главная цель `llama.cpp` — инференс LLM (и VLM) с минимальной настройкой и state-of-the-art производительностью на широком спектре железа — локально и в облаке.
 
-- Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
+- Чистая реализация на C/C++ без внешних зависимостей
+- Apple silicon — first-class citizen: ARM NEON, Accelerate и Metal
+- AVX, AVX2, AVX512 и AMX для x86
+- RVV, ZVFH, ZFH, ZICBOP и ZIHINTPAUSE для RISC-V
+- Integer quantization 1.5 / 2 / 3 / 4 / 5 / 6 / 8 bit — быстрее и меньше памяти
+- Кастомные CUDA kernels для NVIDIA GPU (AMD через HIP, Moore Threads через MUSA)
+- Backend'ы Vulkan и SYCL
+- Hybrid CPU+GPU инференс для моделей больше объёма VRAM
 
-The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
+Проект `llama.cpp` построен поверх библиотеки [ggml](https://github.com/ggml-org/ggml).
 
 ## Supported backends
 
@@ -116,16 +115,16 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 
 ## Contributing
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+- Контрибьюторы могут открывать PR
+- Collaborators приглашают по вкладу
+- Maintainers пушат в ветки `llama.cpp` и мержат PR в `master`
+- Любая помощь с issues, PR и проектами очень ценна!
+- Подробнее: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Acknowledgements
 
-- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
-- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) — single-header HTTP server для `llama-server` — MIT
+- [nothings/stb](https://github.com/nothings/stb) — single-header image decoder для multimodal — Public domain
+- [nlohmann/json](https://github.com/nlohmann/json) — single-header JSON — MIT
+- [mackron/miniaudio](https://github.com/mackron/miniaudio) — single-header audio decoder — Public domain
+- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) — single-header process launching — Public domain
