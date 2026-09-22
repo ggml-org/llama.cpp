@@ -3,8 +3,6 @@ from __future__ import annotations
 import re
 from typing import Callable, Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
@@ -75,7 +73,7 @@ class Xing4_0Model(DeepseekV2Model):
                 self.rope_parameters["type"] = "yarn"
             # base.py's YARN branch accesses this with a direct key lookup
             self.rope_parameters.setdefault("original_max_position_embeddings",
-                self.hparams.get("original_max_position_embeddings", 4096))
+                                            self.hparams.get("original_max_position_embeddings", 4096))
 
         super().set_gguf_parameters()
         hparams = self.hparams
