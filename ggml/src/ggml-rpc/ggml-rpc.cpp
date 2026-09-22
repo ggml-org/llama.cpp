@@ -91,6 +91,8 @@ static_assert(RPC_CMD_HELLO == 14, "RPC_CMD_HELLO must be always 14");
 
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
 const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
+static constexpr uint64_t RPC_GRAPH_CACHE_DEFAULT_BUDGET_BYTES = 0;
+static constexpr int32_t  RPC_GRAPH_CACHE_DEFAULT_MAX_MARKERS  = 1024;
 
 struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
@@ -507,10 +509,10 @@ private:
     graph_cache_marker_list graph_cache_marker_order;
     std::unordered_map<uint32_t, uint64_t> last_graph_uids;
     std::string      endpoint;
-    uint64_t         graph_cache_budget_bytes = 0;
+    uint64_t         graph_cache_budget_bytes = RPC_GRAPH_CACHE_DEFAULT_BUDGET_BYTES;
     uint64_t         graph_cache_used_bytes   = 0;
     size_t           graph_cache_entries      = 0;
-    int32_t          graph_cache_max_markers  = 1024;
+    int32_t          graph_cache_max_markers  = RPC_GRAPH_CACHE_DEFAULT_MAX_MARKERS;
 };
 
 static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher)
@@ -2535,7 +2537,9 @@ static void rpc_start_server(const char * endpoint, const char * cache_dir, size
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
                                    size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices) {
-    rpc_start_server(endpoint, cache_dir, n_threads, 0, 1024, n_devices, devices);
+    rpc_start_server(endpoint, cache_dir, n_threads,
+                     RPC_GRAPH_CACHE_DEFAULT_BUDGET_BYTES, RPC_GRAPH_CACHE_DEFAULT_MAX_MARKERS,
+                     n_devices, devices);
 }
 
 void ggml_backend_rpc_start_server_with_graph_cache(const char * endpoint, const char * cache_dir,
