@@ -599,9 +599,8 @@ ggml_tensor * llama_model_xing4_0::graph::build_hc_post(
     GGML_ASSERT(x->ne[0] == n_embd);
     GGML_ASSERT(residual->ne[1] == hparams.dsv4_hc_mult);
 
-    comb = ggml_cont(ctx0, ggml_transpose(ctx0, comb));
-
     if (cparams.fused_dsv4_hc_post) {
+        comb = ggml_cont(ctx0, ggml_transpose(ctx0, comb));
         ggml_tensor * result = ggml_dsv4_hc_post(ctx0, x, residual, post, comb);
         res->add_fused_node({LLM_FUSED_OP_DSV4_HC_POST, result, il});
         return result;
