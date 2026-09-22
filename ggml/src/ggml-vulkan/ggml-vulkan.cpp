@@ -6237,6 +6237,11 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         }
     }
 
+    // The partial tiles of a quantized A rely on the bound range to read zeros past the last row,
+    // so the range stays exact: the strided extent of a tensor read in place, the staged size otherwise.
+    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
+
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
     uint32_t stride_batch_y = (qy_needs_dequant || quantize_y) ? ne10*ne11 : ggml_vk_batch_stride(src1);
 
@@ -6251,7 +6256,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     // compute
     ggml_vk_matmul(
         ctx, subctx, pipeline,
-        ggml_vk_subbuffer(ctx, d_X, x_buf_offset), ggml_vk_subbuffer(ctx, d_Y, y_buf_offset),
+        { d_X, x_buf_offset, x_range }, { d_Y, y_buf_offset, y_range },
         ggml_vk_subbuffer(ctx, d_D, d_buf_offset), { ctx->prealloc_split_k, 0, d_sz * split_k },
         ne01, ne11, ne10,
         ne10, ne10, stride_d, stride_batch_x, stride_batch_y, stride_batch_d,
@@ -7345,6 +7350,9 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     ggml_vk_sync_buffers(ctx, subctx);
 
+    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
+
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
     uint32_t stride_b_y = y_needs_k_padding ? y_staged_row_stride : ne10;
     uint32_t stride_batch_y = y_needs_k_padding ? y_staged_row_stride * ne11 : ((qy_needs_dequant || quantize_y) ? ne10*ne11 : ggml_vk_batch_stride(src1));
@@ -7360,7 +7368,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     // compute
     ggml_vk_matmul_id(
         ctx, subctx, pipeline,
-        ggml_vk_subbuffer(ctx, d_X, x_buf_offset), ggml_vk_subbuffer(ctx, d_Y, y_buf_offset),
+        { d_X, x_buf_offset, x_range }, { d_Y, y_buf_offset, y_range },
         { d_D, d_buf_offset, d_sz }, { d_ids, ids_buf_offset, ids_sz }, expert_count_buf,
         ne01, ne21, ne10, ne10, stride_b_y, ne01,
         stride_batch_x, stride_batch_y, ne20*ne21,
