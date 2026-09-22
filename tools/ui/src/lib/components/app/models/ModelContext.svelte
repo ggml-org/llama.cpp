@@ -5,10 +5,11 @@
 	import { formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
+		class?: string;
 		option: ModelOption;
 	}
 
-	let { option }: Props = $props();
+	let { class: className = '', option }: Props = $props();
 
 	// a listing that reports a context window (OpenRouter, Groq, HF) needs no lookup
 	let reported = $derived(option.contextLength ?? null);
@@ -67,6 +68,6 @@
 	let context = $derived(reported ?? fetched);
 </script>
 
-<span class="text-sm text-muted-foreground">
+<span class={['text-sm text-muted-foreground', className]}>
 	{context ? `${formatParameters(context)} tokens` : '—'}
 </span>

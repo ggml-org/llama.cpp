@@ -145,14 +145,15 @@
 				/>
 			</span>
 
-			<ModelContext {option} />
+			<ModelContext class="justify-self-end" {option} />
 
-			<span class="text-sm text-muted-foreground">
+			<span class="justify-self-end text-sm text-muted-foreground">
 				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
 			</span>
 
 			<ModelLoadControl
 				{canLoad}
+				class="justify-self-center"
 				{isFailed}
 				{isLoaded}
 				{isLoading}
@@ -162,7 +163,7 @@
 				showRemoteMark
 			/>
 
-			<div class="flex items-center justify-end">
+			<div class="flex items-center justify-center justify-self-center">
 				<DropdownMenuActions
 					actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
 					align="end"
@@ -193,13 +194,13 @@
 	>
 		<span>Model</span>
 
-		<span>Context</span>
+		<span class="text-right">Context</span>
 
-		<span>Last used</span>
+		<span class="text-right">Last used</span>
 
 		<span class="text-center">Status</span>
 
-		<span class="text-right">Actions</span>
+		<span class="text-center">Actions</span>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">

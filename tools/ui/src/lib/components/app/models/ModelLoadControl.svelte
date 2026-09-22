@@ -10,6 +10,7 @@
 	interface Props {
 		/** Backend can load and unload models, llama-compat servers only. */
 		canLoad: boolean;
+		class?: string;
 		isFailed?: boolean;
 		isLoaded: boolean;
 		isLoading?: boolean;
@@ -27,6 +28,7 @@
 
 	let {
 		canLoad,
+		class: className = '',
 		isFailed = false,
 		isLoaded,
 		isLoading = false,
@@ -45,7 +47,7 @@
 	);
 </script>
 
-<div class="flex w-5 shrink-0 items-center justify-center">
+<div class={['flex w-5 shrink-0 items-center justify-center', className]}>
 	{#if !canLoad}
 		{#if showBackendMark}
 			<BackendIcon backend={getBackend(option.backendId)} class="h-3.5 w-3.5" />

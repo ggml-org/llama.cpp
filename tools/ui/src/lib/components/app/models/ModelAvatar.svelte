@@ -1,5 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
+	import { BackendIcon } from '$lib/components/app/backends';
+	import { Logo } from '$lib/components/app/misc';
 	import { HF_BASE_MODEL_TAG_REGEX } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
@@ -30,6 +32,10 @@
 
 	let parsedId = $derived(ModelsService.parseModelId(option.model));
 	let orgName = $derived(parsedId.orgName);
+	// a llama-compat model whose id carries no `org/name` is not a Hugging Face repo,
+	// so the provider's own mark identifies it better than an initial
+	let isLlamaCompat = $derived(getBackendCapabilities(getBackend(option.backendId)).props);
+	let useProviderIcon = $derived(isLlamaCompat && !orgName);
 	let tagBaseModel = $derived(
 		(option.tags ?? [])
 			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
@@ -92,7 +98,15 @@
 	});
 </script>
 
-{#if orgName}
+{#if useProviderIcon}
+	<span class={['inline-flex shrink-0', className]}>
+		<BackendIcon backend={getBackend(option.backendId)} class={size}>
+			{#snippet fallback()}
+				<Logo class={size} style="--size: 100%" />
+			{/snippet}
+		</BackendIcon>
+	</span>
+{:else if orgName}
 	<span bind:this={avatarEl} class={['inline-flex shrink-0', className]}>
 		<ModelsDiscoverAvatar
 			class="mt-0"
