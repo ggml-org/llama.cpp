@@ -1,4 +1,6 @@
 <script lang="ts">
+	import ModelsManagerModelsListControls from './ModelsManagerModelsList/ModelsManagerModelsListControls.svelte';
+	import type { ModelsListFilter } from './utils';
 	import { modelParamsLabel, modelSizeLabel, servedByLabel } from './utils';
 	import { ArrowUpDown, ChevronDown, Heart, Loader2, MoreHorizontal, Plus } from '@lucide/svelte';
 	import { ModelCapabilityIcons } from '$lib/components/app';
@@ -10,6 +12,7 @@
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
+		filter?: string;
 		isFavorite: (option: ModelOption) => boolean;
 		models: ModelOption[];
 		onCopyId: (option: ModelOption) => void;
@@ -21,9 +24,11 @@
 		selectedId: string | null;
 		summary: string;
 		title: string;
+		view?: ModelsListFilter;
 	}
 
 	let {
+		filter = $bindable(''),
 		isFavorite,
 		models,
 		onCopyId,
@@ -34,7 +39,8 @@
 		onUseInNewChat,
 		selectedId,
 		summary,
-		title
+		title,
+		view = $bindable<ModelsListFilter>('all')
 	}: Props = $props();
 
 	let descending = $state(false);
@@ -91,6 +97,10 @@
 		<span class="text-center">State</span>
 
 		<span class="text-right">Actions</span>
+	</div>
+
+	<div class="shrink-0 border-b border-border/40 px-4 py-3">
+		<ModelsManagerModelsListControls bind:filter bind:view />
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">

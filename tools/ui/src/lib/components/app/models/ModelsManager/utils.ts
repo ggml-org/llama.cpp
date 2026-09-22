@@ -38,11 +38,11 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 
 export type ModelsListFilter = 'all' | 'favorites' | 'loaded';
 
-/** One backend's worth of models, as listed in the manager's rail. */
-export interface ModelsListGroup {
+/** One backend, as listed in the manager's provider rail. */
+export interface ModelsProviderGroup {
 	backendId: string;
+	count: number;
 	isLocal: boolean;
-	items: ModelOption[];
 	label: string;
 }
 

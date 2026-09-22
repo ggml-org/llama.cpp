@@ -1,83 +1,39 @@
 <script lang="ts">
-	import type { ModelsListFilter, ModelsListGroup } from '../utils';
-	import ModelsManagerModelsListControls from './ModelsManagerModelsListControls.svelte';
+	import type { ModelsProviderGroup } from '../utils';
 	import ModelsManagerModelsListItem from './ModelsManagerModelsListItem.svelte';
-	import { Heart } from '@lucide/svelte';
-	import { Logo, ModelsSection } from '$lib/components/app';
-	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
-		favorites: ModelOption[];
-		filter?: string;
-		groups: ModelsListGroup[];
-		isFavorite: (option: ModelOption) => boolean;
-		onSelect: (option: ModelOption) => void;
-		onToggleFavorite: (option: ModelOption) => void;
-		selectedId: string | null;
-		view?: ModelsListFilter;
+		onSelect: (backendId: string | null) => void;
+		providers: ModelsProviderGroup[];
+		selectedBackendId: string | null;
+		totalCount: number;
 	}
 
-	let {
-		favorites,
-		filter = $bindable(''),
-		groups,
-		isFavorite,
-		onSelect,
-		onToggleFavorite,
-		selectedId,
-		view = $bindable<ModelsListFilter>('all')
-	}: Props = $props();
+	let { onSelect, providers, selectedBackendId, totalCount }: Props = $props();
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-3">
-	<ModelsManagerModelsListControls bind:filter bind:view />
+<div class="flex h-full min-h-0 flex-col gap-1">
+	<p class="px-2 py-1 text-[13px] font-semibold text-muted-foreground/70 select-none">Providers</p>
 
-	<div class="min-h-0 flex-1 space-y-1 overflow-y-auto">
-		{#if favorites.length > 0}
-			<ModelsSection count={favorites.length} label="Favorites" sticky>
-				{#snippet icon()}
-					<Heart class="h-3.5 w-3.5 shrink-0" />
-				{/snippet}
+	<div class="min-h-0 flex-1 space-y-0.5 overflow-y-auto">
+		<ModelsManagerModelsListItem
+			backendId={null}
+			count={totalCount}
+			isActive={selectedBackendId === null}
+			isLocal={false}
+			label="All providers"
+			onSelect={() => onSelect(null)}
+		/>
 
-				{#each favorites as option (option.id)}
-					<ModelsManagerModelsListItem
-						isFavorite={isFavorite(option)}
-						isSelected={selectedId === option.id}
-						onSelect={() => onSelect(option)}
-						onToggleFavorite={() => onToggleFavorite(option)}
-						{option}
-					/>
-				{/each}
-			</ModelsSection>
-		{/if}
-
-		{#each groups as group (group.backendId)}
-			<ModelsSection
-				backendId={group.isLocal ? undefined : group.backendId}
-				count={group.items.length}
-				label={group.label}
-				sticky
-			>
-				{#snippet icon()}
-					{#if group.isLocal}
-						<Logo class="shrink-0" style="--size: 0.875rem" />
-					{/if}
-				{/snippet}
-
-				{#each group.items as option (option.id)}
-					<ModelsManagerModelsListItem
-						isFavorite={isFavorite(option)}
-						isSelected={selectedId === option.id}
-						onSelect={() => onSelect(option)}
-						onToggleFavorite={() => onToggleFavorite(option)}
-						{option}
-					/>
-				{/each}
-			</ModelsSection>
+		{#each providers as provider (provider.backendId)}
+			<ModelsManagerModelsListItem
+				backendId={provider.backendId}
+				count={provider.count}
+				isActive={selectedBackendId === provider.backendId}
+				isLocal={provider.isLocal}
+				label={provider.label}
+				onSelect={() => onSelect(provider.backendId)}
+			/>
 		{/each}
-
-		{#if groups.length === 0 && favorites.length === 0}
-			<p class="px-2 py-6 text-center text-sm text-muted-foreground">No models found.</p>
-		{/if}
 	</div>
 </div>
