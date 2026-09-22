@@ -822,13 +822,19 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
                     }
                     fprintf(stderr, "  Q%dNSG%d=%.1f (%.3fx)", cands[i].Q, cands[i].NSG, r.t[i], r.t[0] / r.t[i]);
 
-                    // a win must clear TUNE_EPS, a cell still within it after the retries is a loss
-                    if (!(r.t[i] > 0.0 && r.t[i] * (1.0 + TUNE_EPS) <= r.t[0])) {
-                        if (small) {
-                            tiles_bad[i] = std::max(tiles_bad[i], tiles);
-                        } else {
-                            ok[i] = false;
-                        }
+                    // a win must clear TUNE_EPS. At a small launch anything short of a win moves tiles_min.
+                    // At a large or partial-tile launch only a clear loss drops the config; a cell still
+                    // within TUNE_EPS after the retries keeps its time in the aggregate and nothing else
+                    if (!(r.t[i] > 0.0)) {
+                        ok[i] = false;
+                        continue;
+                    }
+                    const bool win  = r.t[i] * (1.0 + TUNE_EPS) <= r.t[0];
+                    const bool loss = r.t[0] * (1.0 + TUNE_EPS) <= r.t[i];
+                    if (!win && small) {
+                        tiles_bad[i] = std::max(tiles_bad[i], tiles);
+                    } else if (loss) {
+                        ok[i] = false;
                     }
                 }
                 fprintf(stderr, "\n");
