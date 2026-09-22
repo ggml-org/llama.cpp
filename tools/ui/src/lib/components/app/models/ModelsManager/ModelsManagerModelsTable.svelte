@@ -7,7 +7,6 @@
 		ModelId,
 		ModelLoadControl,
 		ModelRowActions,
-		ModelSize,
 		ModelsSection
 	} from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
@@ -36,7 +35,7 @@
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_5.5rem_3rem_4.5rem] items-center gap-3';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_3rem_4.5rem] items-center gap-3';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -83,8 +82,6 @@
 				/>
 			</span>
 
-			<ModelSize {option} />
-
 			<ModelLoadControl
 				canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 				{isFailed}
@@ -113,8 +110,6 @@
 		class="{rowGrid} shrink-0 border-y border-border/40 px-6 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
 	>
 		<span>Model</span>
-
-		<span>Size</span>
 
 		<span class="text-center">State</span>
 

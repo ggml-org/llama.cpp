@@ -1,4 +1,5 @@
 import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
+import { HuggingFaceService } from '$lib/services';
 import type { ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
@@ -127,6 +128,34 @@ export function modelParamsLabel(option: ModelOption): string | null {
 
 export function modelQuantLabel(option: ModelOption): string | null {
 	return option.parsedId?.quantization ?? null;
+}
+
+/**
+ * File size of the model's own quant. The router reports one for some backends;
+ * otherwise a local GGUF reads it from its repo tree, the same source the
+ * discovery details use. Returns null when neither knows.
+ */
+export async function resolveModelSize(option: ModelOption): Promise<string | null> {
+	const reported = modelSizeLabel(option);
+
+	if (reported) return reported;
+
+	if (!isLocalOption(option)) return null;
+
+	const [repo, quant] = option.model.split(':');
+
+	if (!repo || !quant) return null;
+
+	const tree = await HuggingFaceService.getTree(repo);
+	const file = HuggingFaceService.collapseGgufShards(
+		HuggingFaceService.filterByExtension(tree, '.gguf')
+	).find((entry) => {
+		const meta = HuggingFaceService.extractQuantMeta(entry.path);
+
+		return meta?.quant === quant && !meta.sidecar;
+	});
+
+	return file?.size ? formatFileSize(file.size) : null;
 }
 
 /** Extra args the router applies when this model is loaded. */

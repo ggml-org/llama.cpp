@@ -5,6 +5,7 @@
 		type ModelOverride,
 		modelQuantLabel,
 		modelSizeLabel,
+		resolveModelSize,
 		SAMPLING_DEFAULTS,
 		SPECULATIVE_OPTIONS
 	} from './utils';
@@ -79,6 +80,26 @@
 	let quant = $derived(modelQuantLabel(option));
 	let size = $derived(modelSizeLabel(option));
 	let stopStrings = $derived(draft.stopStrings ?? []);
+	let resolvedSize = $state<string | null>(null);
+
+	// the router rarely reports a size, the repo tree does
+	$effect(() => {
+		const target = option;
+
+		let cancelled = false;
+
+		resolvedSize = null;
+
+		void resolveModelSize(target)
+			.then((value) => {
+				if (!cancelled) resolvedSize = value;
+			})
+			.catch(() => {});
+
+		return () => {
+			cancelled = true;
+		};
+	});
 	let infoRows = $derived([
 		{ label: 'Model', value: option.model },
 		{ label: 'File Path', value: serverProps?.model_path ?? null },
@@ -92,7 +113,7 @@
 			label: 'Training Context',
 			value: option.contextLength ? `${formatParameters(option.contextLength)} tokens` : null
 		},
-		{ label: 'Model Size', value: size },
+		{ label: 'Model Size', value: resolvedSize ?? size },
 		{ label: 'Parameters', value: option.parsedId?.params ?? null },
 		{ isBadge: true, label: 'Quantization', value: quant },
 		{ isBadge: true, label: 'Architecture', value: (option.meta?.architecture as string) ?? null },
