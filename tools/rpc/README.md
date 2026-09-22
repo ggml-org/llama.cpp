@@ -99,7 +99,9 @@ By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory an
 
 By default, the RPC server can reuse only the most recently computed graph. Use `--graph-cache-mib N` to enable a multi-graph cache with a budget of `N` MiB for each client session. Graphs seen at least twice are cached and reused on later executions.
 
-The budget counts serialized graph descriptions, not the total server memory used by cached graphs. When adding a graph would exceed the budget, the client clears the cache before storing it. A graph larger than the full budget is computed without caching. The default value is `0`, which disables the multi-graph cache and keeps the original single-graph reuse behavior. Support is negotiated when the connection starts, so older clients and servers continue to use the original behavior.
+The client keeps up to 1024 pending UID markers by default. Use `--graph-cache-max-markers N` to change the limit. A positive value limits pending markers, `-1` allows them to grow for the full client session, and `0` disables the markers and caches graphs on their first use. Reaching a positive limit clears only pending markers; stored graphs remain cached. Enable `GGML_RPC_DEBUG` to see marker resets and increase the limit if they happen before recurring graphs are cached.
+
+The MiB budget counts serialized graph descriptions, not the total server memory used by cached graphs. When adding a graph would exceed the budget, the client clears the cache before storing it. A graph larger than the full budget is computed without caching. The default budget is `0`, which disables the multi-graph cache and keeps the original single-graph reuse behavior. Support is negotiated when the connection starts, so older clients and servers continue to use the original behavior.
 
 ### RDMA transport
 

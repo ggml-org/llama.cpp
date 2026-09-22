@@ -40,6 +40,12 @@ int main(int argc, char ** argv) {
     ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
     GGML_ASSERT(total_mem > 0);
 
+    // Server A caches on first use because its marker limit is zero.
+    GGML_ASSERT(ggml_backend_graph_compute(backend_a, graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_a, graph) == GGML_STATUS_SUCCESS);
+    ggml_backend_rpc_get_device_memory(endpoint_a, 0, &free_mem, &total_mem);
+    GGML_ASSERT(total_mem > 0);
+
     // Exercise multi-graph caching by alternating two UIDs, then reusing the first.
     ggml_init_params cache_params = {
         /* .mem_size   = */ 2*ggml_tensor_overhead() + 2*ggml_graph_overhead_custom(1, false),
@@ -110,6 +116,21 @@ int main(int argc, char ** argv) {
     overflow_graph->n_nodes = overflow_nodes;
     ggml_backend_buffer_t overflow_buffer = ggml_backend_alloc_ctx_tensors(overflow_ctx, backend_b);
     GGML_ASSERT(overflow_buffer != nullptr);
+
+    const uint64_t persistent_uid = 0xcafe000000000000ULL;
+    overflow_graph->uid = persistent_uid;
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+
+    for (uint64_t i = 0; i < 8; ++i) {
+        overflow_graph->uid = 0xdead000000000000ULL + i;
+        GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    }
+
+    // Marker eviction must not remove a stored graph.
+    overflow_graph->uid = persistent_uid;
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
+    GGML_ASSERT(ggml_backend_graph_compute(backend_b, overflow_graph) == GGML_STATUS_SUCCESS);
 
     for (uint64_t i = 0; i < 32; ++i) {
         overflow_graph->uid = 0xfeed000000000000ULL + i;

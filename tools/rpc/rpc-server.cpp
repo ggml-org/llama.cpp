@@ -176,6 +176,8 @@ struct rpc_server_params {
     bool                     use_cache       = false;
     int                      n_threads       = std::max(1U, std::thread::hardware_concurrency()/2);
     int                      graph_cache_mib = 0;
+    int                      graph_cache_max_markers = 1024;
+    bool                     graph_cache_max_markers_set = false;
     std::vector<std::string> devices;
 };
 
@@ -190,6 +192,8 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "      --graph-cache-mib N          serialized graph cache budget per client session (default: %d)\n",
             params.graph_cache_mib);
+    fprintf(stderr, "      --graph-cache-max-markers N  pending UID limit: -1 = unlimited, 0 = cache on first use (default: %d)\n",
+            params.graph_cache_max_markers);
     fprintf(stderr, "\n");
 }
 
@@ -251,6 +255,21 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 fprintf(stderr, "error: invalid graph cache budget: %s\n", argv[i]);
                 return false;
             }
+        } else if (arg == "--graph-cache-max-markers") {
+            if (++i >= argc) {
+                return false;
+            }
+            try {
+                params.graph_cache_max_markers = std::stoi(argv[i]);
+            } catch (const std::exception &) {
+                fprintf(stderr, "error: invalid graph cache marker limit: %s\n", argv[i]);
+                return false;
+            }
+            if (params.graph_cache_max_markers < -1) {
+                fprintf(stderr, "error: invalid graph cache marker limit: %s\n", argv[i]);
+                return false;
+            }
+            params.graph_cache_max_markers_set = true;
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -259,6 +278,10 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             print_usage(argc, argv, params);
             exit(0);
         }
+    }
+    if (params.graph_cache_mib == 0 && params.graph_cache_max_markers_set) {
+        fprintf(stderr, "error: --graph-cache-max-markers requires --graph-cache-mib greater than zero\n");
+        return false;
     }
     return true;
 }
@@ -359,6 +382,7 @@ int main(int argc, char * argv[]) {
 
     const uint64_t graph_cache_bytes = uint64_t(params.graph_cache_mib) * 1024 * 1024;
     start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, graph_cache_bytes,
+                    (int32_t) params.graph_cache_max_markers,
                     devices.size(), devices.data());
     return 0;
 }

@@ -28,16 +28,22 @@ wait_for_port() {
     return 1
 }
 
-"$server" --device CPU --host 127.0.0.1 --port "$port_a" --graph-cache-mib 1 >"$test_dir/server-a.log" 2>&1 &
+"$server" --device CPU --host 127.0.0.1 --port "$port_a" --graph-cache-mib 1 --graph-cache-max-markers 0 >"$test_dir/server-a.log" 2>&1 &
 pid_a=$!
-"$server" --device CPU --host 127.0.0.1 --port "$port_b" --graph-cache-mib 1 >"$test_dir/server-b.log" 2>&1 &
+"$server" --device CPU --host 127.0.0.1 --port "$port_b" --graph-cache-mib 1 --graph-cache-max-markers 4 >"$test_dir/server-b.log" 2>&1 &
 pid_b=$!
 wait_for_port "$port_a"
 wait_for_port "$port_b"
 
-"$client" "$endpoint_a" "$endpoint_b" >"$test_dir/client.log" 2>&1
+GGML_RPC_DEBUG=1 "$client" "$endpoint_a" "$endpoint_b" >"$test_dir/client.log" 2>&1
 
 if ! grep -q "graph cache budget reached" "$test_dir/client.log"; then
+    cat "$test_dir/client.log"
+    cat "$test_dir/server-b.log"
+    exit 1
+fi
+
+if ! grep -q "graph cache marker limit reached.*removed 2 old pending UIDs" "$test_dir/client.log"; then
     cat "$test_dir/client.log"
     cat "$test_dir/server-b.log"
     exit 1

@@ -12,6 +12,8 @@
 #include <queue>
 #include <condition_variable>
 #include <future>
+#include <iterator>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -108,6 +110,7 @@ enum rpc_feature : uint8_t {
 
 struct rpc_msg_graph_cache_info_rsp {
     uint64_t budget_bytes;
+    int32_t  max_markers;
 };
 
 struct rpc_msg_device_count_rsp {
@@ -438,6 +441,18 @@ enum class graph_cache_entry_state {
     uncacheable,
 };
 
+struct graph_cache_marker {
+    uint32_t device;
+    uint64_t uid;
+};
+
+using graph_cache_marker_list = std::list<graph_cache_marker>;
+
+struct graph_cache_entry {
+    graph_cache_entry_state state;
+    std::optional<graph_cache_marker_list::iterator> marker;
+};
+
 class rpc_dispatcher {
 public:
     rpc_dispatcher() {
@@ -465,6 +480,10 @@ public:
     ~rpc_dispatcher();
 
 private:
+    size_t remove_graph_cache_markers_locked(size_t count);
+    void ensure_graph_cache_marker_capacity_locked();
+    void add_graph_cache_marker_locked(uint32_t device, uint64_t uid, graph_cache_entry_state state);
+
     struct rpc_msg {
         rpc_cmd                       cmd;
         std::shared_ptr<const void>   input;
@@ -484,12 +503,14 @@ private:
     std::atomic_bool running;
     std::thread      thread;
     std::mutex       graph_cache_mutex;
-    std::unordered_map<uint32_t, std::unordered_map<uint64_t, graph_cache_entry_state>> known_graph_uids;
+    std::unordered_map<uint32_t, std::unordered_map<uint64_t, graph_cache_entry>> known_graph_uids;
+    graph_cache_marker_list graph_cache_marker_order;
     std::unordered_map<uint32_t, uint64_t> last_graph_uids;
     std::string      endpoint;
     uint64_t         graph_cache_budget_bytes = 0;
     uint64_t         graph_cache_used_bytes   = 0;
     size_t           graph_cache_entries      = 0;
+    int32_t          graph_cache_max_markers  = 1024;
 };
 
 static void rpc_dispatcher_trampoline(rpc_dispatcher * dispatcher)
@@ -541,6 +562,39 @@ void rpc_dispatcher::send_async(enum rpc_cmd cmd, std::shared_ptr<const void> in
     GGML_ASSERT(queue.push(msg));
 }
 
+size_t rpc_dispatcher::remove_graph_cache_markers_locked(size_t count) {
+    size_t removed = 0;
+    while (removed < count && !graph_cache_marker_order.empty()) {
+        const graph_cache_marker marker = graph_cache_marker_order.front();
+        auto device_it = known_graph_uids.find(marker.device);
+        GGML_ASSERT(device_it != known_graph_uids.end());
+        auto entry_it = device_it->second.find(marker.uid);
+        GGML_ASSERT(entry_it != device_it->second.end());
+        GGML_ASSERT(entry_it->second.state != graph_cache_entry_state::stored);
+        device_it->second.erase(entry_it);
+        graph_cache_marker_order.pop_front();
+        ++removed;
+    }
+    return removed;
+}
+
+void rpc_dispatcher::ensure_graph_cache_marker_capacity_locked() {
+    if (graph_cache_max_markers <= 0 || graph_cache_marker_order.size() < (size_t) graph_cache_max_markers) {
+        return;
+    }
+    const size_t removed = remove_graph_cache_markers_locked((graph_cache_marker_order.size() + 1)/2);
+    LOG_DBG("[%s] graph cache marker limit reached on %s: removed %zu old pending UIDs\n",
+            __func__, endpoint.c_str(), removed);
+}
+
+void rpc_dispatcher::add_graph_cache_marker_locked(uint32_t device, uint64_t uid, graph_cache_entry_state state) {
+    ensure_graph_cache_marker_capacity_locked();
+    graph_cache_marker_order.push_back({ device, uid });
+    auto marker = std::prev(graph_cache_marker_order.end());
+    const bool inserted = known_graph_uids[device].emplace(uid, graph_cache_entry { state, marker }).second;
+    GGML_ASSERT(inserted);
+}
+
 graph_cache_action rpc_dispatcher::graph_cache_get_action(uint32_t device, uint64_t uid) {
     std::lock_guard<std::mutex> lock(graph_cache_mutex);
     if (graph_cache_budget_bytes == 0) {
@@ -557,15 +611,18 @@ graph_cache_action rpc_dispatcher::graph_cache_get_action(uint32_t device, uint6
     auto & known = known_graph_uids[device];
     auto it = known.find(uid);
     if (it != known.end()) {
-        if (it->second == graph_cache_entry_state::seen_once) {
+        if (it->second.state == graph_cache_entry_state::seen_once) {
             return graph_cache_action::store;
         }
-        if (it->second == graph_cache_entry_state::uncacheable) {
+        if (it->second.state == graph_cache_entry_state::uncacheable) {
             return graph_cache_action::compute;
         }
         return graph_cache_action::recompute;
     }
-    known_graph_uids[device].emplace(uid, graph_cache_entry_state::seen_once);
+    if (graph_cache_max_markers == 0) {
+        return graph_cache_action::store;
+    }
+    add_graph_cache_marker_locked(device, uid, graph_cache_entry_state::seen_once);
     return graph_cache_action::compute;
 }
 
@@ -573,17 +630,28 @@ void rpc_dispatcher::send_graph_cache_store(uint32_t device, uint64_t uid,
                                             std::shared_ptr<const void> input, size_t input_size) {
     std::lock_guard<std::mutex> lock(graph_cache_mutex);
     auto & known = known_graph_uids[device];
-    auto [it, inserted] = known.emplace(uid, graph_cache_entry_state::seen_once);
-    if (!inserted && it->second == graph_cache_entry_state::stored) {
+    auto it = known.find(uid);
+    if (it != known.end() && it->second.state == graph_cache_entry_state::stored) {
         auto request = std::make_shared<rpc_msg_graph_recompute_uid_req>();
         request->device = device;
         request->uid = uid;
         send_async(RPC_CMD_GRAPH_RECOMPUTE_UID, request, sizeof(*request));
         return;
     }
+    const bool had_marker = it != known.end();
 
     if (input_size > graph_cache_budget_bytes) {
-        it->second = graph_cache_entry_state::uncacheable;
+        if (graph_cache_max_markers == 0) {
+            if (had_marker) {
+                GGML_ASSERT(it->second.marker.has_value());
+                graph_cache_marker_order.erase(*it->second.marker);
+                known.erase(it);
+            }
+        } else if (had_marker) {
+            it->second.state = graph_cache_entry_state::uncacheable;
+        } else {
+            add_graph_cache_marker_locked(device, uid, graph_cache_entry_state::uncacheable);
+        }
         GGML_LOG_WARN("RPC graph cache on %s: graph uid %" PRIu64 " is too large to cache "
                       "(%" PRIu64 " bytes, budget %" PRIu64 " bytes)\n",
                       endpoint.c_str(), uid, (uint64_t) input_size, graph_cache_budget_bytes);
@@ -599,6 +667,7 @@ void rpc_dispatcher::send_graph_cache_store(uint32_t device, uint64_t uid,
         return;
     }
 
+    bool cache_cleared = false;
     if (graph_cache_used_bytes > graph_cache_budget_bytes - input_size) {
         GGML_LOG_WARN("RPC graph cache budget reached on %s: used %" PRIu64 "/%" PRIu64
                       " bytes in %zu graphs; clearing cache\n",
@@ -606,11 +675,21 @@ void rpc_dispatcher::send_graph_cache_store(uint32_t device, uint64_t uid,
                       graph_cache_entries);
         send(RPC_CMD_GRAPH_CACHE_CLEAR, nullptr, 0);
         known_graph_uids.clear();
+        graph_cache_marker_order.clear();
         graph_cache_used_bytes = 0;
         graph_cache_entries = 0;
+        cache_cleared = true;
+    } else if (had_marker) {
+        GGML_ASSERT(it->second.marker.has_value());
+        graph_cache_marker_order.erase(*it->second.marker);
+        it->second = { graph_cache_entry_state::stored, std::nullopt };
+    } else {
+        known.emplace(uid, graph_cache_entry { graph_cache_entry_state::stored, std::nullopt });
     }
 
-    known_graph_uids[device][uid] = graph_cache_entry_state::stored;
+    if (cache_cleared) {
+        known_graph_uids[device].emplace(uid, graph_cache_entry { graph_cache_entry_state::stored, std::nullopt });
+    }
     graph_cache_used_bytes += input_size;
     ++graph_cache_entries;
     send_async(RPC_CMD_GRAPH_COMPUTE_UID, std::move(input), input_size);
@@ -624,6 +703,7 @@ void rpc_dispatcher::clear_graph_cache() {
     }
     send(RPC_CMD_GRAPH_CACHE_CLEAR, nullptr, 0);
     known_graph_uids.clear();
+    graph_cache_marker_order.clear();
     graph_cache_used_bytes = 0;
     graph_cache_entries = 0;
 }
@@ -691,8 +771,10 @@ void rpc_dispatcher::start(const std::string & endpoint) {
                                    &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
         graph_cache_budget_bytes = response.budget_bytes;
-        LOG_DBG("[%s] graph cache budget on %s: %" PRIu64 " bytes\n",
-                __func__, endpoint.c_str(), graph_cache_budget_bytes);
+        RPC_STATUS_ASSERT(response.max_markers >= -1);
+        graph_cache_max_markers = response.max_markers;
+        LOG_DBG("[%s] graph cache on %s: %" PRIu64 " bytes, max markers: %" PRId32 "\n",
+                __func__, endpoint.c_str(), graph_cache_budget_bytes, graph_cache_max_markers);
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
     running = true;
@@ -1309,9 +1391,10 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, 
 
 class rpc_server {
 public:
-    rpc_server(std::vector<ggml_backend_t> all_backends, const char * cache_dir, uint64_t graph_cache_budget_bytes)
+    rpc_server(std::vector<ggml_backend_t> all_backends, const char * cache_dir,
+               uint64_t graph_cache_budget_bytes, int32_t graph_cache_max_markers)
         : backends(std::move(all_backends)), cache_dir(cache_dir),
-          graph_cache_budget_bytes(graph_cache_budget_bytes) {
+          graph_cache_budget_bytes(graph_cache_budget_bytes), graph_cache_max_markers(graph_cache_max_markers) {
         stored_graphs.resize(backends.size());
         graph_caches.resize(backends.size());
     }
@@ -1363,6 +1446,7 @@ private:
     std::vector<std::unordered_map<uint64_t, std::unique_ptr<stored_graph>>> graph_caches;
     uint64_t graph_cache_budget_bytes;
     uint64_t graph_cache_used_bytes = 0;
+    int32_t  graph_cache_max_markers;
 };
 
 void rpc_server::hello(rpc_msg_hello_rsp & response) {
@@ -2031,6 +2115,7 @@ void rpc_server::graph_cache_clear() {
 
 void rpc_server::graph_cache_info(rpc_msg_graph_cache_info_rsp & response) {
     response.budget_bytes = graph_cache_budget_bytes;
+    response.max_markers = graph_cache_max_markers;
 }
 
 bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response) {
@@ -2058,9 +2143,9 @@ rpc_server::~rpc_server() {
 }
 
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
-                             uint64_t graph_cache_budget_bytes,
+                             uint64_t graph_cache_budget_bytes, int32_t graph_cache_max_markers,
                              socket_ptr sock) {
-    rpc_server server(backends, cache_dir, graph_cache_budget_bytes);
+    rpc_server server(backends, cache_dir, graph_cache_budget_bytes, graph_cache_max_markers);
     uint8_t cmd;
     if (!sock->recv_data(&cmd, 1)) {
         return;
@@ -2365,7 +2450,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 static void rpc_start_server(const char * endpoint, const char * cache_dir, size_t n_threads,
-                             uint64_t graph_cache_bytes, size_t n_devices, ggml_backend_dev_t * devices) {
+                             uint64_t graph_cache_bytes, int32_t graph_cache_max_markers,
+                             size_t n_devices, ggml_backend_dev_t * devices) {
     if (n_devices == 0 || devices == nullptr) {
         fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
         return;
@@ -2378,6 +2464,15 @@ static void rpc_start_server(const char * endpoint, const char * cache_dir, size
     printf("  endpoint       : %s\n", endpoint);
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("  graph cache    : %" PRIu64 " MiB\n", graph_cache_bytes / (1024 * 1024));
+    if (graph_cache_bytes > 0) {
+        if (graph_cache_max_markers < 0) {
+            printf("  graph markers  : unlimited\n");
+        } else if (graph_cache_max_markers == 0) {
+            printf("  graph markers  : disabled (cache on first use)\n");
+        } else {
+            printf("  graph markers  : %" PRId32 "\n", graph_cache_max_markers);
+        }
+    }
     printf("Devices:\n");
     for (size_t i = 0; i < n_devices; i++) {
         auto dev = devices[i];
@@ -2428,7 +2523,7 @@ static void rpc_start_server(const char * endpoint, const char * cache_dir, size
         }
         printf("Accepted client connection\n");
         fflush(stdout);
-        rpc_serve_client(backends, cache_dir, graph_cache_bytes, client_socket);
+        rpc_serve_client(backends, cache_dir, graph_cache_bytes, graph_cache_max_markers, client_socket);
         printf("Client connection closed\n");
         fflush(stdout);
     }
@@ -2440,13 +2535,13 @@ static void rpc_start_server(const char * endpoint, const char * cache_dir, size
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
                                    size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices) {
-    rpc_start_server(endpoint, cache_dir, n_threads, 0, n_devices, devices);
+    rpc_start_server(endpoint, cache_dir, n_threads, 0, 1024, n_devices, devices);
 }
 
 void ggml_backend_rpc_start_server_with_graph_cache(const char * endpoint, const char * cache_dir,
-                                                    size_t n_threads, uint64_t graph_cache_bytes,
+                                                    size_t n_threads, uint64_t graph_cache_bytes, int32_t graph_cache_max_markers,
                                                     size_t n_devices, ggml_backend_dev_t * devices) {
-    rpc_start_server(endpoint, cache_dir, n_threads, graph_cache_bytes, n_devices, devices);
+    rpc_start_server(endpoint, cache_dir, n_threads, graph_cache_bytes, graph_cache_max_markers, n_devices, devices);
 }
 
 static const char * ggml_backend_rpc_device_get_name(ggml_backend_dev_t dev) {
