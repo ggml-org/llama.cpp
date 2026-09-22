@@ -65,7 +65,9 @@
 #include "ggml-sycl/mem.hpp"
 #include "ggml-sycl/norm.hpp"
 #include "ggml-sycl/presets.hpp"
+#include "ggml-sycl/qsa-score.hpp"
 #include "ggml-sycl/quantize.hpp"
+#include "ggml-sycl/topk-radix.hpp"
 #include "ggml-sycl/repeat_back.hpp"
 #include "ggml-sycl/set_rows.hpp"
 #include "ggml-sycl/set.hpp"
@@ -6220,6 +6222,23 @@ static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_ev
     std::exit(1);
 }
 
+static int ggml_backend_sycl_fusion_absorbs(ggml_backend_t backend, const ggml_cgraph * cgraph, int node_idx) {
+    GGML_UNUSED(backend);
+    if (const int n = ggml_sycl_qsa_topk_absorbs(cgraph, node_idx)) {
+        return n;
+    }
+    if (const int n = ggml_sycl_qsa_score_absorbs(cgraph, node_idx)) {
+        return n;
+    }
+    if (ggml_sycl_can_fuse_qsa_gather(cgraph, node_idx)) {
+        return 3;
+    }
+    if (ggml_sycl_can_fuse_cast_add(cgraph, node_idx, NULL)) {
+        return 1;
+    }
+    return 0;
+}
+
 static ggml_backend_i ggml_backend_sycl_interface = {
     /* .get_name                = */ ggml_backend_sycl_get_name,
     /* .free                    = */ ggml_backend_sycl_free,
@@ -6239,6 +6258,7 @@ static ggml_backend_i ggml_backend_sycl_interface = {
     /* .event_record            = */ ggml_backend_sycl_event_record,
     /* .event_wait              = */ ggml_backend_sycl_event_wait,
     /* .graph_optimize          = */ NULL,
+    /* .fusion_absorbs          = */ ggml_backend_sycl_fusion_absorbs,
 };
 
 static ggml_guid_t ggml_backend_sycl_guid() {

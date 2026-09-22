@@ -17,4 +17,8 @@
 
 void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor *dst);
 
+bool ggml_sycl_qsa_gather_shape(const ggml_cgraph * cgraph, int node_idx);
+bool ggml_sycl_can_fuse_qsa_gather(const ggml_cgraph * cgraph, int node_idx);
+int  ggml_sycl_fuse_qsa_gather(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int node_idx);
+
 #endif // GGML_SYCL_GETROWS_HPP
