@@ -48,6 +48,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/timestep_embedding.cpp
                          ops/flash_attn.cpp
                          ops/mul_mat.cpp
+                         ops/mul_mat_adreno.cpp
                          ops/conv_2d.cpp
                          ops/conv_2d_dw.cpp
                          ops/mul_mat_id.cpp
