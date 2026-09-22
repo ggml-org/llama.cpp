@@ -97,7 +97,7 @@ kernel void kernel_conv_3d(
                 const ulong kh_rem = kd_rem - KD_idx * KHW;
                 const ulong KH_idx = kh_rem / KW;
                 const ulong KW_idx = kh_rem - KH_idx * KW;
-                const ulong knl_idx = KW_idx + KH_idx*nb01 + KD_idx*nb02 + (k_g*Cin + Cin_idx)*nb03;
+                const ulong knl_idx = KW_idx + KH_idx*nb01 + KD_idx*nb02 + ((ulong) k_g*(ulong) Cin + Cin_idx)*nb03;
                 Ash[k_l * BS_CRS + crs_l] = knl_data[knl_idx];
             } else {
                 Ash[k_l * BS_CRS + crs_l] = (T_FLOAT) 0.0f;
@@ -126,12 +126,12 @@ kernel void kernel_conv_3d(
                         const ulong oh_rem = od_rem - OD_idx * OHW;
                         const ulong OH_idx = oh_rem / OW;
                         const ulong OW_idx = oh_rem - OH_idx * OW;
-                        const long D_idx = (long) (OD_idx * s2 + KD_idx * d2) - p2;
-                        const long H_idx = (long) (OH_idx * s1 + KH_idx * d1) - p1;
-                        const long W_idx = (long) (OW_idx * s0 + KW_idx * d0) - p0;
+                        const long D_idx = (long) OD_idx*(long) s2 + (long) KD_idx*(long) d2 - (long) p2;
+                        const long H_idx = (long) OH_idx*(long) s1 + (long) KH_idx*(long) d1 - (long) p1;
+                        const long W_idx = (long) OW_idx*(long) s0 + (long) KW_idx*(long) d0 - (long) p0;
 
                         if (D_idx >= 0 && D_idx < ID && H_idx >= 0 && H_idx < H && W_idx >= 0 && W_idx < W) {
-                            const ulong src_idx = W_idx + H_idx*nb11 + D_idx*nb12 + (N_idx*Cin + Cin_idx)*nb13;
+                            const ulong src_idx = W_idx + H_idx*nb11 + D_idx*nb12 + ((ulong) N_idx*(ulong) Cin + Cin_idx)*nb13;
                             ((T_FLOAT *) &val)[v] = src_data[src_idx];
                         }
                     }
@@ -174,7 +174,7 @@ kernel void kernel_conv_3d(
             const ulong OW_idx = oh_rem - OH_idx * OW;
 
             if (nb1 == OW && OW_idx + VEC_SIZE <= OW && npq_g_base + VEC_SIZE <= NPQ) {
-                const ulong dst_idx = OW_idx + OH_idx*nb1 + OD_idx*nb2 + (N_idx*Cout + k_g)*nb3;
+                const ulong dst_idx = OW_idx + OH_idx*nb1 + OD_idx*nb2 + ((ulong) N_idx*(ulong) Cout + k_g)*nb3;
                 vstore4(regC[k_l_reg][npq_l_vec_reg], 0, &dst_data[dst_idx]);
             } else {
                 T_ACCUM res = regC[k_l_reg][npq_l_vec_reg];
@@ -187,7 +187,7 @@ kernel void kernel_conv_3d(
                         const ulong oh_rem_s = od_rem_s - OD_idx_s * OHW;
                         const ulong OH_idx_s = oh_rem_s / OW;
                         const ulong OW_idx_s = oh_rem_s - OH_idx_s * OW;
-                        const ulong dst_idx_s = OW_idx_s + OH_idx_s*nb1 + OD_idx_s*nb2 + (N_idx_s*Cout + k_g)*nb3;
+                        const ulong dst_idx_s = OW_idx_s + OH_idx_s*nb1 + OD_idx_s*nb2 + ((ulong) N_idx_s*(ulong) Cout + k_g)*nb3;
                         dst_data[dst_idx_s] = ((float *) &res)[v];
                     }
                 }
