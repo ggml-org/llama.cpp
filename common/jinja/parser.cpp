@@ -412,22 +412,13 @@ private:
     }
 
     statement_ptr parse_multiplicative_expression() {
-        auto left = parse_unary_expression();
+        auto left = parse_test_expression();
         while (is(token::multiplicative_binary_operator)) {
             size_t start_pos = current;
             auto op = next();
-            left = mk_stmt<binary_expression>(start_pos, op, std::move(left), parse_unary_expression());
+            left = mk_stmt<binary_expression>(start_pos, op, std::move(left), parse_test_expression());
         }
         return left;
-    }
-
-    statement_ptr parse_unary_expression() {
-        if (is(token::unary_operator)) {
-            size_t start_pos = current;
-            auto op = next();
-            return mk_stmt<unary_expression>(start_pos, op, parse_unary_expression());
-        }
-        return parse_test_expression();
     }
 
     statement_ptr parse_test_expression() {
@@ -446,7 +437,8 @@ private:
     }
 
     statement_ptr parse_filter_expression() {
-        auto operand = parse_call_member_expression();
+        // Filters/tests bind outside unary so -n|abs is (-n)|abs, not -(n|abs).
+        auto operand = parse_unary_expression();
         while (is(token::pipe)) {
             size_t start_pos = current;
             ++current; // consume pipe
@@ -455,6 +447,15 @@ private:
             operand = mk_stmt<filter_expression>(start_pos, std::move(operand), std::move(filter));
         }
         return operand;
+    }
+
+    statement_ptr parse_unary_expression() {
+        if (is(token::unary_operator)) {
+            size_t start_pos = current;
+            auto op = next();
+            return mk_stmt<unary_expression>(start_pos, op, parse_unary_expression());
+        }
+        return parse_call_member_expression();
     }
 
     statement_ptr parse_call_member_expression() {
