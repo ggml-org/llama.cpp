@@ -195,6 +195,87 @@ void quantize_q8_0(device const float * src, device block_q8_0 & dst) {
     }
 }
 
+void quantize_iq2_nl(device const float * src, device block_iq2_nl & dst) {
+#pragma METAL fp math_mode(safe)
+    float amax = 0.0f; // absolute max
+    float max  = 0.0f;
+
+    for (int j = 0; j < QK2_NL; j++) {
+        const float v = src[j];
+        if (amax < fabs(v)) {
+            amax = fabs(v);
+            max  = v;
+        }
+    }
+
+    const float d  = max / kvalues_iq2nl_f[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK2_NL/4; ++j) {
+        uint8_t q = 0;
+        for (int g = 0; g < 4; ++g) {
+            const int     p  = j + g*(QK2_NL/4);
+            const float   x  = src[p]*id;
+            const uint8_t xi = best_index_int8(4, kvalues_iq2nl_f, x);
+
+            q |= xi << (2*g);
+
+            const float v = kvalues_iq2nl_f[xi];
+            const float w = src[p]*src[p];
+            sumqx += w*v*src[p];
+            sumq2 += w*v*v;
+        }
+        dst.qs[j] = q;
+    }
+
+    dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
+}
+
+void quantize_iq3_nl(device const float * src, device block_iq3_nl & dst) {
+#pragma METAL fp math_mode(safe)
+    float amax = 0.0f; // absolute max
+    float max  = 0.0f;
+
+    for (int j = 0; j < QK3_NL; j++) {
+        const float v = src[j];
+        if (amax < fabs(v)) {
+            amax = fabs(v);
+            max  = v;
+        }
+    }
+
+    const float d  = max / kvalues_iq3nl_f[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    for (int g = 0; g < QK3_NL/8; ++g) {
+        dst.qh[g] = 0;
+    }
+
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK3_NL/4; ++j) {
+        uint8_t q = 0;
+        for (int g = 0; g < 4; ++g) {
+            const int     p  = j + g*(QK3_NL/4);
+            const float   x  = src[p]*id;
+            const uint8_t xi = best_index_int8(8, kvalues_iq3nl_f, x); // 0..7
+
+            q |= (xi & 3) << (2*g);
+            if (xi & 4) {
+                dst.qh[g] |= 1 << j;
+            }
+
+            const float v = kvalues_iq3nl_f[xi];
+            const float w = src[p]*src[p];
+            sumqx += w*v*src[p];
+            sumq2 += w*v*v;
+        }
+        dst.qs[j] = q;
+    }
+
+    dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
+}
+
 void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
 #pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
