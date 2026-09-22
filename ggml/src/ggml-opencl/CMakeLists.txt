@@ -492,7 +492,18 @@ set(GGML_OPENCL_KERNELS
 )
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
-    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8 gemm_moe_mxfp4_f32_ns_coopmat gemm_moe_q4_0_f32_ns_coopmat gemm_moe_q4_1_f32_ns_coopmat gemm_moe_q5_0_f32_ns_coopmat gemm_moe_q5_1_f32_ns_coopmat gemm_moe_q4_k_f32_ns_coopmat gemm_moe_q5_k_f32_ns_coopmat gemm_moe_q6_k_f32_ns_coopmat)
+    list(APPEND GGML_OPENCL_KERNELS
+        gemm_xmem_f16_f32_os8
+        gemm_moe_mxfp4_f32_ns_coopmat
+        gemm_moe_q4_0_f32_ns_coopmat
+        gemm_moe_q4_1_f32_ns_coopmat
+        gemm_moe_q4_k_f32_ns_coopmat
+        gemm_moe_q5_0_f32_ns_coopmat
+        gemm_moe_q5_1_f32_ns_coopmat
+        gemm_moe_q5_k_f32_ns_coopmat
+        gemm_moe_q6_k_f32_ns_coopmat
+        mul_mm_f16_f32_attn_adreno
+        sdpa_xmem_f32_f16_os8)
 endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})
