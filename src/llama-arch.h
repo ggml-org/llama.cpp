@@ -110,6 +110,7 @@ enum llm_arch {
     LLM_ARCH_GRANITE_HYBRID,
     LLM_ARCH_GRANITE_SWITCH,
     LLM_ARCH_GRANITE_SWA,
+    LLM_ARCH_GRANITE_SPEECH_5,
     LLM_ARCH_CHAMELEON,
     LLM_ARCH_WAVTOKENIZER_DEC,
     LLM_ARCH_PLM,
@@ -420,6 +421,12 @@ enum llm_kv {
 
     LLM_KV_SHORTCONV_L_CACHE,
 
+    LLM_KV_CTC_CONTEXT_SIZE,
+    LLM_KV_CTC_MAX_POS_EMB,
+    LLM_KV_CTC_CONV_KERNEL,
+    LLM_KV_CTC_SUBSAMPLE_LAYERS,
+    LLM_KV_CTC_CONV_EXPANSION_FACTOR,
+
     LLM_KV_XIELU_ALPHA_N,
     LLM_KV_XIELU_ALPHA_P,
     LLM_KV_XIELU_BETA,
@@ -689,6 +696,16 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_COMPRESSOR_WGATE,
     LLM_TENSOR_INDEXER_COMPRESSOR_APE,
     LLM_TENSOR_INDEXER_COMPRESSOR_NORM,
+    LLM_TENSOR_ATTN_REL_POS,   // granite-speech-5
+    LLM_TENSOR_CONV_NORM,      // granite-speech-5
+    LLM_TENSOR_CONV_PW1,       // granite-speech-5
+    LLM_TENSOR_CONV_PW2,       // granite-speech-5
+    LLM_TENSOR_CONV_DW,        // granite-speech-5
+    LLM_TENSOR_CONV_DW_NORM,   // granite-speech-5
+    LLM_TENSOR_FFN_NORM_1,     // granite-speech-5
+    LLM_TENSOR_FFN_UP_1,       // granite-speech-5
+    LLM_TENSOR_FFN_DOWN_1,     // granite-speech-5
+    LLM_TENSOR_CTC_OUT_MID,    // granite-speech-5
     LLM_TENSOR_FFN_GATE_TID2EID,
     LLM_TENSOR_NEXTN_PROJ_PRE,
     LLM_TENSOR_NEXTN_PROJ_POST,
