@@ -134,9 +134,21 @@ struct ggml_backend_openvino_buffer_context {
             data = usm_tensor.get();
             ov_buffer = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
         } else {
+            // In strict warm-mmap mode the model weights are supplied via buffer_from_host_ptr,
+            // so every alloc_buffer here is graph scratch / KV. The large prefill compute buffer
+            // is never touched on the host by the on-device fused OV model, yet an L0 host tensor
+            // commits/zeroes it eagerly (fully resident). For such large buffers, reserve
+            // demand-zero pages instead (no L0, no memset) so they stay non-resident. KV and small
+            // I/O buffers keep the L0 host tensor for zero-copy import (decode throughput).
+            const bool strict_mmap = device_name == "NPU" &&
+                                     ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") &&
+                                     ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
+                                     ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
+            const size_t lazy_host_threshold = (size_t) 1024 * 1024 * 1024;  // 1 GiB
+            const bool lazy_host_alloc = strict_mmap && size >= lazy_host_threshold;
             // Prefer importable Level Zero host memory on NPU: the plugin imports it without an
             // extra host-to-device copy each infer.
-            if (ggml_openvino_is_npu() && ggml_openvino_npu_l0_host_tensors_enabled() &&
+            if (!lazy_host_alloc && ggml_openvino_is_npu() && ggml_openvino_npu_l0_host_tensors_enabled() &&
                 !ggml_openvino_model_cache_only()) {
                 try {
                     auto npu_context = ov_singleton_core().get_default_context("NPU");
@@ -218,7 +230,11 @@ struct ggml_backend_openvino_buffer_context {
 #endif
                 data = ggml_aligned_malloc(size);
                 GGML_ASSERT(data);
-                memset(data, 0, size);
+                // Demand-zero pages already read as zero; skip the eager memset in lazy mode so the
+                // large, host-untouched prefill compute buffer never becomes resident.
+                if (!lazy_host_alloc) {
+                    memset(data, 0, size);
+                }
                 ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
             }
         }
