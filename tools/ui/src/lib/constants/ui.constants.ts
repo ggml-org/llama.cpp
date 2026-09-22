@@ -53,6 +53,12 @@ export const MODEL_SELECTOR_ICON = Package;
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 
+/**
+ * Model rows mounted before the list is scrolled. A local catalog can hold
+ * hundreds of models and mounting them all costs seconds on open.
+ */
+export const MODEL_ROW_WINDOW = 50;
+
 /** Recently used models kept per browser, most recent first. */
 export const RECENT_MODEL_LIMIT = 20;
 

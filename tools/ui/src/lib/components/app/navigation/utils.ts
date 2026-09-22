@@ -84,6 +84,36 @@ export function groupFavoriteOptions(
 	return favorites;
 }
 
+/**
+ * Cut the local groups down to a window of rows. Loaded models come first, then
+ * the org groups, so the caller can grow the window as the list is scrolled.
+ */
+export function windowLocalGroups(
+	groups: GroupedModelOptions,
+	limit: number
+): { available: GroupedModelOptions['available']; loaded: ModelItem[]; shown: number } {
+	const loaded = groups.loaded.slice(0, Math.max(0, limit));
+
+	let budget = limit - loaded.length;
+
+	const available: GroupedModelOptions['available'] = [];
+
+	let shown = loaded.length;
+
+	for (const group of groups.available) {
+		if (budget <= 0) break;
+
+		const items = group.items.slice(0, budget);
+
+		budget -= items.length;
+		shown += items.length;
+
+		if (items.length > 0) available.push({ ...group, items });
+	}
+
+	return { available, loaded, shown };
+}
+
 export function groupModelOptions(
 	filteredOptions: ModelOption[],
 	isModelLoaded: (model: string) => boolean

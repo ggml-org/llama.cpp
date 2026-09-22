@@ -6,7 +6,12 @@
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
+	import {
+		type GroupedModelOptions,
+		type ModelItem,
+		windowLocalGroups
+	} from '$lib/components/app/navigation/utils';
+	import { MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import { getBackend } from '$lib/utils/api-base';
@@ -43,6 +48,38 @@
 		showOrgName = true
 	}: Props = $props();
 	let render = $derived(renderOption ?? defaultOption);
+	// A large local catalog is mounted a window at a time; the sentinel at the end
+	// of the list grows the window when it scrolls into view.
+	let visibleCount = $state(MODEL_ROW_WINDOW);
+	let sentinelEl = $state<HTMLElement | null>(null);
+	const localGroups = $derived(windowLocalGroups(groups, visibleCount));
+	const localRowCount = $derived(
+		groups.loaded.length + groups.available.reduce((count, group) => count + group.items.length, 0)
+	);
+	const hasMoreLocal = $derived(localGroups.shown < localRowCount);
+
+	$effect(() => {
+		const sentinel = sentinelEl;
+
+		if (!sentinel || !hasMoreLocal) return;
+
+		// scroll does not bubble, so listen in the capture phase and ask the
+		// sentinel where it is instead of guessing which ancestor scrolls
+		const onScroll = () => {
+			const rect = sentinel.getBoundingClientRect();
+
+			// grow only when the end of the list is actually on screen, otherwise
+			// every scroll event of the page would mount the whole catalog
+			if (rect.top > window.innerHeight || rect.bottom < 0) return;
+
+			visibleCount += MODEL_ROW_WINDOW;
+		};
+
+		document.addEventListener('scroll', onScroll, { capture: true, passive: true });
+		onScroll();
+
+		return () => document.removeEventListener('scroll', onScroll, { capture: true });
+	});
 	// a local-only install is one list: favorites first, then the rest, no headings
 	let localOnly = $derived(groups.providers.length === 0);
 	// section headers stick right below the search/tabs block of the dropdown
@@ -120,15 +157,19 @@
 
 {#snippet localRows()}
 	<!-- the loaded models first -->
-	{#each groups.loaded as item (`loaded-${item.option.id}`)}
+	{#each localGroups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, !showOrgName)}
 	{/each}
 
-	{#each groups.available as group (group.orgName)}
+	{#each localGroups.available as group (group.orgName)}
 		{#each group.items as item (item.option.id)}
 			{@render render(item, !showOrgName)}
 		{/each}
 	{/each}
+
+	{#if hasMoreLocal}
+		<div bind:this={sentinelEl} aria-hidden="true" class="h-px"></div>
+	{/if}
 {/snippet}
 
 {#if groups.loaded.length > 0 || groups.available.length > 0}
