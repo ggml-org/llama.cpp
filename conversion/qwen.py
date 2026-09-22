@@ -659,6 +659,7 @@ class DFlashModel(Qwen3Model):
             )
         logger.info(f"DFlash: Using tokenizer from target model: {self.target_model_dir}")
         original_dir = self.dir_model
+        original_hparams = self.hparams
         self.dir_model = self.target_model_dir
 
         # Reuse the target model's own vocab handler (e.g. Gemma-4 needs its
@@ -667,16 +668,25 @@ class DFlashModel(Qwen3Model):
         with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
             target_hparams = json.load(f)
             target_arch = target_hparams["architectures"][0]
-        target_cls = get_model_class(target_arch)
 
-        if target_cls is not type(self):
-            if target_arch == "NemotronHForCausalLM":
-                setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
-        else:
-            super().set_vocab()
+        # The draft has no tokenizer of its own, so the borrowed set_vocab() must
+        # also see the target's config: e.g. HunyuanOCR keeps vocab_size and
+        # pad_token_id inside text_config, whereas the draft's config is flat.
+        if "text_config" in target_hparams:
+            target_hparams = {**target_hparams, **target_hparams["text_config"]}
+        self.hparams = target_hparams
 
-        self.dir_model = original_dir
+        try:
+            target_cls = get_model_class(target_arch)
+            if target_cls is not type(self):
+                if target_arch == "NemotronHForCausalLM":
+                    setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
+                target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+            else:
+                super().set_vocab()
+        finally:
+            self.dir_model = original_dir
+            self.hparams = original_hparams
 
         mask_token_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
         if mask_token_id is not None:
