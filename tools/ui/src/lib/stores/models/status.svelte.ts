@@ -329,7 +329,7 @@ export class ModelStatusManager {
 		return this.downloadedSidecars.has(`${repoId}/${filePath}`);
 	}
 
-	async load(modelId: string): Promise<void> {
+	async load(modelId: string, extraArgs?: string[]): Promise<void> {
 		await this.ensureLocalTarget();
 
 		if (this.host.isModelLoaded(modelId)) return;
@@ -347,7 +347,7 @@ export class ModelStatusManager {
 		reachedLoaded.catch(() => {});
 
 		try {
-			await ModelsService.load(modelId);
+			await ModelsService.load(modelId, extraArgs);
 			await reachedLoaded;
 			toast.success(`Model loaded: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {

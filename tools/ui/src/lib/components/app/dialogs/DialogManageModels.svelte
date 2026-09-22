@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { Logo } from '$lib/components/app/misc';
+	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
 	import * as Dialog from '$lib/components/ui/dialog';
 
 	interface Props {
+		onOpenDiscover?: () => void;
 		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { onOpenChange, open = $bindable(false) }: Props = $props();
+	let { onOpenChange, onOpenDiscover, open = $bindable(false) }: Props = $props();
 
 	function handleOpenChange(value: boolean) {
 		open = value;
@@ -29,6 +31,6 @@
 			<Dialog.Description>Model management goes here.</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="min-h-0 flex-1"></div>
+		<ModelsManager {onOpenDiscover} />
 	</Dialog.Content>
 </Dialog.Root>
