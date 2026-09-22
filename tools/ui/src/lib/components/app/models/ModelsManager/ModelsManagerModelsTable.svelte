@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { modelSizeLabel } from './utils';
 	import { Heart, Power } from '@lucide/svelte';
 	import {
 		Logo,
@@ -8,6 +7,7 @@
 		ModelId,
 		ModelLoadControl,
 		ModelRowActions,
+		ModelSize,
 		ModelsSection
 	} from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
@@ -54,7 +54,6 @@
 		!isOperationInProgress}
 	{@const isFailed = status === ServerModelStatus.FAILED}
 	{@const isSleeping = status === ServerModelStatus.SLEEPING}
-	{@const size = modelSizeLabel(option)}
 	{@const favorite = isFavorite(option)}
 
 	<div>
@@ -84,7 +83,7 @@
 				/>
 			</span>
 
-			<span class="text-sm text-muted-foreground">{size ?? '—'}</span>
+			<ModelSize {option} />
 
 			<ModelLoadControl
 				canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -93,6 +92,7 @@
 				{isLoading}
 				{isSleeping}
 				{option}
+				revealOnHover={false}
 			/>
 
 			<span class="flex items-center justify-end">
@@ -121,7 +121,7 @@
 		<span class="text-right">Actions</span>
 	</div>
 
-	<div class="min-h-0 flex-1 overflow-y-auto py-2">
+	<div class="min-h-0 flex-1 overflow-y-auto">
 		{#each groups as group (group.key)}
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
