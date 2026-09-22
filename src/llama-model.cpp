@@ -2728,7 +2728,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 filter,
                                 nullptr,
                                 nullptr);
-                        
                     }
                 }
             }
