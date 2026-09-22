@@ -89,7 +89,8 @@ void main() {
   const uint maxDim = (p.kvSeqLen + MATP_REDUCE - 1) / MATP_REDUCE;
   const uint pDim = maxDim * MATP_REDUCE;
   const uint tokFlatIdx = localLinearId + outGroupIdx * N_TOK;
-  uint offsetBaseQ = (d * p.batchStrideQ + kHeadIdx * HEAD_DIM * GQA_RATIO + tokFlatIdx * qDim);
+  uint offsetBaseQ = min(tokFlatIdx, p.activationLength - 1) * qDim;
+  offsetBaseQ = offsetBaseQ + d * p.batchStrideQ + kHeadIdx * HEAD_DIM * GQA_RATIO;
   const uint offsetBaseK = (d * p.batchStrideK + (v * MATP_REDUCE) * kvDim + kHeadIdx * p.kvStride2) / 4;
   uint offsetOut = d * p.qHead * p.activationLength * pDim + v * MATP_REDUCE + kHeadIdx * GQA_RATIO * pDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * pDim + lane;
   uint offsetMax = d * p.qHead * p.activationLength * maxDim + v + kHeadIdx * GQA_RATIO * maxDim + (localLinearId * O_COUNT + outGroupIdx * N_TOK * p.qHead) * maxDim;
@@ -147,7 +148,7 @@ void main() {
     }
 
     barrier();
-    if (tokFlatIdx < p.activationLength) {
+    if (localLinearId < N_TOK) {
       [[unroll]] for (uint loop = 0; loop < loopCount; loop++) {
         coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> matQ[COOP_MAT_P_M];
         coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> matK[COOP_MAT_P_PER_LOOP];
