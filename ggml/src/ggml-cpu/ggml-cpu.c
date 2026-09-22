@@ -516,6 +516,11 @@ struct ggml_compute_state {
     int ith;
 };
 
+// How many relax() iterations a thread spins at a barrier before it starts yielding the
+// core between polls (see ggml_barrier). Roughly 50-100 us on x86: long enough that the
+// common case (all threads arrive within a few microseconds) never yields.
+#define GGML_BARRIER_SPINS_BEFORE_YIELD 2048
+
 // Helpers for polling loops
 #if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
 static inline void ggml_thread_cpu_relax(void) {
@@ -596,9 +601,18 @@ void ggml_barrier(struct ggml_threadpool * tp) {
         return;
     }
 
-    // wait for other threads
+    // wait for other threads: spin for a while, then yield the core between polls so that
+    // an oversubscribed host can schedule the thread we are waiting for. A pure spin
+    // starves it: with more compute threads than cores every barrier costs scheduler
+    // quanta instead of nanoseconds (test-thread-safety on 2 cores: 147 s vs 4.4 s).
+    int spins = 0;
     while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
-        ggml_thread_cpu_relax();
+        if (spins < GGML_BARRIER_SPINS_BEFORE_YIELD) {
+            ggml_thread_cpu_relax();
+            spins++;
+        } else {
+            sched_yield();
+        }
     }
 
     // exit barrier (full seq-cst fence)
