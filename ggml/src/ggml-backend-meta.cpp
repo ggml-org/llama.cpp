@@ -2265,10 +2265,8 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
         }
 
-        // Auxiliary reduction graphs reuse stable graph and node slots until the
-        // parent graph is rebuilt. Give each slot a non-zero UID so backends can
-        // safely cache it across repeated executions, and invalidate those UIDs
-        // together with the parent graph topology.
+        // Auxiliary reduction graphs keep stable slots until the parent graph is rebuilt.
+        // Assign UIDs so backends can cache them for the same lifetime.
         for (ggml_cgraph * cgraph_aux : backend_ctx->cgraphs_aux) {
             cgraph_aux->uid = ggml_graph_next_uid();
         }

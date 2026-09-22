@@ -40,9 +40,7 @@ int main(int argc, char ** argv) {
     ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
     GGML_ASSERT(total_mem > 0);
 
-    // Alternate between two graph UIDs until both are promoted to the cache,
-    // then reuse the first one. This exercises multi-graph RPC caching rather
-    // than only the most recently computed graph.
+    // Exercise multi-graph caching by alternating two UIDs, then reusing the first.
     ggml_init_params cache_params = {
         /* .mem_size   = */ 2*ggml_tensor_overhead() + 2*ggml_graph_overhead_custom(1, false),
         /* .mem_buffer = */ nullptr,
@@ -71,8 +69,7 @@ int main(int argc, char ** argv) {
     GGML_ASSERT(ggml_backend_graph_compute(backend_b, cache_graph_a) == GGML_STATUS_SUCCESS);
     ggml_backend_rpc_get_device_memory(endpoint_b, 0, &free_mem, &total_mem);
 
-    // Freeing a backing buffer must invalidate cached server graphs. Reusing the
-    // UID with a new buffer must therefore send and store a complete graph again.
+    // Freeing a backing buffer must invalidate graphs that reference it.
     ggml_backend_buffer_free(cache_buffer);
     ggml_free(cache_ctx);
 
@@ -96,9 +93,7 @@ int main(int argc, char ** argv) {
     ggml_backend_buffer_free(replacement_buffer);
     ggml_free(replacement_ctx);
 
-    // Fill the one MiB test cache with a series of repeated, distinct graphs.
-    // The client must clear the remote cache when the next graph would exceed
-    // the advertised budget, then continue computing without disconnecting.
+    // Exceed the one MiB budget and verify that RPC remains connected after cache resets.
     constexpr uint32_t overflow_nodes = 256;
     ggml_init_params overflow_params = {
         /* .mem_size   = */ overflow_nodes*ggml_tensor_overhead() +

@@ -12,11 +12,9 @@
 #  include <sys/stat.h>
 #endif
 #include <algorithm>
-#include <cinttypes>
 #include <clocale>
 #include <codecvt>
 #include <filesystem>
-#include <limits>
 #include <regex>
 #include <stdio.h>
 #include <string>
@@ -173,11 +171,11 @@ static std::string fs_get_cache_directory() {
 }
 
 struct rpc_server_params {
-    std::string              host        = "127.0.0.1";
-    int                      port        = 50052;
-    bool                     use_cache   = false;
-    int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
-    uint64_t                 graph_cache_mib = 0;
+    std::string              host            = "127.0.0.1";
+    int                      port            = 50052;
+    bool                     use_cache       = false;
+    int                      n_threads       = std::max(1U, std::thread::hardware_concurrency()/2);
+    int                      graph_cache_mib = 0;
     std::vector<std::string> devices;
 };
 
@@ -190,7 +188,7 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
-    fprintf(stderr, "      --graph-cache-mib N          graph cache budget per client session (default: %" PRIu64 ")\n",
+    fprintf(stderr, "      --graph-cache-mib N          serialized graph cache budget per client session (default: %d)\n",
             params.graph_cache_mib);
     fprintf(stderr, "\n");
 }
@@ -244,13 +242,13 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
                 return false;
             }
             try {
-                params.graph_cache_mib = std::stoull(argv[i]);
+                params.graph_cache_mib = std::stoi(argv[i]);
             } catch (const std::exception &) {
                 fprintf(stderr, "error: invalid graph cache budget: %s\n", argv[i]);
                 return false;
             }
-            if (params.graph_cache_mib > std::numeric_limits<uint64_t>::max() / (1024 * 1024)) {
-                fprintf(stderr, "error: graph cache budget is too large: %s\n", argv[i]);
+            if (params.graph_cache_mib < 0) {
+                fprintf(stderr, "error: invalid graph cache budget: %s\n", argv[i]);
                 return false;
             }
         } else if (arg == "-h" || arg == "--help") {
@@ -359,7 +357,7 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    const uint64_t graph_cache_bytes = params.graph_cache_mib * 1024 * 1024;
+    const uint64_t graph_cache_bytes = uint64_t(params.graph_cache_mib) * 1024 * 1024;
     start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, graph_cache_bytes,
                     devices.size(), devices.data());
     return 0;

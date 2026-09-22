@@ -95,6 +95,12 @@ $ bin/ggml-rpc-server -c
 
 By default, the cache is stored in the `$HOME/.cache/llama.cpp/rpc` directory and can be controlled via the `LLAMA_CACHE` environment variable.
 
+### Graph cache
+
+By default, the RPC server can reuse only the most recently computed graph. Use `--graph-cache-mib N` to enable a multi-graph cache with a budget of `N` MiB for each client session. Graphs seen at least twice are cached and reused on later executions.
+
+The budget counts serialized graph descriptions, not the total server memory used by cached graphs. When adding a graph would exceed the budget, the client clears the cache before storing it. A graph larger than the full budget is computed without caching. The default value is `0`, which disables the multi-graph cache and keeps the original single-graph reuse behavior. Support is negotiated when the connection starts, so older clients and servers continue to use the original behavior.
+
 ### RDMA transport
 
 The RPC backend can use RDMA instead of TCP for lower latency and higher throughput. The transport is negotiated during the initial handshake -- no changes to command-line usage are required, and the connection falls back to TCP unless both peers can use RDMA.
@@ -117,4 +123,3 @@ Use the `GGML_RPC_DEBUG` environment variable to enable debug messages from `ggm
 ```bash
 $ GGML_RPC_DEBUG=1 bin/ggml-rpc-server
 ```
-
