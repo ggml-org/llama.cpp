@@ -182,9 +182,9 @@ cmake --build build --config Release
 ```
 
 Note that this also builds the CPU backend by default. On Windows on ARM, MSVC's
-support for the ARM NEON intrinsics used by the CPU backend is still incomplete, so
-a CUDA build produced entirely with MSVC will have a slower CPU backend. If CPU
-performance matters, follow the split build used in our release workflow
+support for the ARM NEON intrinsics used by the CPU backend may be incomplete, so
+a CUDA build produced entirely with MSVC might have a slower CPU backend. If CPU
+performance matters, try following the split build used in our release workflow
 ([.github/workflows/release.yml](../.github/workflows/release.yml)): the CPU backend
 is built with clang (`cmake/arm64-windows-llvm.cmake`) and the CUDA backend with MSVC
 (`cmake/arm64-windows-msvc-cuda.cmake`), and the artifacts are merged afterwards.
