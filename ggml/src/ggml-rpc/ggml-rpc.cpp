@@ -1465,8 +1465,10 @@ bool rpc_server::free_buffer(const rpc_msg_free_buffer_req & request) {
     }
     // Discard all cached graphs to avoid use-after-free in graph_recompute,
     // since their nodes may hold pointers to the buffer being freed.
-    for (auto & sg : stored_graphs) {
-        sg.graph = nullptr;
+    for (auto & sgs : stored_graphs) {
+        for (auto & sg : sgs) {
+            sg.second.graph = nullptr;
+        }
     }
     ggml_backend_buffer_free(buffer);
     buffers.erase(buffer);
