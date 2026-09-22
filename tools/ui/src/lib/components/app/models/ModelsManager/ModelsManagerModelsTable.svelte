@@ -162,7 +162,7 @@
 				{isLoading}
 				{isSleeping}
 				{option}
-				revealOnHover={false}
+				showAction={false}
 				showRemoteMark
 			/>
 
@@ -201,7 +201,7 @@
 
 		<span>Last used</span>
 
-		<span class="text-center">State</span>
+		<span class="text-center">Status</span>
 
 		<span class="text-right">Actions</span>
 	</div>
