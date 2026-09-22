@@ -730,8 +730,9 @@ class GGUFWriter:
     def add_ctc_conv_kernel(self, value: int) -> None:
         self.add_uint32(Keys.CTC.CONV_KERNEL.format(arch=self.arch), value)
 
-    def add_ctc_subsample_layers(self, layers: Sequence[int]) -> None:
-        self.add_array(Keys.CTC.SUBSAMPLE_LAYERS.format(arch=self.arch), layers)
+    def add_ctc_subsample_layer_mapping(self, layers: Sequence[int]) -> None:
+        """Add per-layer subsample values"""
+        self.add_array(Keys.CTC.SUBSAMPLE_LAYERS.format(arch=self.arch), list(layers))
 
     def add_ctc_conv_expansion_factor(self, value: int) -> None:
         self.add_uint32(Keys.CTC.CONV_EXPANSION_FACTOR.format(arch=self.arch), value)
