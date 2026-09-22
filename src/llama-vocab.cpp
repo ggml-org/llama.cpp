@@ -2165,7 +2165,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
                 LLAMA_LOG_WARN("%s:                                             \n", __func__);
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            } else if (tokenizer_pre == "default") {
+            } else if (
+                tokenizer_pre == "default" ||
+                tokenizer_pre == "granite-speech-5") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             } else if (tokenizer_pre == "minicpm5") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINICPM5;
