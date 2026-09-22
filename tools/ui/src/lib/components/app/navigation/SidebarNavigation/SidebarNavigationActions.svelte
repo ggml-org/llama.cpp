@@ -9,10 +9,11 @@
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
 		ROUTES,
+		SETTINGS_KEYS,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { conversationsStore, deviceStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, serverStore, settingsStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -48,7 +49,16 @@
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 
-	const actionsItems = SIDEBAR_ACTIONS_ITEMS;
+	// the discovery dialog downloads into the local server, so the entry is only
+	// useful when that server is a router with discovery enabled
+	const hasDiscover = $derived(
+		serverStore.localIsRouter && settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] === true
+	);
+	const actionsItems = $derived(
+		SIDEBAR_ACTIONS_ITEMS.filter(
+			(item) => item.action !== SidebarAction.MANAGE_MODELS || hasDiscover
+		)
+	);
 
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {

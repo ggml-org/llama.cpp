@@ -11,6 +11,7 @@ import {
 	Monitor,
 	Moon,
 	PencilRuler,
+	Server,
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
@@ -28,7 +29,7 @@ import type {
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
 	AGENTIC: { slug: 'agentic', title: 'Agentic' },
-	BACKENDS: { slug: 'backends', title: 'Backends' },
+	BACKENDS: { slug: 'backends', title: 'Providers' },
 	DEVELOPER: { slug: 'developer', title: 'Developer' },
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
@@ -195,6 +196,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		],
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
 		title: SETTINGS_SECTION_TITLES.GENERAL
+	},
+	// Providers
+	{
+		icon: Server,
+		settings: [],
+		slug: SETTINGS_SECTION_SLUGS.BACKENDS,
+		title: SETTINGS_SECTION_TITLES.BACKENDS
 	},
 	// Display
 	{

@@ -5,6 +5,7 @@
 		SettingsChatFields,
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
+		SettingsChatProvidersTab,
 		SettingsChatToolsTab,
 		SettingsFooter
 	} from '$lib/components/app/settings';
@@ -160,7 +161,9 @@
 		<div class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
 			<div class="space-y-6 pt-3">
 				<div class="grid">
-					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
+					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.BACKENDS}
+						<SettingsChatProvidersTab />
+					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
 						<SettingsChatToolsTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />

@@ -81,7 +81,7 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{
 		action: SidebarAction.MANAGE_MODELS,
 		icon: Boxes,
-		tooltip: 'Manage models'
+		tooltip: 'Discover models'
 	},
 	{
 		action: SidebarAction.SETTINGS,
