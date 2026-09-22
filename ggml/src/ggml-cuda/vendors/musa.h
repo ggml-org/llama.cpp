@@ -44,6 +44,7 @@
 #define cudaDeviceGetPCIBusId musaDeviceGetPCIBusId
 #define cudaDeviceProp musaDeviceProp
 #define cudaDeviceSynchronize musaDeviceSynchronize
+#define cudaDeviceGetAttribute musaDeviceGetAttribute
 #define cudaError_t musaError_t
 #define cudaErrorMemoryAllocation musaErrorMemoryAllocation
 #define cudaErrorPeerAccessAlreadyEnabled musaErrorPeerAccessAlreadyEnabled
@@ -55,7 +56,6 @@
 #define cudaEvent_t musaEvent_t
 #define cudaEventDestroy musaEventDestroy
 #define cudaFree musaFree
-#define cudaDeviceGetAttribute musaDeviceGetAttribute
 #define cudaFreeHost musaFreeHost
 #define cudaGetDevice musaGetDevice
 #define cudaGetDeviceCount musaGetDeviceCount
@@ -147,6 +147,9 @@
 #define cudaStreamCaptureModeRelaxed musaStreamCaptureModeRelaxed
 #define cudaStreamBeginCapture musaStreamBeginCapture
 #define cudaStreamEndCapture musaStreamEndCapture
+#define cudaStreamCaptureStatus musaStreamCaptureStatus
+#define cudaStreamCaptureStatusNone musaStreamCaptureStatusNone
+#define cudaStreamIsCapturing musaStreamIsCapturing
 #define cudaOccupancyMaxActiveBlocksPerMultiprocessor musaOccupancyMaxActiveBlocksPerMultiprocessor
 
 typedef __mt_bfloat16 nv_bfloat16;
