@@ -259,8 +259,28 @@ public:
 
     struct load_options {
         server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        bool reserved_slot = false; // caller already owns a models_max slot
         // used for spawning a downloading child process
         std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
+    struct model_queue_hold {
+        model_queue_hold() = default;
+        model_queue_hold(const model_queue_hold &) = delete;
+        model_queue_hold & operator=(const model_queue_hold &) = delete;
+        model_queue_hold(model_queue_hold && other) noexcept;
+        model_queue_hold & operator=(model_queue_hold && other) noexcept;
+        ~model_queue_hold();
+
+    private:
+        friend struct server_models;
+
+        void arm(server_models * models, std::string name);
+        void commit(std::unique_lock<std::mutex> & lk);
+        void release();
+
+        server_models * models = nullptr;
+        std::string name;
     };
 
     // load and unload model instances
@@ -296,10 +316,12 @@ public:
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
     // if models_max is reached, the request waits in a queue until a slot frees up
     // throws if the load fails, or if should_stop fires while waiting
-    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr,
+                            model_queue_hold * queue_hold = nullptr);
 
     // proxy an HTTP request to the model instance
-    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
+    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name,
+                                      model_queue_hold queue_hold, bool update_last_used, bool detached = false);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
