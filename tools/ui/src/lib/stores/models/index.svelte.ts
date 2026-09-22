@@ -10,7 +10,9 @@
 import { browser } from '$app/environment';
 import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	RECENT_MODEL_LIMIT,
+	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
 	RECENT_MODELS_LOCALSTORAGE_KEY,
 	SELECTED_MODEL_LOCALSTORAGE_KEY
 } from '$lib/constants';
@@ -50,6 +52,36 @@ function loadStoredSelection(): { id: string; model: string | null } | null {
 
 const storedSelection = loadStoredSelection();
 
+/** Last use timestamp per backend-qualified model id. */
+function loadRecentModelUsage(): Record<string, number> {
+	if (!browser) return {};
+
+	try {
+		const raw = localStorage.getItem(RECENT_MODEL_USAGE_LOCALSTORAGE_KEY);
+
+		if (!raw) return {};
+
+		const parsed = JSON.parse(raw) as unknown;
+
+		return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Models kept out of the selector. */
+function loadHiddenModels(): Set<string> {
+	if (!browser) return new SvelteSet<string>();
+
+	try {
+		const raw = localStorage.getItem(HIDDEN_MODELS_LOCALSTORAGE_KEY);
+
+		return raw ? new SvelteSet(JSON.parse(raw) as string[]) : new SvelteSet<string>();
+	} catch {
+		return new SvelteSet<string>();
+	}
+}
+
 /** Recently used backend-qualified ids, most recent first. */
 function loadRecentModels(): string[] {
 	if (!browser) return [];
@@ -73,6 +105,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
 	/**
 	 * Every selectable model across enabled backends. The active backend's
@@ -117,6 +150,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return merged;
 	});
 	recentModelIds = $state<string[]>(loadRecentModels());
+	recentModelUsage = $state<Record<string, number>>(loadRecentModelUsage());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(storedSelection?.id ?? null);
 
@@ -390,6 +424,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.favoriteModelIds.has(modelId);
 	}
 
+	isHidden(modelId: string): boolean {
+		return this.hiddenModelIds.has(modelId);
+	}
+
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
@@ -550,6 +588,25 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
+	/** Models hidden from the selector stay in the manager, flagged and unhideable. */
+	toggleHidden(modelId: string): void {
+		const next = new SvelteSet(this.hiddenModelIds);
+
+		if (next.has(modelId)) {
+			next.delete(modelId);
+		} else {
+			next.add(modelId);
+		}
+
+		this.hiddenModelIds = next;
+
+		try {
+			localStorage.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save hidden models to local storage');
+		}
+	}
+
 	/**
 	 * Build ModelOption[] from an API response.
 	 * Both MODEL and ROUTER modes share the same mapping logic;
@@ -601,7 +658,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				})
 		);
 	}
-
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
 	private async fetchModelModeInternal(): Promise<ModelOption[]> {
 		const response = await ModelsService.list();
@@ -617,6 +673,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			(option) => this.props.getModelProps(option.model)?.ui !== false
 		);
 	}
+
 	private loadFavoritesFromStorage(): Set<string> {
 		try {
 			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
@@ -652,11 +709,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			qualifiedId,
 			...this.recentModelIds.filter((id) => id !== qualifiedId)
 		].slice(0, RECENT_MODEL_LIMIT);
+		this.recentModelUsage = { ...this.recentModelUsage, [qualifiedId]: Date.now() };
 
 		if (!browser) return;
 
 		try {
 			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
+			localStorage.setItem(
+				RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
+				JSON.stringify(this.recentModelUsage)
+			);
 		} catch {
 			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}

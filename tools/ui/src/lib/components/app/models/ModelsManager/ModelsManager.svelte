@@ -183,6 +183,7 @@
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
+			onToggleLoad={(option) => void toggleLoad(option)}
 			{selectedId}
 			{summary}
 		/>

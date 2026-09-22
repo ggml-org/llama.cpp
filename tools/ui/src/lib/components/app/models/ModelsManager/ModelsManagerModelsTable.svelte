@@ -1,16 +1,21 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { Heart, Power } from '@lucide/svelte';
+	import { formatLastUsed } from './utils';
+	import { EyeOff, Heart, MoreHorizontal, Power } from '@lucide/svelte';
 	import {
 		Logo,
 		ModelAvatar,
+		ModelContext,
 		ModelId,
 		ModelLoadControl,
 		ModelRowActions,
 		ModelsSection
 	} from '$lib/components/app';
+	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import { Button } from '$lib/components/ui/button';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
-	import { ModelCapability, ServerModelStatus } from '$lib/enums';
+	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
@@ -21,6 +26,7 @@
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
+		onToggleLoad: (option: ModelOption) => void;
 		selectedId: string | null;
 		summary: string;
 	}
@@ -30,12 +36,20 @@
 		groups,
 		isFavorite,
 		onSelect,
+		onToggleLoad,
 		selectedId,
 		summary
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_3rem_4.5rem] items-center gap-3';
+	let pendingDelete = $state('');
+	let deleteOpen = $state(false);
+
+	function requestDelete(option: ModelOption): void {
+		pendingDelete = option.model;
+		deleteOpen = true;
+	}
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_7rem_5rem_3rem_4.5rem] items-center gap-3';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -54,12 +68,15 @@
 	{@const isFailed = status === ServerModelStatus.FAILED}
 	{@const isSleeping = status === ServerModelStatus.SLEEPING}
 	{@const favorite = isFavorite(option)}
+	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
+	{@const isHidden = modelsStore.isHidden(option.id)}
 
 	<div>
 		<div
 			class={[
 				rowGrid,
 				'cursor-pointer rounded-md px-2 py-2.5 transition',
+				isHidden && 'opacity-60',
 				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 			]}
 			onclick={() => onSelect(option)}
@@ -69,6 +86,10 @@
 		>
 			<span class="flex min-w-0 items-center gap-3">
 				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
+
+				{#if isHidden}
+					<EyeOff class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				{/if}
 
 				<ModelId
 					aliases={option.aliases}
@@ -82,22 +103,69 @@
 				/>
 			</span>
 
+			<ModelContext {option} />
+
+			<span class="text-sm text-muted-foreground">
+				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
+			</span>
+
 			<ModelLoadControl
-				canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
+				{canLoad}
 				{isFailed}
 				{isLoaded}
 				{isLoading}
 				{isSleeping}
 				{option}
 				revealOnHover={false}
+				showRemoteMark
 			/>
 
-			<span class="flex items-center justify-end">
+			<span class="flex items-center justify-end gap-1">
 				<ModelRowActions isFav={favorite} {isLoaded} {option} revealOnHover={false} />
+
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger>
+						{#snippet child({ props })}
+							<Button
+								{...props}
+								aria-label="Model actions"
+								class="h-7 w-7 text-muted-foreground"
+								onclick={(event) => event.stopPropagation()}
+								size="icon"
+								variant="ghost"
+							>
+								<MoreHorizontal class="h-3.5 w-3.5" />
+							</Button>
+						{/snippet}
+					</DropdownMenu.Trigger>
+
+					<DropdownMenu.Content align="end">
+						{#if canLoad}
+							<DropdownMenu.Item onclick={() => onToggleLoad(option)}>
+								{isLoaded ? 'Unload model' : 'Load model'}
+							</DropdownMenu.Item>
+
+							<DropdownMenu.Item onclick={() => requestDelete(option)}>
+								Delete from disk
+							</DropdownMenu.Item>
+						{/if}
+
+						<DropdownMenu.Item onclick={() => modelsStore.toggleHidden(option.id)}>
+							{isHidden ? 'Show in selector' : 'Hide from selector'}
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Root>
 			</span>
 		</div>
 	</div>
 {/snippet}
+
+<DialogConfirmDownload
+	action={ModelDownloadConfirmAction.DELETE}
+	onClose={() => (deleteOpen = false)}
+	open={deleteOpen}
+	repoWithTag={pendingDelete}
+/>
 
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex shrink-0 items-center gap-2 py-4">
@@ -110,6 +178,10 @@
 		class="{rowGrid} shrink-0 border-y border-border/40 px-6 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
 	>
 		<span>Model</span>
+
+		<span>Context</span>
+
+		<span>Last used</span>
 
 		<span class="text-center">State</span>
 

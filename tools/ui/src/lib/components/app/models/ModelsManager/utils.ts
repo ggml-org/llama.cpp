@@ -158,6 +158,23 @@ export async function resolveModelSize(option: ModelOption): Promise<string | nu
 	return file?.size ? formatFileSize(file.size) : null;
 }
 
+/** Compact "last used" label: minutes, hours, then days. */
+export function formatLastUsed(timestamp?: number): string {
+	if (!timestamp) return '—';
+
+	const minutes = Math.floor((Date.now() - timestamp) / 60_000);
+
+	if (minutes < 1) return 'just now';
+
+	if (minutes < 60) return `${minutes}m`;
+
+	const hours = Math.floor(minutes / 60);
+
+	if (hours < 24) return `${hours}h`;
+
+	return `${Math.floor(hours / 24)}d`;
+}
+
 /** Extra args the router applies when this model is loaded. */
 export function loadExtraArgs(override?: ModelOverride): string[] {
 	const load = override?.load;

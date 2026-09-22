@@ -127,10 +127,14 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
 
+	const visibleOptions = $derived(allOptions.filter((option) => !modelsStore.isHidden(option.id)));
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
 	// favorites span every backend, so they come from the full option list
 	const favoriteItems = $derived(
-		groupFavoriteOptions(filterModelOptions(allOptions, searchTerm), modelsStore.favoriteModelIds)
+		groupFavoriteOptions(
+			filterModelOptions(visibleOptions, searchTerm),
+			modelsStore.favoriteModelIds
+		)
 	);
 	const remoteProviders = $derived(
 		backendsStore.enabled
@@ -154,7 +158,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const loadedItems = $derived.by(() => {
 		if (isProviderView) return [];
 
-		return filterModelOptions(allOptions, searchTerm)
+		return filterModelOptions(visibleOptions, searchTerm)
 			.map((option, flatIndex) => ({ flatIndex, option }))
 			.filter(({ option }) => isLoadedLlamaCompat(option));
 	});

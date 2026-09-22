@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { CircleAlert, Loader2, Power, RotateCw, Upload } from '@lucide/svelte';
+	import { CircleAlert, Cloud, Loader2, Power, RotateCw, Upload } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -19,6 +19,8 @@
 		revealOnHover?: boolean;
 		/** Non-loadable rows show the provider mark, which identifies them in a flat list. */
 		showBackendMark?: boolean;
+		/** Table rows mark a remote provider, which this UI cannot load or unload. */
+		showRemoteMark?: boolean;
 	}
 
 	let {
@@ -29,7 +31,8 @@
 		isSleeping = false,
 		option,
 		revealOnHover = true,
-		showBackendMark = false
+		showBackendMark = false,
+		showRemoteMark = false
 	}: Props = $props();
 </script>
 
@@ -37,6 +40,10 @@
 	{#if !canLoad}
 		{#if showBackendMark}
 			<BackendIcon backend={getBackend(option.backendId)} class="h-3.5 w-3.5" />
+		{:else if showRemoteMark}
+			<span class="text-muted-foreground" title="Served remotely"
+				><Cloud class="h-3.5 w-3.5" /></span
+			>
 		{/if}
 	{:else if isLoading}
 		<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
