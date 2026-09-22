@@ -85,6 +85,10 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 
 #include <thread>
 
+#include <atomic>
+
+#include <chrono>
+
 #if defined(_MSC_VER)
 # define NOMINMAX 1
 # include <windows.h>
@@ -1007,6 +1011,14 @@ struct vk_device_struct {
 
     vk::Fence fence;
     vk_buffer sync_staging;
+
+    // Optional WDDM idle keepalive (GGML_VK_KEEPALIVE_MS). Off when 0.
+    // Dedicated buffer/fence: do not share with sync_staging or device->fence.
+    int keepalive_ms = 0;
+    std::atomic<bool> keepalive_stop{false};
+    std::thread keepalive_thread;
+    vk::Fence keepalive_fence;
+    vk_buffer keepalive_buffer;
 
     ggml_backend_buffer_type buffer_type;
 
