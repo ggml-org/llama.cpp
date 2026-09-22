@@ -160,13 +160,9 @@ class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
     def set_vocab(self):
-        # The tokenizer below is read from dir_model, and a draft model (e.g.
-        # DFlash) points dir_model at its target for the duration of this call.
-        # Take the special token ids from that same config, so they describe the
-        # tokenizer being written: the draft has no eod_token_id, and the v1.0
-        # target uses pad_token_id=-1.
-        with open(self.dir_model / "config.json", encoding="utf-8") as f:
-            config = json.load(f)
+        # Also called by draft models (e.g. DFlash), with dir_model pointing at
+        # the target model.
+        config = ModelBase.load_hparams(self.dir_model, self.is_mistral_format)
         config = {**config, **config.get("text_config", {})}
         self.hparams["pad_token_id"] = config.get("pad_token_id")
         self.hparams["eod_token_id"] = config.get("eod_token_id")
