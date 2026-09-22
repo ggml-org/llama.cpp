@@ -721,6 +721,27 @@ class GGUFWriter:
     def add_shortconv_l_cache(self, length: int) -> None:
         self.add_uint32(Keys.ShortConv.L_CACHE.format(arch=self.arch), length)
 
+    def add_ctc_context_size(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.CONTEXT_SIZE.format(arch=self.arch), value)
+
+    def add_ctc_max_pos_emb(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.MAX_POS_EMB.format(arch=self.arch), value)
+
+    def add_ctc_conv_kernel(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.CONV_KERNEL.format(arch=self.arch), value)
+
+    def add_ctc_subsample_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.CTC.SUBSAMPLE_LAYERS.format(arch=self.arch), layers)
+
+    def add_ctc_conv_expansion_factor(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.CONV_EXPANSION_FACTOR.format(arch=self.arch), value)
+
+    def add_ctc_num_special_tokens(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.NUM_SPECIAL_TOKENS.format(arch=self.arch), value)
+
+    def add_ctc_token_id_offset(self, value: int) -> None:
+        self.add_uint32(Keys.CTC.TOKEN_ID_OFFSET.format(arch=self.arch), value)
+
     def add_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_COUNT.format(arch=self.arch), length)
 
@@ -1504,6 +1525,12 @@ class GGUFWriter:
 
     def add_audio_num_mel_bins(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.NUM_MEL_BINS, value)
+
+    def add_audio_raw_num_mel_bins(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.RAW_NUM_MEL_BINS, value)
+
+    def add_audio_delta_win_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.DELTA_WIN_LENGTH, value)
 
     def add_audio_rvq_num_quantizers(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.RVQ_NUM_QUANTIZERS, value)

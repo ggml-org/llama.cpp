@@ -317,6 +317,15 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class CTC:
+        CONTEXT_SIZE          = "{arch}.ctc.context_size"           # Shaw rel-pos block attention size
+        MAX_POS_EMB           = "{arch}.ctc.max_pos_emb"            # Shaw rel-pos embedding table size
+        CONV_KERNEL           = "{arch}.ctc.conv_kernel"
+        SUBSAMPLE_LAYERS      = "{arch}.ctc.subsample_layers"       # 0-based block indices that subsample time by 2
+        CONV_EXPANSION_FACTOR = "{arch}.ctc.conv_expansion_factor"  # conv module inner_dim = n_embd * this
+        NUM_SPECIAL_TOKENS    = "{arch}.ctc.num_special_tokens"     # decode: ids < this are dropped (blank)
+        TOKEN_ID_OFFSET       = "{arch}.ctc.token_id_offset"        # decode: subtracted to map to tokenizer ids
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -442,6 +451,8 @@ class Keys:
         WINDOW_SIZE         = "clip.audio.window_size"
         LOCAL_BLOCK_COUNT   = "clip.audio.local_block_count" # mimo-v2.5: input_local_transformer layer count
         LOCAL_GROUP_SIZE    = "clip.audio.local_group_size"  # mimo-v2.5: input_local_transformer grouping size
+        RAW_NUM_MEL_BINS    = "clip.audio.raw_num_mel_bins" # granite_speech_5_fe: pre-delta, pre-stack mel bin count
+        DELTA_WIN_LENGTH    = "clip.audio.delta_win_length" # granite_speech_5_fe
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -590,6 +601,7 @@ class MODEL_ARCH(IntEnum):
     GRANITE_HYBRID   = auto()
     GRANITE_SWITCH   = auto()
     GRANITE_SWA      = auto()
+    GRANITE_SPEECH_5 = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
     PLM              = auto()
@@ -908,6 +920,16 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_COMPRESSOR_WGATE = auto()
     INDEXER_COMPRESSOR_APE = auto()
     INDEXER_COMPRESSOR_NORM = auto()
+    ATTN_REL_POS         = auto() # granite-speech-5 (Shaw relative position embedding)
+    CONV_NORM            = auto() # granite-speech-5 (pre-conv-module norm)
+    CONV_PW1             = auto() # granite-speech-5
+    CONV_PW2             = auto() # granite-speech-5
+    CONV_DW              = auto() # granite-speech-5 (depthwise conv)
+    CONV_DW_NORM         = auto() # granite-speech-5 (folded batch norm after depthwise conv)
+    FFN_NORM_1           = auto() # granite-speech-5 (second half-step FFN)
+    FFN_UP_1             = auto() # granite-speech-5
+    FFN_DOWN_1           = auto() # granite-speech-5
+    CTC_OUT_MID          = auto() # granite-speech-5 (mid-stack self-conditioning back-projection)
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -1348,6 +1370,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
     MODEL_ARCH.GRANITE_SWITCH:   "graniteswitch",
     MODEL_ARCH.GRANITE_SWA:      "granite_swa",
+    MODEL_ARCH.GRANITE_SPEECH_5: "granite-speech-5",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
@@ -1665,6 +1688,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE:  "blk.{bid}.indexer_compressor_gate",
     MODEL_TENSOR.INDEXER_COMPRESSOR_APE:    "blk.{bid}.indexer_compressor_ape",
     MODEL_TENSOR.INDEXER_COMPRESSOR_NORM:   "blk.{bid}.indexer_compressor_norm",
+    MODEL_TENSOR.ATTN_REL_POS:              "blk.{bid}.attn_rel_pos",
+    MODEL_TENSOR.CONV_NORM:                 "blk.{bid}.conv_norm",
+    MODEL_TENSOR.CONV_PW1:                  "blk.{bid}.conv_pw1",
+    MODEL_TENSOR.CONV_PW2:                  "blk.{bid}.conv_pw2",
+    MODEL_TENSOR.CONV_DW:                   "blk.{bid}.conv_dw",
+    MODEL_TENSOR.CONV_DW_NORM:              "blk.{bid}.conv_dw_norm",
+    MODEL_TENSOR.FFN_NORM_1:                "blk.{bid}.ffn_norm_1",
+    MODEL_TENSOR.FFN_UP_1:                  "blk.{bid}.ffn_up_1",
+    MODEL_TENSOR.FFN_DOWN_1:                "blk.{bid}.ffn_down_1",
+    MODEL_TENSOR.CTC_OUT_MID:               "ctc_out_mid",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
@@ -4443,6 +4476,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
     ],
+    MODEL_ARCH.GRANITE_SPEECH_5: [
+        # unused: this arch is only ever driven via raw feature (.embd) input, never
+        # token ids, but build_inp_embd() requires a valid tok_embd tensor to exist
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_REL_POS,
+        MODEL_TENSOR.CONV_NORM,
+        MODEL_TENSOR.CONV_PW1,
+        MODEL_TENSOR.CONV_PW2,
+        MODEL_TENSOR.CONV_DW,
+        MODEL_TENSOR.CONV_DW_NORM,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_NORM_1,
+        MODEL_TENSOR.FFN_UP_1,
+        MODEL_TENSOR.FFN_DOWN_1,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.CTC_OUT_MID,
+    ],
     MODEL_ARCH.CHAMELEON: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -5876,6 +5934,7 @@ class VisionProjectorType:
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
+    GRANITE_SPEECH_5_FE = "granite_speech_5_fe" # audio, front-end only, no learned encoder
 
 
 # Items here are (block size, type size)
