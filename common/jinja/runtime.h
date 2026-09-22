@@ -119,7 +119,7 @@ static std::vector<statement *> stmts_to_ptr(const statements & stmts) {
  * Base class for all nodes in the AST.
  */
 struct statement {
-    size_t pos; // position in source, for debugging
+    size_t pos = 0; // position in source, for debugging
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
     virtual void visit(context & ctx) { ctx.visitor(true, this, {}); }
@@ -476,20 +476,12 @@ struct binary_expression : public expression {
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */
 struct filter_expression : public expression {
-    // either an expression or a value is allowed
     statement_ptr operand;
-    value_string val; // will be set by filter_statement
-
     statement_ptr filter;
 
     filter_expression(statement_ptr && operand, statement_ptr && filter)
         : operand(std::move(operand)), filter(std::move(filter)) {
         chk_type<expression>(this->operand);
-        chk_type<identifier, call_expression>(this->filter);
-    }
-
-    filter_expression(value_string && val, statement_ptr && filter)
-        : val(std::move(val)), filter(std::move(filter)) {
         chk_type<identifier, call_expression>(this->filter);
     }
 
