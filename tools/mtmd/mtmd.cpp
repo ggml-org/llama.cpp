@@ -2581,8 +2581,7 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
     mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
     image_tokens->nx = 4;
     image_tokens->ny = 4;
-    image_tokens->pos = MTMD_POS_TYPE_SENSENOVA_U1;
-    image_tokens->batch_f32.entries.resize(1);
+    image_tokens->batch_f32.entries.resize(16);
     image_tokens->id = "image_1";
     mtmd_input_chunk chunk_image{
         MTMD_INPUT_CHUNK_TYPE_IMAGE,
