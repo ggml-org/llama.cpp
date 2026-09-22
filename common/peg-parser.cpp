@@ -202,6 +202,54 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
+common_peg_special_tokens::common_peg_special_tokens(const llama_vocab * vocab) {
+    const llama_token n_tokens = llama_vocab_n_tokens(vocab);
+    for (llama_token id = 0; id < n_tokens; ++id) {
+        const auto attr = llama_vocab_get_attr(vocab, id);
+        if (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+            std::string text = llama_vocab_get_text(vocab, id);
+            ids.emplace(text, id);
+            tokens.emplace(id, common_peg_special_token{ std::move(text), attr });
+        }
+    }
+}
+
+llama_token common_peg_special_tokens::token_id(const std::string & text) const {
+    auto it = ids.find(text);
+    return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
+}
+
+bool common_peg_special_tokens::is_special(llama_token id) const {
+    return tokens.find(id) != tokens.end();
+}
+
+bool common_peg_special_tokens::is_control(llama_token id) const {
+    auto it = tokens.find(id);
+    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_CONTROL);
+}
+
+bool common_peg_special_tokens::is_user_defined(llama_token id) const {
+    auto it = tokens.find(id);
+    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_USER_DEFINED);
+}
+
+void common_peg_input::append(const std::string & piece, llama_token token) {
+    if (piece.empty()) {
+        return;
+    }
+    if (special_tokens.is_special(token)) {
+        tokens.push_back({ text.size(), token });
+    }
+    text += piece;
+}
+
+common_peg_input_token common_peg_input::next_token(size_t pos) const {
+    auto it = std::lower_bound(tokens.begin(), tokens.end(), pos, [](const common_peg_input_token & t, size_t p) {
+        return t.pos < p;
+    });
+    return it != tokens.end() ? *it : common_peg_input_token{};
+}
+
 struct parser_executor;
 
 common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
