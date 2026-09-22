@@ -57,9 +57,13 @@ The tuner emits whatever token the runtime reports for the machine, so an unregi
 ./build/bin/ggml-metal-tuning fa > fa_rows.txt 2> fa_sweep.log
 ```
 
-The sweep times the baseline tile against the wide tile with 4 and with 8 simdgroups at GQA 8, F16 K/V, over 8 KV depths (3 of them in the first bucket) x up to 4 batch widths per head size (well under an hour).
-A KV-depth bucket gets a row only for a config that is no slower at every sampled point and at least 2% faster in aggregate, so a device where the wide tile does not pay off emits nothing and stays at baseline.
+The sweep times the baseline tile against the wide tile with 4 and with 8 simdgroups at GQA 8, F16 K/V, over 8 KV depths (3 of them in the first bucket) x up to 4 batch widths per head size, and again with 8 query heads from 32 to 1024 tiles (about an hour).
+A launch is counted in dispatched wide tiles: `ceil(batch/16) x query heads x streams`.
+A KV-depth bucket gets a row only for a config that is at least 2% faster over the launches of 1024 tiles or more and loses at none of them, so a device where the wide tile does not pay off emits nothing and stays at baseline.
+The last number of a row is `tiles_min`: the smallest sampled launch of that KV-depth bucket from which the config wins at every sampled point. Below it the baseline tile is kept.
+A win must clear 1.5%. A cell whose first measurement is closer to baseline than that is measured two more times, and the decision uses the median ratio over the three, so a marginal cell still counts as a loss.
 The 8-simdgroup variant replaces the 4-simdgroup one only when it is at least 3% faster, so that rows do not flip on noise.
+Rows of one head size collapse into a single default row only when every bucket picks the same config and the same `tiles_min`.
 `test-backend-ops test -o FLASH_ATTN_EXT -b MTL0` forces the wide tile regardless of the table.
 
 ## Thermal throttling
