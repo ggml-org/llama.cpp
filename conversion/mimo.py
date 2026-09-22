@@ -239,6 +239,8 @@ class MimoV2Model(TextModel):
             del self.model_tensors[name]
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # not a generator on purpose: base.py chains this with get_tensors(), so the
+        # tensors used here must be removed from model_tensors before that starts
         if self._is_mxfp4_packed():
             self._write_mxfp4_experts()
         return ()
