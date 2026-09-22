@@ -4964,14 +4964,7 @@ static bool ggml_sycl_mul_mat_glu_mmvq_plain(ggml_backend_sycl_context & ctx, gg
 
 // Fused dense-FFN mat-vec for the {mul_mat(gate), mul_mat(up), GLU} subgraph at node_idx.
 // Returns false if it declined, in which case the caller runs the three nodes normally.
-static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph, int node_idx) {
-    if (!ggml_sycl_can_fuse(cgraph, node_idx, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU }, {})) {
-        return false;
-    }
-
-    ggml_tensor *       glu  = cgraph->nodes[node_idx + 2];
-    ggml_tensor *       gate = glu->src[0];
-    ggml_tensor *       up   = glu->src[1];
+static bool ggml_sycl_op_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, ggml_tensor * gate, ggml_tensor * up, ggml_tensor * glu) {
     const ggml_tensor * wu   = up->src[0];
     const ggml_tensor * wg   = gate->src[0];
     const ggml_tensor * act  = up->src[1];
@@ -6191,19 +6184,22 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
         if (node->op == GGML_OP_SSM_CONV &&
             ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_ADD, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
-            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+            ggml_sycl_op_ssm_conv_fused(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
             i += 2;
             continue;
         }
 
         if (node->op == GGML_OP_SSM_CONV &&
             ggml_sycl_can_fuse(cgraph, i, { GGML_OP_SSM_CONV, GGML_OP_UNARY }, { GGML_UNARY_OP_SILU })) {
-            ggml_sycl_ssm_conv_fused(*sycl_ctx, node, nullptr, cgraph->nodes[i + 1]);
+            ggml_sycl_op_ssm_conv_fused(*sycl_ctx, node, nullptr, cgraph->nodes[i + 1]);
             i++;
             continue;
         }
 
-        if (node->op == GGML_OP_MUL_MAT && ggml_sycl_mul_mat_glu_mmvq_fused(*sycl_ctx, cgraph, i)) {
+        if (node->op == GGML_OP_MUL_MAT &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT, GGML_OP_GLU }, {})) {
+            ggml_tensor * glu = cgraph->nodes[i + 2];
+            ggml_sycl_op_mul_mat_glu_mmvq_fused(*sycl_ctx, glu->src[0], glu->src[1], glu);
             i += 2;
             continue;
         }

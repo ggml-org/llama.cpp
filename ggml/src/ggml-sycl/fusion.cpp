@@ -4,7 +4,7 @@
 #include <algorithm>
 
 // mul_mat(gate) + mul_mat(up) + GLU: graph shape and tensor properties only. Backend state
-// (weight layout, split buffers, DMMV) is checked by ggml_sycl_mul_mat_glu_mmvq_fused().
+// (weight layout, split buffers, DMMV) is checked by ggml_sycl_op_mul_mat_glu_mmvq_fused().
 static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const ggml_tensor * up,
                                               const ggml_tensor * glu) {
     // the fused epilogue implements these two; the rest fall back to the standalone GLU kernels
