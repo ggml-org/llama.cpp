@@ -1711,6 +1711,9 @@ class TextModel(ModelBase):
         if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
             # ref: https://huggingface.co/XHToken/Spark-X2.5-1.7B
             res = "spark2_5"
+        if chkhsh == "863be7faaea4c039abf69dce5367bbfd74decc6fb0ee2b351003e31e4b6d7d9b":
+            # ref: https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc
+            res = "granite-speech-5"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
