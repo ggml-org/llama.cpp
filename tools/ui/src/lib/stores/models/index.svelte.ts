@@ -74,9 +74,52 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	loading = $state(false);
+	/**
+	 * Every selectable model across enabled backends. The active backend's
+	 * models come from {@link activeModels}; the rest come from the background
+	 * prefetch cache. Ids are backend-qualified so the same model name on two
+	 * backends stays distinct.
+	 */
+	/**
+	 * Computed once per state change. Rows reach this through per-model props
+	 * lookups, so a getter that rebuilt the list on every read made opening the
+	 * selector quadratic in the size of the catalog.
+	 */
+	models = $derived.by((): ModelOption[] => {
+		const activeBackendId = backendsStore.active.id;
+		const merged: ModelOption[] = [];
+		const seen = new SvelteSet<string>();
+		const push = (option: ModelOption, backendId: string) => {
+			const id = qualifyModelId(backendId, rawModelId(option.id));
+
+			// a backend can be listed twice while a switch is in flight: the rows
+			// of the previous backend are still in activeModels
+			if (seen.has(id)) return;
+
+			seen.add(id);
+			merged.push({ ...option, backendId, id });
+		};
+
+		for (const option of this.activeModels) {
+			// keep the backend an option was built for: rows from the previous
+			// backend must not be relabelled while a switch is in flight
+			push(option, option.backendId ?? activeBackendId);
+		}
+
+		for (const backend of backendsStore.enabled) {
+			if (backend.id === activeBackendId) continue;
+
+			for (const option of backendsModelsStore.get(backend.id).models) {
+				push(option, option.backendId ?? backend.id);
+			}
+		}
+
+		return merged;
+	});
 	recentModelIds = $state<string[]>(loadRecentModels());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(storedSelection?.id ?? null);
+
 	selectedModelName = $state<string | null>(storedSelection?.model ?? null);
 
 	updating = $state(false);
@@ -139,44 +182,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					m.status.value === ServerModelStatus.SLEEPING
 			)
 			.map((m) => m.id);
-	}
-
-	/**
-	 * Every selectable model across enabled backends. The active backend's
-	 * models come from {@link activeModels}; the rest come from the background
-	 * prefetch cache. Ids are backend-qualified so the same model name on two
-	 * backends stays distinct.
-	 */
-	get models(): ModelOption[] {
-		const activeBackendId = backendsStore.active.id;
-		const merged: ModelOption[] = [];
-		const seen = new SvelteSet<string>();
-		const push = (option: ModelOption, backendId: string) => {
-			const id = qualifyModelId(backendId, rawModelId(option.id));
-
-			// a backend can be listed twice while a switch is in flight: the rows
-			// of the previous backend are still in activeModels
-			if (seen.has(id)) return;
-
-			seen.add(id);
-			merged.push({ ...option, backendId, id });
-		};
-
-		for (const option of this.activeModels) {
-			// keep the backend an option was built for: rows from the previous
-			// backend must not be relabelled while a switch is in flight
-			push(option, option.backendId ?? activeBackendId);
-		}
-
-		for (const backend of backendsStore.enabled) {
-			if (backend.id === activeBackendId) continue;
-
-			for (const option of backendsModelsStore.get(backend.id).models) {
-				push(option, option.backendId ?? backend.id);
-			}
-		}
-
-		return merged;
 	}
 
 	get props() {
