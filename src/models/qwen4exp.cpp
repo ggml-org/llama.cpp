@@ -92,14 +92,16 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
         qwen4exp_require_nonzero(ml, LLM_KV_PLE_CONV_KERNEL,             hparams.ple_conv_kernel);
         qwen4exp_require_nonzero(ml, LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  hparams.n_embd_per_layer);
 
-        hparams.ple_n_heads  = (hparams.ple_ngram_size - 1) * hparams.ple_heads_per_ngram;
-        hparams.ple_head_dim = hparams.n_embd_per_layer;
         if (hparams.ple_ngram_size < 2 || hparams.ple_ngram_size > LLAMA_MAX_PLE_NGRAM) {
             throw std::runtime_error(format("PLE n-gram size %u is out of range", hparams.ple_ngram_size));
         }
-        if (hparams.ple_n_heads == 0 || hparams.ple_n_heads > LLAMA_MAX_PLE_HEADS) {
-            throw std::runtime_error(format("PLE head count %u is out of range", hparams.ple_n_heads));
+        // keep in 64 bits: a uint32 product can wrap and pass the range check below
+        const uint64_t ple_n_heads = (uint64_t)(hparams.ple_ngram_size - 1) * hparams.ple_heads_per_ngram;
+        if (ple_n_heads == 0 || ple_n_heads > LLAMA_MAX_PLE_HEADS) {
+            throw std::runtime_error(format("PLE head count %" PRIu64 " is out of range", ple_n_heads));
         }
+        hparams.ple_n_heads  = (uint32_t) ple_n_heads;
+        hparams.ple_head_dim = hparams.n_embd_per_layer;
 
         qwen4exp_require_arr_len(ml, LLM_KV_PLE_LAYER_MULTIPLIERS, hparams.ple_ngram_size);
         qwen4exp_require_arr_len(ml, LLM_KV_PLE_HEAD_OFFSETS,      hparams.ple_n_heads);
@@ -1082,6 +1084,9 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
     const int64_t per_gram = hp.ple_heads_per_ngram;
     const int64_t eos      = hp.ple_eos_token_id;
     const int64_t n_prev   = n_gram - 1;
+
+    // ple_n_heads is derived from the n-gram geometry, see load_arch_hparams()
+    GGML_ASSERT((n_gram - 1) * per_gram == n_heads && "PLE head count does not match the n-gram geometry");
 
     std::vector<int32_t> idx(n_heads * n_tokens);
 
