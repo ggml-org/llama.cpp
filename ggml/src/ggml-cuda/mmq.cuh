@@ -10,6 +10,10 @@
 #define MMQ_ITER_K_FP4         512
 #define MMQ_NWARPS               8
 
+// Prefill optimization: larger tile sizes for better throughput
+// These configurations are optimized for larger batch sizes (prefill)
+// and should not affect decode performance (which uses ne11=1)
+
 typedef void (*ggml_cuda_mmq_load_tiles_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
 typedef void (*ggml_cuda_mmq_vec_dot_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
 typedef void (*ggml_cuda_mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
@@ -370,14 +374,40 @@ static constexpr __device__ int ggml_cuda_mmq_get_sram_stride(ggml_type type, in
 }
 
 static __host__ int ggml_cuda_mmq_get_J_max(const ggml_type type, const bool fallback, const int cc, const int64_t ne11) {
-    int ret = std::min(ne11, int64_t(512));
-    ret -= ret % 8;
-    for (;ret > 0; ret -= 8) {
-        if (ggml_cuda_mmq_get_config(type, ret, fallback, cc).type != GGML_TYPE_COUNT) {
-            return ret;
+    // For larger batch sizes (prefill), use larger J values for better throughput
+    // For decode (ne11 == 1), use standard config
+    if (ne11 > 1) {
+        // Prefill mode: try larger J values first (32, 64, 128)
+        int ret = std::min(int64_t(128), ne11);
+        ret -= ret % 8;
+        for (; ret > 0; ret -= 8) {
+            // Try prefill-friendly J values first
+            if (ret == 32 || ret == 64 || ret == 128) {
+                if (ggml_cuda_mmq_get_config(type, ret, fallback, cc).type != GGML_TYPE_COUNT) {
+                    return ret;
+                }
+            }
         }
+        // Fallback to standard behavior
+        int ret2 = std::min(ne11, int64_t(512));
+        ret2 -= ret2 % 8;
+        for (;ret2 > 0; ret2 -= 8) {
+            if (ggml_cuda_mmq_get_config(type, ret2, fallback, cc).type != GGML_TYPE_COUNT) {
+                return ret2;
+            }
+        }
+        return ret2;
+    } else {
+        // Decode mode: use standard config
+        int ret = std::min(ne11, int64_t(512));
+        ret -= ret % 8;
+        for (;ret > 0; ret -= 8) {
+            if (ggml_cuda_mmq_get_config(type, ret, fallback, cc).type != GGML_TYPE_COUNT) {
+                return ret;
+            }
+        }
+        return ret;
     }
-    return ret;
 }
 
 static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, int J, bool fallback) {

@@ -127,14 +127,29 @@ void ggml_cuda_mul_mat_q(
     const int64_t s3  =  dst->nb[3] / ts_dst;
 
     const bool fallback = ne01 % 128 != 0;
-
+    
+    // Determine if we should use prefill configuration
+    // For MoE: use prefill config if batch_size > 2 or n_expert_used > 4
+    // For non-MoE: use prefill config if ne11 > 1 (batch processing)
+    const bool has_experts = ids != nullptr;
+    const bool is_prefill = has_experts 
+        ? (ne11 > 2 || (ids && ids->ne[0] > 4))
+        : (ne11 > 1);
+    
+    // For MoE, use the optimal J based on batch size
+    const int64_t j_max_param = has_experts 
+        ? std::min(ne11 * (ids ? ids->ne[0] : 1), int64_t(128)) 
+        : ne11;
+    
     const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
     if (!ids) {
+        // For non-MoE, use prefill config based on ne11
+        const int64_t j_max = is_prefill ? j_max_param : ne11;
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block +
-            ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
+            ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, j_max) * sizeof(block_q8_1_mmq);
         ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
         if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
@@ -203,7 +218,7 @@ void ggml_cuda_mul_mat_q(
     }
 
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * y_block_size/y_values_per_block +
-        ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
+        ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, j_max_param) * sizeof(block_q8_1_mmq);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
     ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
     if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
