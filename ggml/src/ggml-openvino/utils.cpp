@@ -108,11 +108,11 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     return ov::Tensor(GgmlOvDecoder::get_ov_type(ggml_tensor), sliced_shape, ggml_tensor->data);
 }
 
-uint64_t ggml_openvino_model_cache_extra_cfg(const std::string & device, bool stateful) {
+uint64_t ggml_openvino_model_cache_extra_cfg(bool stateful) {
     const char * manual_gqa_env = ggml_openvino_getenv_str("GGML_OPENVINO_MANUAL_GQA_ATTN");
     const bool manual_gqa_enabled = manual_gqa_env != nullptr ?
                                         ggml_openvino_getenv_int("GGML_OPENVINO_MANUAL_GQA_ATTN") > 0 :
-                                        device == "GPU";
+                                        ggml_openvino_is_gpu();
 
     uint64_t extra_cfg = 1;  // Graph-ordinal port names (invalidate older disk-cache blobs).
     extra_cfg = extra_cfg * 131 + (stateful ? 1u : 0u);
@@ -879,7 +879,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                 mc_config.erase("CACHE_MODE");
             }
             if (!imported && !model_cache_dir.empty() && !model_is_splitted) {
-                const uint64_t extra_cfg = ggml_openvino_model_cache_extra_cfg(device, stateful);
+                const uint64_t extra_cfg = ggml_openvino_model_cache_extra_cfg(stateful);
                 model_fp =
                     ggml_openvino_model_fingerprint(cgraph, device, /*fa=*/true, m_params.rope_params, 16, extra_cfg);
                 blob_path = ggml_openvino_model_cache_blob_path(model_cache_dir, model_fp);
@@ -1108,7 +1108,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
     // be reading host weights during conversion/compilation. Pin the shared compiled
     // models across backend teardown; a later context can create its own request without
     // reading the dropped pages. A new, uncached graph still fails fast above.
-    if (cache_hit && ggml_openvino_release_weights_enabled(device)) {
+    if (cache_hit && ggml_openvino_release_weights_enabled()) {
         std::lock_guard<std::mutex> compile_lock(r_ctx->compiled_cache->mutex);
         if (!ggml_openvino_weight_buffers_released()) {
             ggml_openvino_release_weight_buffers();

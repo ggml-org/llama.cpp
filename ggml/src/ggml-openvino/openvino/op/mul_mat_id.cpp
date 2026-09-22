@@ -197,7 +197,7 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
     }
 
     const auto output_type = context.get_output_type();
-    const auto activations_type = ggml_openvino_get_device_name() == "GPU" ? ov::element::f16 : ov::element::f32;
+    const auto activations_type = ggml_openvino_is_gpu() ? ov::element::f16 : ov::element::f32;
     if (activations.get_element_type() != activations_type) {
         activations = std::make_shared<ov::op::v0::Convert>(activations, activations_type);
     }
