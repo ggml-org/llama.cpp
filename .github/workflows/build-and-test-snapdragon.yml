@@ -123,6 +123,7 @@ jobs:
         run: |
           curl -fSL -o qdc_sdk.zip https://softwarecenter.qualcomm.com/api/download/software/tools/Qualcomm_Device_Cloud_SDK/All/0.2.3/qualcomm_device_cloud_sdk-0.2.3.zip
           unzip qdc_sdk.zip -d qdc_sdk
+          source scripts/apply-pip-cooldown.sh python3
           pip install qdc_sdk/qualcomm_device_cloud_sdk-0.2.3-py3-none-any.whl
 
       - name: Check QDC API key
