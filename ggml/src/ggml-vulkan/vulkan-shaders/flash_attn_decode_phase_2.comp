@@ -326,7 +326,7 @@ void main() {
     [[unroll]] for (uint pm = 0; pm < ALIGNED_P_M; pm++) {
       [[unroll]] for (uint reduce = 0; reduce < SUB_GROUPS_PER_LINE; reduce++) {
         sumTemp[pm][reduce] = slm_pool_f32.slm_pool_o[sumBase + pm * WARPSIZE * SUB_GROUPS_PER_LINE + reduce];
-      }  
+      }
     }
 
     [[unroll]] for (uint pm = 0; pm < ALIGNED_P_M; pm++) {
