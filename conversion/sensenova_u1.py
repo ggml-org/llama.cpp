@@ -55,16 +55,12 @@ class SenseNovaU1VisionModel(MmprojModel):
             hparams = dict(hparams)
 
         vision_config = dict(hparams["vision_config"])
-        vision_config.update(
-            {
-                # NEOVisionModel has no transformer blocks; these values
-                # satisfy the generic mmproj metadata contract.
-                "image_size": 0,
-                "intermediate_size": 0,
-                "num_hidden_layers": 0,
-                "num_attention_heads": 1,
-            }
-        )
+        # NEOVisionModel has no transformer blocks; these defaults satisfy
+        # the generic mmproj metadata contract without replacing checkpoint values.
+        vision_config.setdefault("image_size", 0)
+        vision_config.setdefault("intermediate_size", 0)
+        vision_config.setdefault("num_hidden_layers", 0)
+        vision_config.setdefault("num_attention_heads", 1)
         hparams["vision_config"] = vision_config
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
 
@@ -81,24 +77,38 @@ class SenseNovaU1VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_clip_projector_type("sensenova_u1")
-        self.gguf_writer.add_vision_head_dim(1024)
-        self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
-        self.gguf_writer.add_vision_min_pixels(65536)
-        self.gguf_writer.add_vision_max_pixels(4194304)
-        self.gguf_writer.add_vision_spatial_merge_size(2)
+        vision_config = self.hparams["vision_config"]
+        # These defaults match the known U1.5 checkpoint when older configs omit fields.
+        hidden_size = int(vision_config.get("hidden_size", 1024))
+        min_pixels = int(vision_config.get("min_pixels", 65536))
+        max_pixels = int(vision_config.get("max_pixels", 16777216))
+        downsample_ratio = float(vision_config.get("downsample_ratio", 0.5))
+        if downsample_ratio <= 0:
+            raise ValueError(f"SenseNova U1 downsample_ratio must be positive, got {downsample_ratio}")
+        merge_size = round(1.0 / downsample_ratio)
+        if abs((1.0 / downsample_ratio) - merge_size) > 1e-6:
+            raise ValueError(f"SenseNova U1 downsample_ratio must have an integer reciprocal, got {downsample_ratio}")
+        norm_eps = float(vision_config.get("layer_norm_eps", vision_config.get("rms_norm_eps", 1e-6)))
+        self.gguf_writer.add_vision_head_dim(hidden_size)
+        self.gguf_writer.add_vision_attention_layernorm_eps(norm_eps)
+        self.gguf_writer.add_vision_min_pixels(min_pixels)
+        self.gguf_writer.add_vision_max_pixels(max_pixels)
+        self.gguf_writer.add_vision_spatial_merge_size(merge_size)
 
     def modify_tensors(self, data_torch, name, bid):
         tensor_names = {
             "vision_model.embeddings.patch_embedding.weight": "v.patch_embd.weight",
             "vision_model.embeddings.patch_embedding.bias":   "v.patch_embd.bias",
-            "vision_model.embeddings.dense_embedding.weight": "v.dense_embd.weight",
-            "vision_model.embeddings.dense_embedding.bias":   "v.dense_embd.bias",
+            "vision_model.embeddings.dense_embedding.weight": self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, 0),
+            "vision_model.embeddings.dense_embedding.bias": self.format_tensor_name(
+                gguf.MODEL_TENSOR.V_MMPROJ, 0, suffix=".bias"
+            ),
         }
         if name not in tensor_names:
             raise ValueError(f"Unexpected SenseNova U1 vision tensor: {name!r}")
         return [(tensor_names[name], data_torch)]
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if new_name == "v.dense_embd.weight":
+        if new_name == self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, 0):
             return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)

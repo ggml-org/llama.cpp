@@ -2245,14 +2245,12 @@ struct clip_model_loader {
         model.post_ln_w = get_tensor(string_format(TN_LN_POST, prefix, "weight"), false);
         model.post_ln_b = get_tensor(string_format(TN_LN_POST, prefix, "bias"),   false);
 
-        model.dense_embedding = get_tensor(TN_DENSE_EMBD, false);
-        model.dense_bias = get_tensor(TN_DENSE_BIAS, false);
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
         model.patch_embeddings_1 = get_tensor(TN_PATCH_EMBD_1, false);
         if (model.proj_type == PROJECTOR_TYPE_SENSENOVA_U1 &&
-            (!model.patch_embeddings_0 || !model.patch_bias || !model.dense_embedding || !model.dense_bias)) {
-            throw std::runtime_error("SenseNova U1 projector requires patch/dense embedding weights and biases");
+            (!model.patch_embeddings_0 || !model.patch_bias)) {
+            throw std::runtime_error("SenseNova U1 projector requires patch embedding weights and biases");
         }
 
         model.norm_embd_w = get_tensor(string_format(TN_NORM_EMBD, "weight"), false);
@@ -3602,7 +3600,10 @@ struct clip_model_loader {
 
                 } break;
             case PROJECTOR_TYPE_SENSENOVA_U1:
-                break;
+                {
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
         }

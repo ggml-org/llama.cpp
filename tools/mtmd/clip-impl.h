@@ -107,8 +107,6 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backward compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
-#define TN_DENSE_EMBD      "v.dense_embd.weight"
-#define TN_DENSE_BIAS      "v.dense_embd.bias"
 #define TN_NORM_EMBD       "v.norm_embd.%s"
 #define TN_PATCH_NORM      "v.patch_norm.%d.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
