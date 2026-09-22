@@ -249,6 +249,16 @@ llama_context::llama_context(
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
 
+    // decoder-less encoder-only architectures (e.g. CTC transcription) have no
+    // incremental generation to split across ubatches - their one-shot encode()
+    // pass must fit the whole input in a single ubatch. Raise the physical/
+    // micro batch size ceiling to n_ctx by default instead of the (much
+    // smaller) generation-oriented default, so a typical input fits.
+    if (!llama_model_has_decoder(&model)) {
+        cparams.n_batch  = std::max(cparams.n_batch,  cparams.n_ctx);
+        cparams.n_ubatch = std::max(cparams.n_ubatch, cparams.n_batch);
+    }
+
     // an encoder pass (real encoder-decoder hybrids, or a decoder-less architecture whose only
     // pass *is* an encode(), e.g. CTC transcription) can produce up to n_batch output rows in one
     // shot - size for that instead of the (possibly much smaller) generation-oriented default
