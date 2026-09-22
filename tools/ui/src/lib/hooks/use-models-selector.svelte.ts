@@ -12,8 +12,11 @@ import {
 } from '$lib/constants';
 import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
+import { getBackend } from '$lib/utils/api-base';
+import { getBackendCapabilities } from '$lib/utils/backend';
 import { rawModelId } from '$lib/utils/model-option-id';
 import { onMount } from 'svelte';
+import { SvelteSet } from 'svelte/reactivity';
 
 /** Groups of the favorites tab, which lists favorites only. */
 const EMPTY_GROUPS = { available: [], loaded: [], providers: [] };
@@ -43,6 +46,7 @@ export interface UseModelsSelectorReturn {
 	readonly isHighlightedCurrentModelActive: boolean;
 	readonly isCurrentModelInCache: boolean;
 	readonly favoriteItems: ModelItem[];
+	readonly loadedItems: ModelItem[];
 	readonly filteredOptions: ModelOption[];
 	readonly isEmpty: boolean;
 	readonly isProviderView: boolean;
@@ -143,9 +147,23 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				};
 			})
 	);
-	// favorites are listed once, at the top: the sections below skip them
+	// loaded models lead the list, from any llama-compat backend
+	const isLoadedLlamaCompat = (option: ModelOption) =>
+		modelsStore.isModelLoaded(option.model) &&
+		getBackendCapabilities(getBackend(option.backendId)).loadUnload;
+	const loadedItems = $derived.by(() => {
+		if (isProviderView) return [];
+
+		return filterModelOptions(allOptions, searchTerm)
+			.map((option, flatIndex) => ({ flatIndex, option }))
+			.filter(({ option }) => isLoadedLlamaCompat(option));
+	});
+	const loadedIds = $derived(new SvelteSet(loadedItems.map((item) => item.option.id)));
+	// loaded models and favorites are listed once, at the top: the sections skip both
 	const sectionOptions = $derived(
-		filteredOptions.filter((option) => !modelsStore.favoriteModelIds.has(option.model))
+		filteredOptions.filter(
+			(option) => !modelsStore.favoriteModelIds.has(option.model) && !loadedIds.has(option.id)
+		)
 	);
 	const providerSections = $derived(
 		groupProviderOptions(
@@ -169,7 +187,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		return { ...local, providers: providerSections };
 	});
-	const isEmpty = $derived(filteredOptions.length === 0 && favoriteItems.length === 0);
+	const isEmpty = $derived(
+		filteredOptions.length === 0 && favoriteItems.length === 0 && loadedItems.length === 0
+	);
 	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
 
 	function handleInfoClick(modelName: string) {
@@ -328,7 +348,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		get favoriteItems() {
 			return favoriteItems;
 		},
-
 		get filteredOptions() {
 			return filteredOptions;
 		},
@@ -379,6 +398,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		get isRouter() {
 			return isRouter;
+		},
+
+		get loadedItems() {
+			return loadedItems;
 		},
 
 		get loading() {

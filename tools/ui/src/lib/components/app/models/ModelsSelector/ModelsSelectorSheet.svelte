@@ -195,6 +195,7 @@
 								{currentModel}
 								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
+								loaded={ms.loadedItems}
 								onInfoClick={ms.handleInfoClick}
 								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
 								onProviderOpen={ms.openProvider}

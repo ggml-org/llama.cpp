@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { Heart } from '@lucide/svelte';
+	import { Heart, Power } from '@lucide/svelte';
 	import { ModelsSelectorOption } from '$lib/components/app';
 	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
@@ -24,6 +24,8 @@
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
 		/** Favorite models of every backend, listed in their own section. */
 		favorites?: ModelItem[];
+		/** Loaded models of every llama-compat backend, leading the list. */
+		loaded?: ModelItem[];
 		/** Show the organization name in every model id of the list. */
 		showOrgName?: boolean;
 		/** Open one provider's full list, offered when a section is cut short. */
@@ -37,6 +39,7 @@
 		currentModel,
 		favorites = [],
 		groups,
+		loaded = [],
 		onInfoClick,
 		onProviderBack,
 		onProviderOpen,
@@ -119,6 +122,18 @@
 		showBaseModelAvatar
 	/>
 {/snippet}
+
+{#if loaded.length > 0}
+	<ModelsSection count={loaded.length} label="Loaded models" revealChevronOnHover sticky>
+		{#snippet icon()}
+			<Power class="h-3.5 w-3.5 shrink-0" />
+		{/snippet}
+
+		{#each loaded as item (item.option.id)}
+			{@render render(item, !showOrgName)}
+		{/each}
+	</ModelsSection>
+{/if}
 
 {#if favorites.length > 0}
 	{#if localOnly}
