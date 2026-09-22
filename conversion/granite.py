@@ -770,8 +770,14 @@ class GraniteSpeech5Model(TextModel):
         self.gguf_writer.add_ctc_context_size(h["context_size"])
         self.gguf_writer.add_ctc_max_pos_emb(h["max_position_embeddings"])
         self.gguf_writer.add_ctc_conv_kernel(h["conv_kernel_size"])
-        self.gguf_writer.add_ctc_subsample_layers(list(h["subsample_layers"]))
         self.gguf_writer.add_ctc_conv_expansion_factor(h["conv_expansion_factor"])
+
+        # subsample values per-layer. granite-speech-5 always uses a factor of 2
+        subsample_layers = list(h["subsample_layers"])
+        self.gguf_writer.add_ctc_subsample_layer_mapping([
+            2 if i in subsample_layers else 1
+            for i in range(self.block_count)
+        ])
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # this arch is only ever driven via raw feature (.embd) input, never
