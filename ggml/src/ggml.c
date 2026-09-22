@@ -3897,8 +3897,8 @@ struct ggml_tensor * ggml_permute(
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
     ggml_format_name(result, "%s (permuted)", a->name);
 
-    int ne[GGML_MAX_DIMS];
-    int nb[GGML_MAX_DIMS];
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
 
     ne[axis0] = a->ne[0];
     ne[axis1] = a->ne[1];
