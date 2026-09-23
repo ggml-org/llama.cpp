@@ -694,6 +694,14 @@ static test_suite run_save_load_tests_for_model(const std::string & model_path, 
 }
 
 
+static void print_usage(int /* argc */, char ** argv) {
+    LOG("\nexample usage:\n");
+    LOG("\n  %s -m your_model.gguf\n", argv[0]);
+    LOG("\n  %s --models tests/test-models\n", argv[0]);
+    LOG("\n  %s -m your_model.gguf -lv 5\n", argv[0]);
+    LOG("\n");
+}
+
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -730,7 +738,7 @@ int main(int argc, char ** argv) {
         params.model.path = models_dir;
     }
 
-    if (!common_params_parse(fargc, filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+    if (!common_params_parse(fargc, filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON, print_usage)) {
         return 1;
     }
 
