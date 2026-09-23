@@ -75,12 +75,13 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
 // FA (non-vec) queries per threadgroup (Q) and simdgroups per threadgroup (NSG). Rows key an exact ne11 bucket,
 // or all of them with ne11_b == FA_NE11_DEFAULT. fa_pick tries exact bucket -> default, under the device and
 // then under its family representative -> baseline.
-// ne01 < FA_NE01_MIN always uses baseline, and so does ne01 < FA_NE01_MIN_PARTIAL when the last wide tile
-// would be padded with more rows than the baseline tile.
+// ne01 < FA_NE01_MIN always uses baseline, and so does a last wide tile of 1..8 rows until the batch is
+// long enough to amortize the rows it pads.
 // a row applies from tiles_min dispatched wide tiles (ceil(ne01/16)*ne02*ne03), below that baseline is kept.
-constexpr int FA_NE11_BUCKETS[]   = { 4096, 8192, 16384, 32768, 65536 };
-constexpr int FA_NE01_MIN         = 64;
-constexpr int FA_NE01_MIN_PARTIAL = 256;
+constexpr int FA_NE11_BUCKETS[]         = { 4096, 8192, 16384, 32768, 65536 };
+constexpr int FA_NE01_MIN               = 64;
+constexpr int FA_NE01_MIN_PARTIAL_TILES = 50;  // such a tile pads 1/this of the row work; 50 keeps that under
+                                               // the 2% aggregate gain the tuner requires of a row (TUNE_THETA)
 
 constexpr int8_t FA_NE11_DEFAULT = -1;
 

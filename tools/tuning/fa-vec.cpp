@@ -679,7 +679,7 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
     // KV lengths per ne11 bucket, and per KV length: the smallest batch that uses the wide tile, the smallest one
     // that may pad its last tile with more rows than baseline, and two typical physical batch sizes
     const std::vector<std::vector<int>> ne11_rep = { { 512, 1024, 2048 }, { 4096 }, { 8192 }, { 16384 }, { 32768 }, { 65536 } };
-    const int ne01_rep[] = { ggml_metal_tuning::FA_NE01_MIN, ggml_metal_tuning::FA_NE01_MIN_PARTIAL + 8, 512, 2048 };
+    const int ne01_rep[] = { ggml_metal_tuning::FA_NE01_MIN, 8*ggml_metal_tuning::FA_NE01_MIN_PARTIAL_TILES + 8, 512, 2048 };
 
     // 8 query heads, 32..1024 wide tiles
     const int ne01_rep_small[] = { 64, 128, 256, 512, 1024, 2048 };
@@ -695,8 +695,11 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
     const size_t n_cands = std::size(cands);
 
     const double TUNE_THETA = 1.02;   // min speedup vs baseline at large launches to emit a row
+                                      // (FA_NE01_MIN_PARTIAL_TILES is sized against this)
     const double TUNE_TIE   = 1.03;   // min speedup vs an earlier candidate to replace it
-    const double TUNE_EPS   = 0.015;  // a win must clear this; a cell this close to baseline is re-measured
+    const double TUNE_EPS   = 0.015;  // a win must clear this, and a loss must exceed it
+    const double TUNE_BAND  = 0.03;   // a cell this close to baseline is re-measured, so that decisions
+                                      // either side of TUNE_EPS rest on the same number of measurements
     const int    TUNE_RETRY = 2;      // extra measurements of such a cell, always all of them, all count
 
     const cooldown_opts cool = {
@@ -757,7 +760,7 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
                 char label[128];
                 snprintf(label, sizeof(label), "dk=%d dv=%d ne11=%d ne01=%d tiles=%d", s.dk, s.dv, ne11, ne01, tiles);
 
-                // a cell whose first measurement is within TUNE_EPS of baseline is measured TUNE_RETRY more times;
+                // a cell whose first measurement is within TUNE_BAND of baseline is measured TUNE_RETRY more times;
                 // every measurement is kept and the decision uses the median ratio over all of them
                 std::vector<cell_result> rs;
                 for (int retry = 0; cell.gf != nullptr && retry <= TUNE_RETRY; ++retry) {
@@ -772,12 +775,12 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
                     if (retry == 0) {
                         bool close = false;
                         for (size_t i = 1; i < n_cands; ++i) {
-                            close = close || (ok[i] && r1.t[i] > 0.0 && std::fabs(r1.t[0]/r1.t[i] - 1.0) <= TUNE_EPS);
+                            close = close || (ok[i] && r1.t[i] > 0.0 && std::fabs(r1.t[0]/r1.t[i] - 1.0) <= TUNE_BAND);
                         }
                         if (!close) {
                             break;
                         }
-                        fprintf(stderr, "# RETRY %s (within %.1f%% of baseline)\n", label, 100.0*TUNE_EPS);
+                        fprintf(stderr, "# RETRY %s (within %.1f%% of baseline)\n", label, 100.0*TUNE_BAND);
                     }
                     fprintf(stderr, "#   attempt %d: Q8=%.1f", retry, r1.t[0]);
                     for (size_t i = 1; i < n_cands; ++i) {
@@ -822,16 +825,16 @@ bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_op
                     }
                     fprintf(stderr, "  Q%dNSG%d=%.1f (%.3fx)", cands[i].Q, cands[i].NSG, r.t[i], r.t[0] / r.t[i]);
 
-                    // a win must clear TUNE_EPS. At a small launch anything short of a win moves tiles_min.
-                    // At a large or partial-tile launch only a clear loss drops the config; a cell still
-                    // within TUNE_EPS after the retries keeps its time in the aggregate and nothing else
+                    // a small launch moves tiles_min instead of dropping the config: a full tile of queries
+                    // on anything short of a win, a partial one only on a clear loss, as it also pays for the
+                    // rows the wide tile pads. A clear loss at a large launch drops the config
                     if (!(r.t[i] > 0.0)) {
                         ok[i] = false;
                         continue;
                     }
                     const bool win  = r.t[i] * (1.0 + TUNE_EPS) <= r.t[0];
                     const bool loss = r.t[0] * (1.0 + TUNE_EPS) <= r.t[i];
-                    if (!win && small) {
+                    if (tiles < TILES_LARGE && (loss || (small && !win))) {
                         tiles_bad[i] = std::max(tiles_bad[i], tiles);
                     } else if (loss) {
                         ok[i] = false;

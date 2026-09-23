@@ -1190,21 +1190,16 @@ constexpr fa_entry_t fa_tuned_table[] = {
     { { GGML_METAL_DEVICE_M5, -1, 40, 40 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, -1, 48, 48 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, -1, 64, 64 }, { 16, 4 }, 64 },
-    { { GGML_METAL_DEVICE_M5, 0, 72, 72 }, { 16, 4 }, 256 },
-    { { GGML_METAL_DEVICE_M5, 1, 72, 72 }, { 16, 4 }, 256 },
-    { { GGML_METAL_DEVICE_M5, 2, 72, 72 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 3, 72, 72 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 4, 72, 72 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 5, 72, 72 }, { 16, 4 }, 128 },
+    { { GGML_METAL_DEVICE_M5, -1, 72, 72 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 0, 80, 80 }, { 16, 4 }, 256 },
     { { GGML_METAL_DEVICE_M5, 1, 80, 80 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 2, 80, 80 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 3, 80, 80 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 4, 80, 80 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 5, 80, 80 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 0, 96, 96 }, { 16, 8 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 1, 96, 96 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 2, 96, 96 }, { 16, 4 }, 128 },
+    { { GGML_METAL_DEVICE_M5, 0, 96, 96 }, { 16, 4 }, 256 },
+    { { GGML_METAL_DEVICE_M5, 1, 96, 96 }, { 16, 4 }, 512 },
+    { { GGML_METAL_DEVICE_M5, 2, 96, 96 }, { 16, 4 }, 512 },
     { { GGML_METAL_DEVICE_M5, 3, 96, 96 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 4, 96, 96 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 5, 96, 96 }, { 16, 4 }, 64 },
@@ -1214,29 +1209,31 @@ constexpr fa_entry_t fa_tuned_table[] = {
     { { GGML_METAL_DEVICE_M5, 3, 96, 64 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 4, 96, 64 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 5, 96, 64 }, { 16, 4 }, 64 },
-    { { GGML_METAL_DEVICE_M5, 0, 112, 112 }, { 16, 4 }, 512 },
+    { { GGML_METAL_DEVICE_M5, 0, 112, 112 }, { 16, 4 }, 256 },
     { { GGML_METAL_DEVICE_M5, 1, 112, 112 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 2, 112, 112 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 3, 112, 112 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 4, 112, 112 }, { 16, 4 }, 64 },
-    { { GGML_METAL_DEVICE_M5, 5, 112, 112 }, { 16, 4 }, 32 },
+    { { GGML_METAL_DEVICE_M5, 5, 112, 112 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, 0, 128, 128 }, { 16, 4 }, 256 },
     { { GGML_METAL_DEVICE_M5, 1, 128, 128 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 2, 128, 128 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 3, 128, 128 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, 4, 128, 128 }, { 16, 4 }, 32 },
     { { GGML_METAL_DEVICE_M5, 5, 128, 128 }, { 16, 4 }, 32 },
-    { { GGML_METAL_DEVICE_M5, 1, 192, 192 }, { 16, 4 }, 128 },
+    { { GGML_METAL_DEVICE_M5, 0, 192, 192 }, { 16, 4 }, 1024 },
+    { { GGML_METAL_DEVICE_M5, 1, 192, 192 }, { 16, 4 }, 256 },
     { { GGML_METAL_DEVICE_M5, 2, 192, 192 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 3, 192, 192 }, { 16, 4 }, 32 },
-    { { GGML_METAL_DEVICE_M5, 4, 192, 192 }, { 16, 4 }, 32 },
+    { { GGML_METAL_DEVICE_M5, 4, 192, 192 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, 5, 192, 192 }, { 16, 4 }, 32 },
     { { GGML_METAL_DEVICE_M5, 0, 192, 128 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 1, 192, 128 }, { 16, 4 }, 128 },
     { { GGML_METAL_DEVICE_M5, 2, 192, 128 }, { 16, 4 }, 128 },
-    { { GGML_METAL_DEVICE_M5, 3, 192, 128 }, { 16, 4 }, 32 },
+    { { GGML_METAL_DEVICE_M5, 3, 192, 128 }, { 16, 4 }, 64 },
     { { GGML_METAL_DEVICE_M5, 4, 192, 128 }, { 16, 4 }, 32 },
     { { GGML_METAL_DEVICE_M5, 5, 192, 128 }, { 16, 4 }, 32 },
+    { { GGML_METAL_DEVICE_M5, 0, 256, 256 }, { 16, 8 }, 1024 },
     { { GGML_METAL_DEVICE_M5, 1, 256, 256 }, { 16, 8 }, 128 },
     { { GGML_METAL_DEVICE_M5, 2, 256, 256 }, { 16, 8 }, 64 },
     { { GGML_METAL_DEVICE_M5, 3, 256, 256 }, { 16, 8 }, 64 },
@@ -1267,9 +1264,10 @@ fa_cfg_t fa_pick(enum ggml_metal_device_id device_id, int gpu_family, int dk, in
         return baseline;
     }
 
-    // a last tile of 1..8 rows is padded with 8 more rows than baseline, which only a larger batch amortizes
+    // a last tile of 1..8 rows is padded with 8 more rows than baseline, costing 1/ceil(ne01/8)
     const int64_t ne01_last = ne01 % FA_Q_WIDE;
-    if (ne01 < FA_NE01_MIN_PARTIAL && ne01_last >= 1 && ne01_last <= FA_Q_BASELINE) {
+    if (ne01_last >= 1 && ne01_last <= FA_Q_BASELINE &&
+        (ne01 + FA_Q_BASELINE - 1)/FA_Q_BASELINE < FA_NE01_MIN_PARTIAL_TILES) {
         return baseline;
     }
 
