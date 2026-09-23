@@ -944,58 +944,6 @@ static void ggml_cl_copy_to_contiguous(ggml_backend_t backend, const ggml_tensor
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, src);
 }
 
-static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-
-    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
-    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
-    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
-
-    cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offset1 = extra1->offset + src1->view_offs;
-    cl_ulong offsetd = extrad->offset + dst->view_offs;
-
-    const int M = src0->ne[1];
-    const int N = src1->ne[1];
-    const int K = src0->ne[0];
-
-    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mat_f16_f32_tiled;
-
-    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(int),      &M));
-    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(int),      &N));
-    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int),      &K));
-    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra0->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_ulong), &offset0));
-    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),   &extra1->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &offset1));
-    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_mem),   &extrad->data_device));
-    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &offsetd));
-
-    // Tiling parameters. These need to be tuned for optimal performance.
-    // They must match the #defines in the kernel mul_mat_f16_f32.cl.
-    //
-    // OPWM / OPWN: Output tile size per Work-Group. A work-group computes a tile of size OPWM x OPWN.
-    // TPWM / TPWN: Threads per Work-group. This is the work-group size.
-    // OPTM / OPTN: Output elements per Thread. Each thread computes OPTM x OPTN elements.
-    //
-    // The following relationships must hold:
-    //   OPWM = TPWM * OPTM
-    //   OPWN = TPWN * OPTN
-    //
-    const int OPWM = 64;
-    const int OPWN = 64;
-    const int TPWM = 16;
-    const int TPWN = 8;
-
-    size_t local_work_size[2] = { TPWM, TPWN };
-    size_t global_work_size[2] = {
-        (size_t) ((M + OPWM - 1) / OPWM) * TPWM,
-        (size_t) ((N + OPWN - 1) / OPWN) * TPWN,
-    };
-
-    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
-}
-
 // Dequant a possibly-strided q4_0/q8_0 tensor to tight-packed f16. Returns a
 // temp cl_mem the caller must release. SoA inputs are reconstructed into a
 // temp AoS buffer reported via *extra_reconstruct (also caller-released).
@@ -1418,6 +1366,58 @@ static bool ggml_cl_mm_f16_f32(ggml_backend_t backend, const ggml_tensor * src0,
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     return true;
+}
+
+static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    const int M = src0->ne[1];
+    const int N = src1->ne[1];
+    const int K = src0->ne[0];
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mat_f16_f32_tiled;
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(int),      &N));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 6, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &offsetd));
+
+    // Tiling parameters. These need to be tuned for optimal performance.
+    // They must match the #defines in the kernel mul_mat_f16_f32.cl.
+    //
+    // OPWM / OPWN: Output tile size per Work-Group. A work-group computes a tile of size OPWM x OPWN.
+    // TPWM / TPWN: Threads per Work-group. This is the work-group size.
+    // OPTM / OPTN: Output elements per Thread. Each thread computes OPTM x OPTN elements.
+    //
+    // The following relationships must hold:
+    //   OPWM = TPWM * OPTM
+    //   OPWN = TPWN * OPTN
+    //
+    const int OPWM = 64;
+    const int OPWN = 64;
+    const int TPWM = 16;
+    const int TPWN = 8;
+
+    size_t local_work_size[2] = { TPWM, TPWN };
+    size_t global_work_size[2] = {
+        (size_t) ((M + OPWM - 1) / OPWM) * TPWM,
+        (size_t) ((N + OPWN - 1) / OPWN) * TPWN,
+    };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 }
 
 static bool ggml_cl_mm_q1_0_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
