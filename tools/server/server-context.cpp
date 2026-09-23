@@ -5487,9 +5487,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
 std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const server_http_req & req, task_response_type res_type) {
     auto res = create_response();
-    const llama_vocab * vocab = ctx_server.vocab;
-    mtmd_context * mctx = ctx_server.mctx;
-    const mtmd_helper_init_opt & init_opt = ctx_server.init_opt;
     std::vector<raw_buffer> files;
     json body = json::parse(req.body);
     bool is_oai = false;
@@ -5522,13 +5519,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const s
 
     // TODO @ngxson : refactor this code block, move this to server-common and reuse it in other places
     size_t n_tokens;
-    if (mctx != nullptr) {
+    if (ctx_server.mctx != nullptr) {
         if (!prompt.is_string()) {
             throw std::runtime_error("for mtmd, input prompt must be a string.");
         }
-        n_tokens = process_mtmd_prompt(mctx, prompt.get<std::string>(), files, init_opt, true).size();
+        n_tokens = process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files, ctx_server.init_opt, true).size();
     } else {
-        n_tokens = tokenize_mixed(vocab, prompt, true, true).size();
+        n_tokens = tokenize_mixed(ctx_server.vocab, prompt, true, true).size();
     }
 
     json response = {{"input_tokens", static_cast<int64_t>(n_tokens)}};
