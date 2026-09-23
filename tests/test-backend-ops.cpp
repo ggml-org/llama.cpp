@@ -5203,6 +5203,36 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
+struct test_mul_mat_id_reuse : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::vector<ggml_tensor *> outputs;
+
+    std::string op_desc(ggml_tensor *) override {
+        return "MUL_MAT_ID_REUSE";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * batch = test_mul_mat_id::build_graph(ctx);
+        ggml_tensor * weights = batch->src[0];
+        ggml_tensor * act = batch->src[1];
+        ggml_tensor * ids = batch->src[2];
+        ggml_tensor * act_one = ggml_view_3d(ctx, act, k, act->ne[1], 1, act->nb[1], act->nb[2], 0);
+        ggml_tensor * ids_one = ggml_view_2d(ctx, ids, n_used, 1, ids->nb[1], 0);
+        ggml_tensor * first = ggml_mul_mat_id(ctx, weights, act_one, ids_one);
+        ggml_tensor * last = ggml_mul_mat_id(ctx, weights, act_one, ids_one);
+
+        // Reuse the weights across decode, batch, and decode dispatch.
+        outputs = {first, batch, last};
+        for (ggml_tensor * out : outputs) {
+            ggml_build_forward_expand(gf, out);
+        }
+        return last;
+    }
+
+    bool run_whole_graph() override { return true; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return outputs; }
+};
+
 // GGML_OP_MUL_MAT_ID + GGML_OP_ADD or GGML_OP_MUL
 struct test_mul_mat_id_fusion : public test_case {
     const ggml_type type_a;
@@ -10181,6 +10211,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
+    }
+
+    for (bool broadcast : {false, true}) {
+        for (int k : {96, 256}) {
+            for (int n : {1, 4, 8, 32}) {
+                test_cases.emplace_back(new test_mul_mat_id_reuse(
+                    GGML_TYPE_Q8_0, GGML_TYPE_F32, 4, 2, broadcast, 64, n, k));
+            }
+        }
     }
 
     // Test IQP panel path for all grid IQ types
