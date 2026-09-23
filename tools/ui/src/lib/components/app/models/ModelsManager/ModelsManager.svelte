@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ModelsManagerModelSettings from './ModelsManagerModelSettings.svelte';
+	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
 		isCustomized,
@@ -205,15 +205,17 @@
 
 	{#if selected}
 		<div class="min-h-0 overflow-hidden border-l border-border/40">
-			<ModelsManagerModelSettings
-				isCustomized={isCustomized(overrides[selected.id])}
-				onClose={() => (selectedId = null)}
-				onSave={(override) => saveOverride(selected, override)}
-				onToggleLoad={() => void toggleLoad(selected)}
-				onUseInNewChat={() => void useInNewChat(selected)}
-				option={selected}
-				override={overrides[selected.id]}
-			/>
+			{#key selected.id}
+				<ModelsManagerModelConfiguration
+					isCustomized={isCustomized(overrides[selected.id])}
+					onClose={() => (selectedId = null)}
+					onSave={(override) => saveOverride(selected, override)}
+					onToggleLoad={() => void toggleLoad(selected)}
+					onUseInNewChat={() => void useInNewChat(selected)}
+					option={selected}
+					override={overrides[selected.id]}
+				/>
+			{/key}
 		</div>
 	{/if}
 </div>

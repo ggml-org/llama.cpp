@@ -1,6 +1,6 @@
 import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
 import { HuggingFaceService } from '$lib/services';
-import type { ModelOption } from '$lib/types/models';
+import type { ModelLoadProgress, ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
 
@@ -36,6 +36,8 @@ export interface ModelOverride {
 }
 
 export type ModelOverrideMap = Record<string, ModelOverride>;
+
+export type { ModelLoadProgress };
 
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
