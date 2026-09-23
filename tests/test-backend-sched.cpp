@@ -143,7 +143,7 @@ static ggml_backend_sched_t create_test_scheduler(const std::vector<sched_backen
     std::vector<ggml_backend_buffer_type_t> bufts(backends_w_caps.size());
     for (size_t b = 0; b < backends_w_caps.size(); b++) {
         backend_handles[b] = backends_w_caps[b].backend;
-        bufts[b]   = ggml_backend_get_default_buffer_type(backends_w_caps[b].backend);
+        bufts[b]           = ggml_backend_get_default_buffer_type(backends_w_caps[b].backend);
     }
     // sets either pinned or paged memory
     bufts.back() = sched_cpu_buft(backends_w_caps[0].backend, backends_w_caps.back().backend, use_device_host_buft);
@@ -199,7 +199,7 @@ static bool run_and_check(ggml_backend_sched_t sched, const sched_graph & g,
 
     const int n_splits = ggml_backend_sched_get_n_splits(sched);
     if (n_splits != n_splits_expected) {
-        return fail("n_splits = %d, expected %d - the backend assignments were not respected", n_splits, n_splits_expected);
+        return fail("n_splits = %d, expected %d, each split consisting of just a single node", n_splits, n_splits_expected);
     }
 
     std::vector<float> data(ne);
@@ -232,7 +232,7 @@ static bool backend_supports(ggml_backend_t backend, ggml_tensor * (*build)(ggml
     return ok;
 }
 
-//helper struct for inputless splits, and constants like 0 and 1
+// helper struct for inputless splits, and constants like 0 and 1
 struct backend_consts {
     std::vector<ggml_context *>        ctxs;
     std::vector<ggml_backend_buffer_t> bufs;
@@ -800,7 +800,6 @@ static bool test_pair_user_inputs(const std::vector<sched_backend_caps> & backen
 static bool test_y_shaped_graph(const std::vector<sched_backend_caps> & backends_w_caps, int backend_a, int backend_b, int64_t tensor_len,
         bool use_device_host_buft) {
 
-
     const size_t graph_size = 64;
 
     backend_consts consts(backends_w_caps, tensor_len);
@@ -988,29 +987,29 @@ int main(int argc, char ** argv) {
         log_maybe("\n");
 
         // every ordered pair of backends is the sender and the receiver of a copy
-        for (size_t b_send = 0; b_send < backends_w_caps.size(); b_send++) {
-            for (size_t b_recv = 0; b_recv < backends_w_caps.size(); b_recv++) {
-                if (b_send == b_recv) {
+        for (size_t backend_a = 0; backend_a < backends_w_caps.size(); backend_a++) {
+            for (size_t backend_b = 0; backend_b < backends_w_caps.size(); backend_b++) {
+                if (backend_a == backend_b) {
                     continue;
                 }
 
-                const char * name_send = ggml_backend_name(backends_w_caps[b_send].backend);
-                const char * name_recv = ggml_backend_name(backends_w_caps[b_recv].backend);
+                const char * name_a = ggml_backend_name(backends_w_caps[backend_a].backend);
+                const char * name_b = ggml_backend_name(backends_w_caps[backend_b].backend);
 
                 for (bool inputs_on_sender : { false, true }) {
                     for (bool parallel : { false, true }) {
                         for (int tensor_len : { 1, 4096 }) {
                             case_begin("test_pair_user_inputs     %-8s -> %-8s inputs on %-8s parallel = %d, tensor_len = %4d",
-                                    name_send, name_recv, inputs_on_sender ? "sender" : "receiver", parallel, tensor_len);
-                            case_end(test_pair_user_inputs(backends_w_caps, (int) b_send, (int) b_recv, tensor_len,
+                                    name_a, name_b, inputs_on_sender ? "sender" : "receiver", parallel, tensor_len);
+                            case_end(test_pair_user_inputs(backends_w_caps, (int) backend_a, (int) backend_b, tensor_len,
                                     /*n_inputs =*/ 4, inputs_on_sender, parallel, use_device_host_buft));
                         }
                     }
                 }
 
                 for (int tensor_len : { 1, 4096 }) {
-                    case_begin("test_y_shaped        %-8s -> %-8s tensor_len = %4d", name_send, name_recv, tensor_len);
-                    case_end(test_y_shaped_graph(backends_w_caps, (int) b_send, (int) b_recv, tensor_len, use_device_host_buft));
+                    case_begin("test_y_shaped        %-8s -> %-8s tensor_len = %4d", name_a, name_b, tensor_len);
+                    case_end(test_y_shaped_graph(backends_w_caps, (int) backend_a, (int) backend_b, tensor_len, use_device_host_buft));
                 }
             }
         }
