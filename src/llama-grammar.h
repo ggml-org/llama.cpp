@@ -37,11 +37,19 @@ enum llama_gretype {
     // any character (.)
     LLAMA_GRETYPE_CHAR_ANY       = 7,
 
-    // terminal element: token (<[token-id]>)
+    // terminal element: token (<[token-id]>, <[token-id,token-id-token-id]>)
     LLAMA_GRETYPE_TOKEN          = 8,
 
-    // inverse token (!<[token-id]>)
+    // inverse token (!<[token-id]>, !<[token-id,token-id-token-id]>)
     LLAMA_GRETYPE_TOKEN_NOT      = 9,
+
+    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or LLAMA_GRETYPE_TOKEN_ALT to
+    // be an inclusive range (<[1-5]>)
+    LLAMA_GRETYPE_TOKEN_RNG_UPPER = 10,
+
+    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or
+    // LLAMA_GRETYPE_TOKEN_RNG_UPPER to add an alternate token to match (<[1,5]>, <[1-5,9]>)
+    LLAMA_GRETYPE_TOKEN_ALT       = 11,
 };
 
 typedef struct llama_grammar_element {
