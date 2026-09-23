@@ -19,6 +19,8 @@
 		onKeyDown: (e: KeyboardEvent) => void;
 		/** Show the base model's org as the main avatar and the repo (quant) org as the corner badge; resolves the base org lazily via HF. */
 		showBaseModelAvatar?: boolean;
+		/** Show the repo's own org instead of the base model's. */
+		showRepoOrgAvatar?: boolean;
 	}
 
 	let {
@@ -30,7 +32,8 @@
 		onMouseEnter,
 		onSelect,
 		option,
-		showBaseModelAvatar = false
+		showBaseModelAvatar = false,
+		showRepoOrgAvatar = false
 	}: Props = $props();
 
 	// row actions follow the backend that serves the row, not the selected one
@@ -86,7 +89,7 @@
 	tabindex="0"
 	title={loadTitle}
 >
-	<ModelAvatar {option} {showBaseModelAvatar} />
+	<ModelAvatar {option} {showBaseModelAvatar} {showRepoOrgAvatar} />
 
 	<ModelId
 		aliases={option.aliases}

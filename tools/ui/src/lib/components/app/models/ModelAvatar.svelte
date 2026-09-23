@@ -18,6 +18,9 @@
 		 *  corner badge. Resolving the base org costs one Hugging Face request per repo, so
 		 *  it waits until the row is near the viewport. */
 		showBaseModelAvatar?: boolean;
+		/** Show the repo's own org as the main image, skipping the base model.
+		 *  Used inside a heading that already carries the base org. */
+		showRepoOrgAvatar?: boolean;
 		/** Keep the quantizer badge off, e.g. when a row stands for a whole family. */
 		showQuantBadge?: boolean;
 		size?: string;
@@ -30,6 +33,7 @@
 		quantSize = 'h-3 w-3',
 		showBaseModelAvatar = false,
 		showQuantBadge = true,
+		showRepoOrgAvatar = false,
 		size = 'size-5'
 	}: Props = $props();
 
@@ -113,8 +117,8 @@
 	<span bind:this={avatarEl} class={['inline-flex shrink-0', className]}>
 		<ModelsDiscoverAvatar
 			class="mt-0"
-			org={baseModelOrg ?? orgName}
-			quantOrg={showBaseModelAvatar && showQuantBadge ? orgName : undefined}
+			org={showRepoOrgAvatar ? orgName : (baseModelOrg ?? orgName)}
+			quantOrg={showBaseModelAvatar && showQuantBadge && !showRepoOrgAvatar ? orgName : undefined}
 			{quantPositionClass}
 			{quantSize}
 			{size}

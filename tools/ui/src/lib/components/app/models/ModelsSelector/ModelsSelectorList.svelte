@@ -156,7 +156,8 @@
 		onMouseEnter={() => {}}
 		{onSelect}
 		{option}
-		showBaseModelAvatar
+		showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+		showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
 	/>
 {/snippet}
 

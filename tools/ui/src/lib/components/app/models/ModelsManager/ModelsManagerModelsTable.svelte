@@ -186,7 +186,12 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
+				<ModelAvatar
+					{option}
+					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+					size="size-9"
+				/>
 
 				<ModelId
 					aliases={option.aliases}
@@ -237,7 +242,12 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<ModelAvatar option={entry.base} showBaseModelAvatar size="size-9" />
+				<ModelAvatar
+					option={entry.base}
+					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+					size="size-9"
+				/>
 
 				<span class="min-w-0">
 					<ModelId
