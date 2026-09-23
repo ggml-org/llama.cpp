@@ -30,19 +30,17 @@
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
+	import { MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
-	import { SvelteSet } from 'svelte/reactivity';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		filter?: string;
-		groupProviders?: boolean;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
@@ -53,7 +51,6 @@
 
 	let {
 		filter = $bindable(''),
-		groupProviders = $bindable(false),
 		groups,
 		isFavorite,
 		onSelect,
@@ -82,6 +79,60 @@
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
+	}
+
+	/** Rows mounted per section, grown by the show more row. */
+	const sectionLimits = new SvelteMap<string, number>();
+
+	function sectionLimit(key: string): number {
+		return sectionLimits.get(key) ?? MODEL_ROW_WINDOW;
+	}
+
+	function growSection(key: string): void {
+		sectionLimits.set(key, sectionLimit(key) + MODEL_ROW_WINDOW);
+	}
+
+	/** Cut a section down to the mounted window, counting models rather than groups. */
+	function windowSection(group: (typeof sections)[number]): {
+		families: ModelFamilyGroup[];
+		hidden: number;
+		items: ModelQuantGroup[];
+		unit: string;
+	} {
+		const limit = sectionLimit(group.key);
+
+		if (group.flat) {
+			const items: ModelQuantGroup[] = [];
+
+			let shown = 0;
+
+			for (const entry of group.items) {
+				if (shown >= limit) break;
+
+				items.push(entry);
+				shown += entry.quants.length;
+			}
+
+			return { families: [], hidden: group.items.length - items.length, items, unit: 'models' };
+		}
+
+		const families: ModelFamilyGroup[] = [];
+
+		let shown = 0;
+
+		for (const family of group.families) {
+			if (shown >= limit) break;
+
+			families.push(family);
+			shown += family.entries.reduce((sum, entry) => sum + entry.quants.length, 0);
+		}
+
+		return {
+			families,
+			hidden: group.families.length - families.length,
+			items: [],
+			unit: 'families'
+		};
 	}
 
 	function toggleFamily(key: string): void {
@@ -234,11 +285,9 @@
 {#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
 	{@const groupLabel =
-		entry.kind === 'providers'
-			? `${entry.quants.length} providers`
-			: entry.kind === 'variants'
-				? `${entry.quants.length} variants`
-				: `${entry.quants.length} quants available`}
+		entry.kind === 'variants'
+			? `${entry.quants.length} variants`
+			: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
 
 	<div class="px-2">
@@ -292,7 +341,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0, showProvider = false)}
+{#snippet quantRow(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isLoaded = isLoadedOption(option)}
@@ -313,9 +362,7 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
-					{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
-				</Badge>
+				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
 
 				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 			</span>
@@ -346,7 +393,7 @@
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24, entry.kind === 'providers')}
+				{@render quantRow(quant, indent + 24)}
 			{/each}
 		{/if}
 	{:else}
@@ -444,14 +491,6 @@
 	<div class="flex shrink-0 items-center gap-2 py-4">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
 
-		<span class="flex items-center gap-2">
-			<Checkbox bind:checked={groupProviders} id="group-providers" />
-
-			<Label class="cursor-pointer text-xs text-muted-foreground" for="group-providers">
-				Group models from different providers
-			</Label>
-		</span>
-
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
 	</div>
 
@@ -484,6 +523,8 @@
 					{/if}
 				{/snippet}
 
+				{@const windowed = windowSection(group)}
+
 				<ModelsSection
 					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					count={group.items.length}
@@ -492,13 +533,11 @@
 					open={group.kind !== 'hidden'}
 					sticky
 				>
-					{#if group.flat}
-						{#each group.items as entry (entry.key)}
-							{@render entryTree(entry, 16)}
-						{/each}
-					{/if}
+					{#each windowed.items as entry (entry.key)}
+						{@render entryTree(entry, 16)}
+					{/each}
 
-					{#each group.families as family (family.key)}
+					{#each windowed.families as family (family.key)}
 						{@render familyRow(family)}
 
 						{#if !collapsedFamilies.has(family.key)}
@@ -507,6 +546,18 @@
 							{/each}
 						{/if}
 					{/each}
+
+					{#if windowed.hidden > 0}
+						<div class="px-2">
+							<button
+								class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
+								onclick={() => growSection(group.key)}
+								type="button"
+							>
+								Show {Math.min(MODEL_ROW_WINDOW, windowed.hidden)} more {windowed.unit}
+							</button>
+						</div>
+					{/if}
 				</ModelsSection>
 			{/if}
 		{/each}

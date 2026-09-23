@@ -41,7 +41,7 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 export type { ModelLoadProgress };
 
 /** What a group folds, which decides its label. */
-export type ModelGroupKind = 'providers' | 'quants' | 'variants';
+export type ModelGroupKind = 'quants' | 'variants';
 
 /** One repo of the table, with the rows it ships as. */
 export interface ModelQuantGroup {
@@ -181,14 +181,14 @@ export function modelRepoKey(model: string): string {
 }
 
 /** Fold the quants of one repo into a single entry, so the table shows one row per model. */
-export function groupModelQuants(models: ModelOption[], mergeProviders = false): ModelQuantGroup[] {
+export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 	const groups = new SvelteMap<string, ModelQuantGroup>();
 
 	for (const option of models) {
 		const repo = modelRepoKey(option.model);
 		// groups stay within one backend, so the same repo served by two providers
 		// is not read as two quants of one model
-		const key = mergeProviders ? repo : `${option.backendId ?? ''}::${repo}`;
+		const key = `${option.backendId ?? ''}::${repo}`;
 		const group = groups.get(key);
 
 		if (group) {
@@ -204,13 +204,8 @@ export function groupModelQuants(models: ModelOption[], mergeProviders = false):
 		const kind = groupKind(group.quants);
 		const modelIds = group.quants.map((option) => option.model);
 
-		// the very same id twice is not a quant set; keep those rows apart, unless
-		// the group is there to show the providers that serve it
-		if (
-			kind !== 'providers' &&
-			modelIds.length > 1 &&
-			modelIds.every((model) => model === modelIds[0])
-		) {
+		// the very same id twice is not a quant set; keep those rows apart
+		if (modelIds.length > 1 && modelIds.every((model) => model === modelIds[0])) {
 			return group.quants.map((option) => ({
 				...group,
 				base: option,
@@ -224,12 +219,8 @@ export function groupModelQuants(models: ModelOption[], mergeProviders = false):
 	});
 }
 
-/** What a group folds, which decides its label: quants, variants or providers. */
+/** Quants share a quantization suffix; anything else is a variant. */
 function groupKind(quants: ModelOption[]): ModelGroupKind {
-	const backends = new Set(quants.map((option) => option.backendId ?? ''));
-
-	if (backends.size > 1) return 'providers';
-
 	const isQuant = quants.every(
 		(option) => (option.parsedId ?? ModelsService.parseModelId(option.model)).quantization
 	);
