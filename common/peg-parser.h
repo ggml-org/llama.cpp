@@ -3,6 +3,7 @@
 #include "json-schema.h"
 #include "json.h"
 #include "llama.h"
+#include "trie.h"
 
 #include <memory>
 #include <set>
@@ -311,7 +312,9 @@ struct common_peg_string_parser {
 };
 
 struct common_peg_until_parser {
-    std::vector<std::string> delimiters;
+    std::vector<std::string>          delimiters;        // text of each delimiter
+    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID; // set when the delimiters were given as a parser
+    common_trie                       matcher;
 };
 
 struct common_peg_schema_parser {
@@ -512,11 +515,16 @@ class common_peg_parser_builder {
     // Matches all characters until a delimiter is found (delimiter not consumed).
     // Invalid UTF-8 is consumed and recorded on the AST nodes.
     //   S -> (!delim .)*
-    common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
+    common_peg_parser until(const std::string & delimiter) { return until_one_of({delimiter}); }
 
     // Matches all characters until one of the delimiters in the list is found (delimiter not consumed).
     //   S -> (!delim .)*
-    common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
+    common_peg_parser until_one_of(const std::vector<std::string> & delimiters);
+
+    // Matches all characters until the delimiter is found (delimiter not consumed). The delimiter may only contain
+    // sequences, choices, literals, and tokens, and it is expanded into every string of text and tokens it matches.
+    //   S -> (!delim .)*
+    common_peg_parser until(const common_peg_parser & delimiter);
 
     // Matches everything
     //   S -> .*
