@@ -197,6 +197,44 @@ export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 	return Array.from(groups.values());
 }
 
+/**
+ * Family a repo belongs to, from its name: `Qwen3.8-27B` and `Qwen3.8-Flash-Next`
+ * both read as `Qwen3.8`, and a name without a version keeps its first segment.
+ */
+export function modelFamilyKey(repo: string): string {
+	const name = repo.split('/').pop() ?? repo;
+	const versioned = name.match(/^[A-Za-z]+\d+(?:\.\d+)?/);
+
+	return versioned ? versioned[0] : (name.split(/[-_.]/)[0] ?? name);
+}
+
+/** One family of the table, the repos it covers. */
+export interface ModelFamilyGroup {
+	entries: ModelQuantGroup[];
+	key: string;
+	label: string;
+}
+
+/** Fold repos into families, so `Qwen3.8` collects its sizes and variants. */
+export function groupModelFamilies(entries: ModelQuantGroup[]): ModelFamilyGroup[] {
+	const families = new SvelteMap<string, ModelFamilyGroup>();
+
+	for (const entry of entries) {
+		const key = modelFamilyKey(entry.base.model);
+		const family = families.get(key);
+
+		if (family) {
+			family.entries.push(entry);
+
+			continue;
+		}
+
+		families.set(key, { entries: [entry], key, label: key });
+	}
+
+	return Array.from(families.values());
+}
+
 /** Compact "last used" label: minutes, hours, then days. */
 export function formatLastUsed(timestamp?: number): string {
 	if (!timestamp) return '—';

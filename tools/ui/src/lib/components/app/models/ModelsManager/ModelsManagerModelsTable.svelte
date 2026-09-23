@@ -1,6 +1,11 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { formatLastUsed, type ModelQuantGroup } from './utils';
+	import {
+		formatLastUsed,
+		groupModelFamilies,
+		type ModelFamilyGroup,
+		type ModelQuantGroup
+	} from './utils';
 	import {
 		ChevronDown,
 		ChevronRight,
@@ -24,7 +29,9 @@
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -57,10 +64,36 @@
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
+	const collapsedFamilies = new SvelteSet<string>();
+	let groupFamilies = $state(false);
+	/** Sections with their repos folded into families, when that view is on. */
+	let sections = $derived(
+		groups.map((group) => {
+			const families = groupModelFamilies(group.items);
+
+			return {
+				...group,
+				families: groupFamilies ? families.filter((family) => family.entries.length > 1) : null,
+				singles: groupFamilies
+					? families
+							.filter((family) => family.entries.length === 1)
+							.flatMap((family) => family.entries)
+					: []
+			};
+		})
+	);
 
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
+	}
+
+	function toggleFamily(key: string): void {
+		if (collapsedFamilies.has(key)) {
+			collapsedFamilies.delete(key);
+		} else {
+			collapsedFamilies.add(key);
+		}
 	}
 
 	function toggleQuants(key: string): void {
@@ -215,14 +248,6 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3">
-				<span class="flex w-4 shrink-0 items-center justify-center text-muted-foreground">
-					{#if isExpanded}
-						<ChevronDown class="h-3.5 w-3.5" />
-					{:else}
-						<ChevronRight class="h-3.5 w-3.5" />
-					{/if}
-				</span>
-
 				<ModelAvatar option={entry.base} showBaseModelAvatar size="size-9" />
 
 				<span class="min-w-0">
@@ -256,7 +281,13 @@
 				></span>
 			</span>
 
-			<span></span>
+			<span class="flex justify-center">
+				{#if isExpanded}
+					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				{:else}
+					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+				{/if}
+			</span>
 		</div>
 	</div>
 {/snippet}
@@ -307,6 +338,50 @@
 	</div>
 {/snippet}
 
+{#snippet entryTree(entry: ModelQuantGroup)}
+	{#if entry.quants.length > 1}
+		{@render repoRow(entry)}
+
+		{#if !collapsedQuants.has(entry.key)}
+			{#each entry.quants as quant (quant.id)}
+				{@render quantRow(quant)}
+			{/each}
+		{/if}
+	{:else}
+		{@render row(entry.base)}
+	{/if}
+{/snippet}
+
+{#snippet familyRow(family: ModelFamilyGroup)}
+	{@const isExpanded = !collapsedFamilies.has(family.key)}
+
+	<div class="px-2">
+		<div
+			class="{rowGrid} cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
+			onclick={() => toggleFamily(family.key)}
+			onkeydown={(event) => event.key === 'Enter' && toggleFamily(family.key)}
+			role="button"
+			tabindex="0"
+		>
+			<span class="truncate text-sm font-medium">{family.label}</span>
+
+			<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+
+			<span></span>
+
+			<span></span>
+
+			<span class="flex justify-center">
+				{#if isExpanded}
+					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				{:else}
+					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+				{/if}
+			</span>
+		</div>
+	</div>
+{/snippet}
+
 <DialogConfirmDownload
 	action={ModelDownloadConfirmAction.DELETE}
 	onClose={() => (deleteOpen = false)}
@@ -317,6 +392,14 @@
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex shrink-0 items-center gap-2 py-4">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
+
+		<span class="flex items-center gap-2">
+			<Checkbox bind:checked={groupFamilies} id="group-families" />
+
+			<Label class="cursor-pointer text-xs text-muted-foreground" for="group-families">
+				Group families
+			</Label>
+		</span>
 
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
 	</div>
@@ -336,7 +419,7 @@
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		{#each groups as group (group.key)}
+		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
 					{#if group.kind === 'favorites'}
@@ -358,19 +441,25 @@
 					open={group.kind !== 'hidden'}
 					sticky
 				>
-					{#each group.items as entry (entry.key)}
-						{#if entry.quants.length > 1}
-							{@render repoRow(entry)}
+					{#if group.families}
+						{#each group.families as family (family.key)}
+							{@render familyRow(family)}
 
-							{#if !collapsedQuants.has(entry.key)}
-								{#each entry.quants as quant (quant.id)}
-									{@render quantRow(quant)}
+							{#if !collapsedFamilies.has(family.key)}
+								{#each family.entries as entry (entry.key)}
+									{@render entryTree(entry)}
 								{/each}
 							{/if}
-						{:else}
-							{@render row(entry.base)}
-						{/if}
-					{/each}
+						{/each}
+
+						{#each group.singles as entry (entry.key)}
+							{@render entryTree(entry)}
+						{/each}
+					{:else}
+						{#each group.items as entry (entry.key)}
+							{@render entryTree(entry)}
+						{/each}
+					{/if}
 				</ModelsSection>
 			{/if}
 		{/each}
