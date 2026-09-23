@@ -18,7 +18,7 @@
 
 #define MKL_FA_CHUNK_SIZE_KV 8192
 
-// Number of query rows processed per tile. The score buffers (KQ_f32, S_f16)
+// Number of query rows processed per tile. The score buffers (KQ_f16, S_f16)
 // are sized q_tile_rows * chunk_size, so this bounds their footprint
 // regardless of batch size (n_query_rows = n_queries * gqa_ratio). A typical
 // single-ubatch prefill (e.g. ubatch 1024 * gqa 8 = 8192 rows) is exactly one
@@ -108,7 +108,7 @@ static void mkl_fa_init_softmax_state(
 
 // Online softmax over one KV chunk for a tile of GQA query rows.
 // The tile spans absolute rows [q0, q0 + q_rows). Score buffers
-// (KQ_f32/S_f16) are indexed RELATIVE to the tile; the persistent state
+// (KQ_f16/S_f16) are indexed RELATIVE to the tile; the persistent state
 // (VKQ_accum/KQ_max/KQ_sum) and mask are indexed by ABSOLUTE row.
 // One WORK-GROUP per query row (local size = wg_size): work-items stride
 // over the chunk so adjacent items touch adjacent elements (coalesced),
@@ -121,7 +121,7 @@ static void mkl_fa_init_softmax_state(
 // summation order differs (tree vs serial), i.e. last-ulp level.
 static void mkl_fa_online_softmax_chunk(
     dpct::queue_ptr stream,
-    float * __restrict KQ_f32,
+    sycl::half * __restrict KQ_f16,
     sycl::half * __restrict S_f16,
     float * __restrict KQ_max,
     float * __restrict KQ_sum,
@@ -147,7 +147,7 @@ static void mkl_fa_online_softmax_chunk(
                 const int gqa_group = jc_abs / n_queries;
                 const int q_row     = jc_abs % n_queries;
                 // Score buffers are tile-local (relative index).
-                const float * __restrict KQ_row = KQ_f32
+                const sycl::half * __restrict KQ_row = KQ_f16
                     + row * (int64_t)chunk_size;
                 sycl::half * __restrict S_row = S_f16
                     + row * (int64_t)chunk_size;
@@ -164,7 +164,7 @@ static void mkl_fa_online_softmax_chunk(
                 }
                 // Score at chunk offset i — original per-element math.
                 auto score = [&](int i) {
-                    float s = KQ_row[i];
+                    float s = (float)KQ_row[i];
                     if (logit_softcap != 0.0f) {
                         s = logit_softcap * sycl::tanh(s);
                     }
@@ -399,7 +399,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int chunk_size = std::min(MKL_FA_CHUNK_SIZE_KV, n_kv);
 
     // Query rows are processed in tiles of q_tile_rows so the score buffers
-    // (KQ_f32/S_f16 = q_tile_rows * chunk_size) stay bounded regardless of
+    // (KQ_f16/S_f16 = q_tile_rows * chunk_size) stay bounded regardless of
     // batch size. n_query_rows <= Q_TILE is a single tile (no extra work).
     static int q_tile_env = ggml_sycl_get_env("GGML_SYCL_MKL_FA_Q_TILE", MKL_FA_Q_TILE);
     const int q_tile_rows = std::max(1, std::min(q_tile_env, n_query_rows));
@@ -497,7 +497,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     // --- Allocate intermediates from pool ---
     ggml_sycl_pool & pool = ctx.pool();
 
-    ggml_sycl_pool_alloc<float>      KQ_f32(pool);      // [q_tile_rows x chunk]
+    ggml_sycl_pool_alloc<sycl::half> KQ_f16(pool);      // [q_tile_rows x chunk]
     ggml_sycl_pool_alloc<sycl::half> S_f16(pool);       // [q_tile_rows x chunk]
     ggml_sycl_pool_alloc<float>      VKQ_chunk(pool);   // [q_tile_rows x DV]
     ggml_sycl_pool_alloc<float>      VKQ_accum(pool);   // [n_query_rows x DV] (full)
@@ -507,7 +507,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     ggml_sycl_pool_alloc<sycl::half> K_chunk_f16(pool); // [chunk x DKQ] (per-chunk dequant)
     ggml_sycl_pool_alloc<sycl::half> V_chunk_f16(pool); // [chunk x DV] (per-chunk dequant)
 
-    KQ_f32.alloc((size_t)q_tile_rows * chunk_size);
+    KQ_f16.alloc((size_t)q_tile_rows * chunk_size);
     S_f16.alloc((size_t)q_tile_rows * chunk_size);
     VKQ_chunk.alloc((size_t)q_tile_rows * DV);
     VKQ_accum.alloc((size_t)n_query_rows * DV);
@@ -525,7 +525,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     }
 
     sycl::half * Q_head_f16_ptr  = Q_head_f16.ptr;
-    float      * KQ_f32_ptr      = KQ_f32.ptr;
+    sycl::half * KQ_f16_ptr      = KQ_f16.ptr;
     sycl::half * S_f16_ptr       = S_f16.ptr;
     float      * VKQ_chunk_ptr   = VKQ_chunk.ptr;
     float      * VKQ_accum_ptr   = VKQ_accum.ptr;
@@ -584,7 +584,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     MKL_ACCUM(dequant_time_us, t0);
                 }
 
-                // 3b. Query tile loop (INNER) — bounds KQ_f32/S_f16 footprint.
+                // 3b. Query tile loop (INNER) - bounds KQ_f16/S_f16 footprint.
                 for (int q0 = 0; q0 < n_query_rows; q0 += q_tile_rows) {
                     int q_rows = std::min(q_tile_rows, n_query_rows - q0);
 
@@ -598,7 +598,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             K_chunk_f16_ptr, DKQ,
                             Q_head_f16_ptr + (int64_t)q0 * DKQ, DKQ,
                             beta,
-                            KQ_f32_ptr, this_chunk);
+                            KQ_f16_ptr, this_chunk);
                         try { ev.wait_and_throw(); } catch (sycl::exception & e) {
                             GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
                             GGML_ABORT("MKL GEMM KQ failed");
@@ -609,7 +609,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                     {
                         MKL_TAKE_TIME(t0);
                         mkl_fa_online_softmax_chunk(stream,
-                            KQ_f32_ptr, S_f16_ptr,
+                            KQ_f16_ptr, S_f16_ptr,
                             KQ_max_ptr, KQ_sum_ptr, VKQ_accum_ptr,
                             q0, q_rows, n_queries, DV,
                             this_chunk, chunk_start,
@@ -675,7 +675,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     if (do_print) {
         const int64_t v_chunk_elems = V_is_K_view ? 0 : (int64_t)chunk_size * DV;
         double total_mb = (double)(
-            (int64_t)q_tile_rows * chunk_size * sizeof(float)      // KQ_f32
+            (int64_t)q_tile_rows * chunk_size * sizeof(sycl::half) // KQ_f16
           + (int64_t)q_tile_rows * chunk_size * sizeof(sycl::half) // S_f16
           + (int64_t)q_tile_rows * DV * sizeof(float)              // VKQ_chunk
           + (int64_t)n_query_rows * DV * sizeof(float)             // VKQ_accum
