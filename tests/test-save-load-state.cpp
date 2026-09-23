@@ -19,7 +19,6 @@ enum class test_status {
     SKIP,
 };
 
-// ANSI-colored, all 4 chars wide, so table cells stay aligned
 static const char * test_status_str(test_status status) {
     switch (status) {
         case test_status::PASS: return "\033[1;32mPASS\033[0m";
@@ -614,8 +613,7 @@ static const std::vector<const char *> test_names = {
 };
 
 // Run the full save/load test suite (tests 1-8) for a single model.
-// Returns the per-test results. Tests 3-5 are skipped when test 1 (baseline) fails,
-// since they depend on the baseline result and the state file it saves.
+// Returns the per-test results.
 static test_suite run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
     test_suite suite;
 
@@ -795,14 +793,12 @@ int main(int argc, char ** argv) {
         for (const auto & model_path : models) {
             const auto name = std::filesystem::path(model_path).filename().string();
 
-            // print the model name first so it is always visible which model is running
             LOG("%-*s", (int) name_width, name.c_str());
             common_log_flush(common_log_main());
 
             const test_suite suite = run_save_load_tests_for_model(model_path, params);
 
             for (size_t i = 0; i < suite.results.size(); i++) {
-                // test_status_str is 4 chars wide; pad up to the column width
                 LOG("  %s%*s", test_status_str(suite.results[i]), col_width(test_names[i]) - 4, "");
             }
             LOG("\n");
