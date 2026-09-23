@@ -187,6 +187,13 @@ struct common_peg_special_token {
     llama_token_attr attr;
 };
 
+struct common_peg_input_token {
+    size_t      pos = std::string::npos;
+    llama_token id  = LLAMA_TOKEN_NULL;
+
+    bool valid() const { return id != LLAMA_TOKEN_NULL; }
+};
+
 // snapshot of the vocab's control and user-defined tokens
 struct common_peg_special_tokens {
     std::unordered_map<llama_token, common_peg_special_token> tokens;
@@ -201,13 +208,9 @@ struct common_peg_special_tokens {
     bool is_special(llama_token id) const;
     bool is_control(llama_token id) const;
     bool is_user_defined(llama_token id) const;
-};
 
-struct common_peg_input_token {
-    size_t      pos = std::string::npos;
-    llama_token id  = LLAMA_TOKEN_NULL;
-
-    bool valid() const { return id != LLAMA_TOKEN_NULL; }
+    // special tokens in text, as tokenizing with parse_special would find them, taking the longest match at each position
+    std::vector<common_peg_input_token> find(const std::string & text) const;
 };
 
 // generated text, plus the rendered special tokens in it, in ascending pos order
@@ -219,15 +222,21 @@ struct common_peg_input {
     common_peg_input() = default;
     explicit common_peg_input(common_peg_special_tokens special_tokens) : special_tokens(std::move(special_tokens)) {}
 
+    // plain text, with no special tokens
+    explicit common_peg_input(std::string text) : text(std::move(text)) {}
+
     // special tokens that are not rendered (empty piece) add nothing and are not recorded
     void append(const std::string & piece, llama_token token);
+
+    // prefix text, recording the special tokens in it and shifting the ones after it
+    void prepend(const std::string & prefix);
 
     // first token at or after pos, invalid if none
     common_peg_input_token next_token(size_t pos) const;
 };
 
 struct common_peg_parse_context {
-    std::string input;
+    common_peg_input input;
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
@@ -236,8 +245,11 @@ struct common_peg_parse_context {
     common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : flags(flags), parse_depth(0) {}
 
+    common_peg_parse_context(common_peg_input input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), flags(flags), parse_depth(0) {}
+
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
-        : input(input), flags(flags), parse_depth(0) {}
+        : input(common_peg_input(input)), flags(flags), parse_depth(0) {}
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
