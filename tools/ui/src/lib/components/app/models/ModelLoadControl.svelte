@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowUpFromLine, CircleAlert, Loader2, Power, RotateCw } from '@lucide/svelte';
+	import { CircleAlert, Eject, Loader2, Power, RotateCw } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -117,7 +117,7 @@
 			{:else if isLoaded || isSleeping}
 				<ActionIcon
 					class="h-5 w-5 hover:text-foreground"
-					icon={ArrowUpFromLine}
+					icon={Eject}
 					iconSize="h-4 w-4"
 					onclick={() => modelsStore.status.unload(option.model)}
 					stopPropagationOnClick
