@@ -3809,7 +3809,6 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                     ops.push_back(GGML_OP_GET_ROWS);
 
                     out_nodes[0] = view_idx;
-                    ids = cgraph->nodes[out_nodes[0]];
                 } else {
                     if (args.prob_bias) {
                         bias = cgraph->nodes[i_probs + 2]->src[1];
@@ -3820,8 +3819,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                         ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
                         out_nodes[0] = i_probs + 3;
                     }
-                    ids = cgraph->nodes[out_nodes[0]];
                 }
+                ids = cgraph->nodes[out_nodes[0]];
 
                 if (args.norm) {
                     ops.insert(ops.end(),
@@ -4880,13 +4879,50 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                         }
                         const int i_probs = i + (int) ops.size() - 1;  // last node of the gating activation
 
-                        if (args.prob_bias) {
-                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW,
-                                                    GGML_OP_GET_ROWS });
-                            out_nodes[0] = i_probs + 4;
+                        if (args.grouped_experts) {
+                            // weights reshape: [1, n_expert, n_tokens]
+                            ops.push_back(GGML_OP_RESHAPE);
+
+                            if (args.prob_bias) {
+                                ops.push_back(GGML_OP_ADD);
+                            }
+
+                            // grouped top-k sequence
+                            ops.insert(ops.end(), {
+                                GGML_OP_RESHAPE,   // selection_groups
+                                GGML_OP_RESHAPE,   // 4d rows for get_rows
+                                GGML_OP_ARGSORT,   // top-2 per group
+                                GGML_OP_VIEW,      // top-2 per group view
+                                GGML_OP_GET_ROWS,  // gather top-2 per group values
+                                GGML_OP_RESHAPE,   // [2, n_groups, n_tokens]
+                                GGML_OP_SUM_ROWS,  // group score
+                                GGML_OP_RESHAPE,   // [n_groups, n_tokens]
+                                GGML_OP_ARGSORT,   // top groups
+                                GGML_OP_VIEW,      // top groups view
+                                GGML_OP_GET_ROWS,  // gather selected group rows
+                                GGML_OP_FILL,      // -INFINITY template
+                                GGML_OP_SET_ROWS,  // mask unselected groups
+                                GGML_OP_RESHAPE    // [n_expert, n_tokens]
+                            });
+
+                            // final expert top-k
+                            ops.push_back(GGML_OP_ARGSORT);
+
+                            const int view_idx = i + (int) ops.size();
+
+                            ops.push_back(GGML_OP_VIEW);
+                            ops.push_back(GGML_OP_GET_ROWS);
+
+                            out_nodes[0] = view_idx;
                         } else {
-                            ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
-                            out_nodes[0] = i_probs + 3;
+                            if (args.prob_bias) {
+                                ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ADD, GGML_OP_ARGSORT, GGML_OP_VIEW,
+                                                        GGML_OP_GET_ROWS });
+                                out_nodes[0] = i_probs + 4;
+                            } else {
+                                ops.insert(ops.end(), { GGML_OP_RESHAPE, GGML_OP_ARGSORT, GGML_OP_VIEW, GGML_OP_GET_ROWS });
+                                out_nodes[0] = i_probs + 3;
+                            }
                         }
                         ids = cgraph->nodes[out_nodes[0]];
 
