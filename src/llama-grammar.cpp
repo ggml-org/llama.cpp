@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -183,23 +184,45 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
     throw std::runtime_error("unexpected end of input");
 }
 
-static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, const char * src) {
+static std::pair<uint32_t, const char *> parse_token_id(const char * src) {
+    const char * int_end = parse_int(src);
+    unsigned long id = std::stoul(std::string(src, int_end - src));
+    if (id > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error(std::string("parsed token id is too big at ") + src);
+    }
+    return std::make_pair(static_cast<uint32_t>(id), int_end);
+}
+
+static const char * parse_token(const llama_vocab * vocab, const char * src, llama_gretype type, llama_grammar_rule & rule) {
     const char * pos = src;
     if (*pos != '<') {
         throw std::runtime_error(std::string("expecting '<' at ") + pos);
     }
     pos++;
 
-    // Parse <[id]>
+    // Parse <[id,id-id,...]>
     if (*pos == '[') {
         pos++;
-        const char * int_end = parse_int(pos);
-        unsigned long id = std::stoul(std::string(pos, int_end - pos));
-        if (id > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error(std::string("parsed token id is too big at ") + pos);
+        const size_t start = rule.size();
+        while (true) {
+            auto id_pair = parse_token_id(pos);
+            uint32_t token_id = id_pair.first;
+            pos = id_pair.second;
+            rule.push_back({rule.size() == start ? type : LLAMA_GRETYPE_TOKEN_ALT, token_id});
+            if (*pos == '-') {
+                pos++;
+                auto end_pair = parse_token_id(pos);
+                if (end_pair.first < token_id) {
+                    throw std::runtime_error(std::string("invalid token range at ") + pos);
+                }
+                pos = end_pair.second;
+                rule.push_back({LLAMA_GRETYPE_TOKEN_RNG_UPPER, end_pair.first});
+            }
+            if (*pos != ',') {
+                break;
+            }
+            pos++;
         }
-        uint32_t token_id = static_cast<uint32_t>(id);
-        pos = int_end;
         if (*pos != ']') {
             throw std::runtime_error(std::string("expecting ']' at ") + pos);
         }
@@ -208,7 +231,7 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
             throw std::runtime_error(std::string("expecting '>' at ") + pos);
         }
         pos++;
-        return std::make_pair(token_id, pos);
+        return pos;
     }
 
     if (vocab == nullptr) {
@@ -230,7 +253,8 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
         // must tokenize to exactly 1 token
         throw std::runtime_error("invalid token '" + std::string(src, pos - src) + "'");
     }
-    return std::make_pair(tokens[0], pos);
+    rule.push_back({type, static_cast<uint32_t>(tokens[0])});
+    return pos;
 }
 
 static void print_grammar_char(FILE * file, uint32_t c) {
@@ -239,6 +263,16 @@ static void print_grammar_char(FILE * file, uint32_t c) {
     } else {
         // cop out of encoding UTF-8
         fprintf(file, "<U+%04X>", c);
+    }
+}
+
+static bool is_token_element(llama_grammar_element elem) {
+    switch (elem.type) {
+        case LLAMA_GRETYPE_TOKEN:           return true;
+        case LLAMA_GRETYPE_TOKEN_NOT:       return true;
+        case LLAMA_GRETYPE_TOKEN_ALT:       return true;
+        case LLAMA_GRETYPE_TOKEN_RNG_UPPER: return true;
+        default:                            return false;
     }
 }
 
@@ -256,16 +290,18 @@ static bool is_char_element(llama_grammar_element elem) {
 static void print_rule_binary(FILE * file, const llama_grammar_rule & rule) {
     for (auto elem : rule) {
         switch (elem.type) {
-            case LLAMA_GRETYPE_END:            fprintf(file, "END");            break;
-            case LLAMA_GRETYPE_ALT:            fprintf(file, "ALT");            break;
-            case LLAMA_GRETYPE_RULE_REF:       fprintf(file, "RULE_REF");       break;
-            case LLAMA_GRETYPE_CHAR:           fprintf(file, "CHAR");           break;
-            case LLAMA_GRETYPE_CHAR_NOT:       fprintf(file, "CHAR_NOT");       break;
-            case LLAMA_GRETYPE_CHAR_RNG_UPPER: fprintf(file, "CHAR_RNG_UPPER"); break;
-            case LLAMA_GRETYPE_CHAR_ALT:       fprintf(file, "CHAR_ALT");       break;
-            case LLAMA_GRETYPE_CHAR_ANY:       fprintf(file, "CHAR_ANY");       break;
-            case LLAMA_GRETYPE_TOKEN:          fprintf(file, "TOKEN");          break;
-            case LLAMA_GRETYPE_TOKEN_NOT:      fprintf(file, "TOKEN_NOT");      break;
+            case LLAMA_GRETYPE_END:             fprintf(file, "END");             break;
+            case LLAMA_GRETYPE_ALT:             fprintf(file, "ALT");             break;
+            case LLAMA_GRETYPE_RULE_REF:        fprintf(file, "RULE_REF");        break;
+            case LLAMA_GRETYPE_CHAR:            fprintf(file, "CHAR");            break;
+            case LLAMA_GRETYPE_CHAR_NOT:        fprintf(file, "CHAR_NOT");        break;
+            case LLAMA_GRETYPE_CHAR_RNG_UPPER:  fprintf(file, "CHAR_RNG_UPPER");  break;
+            case LLAMA_GRETYPE_CHAR_ALT:        fprintf(file, "CHAR_ALT");        break;
+            case LLAMA_GRETYPE_CHAR_ANY:        fprintf(file, "CHAR_ANY");        break;
+            case LLAMA_GRETYPE_TOKEN:           fprintf(file, "TOKEN");           break;
+            case LLAMA_GRETYPE_TOKEN_NOT:       fprintf(file, "TOKEN_NOT");       break;
+            case LLAMA_GRETYPE_TOKEN_RNG_UPPER: fprintf(file, "TOKEN_RNG_UPPER"); break;
+            case LLAMA_GRETYPE_TOKEN_ALT:       fprintf(file, "TOKEN_ALT");       break;
         }
         switch (elem.type) {
             case LLAMA_GRETYPE_END:
@@ -292,6 +328,10 @@ static void print_rule_binary(FILE * file, const llama_grammar_rule & rule) {
                 fprintf(file, "<[");
                 fprintf(file, "%u", elem.value);
                 fprintf(file, "]> ");
+                break;
+            case LLAMA_GRETYPE_TOKEN_RNG_UPPER:
+            case LLAMA_GRETYPE_TOKEN_ALT:
+                fprintf(file, "(%u) ", elem.value);
                 break;
         }
     }
@@ -352,14 +392,32 @@ static void print_rule(
             case LLAMA_GRETYPE_TOKEN:
                 fprintf(file, "<[");
                 fprintf(file, "%u", elem.value);
-                fprintf(file, "]> ");
                 break;
             case LLAMA_GRETYPE_TOKEN_NOT:
                 fprintf(file, "!");
                 fprintf(file, "<[");
                 fprintf(file, "%u", elem.value);
-                fprintf(file, "]> ");
                 break;
+            case LLAMA_GRETYPE_TOKEN_RNG_UPPER:
+                if (i == 0 || !is_token_element(rule[i - 1])) {
+                    throw std::runtime_error(
+                        "LLAMA_GRETYPE_TOKEN_RNG_UPPER without preceding token: " +
+                        std::to_string(rule_id) + "," + std::to_string(i));
+                }
+                fprintf(file, "-%u", elem.value);
+                break;
+            case LLAMA_GRETYPE_TOKEN_ALT:
+                if (i == 0 || !is_token_element(rule[i - 1])) {
+                    throw std::runtime_error(
+                        "LLAMA_GRETYPE_TOKEN_ALT without preceding token: " +
+                        std::to_string(rule_id) + "," + std::to_string(i));
+                }
+                fprintf(file, ",%u", elem.value);
+                break;
+        }
+        if (is_token_element(elem) &&
+                rule[i + 1].type != LLAMA_GRETYPE_TOKEN_ALT && rule[i + 1].type != LLAMA_GRETYPE_TOKEN_RNG_UPPER) {
+            fprintf(file, "]> ");
         }
         if (is_char_element(elem)) {
             switch (rule[i + 1].type) {
@@ -581,11 +639,9 @@ const char * llama_grammar_parser::parse_sequence(
                 type = LLAMA_GRETYPE_TOKEN_NOT;
                 pos++;
             }
-            auto token_pair = parse_token(vocab, pos);
-            const char * token_end  = token_pair.second;
             last_sym_start = rule.size();
             n_prev_rules = 1;
-            rule.push_back({type, token_pair.first});
+            const char * token_end = parse_token(vocab, pos, type, rule);
             pos = parse_space(token_end, is_nested);
         } else if (is_word_char(*pos)) { // rule reference
             const char * name_end    = parse_name(pos);
@@ -842,17 +898,28 @@ static bool llama_grammar_match_partial_char(
 
 // returns true iff token matches the rule at pos (regular or inverse)
 // asserts that pos is pointing to a token element
-static bool llama_grammar_match_token(
+static std::pair<bool, const llama_grammar_element *> llama_grammar_match_token(
     const llama_grammar_element * pos,
     const llama_token             token) {
-    GGML_ASSERT(pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_NOT);
-    if (pos->type == LLAMA_GRETYPE_TOKEN) {
-        return pos->value == static_cast<uint32_t>(token);
-    }
-    if (pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
-        return pos->value != static_cast<uint32_t>(token);
-    }
-    return false;
+    bool is_positive_token = pos->type == LLAMA_GRETYPE_TOKEN;
+
+    GGML_ASSERT(is_positive_token || pos->type == LLAMA_GRETYPE_TOKEN_NOT);
+
+    const uint32_t id = static_cast<uint32_t>(token);
+
+    bool found = false;
+    do {
+        if (pos[1].type == LLAMA_GRETYPE_TOKEN_RNG_UPPER) {
+            // inclusive range, e.g. <[1-5]>
+            found = found || (pos->value <= id && id <= pos[1].value);
+            pos += 2;
+        } else {
+            found = found || pos->value == id;
+            pos += 1;
+        }
+    } while (pos->type == LLAMA_GRETYPE_TOKEN_ALT);
+
+    return std::make_pair(found == is_positive_token, pos);
 }
 
 // transforms a grammar pushdown stack into N possible stacks, all ending
@@ -934,8 +1001,8 @@ static void llama_grammar_advance_stack(
             break;
         default:
             // end of alternate (LLAMA_GRETYPE_END, LLAMA_GRETYPE_ALT) or middle of char range
-            // (LLAMA_GRETYPE_CHAR_ALT, LLAMA_GRETYPE_CHAR_RNG_UPPER); stack should never be left on
-            // those
+            // (LLAMA_GRETYPE_CHAR_ALT, LLAMA_GRETYPE_CHAR_RNG_UPPER) or token set (LLAMA_GRETYPE_TOKEN_ALT,
+            // LLAMA_GRETYPE_TOKEN_RNG_UPPER); stack should never be left on those
             GGML_ABORT("fatal error");
         }
     }
@@ -1084,7 +1151,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
                 if (*tok.code_points != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(tok);
                 }
-            } else if (tok.partial_utf8.n_remain < 0 || !llama_grammar_match_token(stack_pos, tok.id)) {
+            } else if (tok.partial_utf8.n_remain < 0 || !llama_grammar_match_token(stack_pos, tok.id).first) {
                 rejects.push_back(tok);
             }
         }
@@ -1487,10 +1554,11 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
         const llama_grammar_element * pos = stack.back();
 
         if (pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
-            if (llama_grammar_match_token(pos, token)) {
+            auto match = llama_grammar_match_token(pos, token);
+            if (match.first) {
                 llama_grammar_stack new_stack(stack.begin(), stack.end() - 1);
-                if (!llama_grammar_is_end_of_sequence(pos + 1)) {
-                    new_stack.push_back(pos + 1);
+                if (!llama_grammar_is_end_of_sequence(match.second)) {
+                    new_stack.push_back(match.second);
                 }
                 llama_grammar_advance_stack(grammar.rules, new_stack, stacks_new);
             }

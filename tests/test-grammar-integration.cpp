@@ -597,6 +597,45 @@ static void test_token_rule_utf8() {
     );
 }
 
+static void test_token_sets() {
+    test_grammar(
+        "token set with alternatives and ranges",
+        R"""(
+            root ::= <[1,5-9,12]>+)""",
+        // Passing strings
+        {
+            token(1),
+            token(5) + token(9),
+            token(7) + token(12) + token(1),
+        },
+        // Failing strings
+        {
+            token(2),
+            token(4),
+            token(10),
+            token(13),
+            token(5) + token(11),
+        }
+    );
+
+    test_grammar(
+        "negated token set",
+        R"""(
+            root ::= <[10]> (!<[11,20-29]>)* <[11]>)""",
+        // Passing strings
+        {
+            token(10) + token(11),
+            token(10) + "text" + token(12) + token(19) + token(30) + token(11),
+        },
+        // Failing strings
+        {
+            token(10) + token(20) + token(11),
+            token(10) + token(29) + token(11),
+            token(10) + token(11) + token(11),
+        }
+    );
+}
+
 static void test_complex_grammar() {
     // Test case for a more complex grammar, with both failure strings and success strings
     test_grammar(
@@ -1571,6 +1610,7 @@ int main() {
     test_simple_grammar();
     test_complex_grammar();
     test_token_rule_utf8();
+    test_token_sets();
     test_special_chars();
     test_quantifiers();
     test_failure_missing_root();
