@@ -7,10 +7,6 @@ static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev);
 static std::vector<ggml_backend_device> ggml_opencl_probe_devices(ggml_backend_reg * reg) {
     std::vector<ggml_backend_device> found_devices;
 
-#ifdef GGML_OPENCL_PROFILING
-    GGML_LOG_INFO("ggml_opencl: OpenCL profiling enabled\n");
-#endif
-
     struct cl_device;
     struct cl_platform {
         cl_platform_id id;
@@ -299,6 +295,10 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
         // for information only, the actual regex object is created in ggml_opencl_is_device_supported
         GGML_LOG_INFO("ggml_opencl: opfilter regex = \"%s\"\n", dev_ctx->opfilter_str.c_str());
     }
+
+#ifdef GGML_OPENCL_PROFILING
+    GGML_LOG_INFO("ggml_opencl: OpenCL profiling enabled\n");
+#endif
 }
 
 // check if device should be accepted
