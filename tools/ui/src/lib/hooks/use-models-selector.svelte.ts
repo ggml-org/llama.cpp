@@ -190,6 +190,14 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	);
 	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
 
+	// a row action can hand over to the models manager, which takes the focus;
+	// the selector closes so it does not sit open behind the dialog
+	$effect(() => {
+		if (!uiStore.manageModelsOpen) return;
+
+		opts.onOpenChange?.(false);
+	});
+
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
 			console.error('Unable to load models:', error);
