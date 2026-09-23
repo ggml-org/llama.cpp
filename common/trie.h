@@ -13,7 +13,6 @@
 // Trie for matching multiple literals.
 // This is used in common_peg_until_parser and to build a GBNF exclusion grammar
 struct common_trie {
-    // A trie symbol, either a Unicode codepoint or a token id. Codepoints sort before tokens.
     struct symbol {
         enum kind_type : uint8_t { CODEPOINT, TOKEN };
 
@@ -33,7 +32,6 @@ struct common_trie {
         }
     };
 
-    // The symbol read from the input at some position, and how many bytes it covers
     struct step {
         enum utf8_parse_result::status status;
         common_trie::symbol            symbol;
@@ -62,9 +60,7 @@ struct common_trie {
 
     enum match_result { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH };
 
-    // Read the symbol at pos. token_map is empty or holds, for each byte of sv, the id of the token that starts
-    // there or a negative value. A token in the trie is read as one symbol that runs to the next token or the end
-    // of the input, and anything else is read as a UTF-8 codepoint.
+    // Read the symbol at pos, a token in the trie up to the next token or else a UTF-8 codepoint
     step next_symbol(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const;
 
     // Check if a delimiter starts at the given position
@@ -90,10 +86,10 @@ struct common_trie {
 
 // Aho-Corasick automaton
 struct common_aho_corasick {
-    common_trie          t;
-    std::vector<size_t>  fail;     // failure links
-    std::vector<size_t>  order;    // states in BFS order
-    std::vector<int32_t> match;    // longest pattern ending at each state (directly or via a suffix link), -1 if none
+    common_trie                   t;
+    std::vector<size_t>           fail;     // failure links
+    std::vector<size_t>           order;    // states in BFS order
+    std::vector<int32_t>          match;    // longest pattern ending at each state (directly or via a suffix link), -1 if none
     std::set<common_trie::symbol> alphabet; // every symbol with a transition
 
     common_aho_corasick(common_trie trie);
