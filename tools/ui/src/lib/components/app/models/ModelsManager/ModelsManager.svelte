@@ -2,11 +2,13 @@
 	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
+		groupModelQuants,
 		isCustomized,
 		isLocalOption,
 		loadExtraArgs,
 		loadOverrides,
 		type ModelOverride,
+		type ModelQuantGroup,
 		type ModelsTableGroup,
 		saveOverrides
 	} from './utils';
@@ -45,35 +47,41 @@
 			return true;
 		});
 	});
-	// loaded models lead the table, then favorites, then one block per provider;
-	// a model is listed once, in the first group that claims it
+	// one entry per repo, so a model with several quants is a single table row;
+	// loaded models lead the table, then favorites, then one block per provider,
+	// and an entry lands in the first group that claims it
+	let entries = $derived(groupModelQuants(visible));
 	let groups = $derived.by(() => {
 		// only llama-compat servers report a load state
-		const isLlamaCompat = (option: ModelOption) =>
-			getBackendCapabilities(getBackend(option.backendId)).loadUnload;
-		// hidden models drop out of the sections and get their own block at the end
-		const shown = visible.filter((option) => !modelsStore.isHidden(option.id));
-		const hidden = visible.filter((option) => modelsStore.isHidden(option.id));
-		const loaded = shown.filter(
-			(option) => isLlamaCompat(option) && modelsStore.isModelLoaded(option.model)
+		const isLlamaCompat = (entry: ModelQuantGroup) =>
+			getBackendCapabilities(getBackend(entry.base.backendId)).loadUnload;
+		const loaded = entries.filter(
+			(entry) =>
+				isLlamaCompat(entry) && entry.quants.some((q) => modelsStore.isModelLoaded(q.model))
 		);
-		const claimed = new SvelteSet(loaded.map((option) => option.id));
-		const favorites = shown.filter(
-			(option) => !claimed.has(option.id) && modelsStore.favoriteModelIds.has(option.model)
+		const claimed = new SvelteSet(loaded.map((entry) => entry.key));
+		const favorites = entries.filter(
+			(entry) =>
+				!claimed.has(entry.key) &&
+				entry.quants.some((q) => modelsStore.favoriteModelIds.has(q.model))
 		);
 
-		for (const option of favorites) claimed.add(option.id);
+		for (const entry of favorites) claimed.add(entry.key);
 
-		const byBackend = new SvelteMap<string, ModelOption[]>();
+		const hidden = entries.filter(
+			(entry) => !claimed.has(entry.key) && entry.quants.some((q) => modelsStore.isHidden(q.id))
+		);
+		const hiddenKeys = new SvelteSet(hidden.map((entry) => entry.key));
+		const byBackend = new SvelteMap<string, ModelQuantGroup[]>();
 
-		for (const option of shown) {
-			if (claimed.has(option.id)) continue;
+		for (const entry of entries) {
+			if (claimed.has(entry.key) || hiddenKeys.has(entry.key)) continue;
 
-			const backendId = option.backendId ?? LOCAL_BACKEND_ID;
+			const backendId = entry.base.backendId ?? LOCAL_BACKEND_ID;
 
 			if (!byBackend.has(backendId)) byBackend.set(backendId, []);
 
-			byBackend.get(backendId)!.push(option);
+			byBackend.get(backendId)!.push(entry);
 		}
 
 		const ordered: ModelsTableGroup[] = [];
@@ -143,7 +151,7 @@
 
 		return ordered;
 	});
-	let matches = $derived(groups.flatMap((group) => group.items));
+	let matches = $derived(entries.flatMap((entry) => entry.quants));
 
 	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
 	let summary = $derived.by(() => {

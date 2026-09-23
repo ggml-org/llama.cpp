@@ -1,7 +1,9 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { formatLastUsed } from './utils';
+	import { formatLastUsed, type ModelQuantGroup } from './utils';
 	import {
+		ChevronDown,
+		ChevronRight,
 		Eye,
 		EyeOff,
 		Heart,
@@ -21,12 +23,14 @@
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		filter?: string;
@@ -51,10 +55,20 @@
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
 	let pendingDelete = $state('');
 	let deleteOpen = $state(false);
+	/** Repos whose quants are folded away; the rest show them. */
+	const collapsedQuants = new SvelteSet<string>();
 
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
+	}
+
+	function toggleQuants(key: string): void {
+		if (collapsedQuants.has(key)) {
+			collapsedQuants.delete(key);
+		} else {
+			collapsedQuants.add(key);
+		}
 	}
 
 	/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
@@ -102,22 +116,45 @@
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
+
+	function isLoadedOption(option: ModelOption): boolean {
+		const status = stateOf(option);
+
+		return (
+			(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
+			!modelsStore.status.isOperationInProgress(option.model)
+		);
+	}
 </script>
 
-{#snippet row(option: ModelOption)}
+{#snippet statusDot(option: ModelOption)}
 	{@const status = stateOf(option)}
 	{@const isOperationInProgress = modelsStore.status.isOperationInProgress(option.model)}
 	{@const isLoading = status === ServerModelStatus.LOADING || isOperationInProgress}
-	{@const isLoaded =
-		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
-		!isOperationInProgress}
+	{@const isLoaded = isLoadedOption(option)}
 	{@const isFailed = status === ServerModelStatus.FAILED}
 	{@const isSleeping = status === ServerModelStatus.SLEEPING}
+
+	<ModelLoadControl
+		canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
+		class="justify-self-center"
+		{isFailed}
+		{isLoaded}
+		{isLoading}
+		{isSleeping}
+		{option}
+		showAction={false}
+		showRemoteMark
+	/>
+{/snippet}
+
+{#snippet row(option: ModelOption)}
+	{@const isLoaded = isLoadedOption(option)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
 
-	<div>
+	<div class="px-2">
 		<div
 			class={[
 				rowGrid,
@@ -151,17 +188,112 @@
 				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
 			</span>
 
-			<ModelLoadControl
-				{canLoad}
-				class="justify-self-center"
-				{isFailed}
-				{isLoaded}
-				{isLoading}
-				{isSleeping}
-				{option}
-				showAction={false}
-				showRemoteMark
-			/>
+			{@render statusDot(option)}
+
+			<div class="flex items-center justify-center justify-self-center">
+				<DropdownMenuActions
+					actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
+					align="end"
+					triggerIcon={MoreHorizontal}
+					triggerTooltip="Model actions"
+				/>
+			</div>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet repoRow(entry: ModelQuantGroup)}
+	{@const isExpanded = !collapsedQuants.has(entry.key)}
+	{@const anyLoaded = entry.quants.some(isLoadedOption)}
+
+	<div class="px-2">
+		<div
+			class={[rowGrid, 'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40']}
+			onclick={() => toggleQuants(entry.key)}
+			onkeydown={(event) => event.key === 'Enter' && toggleQuants(entry.key)}
+			role="button"
+			tabindex="0"
+		>
+			<span class="flex min-w-0 items-center gap-3">
+				<span class="flex w-4 shrink-0 items-center justify-center text-muted-foreground">
+					{#if isExpanded}
+						<ChevronDown class="h-3.5 w-3.5" />
+					{:else}
+						<ChevronRight class="h-3.5 w-3.5" />
+					{/if}
+				</span>
+
+				<ModelAvatar option={entry.base} showBaseModelAvatar size="size-9" />
+
+				<span class="min-w-0">
+					<ModelId
+						aliases={entry.base.aliases}
+						class="min-w-0"
+						hideQuantization
+						modalities={entry.base.modalities}
+						modelId={entry.base.model}
+						supportsThinking={entry.base.capabilities.includes(ModelCapability.REASONING)}
+						supportsToolUse={entry.base.capabilities.includes(ModelCapability.TOOL_USE)}
+						tags={entry.base.tags}
+						title={entry.base.model}
+					/>
+
+					<span class="block text-xs text-muted-foreground">
+						{entry.quants.length} quants available
+					</span>
+				</span>
+			</span>
+
+			<span></span>
+
+			<span></span>
+
+			<span class="justify-self-center">
+				<span
+					class="block h-2.5 w-2.5 rounded-full {anyLoaded
+						? 'bg-emerald-500'
+						: 'border border-muted-foreground/50'}"
+				></span>
+			</span>
+
+			<span></span>
+		</div>
+	</div>
+{/snippet}
+
+{#snippet quantRow(option: ModelOption)}
+	{@const favorite = isFavorite(option)}
+	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
+	{@const isLoaded = isLoadedOption(option)}
+	{@const isHidden = modelsStore.isHidden(option.id)}
+	{@const quant = option.parsedId?.quantization ?? option.model}
+
+	<div class="px-2">
+		<div
+			class={[
+				rowGrid,
+				'cursor-pointer rounded-md py-2 pr-2 pl-13 transition',
+				isHidden && 'opacity-60',
+				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
+			]}
+			onclick={() => onSelect(option)}
+			onkeydown={(event) => event.key === 'Enter' && onSelect(option)}
+			role="button"
+			tabindex="0"
+		>
+			<span class="flex min-w-0 items-center gap-3">
+				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+
+				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
+			</span>
+
+			<ModelContext class="justify-self-end" {option} />
+
+			<span class="justify-self-end text-sm text-muted-foreground">
+				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
+			</span>
+
+			{@render statusDot(option)}
 
 			<div class="flex items-center justify-center justify-self-center">
 				<DropdownMenuActions
@@ -226,8 +358,18 @@
 					open={group.kind !== 'hidden'}
 					sticky
 				>
-					{#each group.items as option (option.id)}
-						{@render row(option)}
+					{#each group.items as entry (entry.key)}
+						{#if entry.quants.length > 1}
+							{@render repoRow(entry)}
+
+							{#if !collapsedQuants.has(entry.key)}
+								{#each entry.quants as quant (quant.id)}
+									{@render quantRow(quant)}
+								{/each}
+							{/if}
+						{:else}
+							{@render row(entry.base)}
+						{/if}
 					{/each}
 				</ModelsSection>
 			{/if}

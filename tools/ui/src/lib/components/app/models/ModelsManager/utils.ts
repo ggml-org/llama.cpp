@@ -1,8 +1,9 @@
 import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
-import { HuggingFaceService } from '$lib/services';
+import { HuggingFaceService, ModelsService } from '$lib/services';
 import type { ModelLoadProgress, ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
+import { SvelteMap } from 'svelte/reactivity';
 
 /** Load parameters a model can override before it is loaded. */
 export interface ModelLoadOverride {
@@ -39,12 +40,21 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 
 export type { ModelLoadProgress };
 
+/** One repo of the table, with the quants it ships as its rows. */
+export interface ModelQuantGroup {
+	/** The quant that carries the identity of the repo. */
+	base: ModelOption;
+	key: string;
+	quants: ModelOption[];
+}
+
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
 	/** Null for the loaded and favorites groups. */
 	backendId: string | null;
 	isLocal: boolean;
-	items: ModelOption[];
+	/** One entry per repo, its quants hanging off it. */
+	items: ModelQuantGroup[];
 	key: string;
 	/** Picks the header icon; providers use their backend logo instead. */
 	kind: 'favorites' | 'hidden' | 'loaded' | 'local' | 'provider';
@@ -158,6 +168,33 @@ export async function resolveModelSize(option: ModelOption): Promise<string | nu
 	});
 
 	return file?.size ? formatFileSize(file.size) : null;
+}
+
+/** Repo a `repo:quant` id belongs to, the id itself when it carries no quant. */
+export function modelRepoKey(model: string): string {
+	const quant = ModelsService.parseModelId(model).quantization;
+
+	return quant ? model.slice(0, model.lastIndexOf(':')) : model;
+}
+
+/** Fold the quants of one repo into a single entry, so the table shows one row per model. */
+export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
+	const groups = new SvelteMap<string, ModelQuantGroup>();
+
+	for (const option of models) {
+		const key = modelRepoKey(option.model);
+		const group = groups.get(key);
+
+		if (group) {
+			group.quants.push(option);
+
+			continue;
+		}
+
+		groups.set(key, { base: option, key, quants: [option] });
+	}
+
+	return Array.from(groups.values());
 }
 
 /** Compact "last used" label: minutes, hours, then days. */
