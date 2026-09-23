@@ -290,6 +290,7 @@ struct common_chat_parser_params {
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
+    common_peg_input        generation_prompt_input; // generation_prompt with its tokens, when a vocab is available
     bool                    parse_tool_calls     = true;
     bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
