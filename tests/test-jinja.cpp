@@ -458,6 +458,49 @@ static void test_expressions(testing & t) {
         "['b']"
     );
 
+    test_template(t, "array slice negative variable",
+        "{{ items[:-n]|string }}",
+        {{"items", json::array({"a", "b", "c"})}, {"n", 1}},
+        "['a', 'b']"
+    );
+
+    test_template(t, "array slice negative variable indent",
+        "{{ indent[:-indent_factor] }}",
+        {{"indent", "    "}, {"indent_factor", 2}},
+        "  "
+    );
+
+    test_template(t, "unary minus variable",
+        "{{ -n }}",
+        {{"n", 3}},
+        "-3"
+    );
+
+    test_template(t, "unary plus variable",
+        "{{ +n }}",
+        {{"n", -3}},
+        "-3"
+    );
+
+    test_template(t, "unary plus float",
+        "{{ +x }}",
+        {{"x", -1.5}},
+        "-1.5"
+    );
+
+    // Unary binds tighter than filter: -n|abs == (-n)|abs, not -(n|abs)
+    test_template(t, "unary minus then abs filter",
+        "{{ -n|abs }}",
+        {{"n", -3}},
+        "3"
+    );
+
+    test_template(t, "unary minus then number test",
+        "{{ -n is number }}",
+        {{"n", 3}},
+        "True"
+    );
+
     test_template(t, "array slice step",
         "{{ items[::2]|string }}",
         {{"items", json::array({"a", "b", "c"})}},
