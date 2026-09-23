@@ -1,11 +1,6 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import {
-		formatLastUsed,
-		groupModelFamilies,
-		type ModelFamilyGroup,
-		type ModelQuantGroup
-	} from './utils';
+	import { formatLastUsed, type ModelQuantGroup } from './utils';
 	import {
 		ChevronDown,
 		ChevronRight,
@@ -37,6 +32,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
+	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -72,7 +68,11 @@
 		groups.map((group) => {
 			const flat = FLAT_SECTIONS.has(group.kind);
 
-			return { ...group, families: flat ? [] : groupModelFamilies(group.items), flat };
+			return {
+				...group,
+				families: flat ? [] : groupModelFamilies(group.items, (entry) => entry.base.model),
+				flat
+			};
 		})
 	);
 
@@ -104,7 +104,7 @@
 
 	/** Cut a section down to the mounted window, counting models rather than groups. */
 	function windowSection(group: (typeof sections)[number]): {
-		families: ModelFamilyGroup[];
+		families: ModelFamilyGroup<ModelQuantGroup>[];
 		hidden: number;
 		items: ModelQuantGroup[];
 		unit: string;
@@ -126,7 +126,7 @@
 			return { families: [], hidden: group.items.length - items.length, items, unit: 'models' };
 		}
 
-		const families: ModelFamilyGroup[] = [];
+		const families: ModelFamilyGroup<ModelQuantGroup>[] = [];
 
 		let shown = 0;
 
@@ -413,7 +413,7 @@
 	{/if}
 {/snippet}
 
-{#snippet familyRow(family: ModelFamilyGroup)}
+{#snippet familyRow(family: ModelFamilyGroup<ModelQuantGroup>)}
 	{@const isExpanded = !collapsedFamilies.has(family.key)}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 	{@const options = family.entries.flatMap((entry) => entry.quants)}
