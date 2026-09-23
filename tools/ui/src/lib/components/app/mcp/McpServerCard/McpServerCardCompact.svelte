@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Card from '$lib/components/ui/card';
-	import { mode } from 'mode-watcher';
 	import type { RecommendedMCPServer } from '$lib/types';
+	import { mode } from 'mode-watcher';
 
 	interface Props {
 		server: RecommendedMCPServer;
@@ -10,12 +10,13 @@
 		dimmed?: boolean;
 	}
 
-	let { server, onClick, selected = false, dimmed = false }: Props = $props();
+	let { dimmed = false, onClick, selected = false, server }: Props = $props();
 
 	let activeIconUrl = $derived.by(() => {
 		const isDark = mode.current === 'dark';
 
 		if (isDark && server.iconUrlDark) return server.iconUrlDark;
+
 		if (!isDark && server.iconUrlLight) return server.iconUrlLight;
 
 		return server.iconUrl;
@@ -29,11 +30,11 @@
 	<div class="flex min-w-0 items-center gap-2">
 		{#if activeIconUrl}
 			<img
-				src={activeIconUrl}
 				alt=""
 				class="h-5 w-5 shrink-0 rounded"
-				loading="lazy"
 				decoding="async"
+				loading="lazy"
+				src={activeIconUrl}
 			/>
 		{/if}
 

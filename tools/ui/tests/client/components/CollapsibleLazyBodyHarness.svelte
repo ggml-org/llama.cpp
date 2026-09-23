@@ -7,7 +7,7 @@
 		open: boolean;
 	}
 
-	let { variant, open }: Props = $props();
+	let { open, variant }: Props = $props();
 </script>
 
 {#if variant === 'content'}

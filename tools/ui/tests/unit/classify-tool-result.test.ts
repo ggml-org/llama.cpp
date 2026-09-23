@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { classifyToolResult } from '$lib/utils/agentic';
+import { describe, expect, it } from 'vitest';
 
 describe('classifyToolResult', () => {
 	describe('text', () => {
@@ -37,12 +37,17 @@ describe('classifyToolResult', () => {
 			expect(classifyToolResult('["a", "b", "c"]')).toBe('json');
 		});
 
+		it('classifies a nested JSON array', () => {
+			expect(classifyToolResult('[[1, 2], [3, 4]]')).toBe('json');
+		});
+
 		it('classifies a pretty-printed JSON object', () => {
 			expect(classifyToolResult('{\n  "key": "value"\n}')).toBe('json');
 		});
 
 		it('classifies a deeply nested JSON payload', () => {
 			const nested = JSON.stringify({ items: [{ id: 1, tags: ['a', 'b'] }] }, null, 2);
+
 			expect(classifyToolResult(nested)).toBe('json');
 		});
 
@@ -52,6 +57,7 @@ describe('classifyToolResult', () => {
 			// `classifyToolResult` only inspects the top-level shape, not
 			// every nested line marker.
 			const jsonWithLink = '{"docs": "see [docs](https://example.com) for more"}';
+
 			expect(classifyToolResult(jsonWithLink)).toBe('json');
 		});
 	});
@@ -91,11 +97,13 @@ describe('classifyToolResult', () => {
 
 		it('classifies a markdown table', () => {
 			const table = '| a | b |\n| - | - |\n| 1 | 2 |';
+
 			expect(classifyToolResult(table)).toBe('markdown');
 		});
 
 		it('classifies a markdown table with alignment markers', () => {
 			const table = '| left | center | right |\n| :--- | :---: | ---: |\n| a | b | c |';
+
 			expect(classifyToolResult(table)).toBe('markdown');
 		});
 
@@ -116,6 +124,7 @@ describe('classifyToolResult', () => {
 				'| ----- | ----- |',
 				'| a     | b     |'
 			].join('\n');
+
 			expect(classifyToolResult(md)).toBe('markdown');
 		});
 	});
@@ -124,6 +133,7 @@ describe('classifyToolResult', () => {
 		it('prefers JSON over markdown when both signals are present', () => {
 			// Starts with `[`, parses as JSON - markdown check is skipped.
 			const arr = '[1, 2, "# not-a-heading", "**not-bold**"]';
+
 			expect(classifyToolResult(arr)).toBe('json');
 		});
 	});

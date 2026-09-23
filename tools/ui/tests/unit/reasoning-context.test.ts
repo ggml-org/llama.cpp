@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { MessageRole } from '$lib/enums';
+import { describe, expect, it } from 'vitest';
 
 /**
  * Tests for the new reasoning content handling.
@@ -27,15 +27,15 @@ describe('reasoning content in new structured format', () => {
 	it('convertDbMessageToApiChatMessageData includes reasoning_content', () => {
 		// Simulate the conversion logic
 		const dbMessage = {
-			role: MessageRole.ASSISTANT,
 			content: 'The answer is 4.',
-			reasoningContent: 'Let me think: 2+2=4, basic arithmetic.'
+			reasoningContent: 'Let me think: 2+2=4, basic arithmetic.',
+			role: MessageRole.ASSISTANT
+		};
+		const apiMessage: Record<string, unknown> = {
+			content: dbMessage.content,
+			role: dbMessage.role
 		};
 
-		const apiMessage: Record<string, unknown> = {
-			role: dbMessage.role,
-			content: dbMessage.content
-		};
 		if (dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}
@@ -49,17 +49,16 @@ describe('reasoning content in new structured format', () => {
 
 	it('API message excludes reasoning when excludeReasoningFromContext is true', () => {
 		const dbMessage = {
-			role: MessageRole.ASSISTANT,
 			content: 'The answer is 4.',
-			reasoningContent: 'internal thinking'
+			reasoningContent: 'internal thinking',
+			role: MessageRole.ASSISTANT
 		};
-
 		const excludeReasoningFromContext = true;
-
 		const apiMessage: Record<string, unknown> = {
-			role: dbMessage.role,
-			content: dbMessage.content
+			content: dbMessage.content,
+			role: dbMessage.role
 		};
+
 		if (!excludeReasoningFromContext && dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}
@@ -70,15 +69,15 @@ describe('reasoning content in new structured format', () => {
 
 	it('handles messages with no reasoning', () => {
 		const dbMessage = {
-			role: MessageRole.ASSISTANT,
 			content: 'No reasoning here.',
-			reasoningContent: undefined
+			reasoningContent: undefined,
+			role: MessageRole.ASSISTANT
+		};
+		const apiMessage: Record<string, unknown> = {
+			content: dbMessage.content,
+			role: dbMessage.role
 		};
 
-		const apiMessage: Record<string, unknown> = {
-			role: dbMessage.role,
-			content: dbMessage.content
-		};
 		if (dbMessage.reasoningContent) {
 			apiMessage.reasoning_content = dbMessage.reasoningContent;
 		}

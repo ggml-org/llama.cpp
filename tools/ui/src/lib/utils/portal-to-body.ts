@@ -4,6 +4,7 @@ export function portalToBody(node: HTMLElement) {
 	}
 
 	const target = document.body;
+
 	if (!target) {
 		return;
 	}

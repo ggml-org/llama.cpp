@@ -14,10 +14,11 @@ struct server_tool {
     std::string display_name;
     bool permission_write = false;
     bool support_stream = false; // if true, output can be streamed
+    bool uses_cwd = false;       // if true, the tool resolves paths and runs against the working directory
 
     virtual ~server_tool() = default;
     virtual json get_definition() const = 0;
-    virtual std::string type() const { return "builtin"; }
+    virtual std::string type() const { return "server"; }
 
     struct stream {
         server_response & qr;
@@ -30,6 +31,8 @@ struct server_tool {
     json to_json() const;
 };
 
+struct server_tools_runtime; // impl detail, defined in server-tools.cpp
+
 struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
 
@@ -37,9 +40,16 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
+    // set when --tools-runtime is configured; routes every tool call through an isolate
+    std::unique_ptr<server_tools_runtime> runtime;
+
     void setup(const std::vector<std::string> & enabled_tools,
-               server_mcp & mcp_mgr);
+               server_mcp & mcp_mgr,
+               const std::string & tools_runtime);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
+
+    server_tools();
+    ~server_tools();
 };

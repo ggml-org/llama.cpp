@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { ModelsService } from '$lib/services/models.service';
+import { describe, expect, it } from 'vitest';
 
 const { parseModelId } = ModelsService;
 
@@ -94,6 +94,38 @@ describe('parseModelId', () => {
 		});
 		expect(parseModelId('model-100B-GGML-Instruct:Q4_K_M')).toMatchObject({
 			tags: ['Instruct']
+		});
+	});
+
+	it('strips trailing container format segments from model names', () => {
+		expect(parseModelId('unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'DeepSeek-V4-Flash-0731',
+			orgName: 'unsloth',
+			params: null,
+			quantization: 'Q2_K_XL',
+			raw: 'unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL',
+			tags: []
+		});
+
+		expect(parseModelId('unsloth/Laguna-S-2.1-GGUF:Q4_K_XL')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'Laguna-S-2.1',
+			orgName: 'unsloth',
+			params: null,
+			quantization: 'Q4_K_XL',
+			raw: 'unsloth/Laguna-S-2.1-GGUF:Q4_K_XL',
+			tags: []
+		});
+
+		expect(parseModelId('org/Model-Name-GGUF')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'Model-Name',
+			orgName: 'org',
+			params: null,
+			quantization: null,
+			raw: 'org/Model-Name-GGUF',
+			tags: []
 		});
 	});
 
@@ -244,16 +276,16 @@ describe('parseModelId', () => {
 	it('handles ambiguous model names', () => {
 		// Qwen3.5 Instruct vs Thinking — tags should distinguish them
 		expect(parseModelId('Qwen/Qwen3.5-30B-A3B-Instruct')).toMatchObject({
+			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			activatedParams: 'A3B',
 			tags: ['Instruct']
 		});
 
 		expect(parseModelId('Qwen/Qwen3.5-30B-A3B-Thinking')).toMatchObject({
+			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			activatedParams: 'A3B',
 			tags: ['Thinking']
 		});
 

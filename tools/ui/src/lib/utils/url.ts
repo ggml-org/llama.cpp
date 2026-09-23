@@ -28,6 +28,7 @@ function isIpAddress(hostname: string): boolean {
  */
 export function extractRootDomain(url: URL): string | null {
 	const hostname = url.hostname.toLowerCase();
+
 	if (!hostname || isIpAddress(hostname)) return null;
 
 	const parts = hostname.split('.');
@@ -95,7 +96,6 @@ export function canonicalizeServerUrl(raw: string): string {
 	try {
 		const parsed = new URL(trimmed);
 		const pathname = parsed.pathname.replace(TRAILING_SLASHES_REGEX, '');
-
 		// Aggressive: drop the port unconditionally. We only use this for
 		// equality checks between user-typed URLs and a hard-coded list of
 		// recommendations, where the port can never carry distinguishing

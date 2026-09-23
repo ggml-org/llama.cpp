@@ -4,9 +4,7 @@
 #include "common.h"
 #include "log.h"
 #include "http.h"
-
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <filesystem>
 #include <fstream>
@@ -14,8 +12,6 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
-
-namespace nl = nlohmann;
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -34,8 +30,8 @@ namespace hf_cache {
 
 namespace fs = std::filesystem;
 
-static fs::path get_cache_directory() {
-    static const fs::path cache = []() {
+std::string get_cache_path() {
+    static const std::string cache = []() {
         struct {
             const char * var;
             fs::path path;
@@ -50,14 +46,14 @@ static fs::path get_cache_directory() {
         for (const auto & entry : entries) {
             if (auto * p = std::getenv(entry.var); p && *p) {
                 fs::path base(p);
-                return entry.path.empty() ? base : base / entry.path;
+                return (entry.path.empty() ? base : base / entry.path).string();
             }
         }
 #ifndef _WIN32
         const struct passwd * pw = getpwuid(getuid());
 
         if (pw && pw->pw_dir && *pw->pw_dir) {
-            return fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub";
+            return (fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub").string();
         }
 #endif
         throw std::runtime_error("Failed to determine HF cache directory");
@@ -84,7 +80,7 @@ static std::string repo_to_folder_name(const std::string & repo_id) {
 }
 
 static fs::path get_repo_path(const std::string & repo_id) {
-    return get_cache_directory() / repo_to_folder_name(repo_id);
+    return fs::path(get_cache_path()) / repo_to_folder_name(repo_id);
 }
 
 static bool is_hex_char(const char c) {
@@ -195,8 +191,8 @@ static void safe_write_file(const fs::path & path, const std::string & data) {
     }
 }
 
-static nl::json api_get(const std::string & url,
-                        const std::string & token) {
+static common_json api_get(const std::string & url,
+                           const std::string & token) {
     auto [cli, parts] = common_http_client(url);
 
     httplib::Headers headers = {
@@ -214,10 +210,10 @@ static nl::json api_get(const std::string & url,
         auto body = res->body;
 
         if (res->status == 200) {
-            return nl::json::parse(res->body);
+            return common_json::parse(res->body);
         }
         try {
-            body = nl::json::parse(res->body)["error"].get<std::string>();
+            body = common_json::parse(res->body)["error"].get<std::string>();
         } catch (...) { }
 
         throw std::runtime_error("GET failed (" + std::to_string(res->status) + "): " + body);
@@ -280,7 +276,7 @@ static std::string get_repo_commit(const std::string & repo_id,
         safe_write_file(refs_path / name, commit);
         return commit;
 
-    } catch (const nl::json::exception & e) {
+    } catch (const common_json_error & e) {
         LOG_ERR("%s: JSON error: %s\n", __func__, e.what());
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
@@ -358,7 +354,7 @@ hf_files get_repo_files(const std::string & repo_id,
 
             files.push_back(file);
         }
-    } catch (const nl::json::exception & e) {
+    } catch (const common_json_error & e) {
         LOG_ERR("%s: JSON error: %s\n", __func__, e.what());
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
@@ -397,8 +393,8 @@ static std::string get_cached_ref(const fs::path & repo_path) {
 }
 
 hf_files get_cached_files(const std::string & repo_id) {
-    fs::path cache_dir = get_cache_directory();
-    if (!fs::exists(cache_dir)) {
+    const fs::path cache_path = get_cache_path();
+    if (!fs::exists(cache_path)) {
         return {};
     }
 
@@ -409,7 +405,7 @@ hf_files get_cached_files(const std::string & repo_id) {
 
     hf_files files;
 
-    for (const auto & repo : fs::directory_iterator(cache_dir)) {
+    for (const auto & repo : fs::directory_iterator(cache_path)) {
         if (!repo.is_directory()) {
             continue;
         }

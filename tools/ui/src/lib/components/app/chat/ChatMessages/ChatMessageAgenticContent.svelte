@@ -1,29 +1,21 @@
 <script lang="ts">
+	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
 	import {
-		ChatMessageStatistics,
-		MarkdownContent,
+		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest,
-		ChatMessageActionCardContinueRequest
+		ChatMessageStatistics,
+		MarkdownContent
 	} from '$lib/components/app';
-
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
+	import { agenticStore, settingsStore } from '$lib/stores';
 	import type {
+		AgenticSection,
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { deriveAgenticSections, type AgenticSection } from '$lib/utils';
-	import {
-		agenticPendingPermissionRequest,
-		agenticResolvePermission,
-		agenticPendingContinueRequest,
-		agenticResolveContinue,
-		agenticLastError,
-		agenticExecutingToolCallId
-	} from '$lib/stores/agentic.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
-	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+	import { deriveAgenticSections } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -33,70 +25,74 @@
 	}
 
 	let {
-		message,
-		toolMessages = [],
+		isLastAssistantMessage = false,
 		isStreaming = false,
-		isLastAssistantMessage = false
+		message,
+		toolMessages = []
 	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
-	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
-	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
-	const showMessageStats = $derived(Boolean(config().showMessageStats));
-	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
+	const showThoughtInProgress = $derived(Boolean(settingsStore.config.showThoughtInProgress));
+	const alwaysShowToolCallContent = $derived(
+		Boolean(settingsStore.config.alwaysShowToolCallContent)
+	);
+	const showMessageStats = $derived(Boolean(settingsStore.config.showMessageStats));
+	const showAgenticTurnStats = $derived(
+		showMessageStats && Boolean(settingsStore.config.showAgenticTurnStats)
+	);
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
-
-	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
+		isStreaming && isLastAssistantMessage
+			? agenticStore.getPendingPermissionRequest(message.convId)
+			: null
 	);
 
-	let prevPendingRef: typeof pendingPermission = null;
-	$effect(() => {
-		if (pendingPermission !== prevPendingRef) {
-			prevPendingRef = pendingPermission;
-			if (pendingPermission) {
-				permissionDismissed = false;
-			}
-		}
-	});
+	// dismissal applies to the request object, so the next request ( new
+	// identity ) shows the card again without any reset bookkeeping
+	let dismissedPermission: typeof pendingPermission = $state(null);
+
+	const visiblePermission = $derived(
+		pendingPermission && dismissedPermission !== pendingPermission ? pendingPermission : null
+	);
 
 	function handlePermission(decision: ToolPermissionDecision) {
-		permissionDismissed = true;
-		agenticResolvePermission(message.convId, decision);
+		dismissedPermission = pendingPermission;
+		agenticStore.resolvePermission(message.convId, decision);
 	}
+
+	const pendingContinue = $derived(
+		isStreaming && isLastAssistantMessage
+			? agenticStore.getPendingContinueRequest(message.convId)
+			: false
+	);
 
 	let continueDismissed = $state(false);
 
-	const pendingContinue = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
-	);
-
-	let prevContinueRef = false;
+	// the continue request is a plain boolean, so there is no identity to
+	// compare against; clear the dismissal whenever no request is pending so
+	// the next one starts from a clean state
 	$effect(() => {
-		if (pendingContinue !== prevContinueRef) {
-			prevContinueRef = pendingContinue;
-			if (pendingContinue) {
-				continueDismissed = false;
-			}
+		if (!pendingContinue) {
+			continueDismissed = false;
 		}
 	});
 
+	const showContinue = $derived(Boolean(pendingContinue) && !continueDismissed);
+
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
-		agenticResolveContinue(message.convId, shouldContinue);
+		agenticStore.resolveContinue(message.convId, shouldContinue);
 	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticExecutingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.getExecutingToolCallId(message.convId) : null
 	);
 
 	type TurnGroup = {
@@ -106,6 +102,7 @@
 
 	const turnGroups: TurnGroup[] = $derived.by(() => {
 		const groups: TurnGroup[] = [];
+
 		let currentTurn: AgenticSection[] = [];
 		let currentIndices: number[] = [];
 		let prevWasTool = false;
@@ -118,7 +115,7 @@
 				section.type === AgenticSectionType.TOOL_CALL_STREAMING;
 
 			if (!isTool && prevWasTool && currentTurn.length > 0) {
-				groups.push({ sections: currentTurn, flatIndices: currentIndices });
+				groups.push({ flatIndices: currentIndices, sections: currentTurn });
 				currentTurn = [];
 				currentIndices = [];
 			}
@@ -129,7 +126,7 @@
 		}
 
 		if (currentTurn.length > 0) {
-			groups.push({ sections: currentTurn, flatIndices: currentIndices });
+			groups.push({ flatIndices: currentIndices, sections: currentTurn });
 		}
 
 		return groups;
@@ -167,11 +164,11 @@
 
 	function buildTurnAgenticTimings(stats: ChatMessageAgenticTurnStats): ChatMessageAgenticTimings {
 		return {
-			turns: 1,
+			llm: stats.llm,
+			toolCalls: stats.toolCalls,
 			toolCallsCount: stats.toolCalls.length,
 			toolsMs: stats.toolsMs,
-			toolCalls: stats.toolCalls,
-			llm: stats.llm
+			turns: 1
 		};
 	}
 </script>
@@ -179,27 +176,26 @@
 {#snippet renderSection(section: AgenticSection, index: number)}
 	{#if section.type === AgenticSectionType.TEXT}
 		<div class="agentic-text">
-			<MarkdownContent content={section.content} attachments={message?.extra} />
+			<MarkdownContent attachments={message?.extra} content={section.content} />
 		</div>
 	{:else if section.type === AgenticSectionType.REASONING || section.type === AgenticSectionType.REASONING_PENDING}
 		<ChatMessageReasoningBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
-			{renderThinkingAsMarkdown}
-			{hasReasoningError}
 			attachments={message?.extra}
+			{hasReasoningError}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 		<ChatMessageToolCallBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
+			attachments={section.toolResultExtras}
 			isExecuting={section.toolCallId !== undefined &&
 				section.toolCallId === currentlyExecutingToolCallId}
-			attachments={message?.extra}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{/if}
 {/snippet}
@@ -217,15 +213,15 @@
 				{#if turnStats && showAgenticTurnStats}
 					<div class="turn-stats transition-opacity duration-150 mt-1 mb-4">
 						<ChatMessageStatistics
-							promptTokens={turnStats.llm.prompt_n}
-							promptMs={turnStats.llm.prompt_ms}
-							predictedTokens={turnStats.llm.predicted_n}
-							predictedMs={turnStats.llm.predicted_ms}
 							agenticTimings={turnStats.toolCalls.length > 0
 								? buildTurnAgenticTimings(turnStats)
 								: undefined}
-							initialView={ChatMessageStatsView.GENERATION}
 							hideSummary
+							initialView={ChatMessageStatsView.GENERATION}
+							predictedMs={turnStats.llm.predicted_ms}
+							predictedTokens={turnStats.llm.predicted_n}
+							promptMs={turnStats.llm.prompt_ms}
+							promptTokens={turnStats.llm.prompt_n}
 						/>
 					</div>
 				{/if}
@@ -237,15 +233,15 @@
 		{/each}
 	{/if}
 
-	{#if pendingPermission && !permissionDismissed}
+	{#if visiblePermission}
 		<ChatMessageActionCardPermissionRequest
-			toolName={pendingPermission.toolName}
-			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
+			serverLabel={visiblePermission.serverLabel}
+			toolName={visiblePermission.toolName}
 		/>
 	{/if}
 
-	{#if pendingContinue && !continueDismissed}
+	{#if showContinue}
 		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>

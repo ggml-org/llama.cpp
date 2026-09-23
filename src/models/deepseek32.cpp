@@ -4,14 +4,12 @@
 #include "llama-kv-cache-dsa.h"
 
 void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
     hparams.f_norm_eps = 1e-6;  // eps for layer norm
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
 
     // MoE parameters
-    ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
@@ -22,7 +20,7 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,     hparams.n_lora_kv);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl, false);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
 
     // DSA parameters
@@ -38,10 +36,6 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
         // cancel the factor from the convert script
         hparams.rope_yarn_log_mul /= 0.1f;
     }
-
-    // NextN/MTP parameters
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
-    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
 
     switch (hparams.n_layer()) {
         case 61: type = LLM_TYPE_685B_A37B; break;
@@ -77,7 +71,7 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader & ml) {
     const int64_t q_lora_rank  = hparams.n_lora_q;
     const int64_t kv_lora_rank = hparams.n_lora_kv;
 
-    const int64_t n_ff_exp        = hparams.n_ff_exp;
+    const int64_t n_ff_exp        = hparams.n_ff_exp();
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -180,9 +174,10 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 
     const int64_t n_indexer_head = hparams.indexer_n_head;
     const int64_t n_embd_indexer_head = hparams.indexer_head_size;
-    const int64_t n_embd_indexer_head_rope = hparams.n_rot();
-    const int64_t n_embd_indexer_head_nope = n_embd_indexer_head - n_embd_indexer_head_rope;
     const uint32_t n_indexer_top_k = hparams.indexer_top_k;
+
+    // the indexer head layous is [rope | nope]
+    GGML_ASSERT(hparams.n_rot() <= n_embd_indexer_head);
 
     const uint32_t kv_lora_rank = hparams.n_lora_kv;
 
@@ -233,28 +228,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 ggml_tensor * indexer_q = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_q_b, qr);
                 cb(indexer_q, "indexer_q", il);
 
-                // split into {n_embd_indexer_head_rope, n_indexer_head, n_tokens}
-                ggml_tensor * indexer_q_pe =
-                    ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_rope, n_indexer_head, n_tokens,
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head),
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head, 0);
-                cb(indexer_q_pe, "indexer_q_pe", il);
-
-                // and {n_embd_indexer_head_nope, n_indexer_head, n_tokens}
-                ggml_tensor * indexer_q_nope =
-                    ggml_view_3d(ctx0, indexer_q, n_embd_indexer_head_nope, n_indexer_head, n_tokens,
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head),
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head) * n_indexer_head,
-                                 ggml_row_size(indexer_q->type, n_embd_indexer_head_nope));
-                cb(indexer_q_nope, "indexer_q_nope", il);
-
-                indexer_q_pe = ggml_rope_ext(ctx0, indexer_q_pe, inp_pos, nullptr, n_rot,
+                // {n_embd_indexer_head, n_indexer_head, n_tokens}
+                indexer_q = ggml_reshape_3d(ctx0, indexer_q, n_embd_indexer_head, n_indexer_head, n_tokens);
+                indexer_q = ggml_rope_ext(ctx0, indexer_q, inp_pos, nullptr, n_rot,
                                      LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(indexer_q_pe, "indexer_q_pe", il);
-
-                // {n_embd_indexer_head_rope + n_embd_indexer_head_nope, n_head, n_tokens}
-                indexer_q = ggml_concat(ctx0, indexer_q_pe, indexer_q_nope, 0);
                 cb(indexer_q, "indexer_q", il);
 
                 ggml_tensor * indexer_k = ggml_mul_mat(ctx0, model.layers[il].indexer_attn_k, cur);
@@ -263,28 +241,11 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 indexer_k = build_norm(indexer_k, model.layers[il].indexer_k_norm, model.layers[il].indexer_k_norm_b, LLM_NORM, il);
                 cb(indexer_k, "indexer_k", il);
 
-                // split into {n_embd_indexer_head_rope, 1, n_tokens}
-                ggml_tensor * indexer_k_pe =
-                    ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_rope, 1, n_tokens,
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head),
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1, 0);
-                cb(indexer_k_pe, "indexer_k_pe", il);
-
-                // and {n_embd_indexer_head_nope, 1, n_tokens}
-                ggml_tensor * indexer_k_nope =
-                    ggml_view_3d(ctx0, indexer_k, n_embd_indexer_head_nope, 1, n_tokens,
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head),
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head) * 1,
-                                 ggml_row_size(indexer_k->type, n_embd_indexer_head_nope));
-                cb(indexer_k_nope, "indexer_k_nope", il);
-
-                indexer_k_pe = ggml_rope_ext(ctx0, indexer_k_pe, inp_pos, nullptr, n_rot,
+                // {n_embd_indexer_head, 1, n_tokens}
+                indexer_k = ggml_reshape_3d(ctx0, indexer_k, n_embd_indexer_head, 1, n_tokens);
+                indexer_k = ggml_rope_ext(ctx0, indexer_k, inp_pos, nullptr, n_rot,
                                      LLAMA_ROPE_TYPE_NEOX, n_ctx_orig, freq_base, freq_scale,
                                      ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(indexer_k_pe, "indexer_k_pe", il);
-
-                // {n_embd_indexer_head_rope + n_embd_indexer_head_nope, 1, n_tokens}
-                indexer_k = ggml_concat(ctx0, indexer_k_pe, indexer_k_nope, 0);
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k

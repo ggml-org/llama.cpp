@@ -6,25 +6,11 @@ enable f16;
 // weight (src0) is [KW,KH,1,C]; output matches the input layout.
 
 @group(0) @binding(0)
-#if defined(WEIGHT_F32)
-var<storage, read_write> weights: array<f32>;
-#elif defined(WEIGHT_F16)
-var<storage, read_write> weights: array<f16>;
-#endif
-
+var<storage, read_write> weights: array<WEIGHT_TYPE>;
 @group(0) @binding(1)
-#if defined(INPUT_F32)
-var<storage, read_write> input: array<f32>;
-#elif defined(INPUT_F16)
-var<storage, read_write> input: array<f16>;
-#endif
-
+var<storage, read_write> input: array<INPUT_TYPE>;
 @group(0) @binding(2)
-#if defined(OUTPUT_F32)
-var<storage, read_write> output: array<f32>;
-#elif defined(OUTPUT_F16)
-var<storage, read_write> output: array<f16>;
-#endif
+var<storage, read_write> output: array<OUTPUT_TYPE>;
 
 struct Params {
     offset_w: u32,
@@ -33,7 +19,6 @@ struct Params {
 
     ne: u32,
     channels: u32,
-    batches: u32,
     dst_w: u32, dst_h: u32,
     src_w: u32, src_h: u32,
     knl_w: u32, knl_h: u32,
@@ -45,28 +30,6 @@ struct Params {
 
 @group(0) @binding(3)
 var<uniform> params: Params;
-
-fn load_weight(idx: u32) -> f32 {
-    #if defined(WEIGHT_F32)
-        return weights[idx];
-    #elif defined(WEIGHT_F16)
-        return f32(weights[idx]);
-    #endif
-}
-fn load_input(idx: u32) -> f32 {
-    #if defined(INPUT_F32)
-        return input[idx];
-    #elif defined(INPUT_F16)
-        return f32(input[idx]);
-    #endif
-}
-fn store_output(idx: u32, val: f32) {
-    #if defined(OUTPUT_F32)
-        output[idx] = val;
-    #elif defined(OUTPUT_F16)
-        output[idx] = f16(val);
-    #endif
-}
 
 #if defined(WHCN)
 // Input/output/kernel contiguous in [W, H, C, N] order (kernel [KW,KH,C]).
@@ -89,8 +52,8 @@ fn conv_2d_dw(idx: u32) -> f32 {
         for (var kx: u32 = 0u; kx < params.knl_w; kx += 1u) {
             let src_x = i32(dst_x) * params.stride_x + i32(kx) * params.dilation_x - params.pad_x;
             if (src_x < 0 || src_x >= i32(params.src_w)) { continue; }
-            let v = load_input(src_i + u32(src_y) * params.src_w + u32(src_x));
-            let k = load_weight(knl_i + ky * params.knl_w + kx);
+            let v = f32(input[src_i + u32(src_y) * params.src_w + u32(src_x)]);
+            let k = f32(weights[knl_i + ky * params.knl_w + kx]);
             sum += v * k;
         }
     }
@@ -117,8 +80,8 @@ fn conv_2d_dw(idx: u32) -> f32 {
         for (var kx: u32 = 0u; kx < params.knl_w; kx += 1u) {
             let src_x = i32(dst_x) * params.stride_x + i32(kx) * params.dilation_x - params.pad_x;
             if (src_x < 0 || src_x >= i32(params.src_w)) { continue; }
-            let v = load_input(src_i + u32(src_y) * src_row + u32(src_x) * params.channels + c);
-            let k = load_weight(params.offset_w + ky * knl_row + kx * params.channels + c);
+            let v = f32(input[src_i + u32(src_y) * src_row + u32(src_x) * params.channels + c]);
+            let k = f32(weights[params.offset_w + ky * knl_row + kx * params.channels + c]);
             sum += v * k;
         }
     }
@@ -133,5 +96,5 @@ fn main(
 ) {
     let idx = gid.x + (num_wg.x * u32(WG_SIZE)) * gid.y;
     if (idx >= params.ne) { return; }
-    store_output(params.offset_o + idx, conv_2d_dw(idx));
+    output[params.offset_o + idx] = OUTPUT_TYPE(conv_2d_dw(idx));
 }

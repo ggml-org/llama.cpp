@@ -4,10 +4,11 @@
 #include "server-task.h"
 #include "server-queue.h"
 
-#include <nlohmann/json_fwd.hpp>
+#include "json.h"
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <set>
 
 struct server_context_impl; // private implementation
@@ -168,15 +169,25 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
-    std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const mtmd_helper_init_opt & init_opt, const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const
     std::unique_ptr<const server_context_meta> meta;
 
     const common_params & params;
-    const server_context_impl & ctx_server;
+    server_context_impl & ctx_server;
 
     server_queue & queue_tasks;
     server_response & queue_results;
     std::unique_ptr<server_res_generator> create_response(bool bypass_sleep = false);
+
+    // cached responses, to be used during sleep
+    std::mutex     mutex_cache;
+    json           cached_models  = nullptr;
+    json           cached_props   = nullptr;
+    server_metrics cached_metrics;
+    // set when a scrape during sleep already reported the throughput buckets
+    bool           should_reset_buckets = false;
+    // call right before sleep to update the cached responses
+    void update_cached_responses(bool is_sleeping);
 };

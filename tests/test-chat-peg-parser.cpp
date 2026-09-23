@@ -11,9 +11,9 @@
 #include <regex>
 #include <string>
 
-#include "nlohmann/json.hpp"
+#include "json.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static json create_tools();
 static void test_example_native(testing & t);
@@ -23,6 +23,7 @@ static void test_command7_parser_compare(testing & t);
 static void test_prefix_tool_names(testing & t);
 static void test_tagged_peg_parser(testing & t);
 static void test_permute(testing & t);
+static void test_invalid_utf8(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -42,6 +43,7 @@ int main(int argc, char * argv[]) {
     t.test("prefix tool names", test_prefix_tool_names);
     t.test("tagged peg parser", test_tagged_peg_parser);
     t.test("permute", test_permute);
+    t.test("invalid utf8", test_invalid_utf8);
 
     return t.summary();
 }
@@ -63,10 +65,10 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description",
                               "The temperature unit to use. Infer this from the users location." } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -86,14 +88,14 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description", "The temperature unit to use. Infer this from the users location." } } },
                         { "days",
                           { { "type", "integer" },
                             { "description", "Number of days to forecast (1-10)" },
                             { "minimum", 1 },
                             { "maximum", 10 } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -114,9 +116,9 @@ static json create_tools() {
                         { "default", 5 } } },
                     { "category",
                       { { "type", "string" },
-                        { "enum", { "api", "troubleshooting", "billing", "general" } },
+                        { "enum", json::array({ "api", "troubleshooting", "billing", "general" }) },
                         { "description", "Filter search by specific category." } } } } },
-                { "required", { "query", "category" } },
+                { "required", json::array({ "query", "category" }) },
                 { "additionalProperties", false } } },
             { "strict", true } } }
     };
@@ -341,7 +343,7 @@ static void test_example_native(testing & t) {
                 { { "invoice_number", { { "type", "string" } } },
                   { "amount", { { "type", "number" } } },
                   { "due_date", { { "type", "string" } } } } },
-              { "required", { "invoice_number", "amount", "due_date" } } },
+              { "required", json::array({ "invoice_number", "amount", "due_date" }) } },
          /* .parallel_tool_calls =  */ false,
          /* .generation_prompt =    */ "<think>",
          /* .input =                */
@@ -358,11 +360,6 @@ static void test_example_native(testing & t) {
             auto parser  = build_parser(tc);
             auto lazy    = !tc.tools.empty() && tc.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
             auto grammar = build_grammar([&](const common_grammar_builder & builder) {
-                for (const auto & def : tc.tools) {
-                    auto function   = def.at("function");
-                    auto parameters = function.at("parameters");
-                    builder.resolve_refs(parameters);
-                };
                 parser.build_grammar(builder, lazy);
             });
 
@@ -406,7 +403,7 @@ static void test_example_qwen3_coder(testing & t) {
 
             std::set<std::string> required_properties;
             if (function.contains("required")) {
-                function.at("required").get_to(required_properties);
+                required_properties = function.at("required").get<std::set<std::string>>();
             }
 
             std::vector<common_peg_parser> arg_parsers;
@@ -440,11 +437,6 @@ static void test_example_qwen3_coder(testing & t) {
     });
 
     auto grammar = build_grammar([&](const common_grammar_builder & builder) {
-        for (const auto & def : tools) {
-            auto function   = def.at("function");
-            auto parameters = function.at("parameters");
-            builder.resolve_refs(parameters);
-        };
         parser.build_grammar(builder);
     });
 
@@ -513,11 +505,6 @@ static void test_example_qwen3_non_coder(testing & t) {
     });
 
     auto grammar = build_grammar([&](const common_grammar_builder & builder) {
-        for (const auto & def : tools) {
-            auto function   = def.at("function");
-            auto parameters = function.at("parameters");
-            builder.resolve_refs(parameters);
-        };
         parser.build_grammar(builder);
     });
 
@@ -661,8 +648,8 @@ void test_command7_parser_compare(testing & t) {
         "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
         "to attractions.";
 
-    std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {
-        { "call_0", "plan_trip", nlohmann::json::parse(R"({
+    std::vector<std::tuple<std::string, std::string, common_json>> tool_calls = {
+        { "call_0", "plan_trip", common_json::parse(R"({
             "destination": "Japan",
             "duration": 14,
             "budget": 4000,
@@ -686,16 +673,16 @@ void test_command7_parser_compare(testing & t) {
     if (!tool_calls.empty()) {
         tokens.emplace_back("<|START_ACTION|>");
 
-        auto json = nlohmann::json::array();
+        auto json = common_json::array();
         for (const auto & tc : tool_calls) {
-            auto tc_json            = nlohmann::json::object();
+            auto tc_json            = common_json::object();
             tc_json["tool_call_id"] = std::get<0>(tc);
             tc_json["tool_name"]    = std::get<1>(tc);
             tc_json["parameters"]   = std::get<2>(tc);
             json.push_back(tc_json);
         }
 
-        auto tokenized = simple_tokenize(json.dump(-1, ' ', true));
+        auto tokenized = simple_tokenize(json.dump(-1));
         tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
 
         tokens.emplace_back("<|END_ACTION|>");
@@ -737,7 +724,7 @@ static void test_prefix_tool_names(testing & t) {
                       {
                           { "arg1", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };
@@ -757,7 +744,7 @@ static void test_prefix_tool_names(testing & t) {
                           { "arg1", { { "type", "integer" } } },
                           { "arg2", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };
@@ -1082,5 +1069,38 @@ static void test_permute(testing & t) {
             root ::= "a" "b" "c" "d" "e" "f" "g"
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf_of(parser));
+    });
+}
+
+static void test_invalid_utf8(testing & t) {
+    auto parser = build_chat_peg_parser([](common_chat_peg_builder & p) {
+        return "<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.content(p.rest()) + p.end();
+    });
+
+    t.test("replaced in reasoning and content", [&](testing & t) {
+        std::string input("<think>plan\xFF\xFE</think>caf\xC3\xA9 \x80 done");
+        common_peg_parse_context ctx(input);
+        auto result = parser.parse(ctx);
+        t.assert_true("success", result.success());
+
+        common_chat_msg msg;
+        auto mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        t.assert_equal("reasoning", "plan\xEF\xBF\xBD\xEF\xBF\xBD", msg.reasoning_content);
+        t.assert_equal("content", "caf\xC3\xA9 \xEF\xBF\xBD done", msg.content);
+    });
+
+    t.test("partial input keeps trailing incomplete sequence out", [&](testing & t) {
+        std::string input("<think>x</think>a\x80" "b\xE4\xB8");
+        common_peg_parse_context ctx(input, COMMON_PEG_PARSE_FLAG_LENIENT);
+        auto result = parser.parse(ctx);
+        t.assert_true("not fail", !result.fail());
+
+        common_chat_msg msg;
+        auto mapper = common_chat_peg_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        t.assert_equal("content", "a\xEF\xBF\xBD" "b", msg.content);
     });
 }

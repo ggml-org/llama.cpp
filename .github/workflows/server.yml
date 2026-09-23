@@ -80,11 +80,19 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: server-ubuntu-24.04-arm
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: server-ubuntu-24.04-arm
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -92,6 +100,18 @@ jobs:
           cmake -B build \
             -DGGML_SCHED_NO_REALLOC=ON
           cmake --build build --config Release -j $(nproc) --target llama-server
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: server-ubuntu-24.04-arm
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
       - name: Python setup
         id: setup_python
@@ -104,21 +124,21 @@ jobs:
         id: server_integration_tests
         run: |
           cd tools/server/tests
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          SLOW_TESTS=1 pytest -v -x
+          SLOW_TESTS=1 ./tests.sh
 
       - name: Tests (Backend sampling)
         id: server_integration_tests_backend_sampling
         run: |
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Slow tests (Backend sampling)
         id: server_integration_tests_slow_backend_sampling
@@ -126,7 +146,7 @@ jobs:
         run: |
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          SLOW_TESTS=1 pytest -v -x
+          SLOW_TESTS=1 ./tests.sh
 
   windows:
     runs-on: windows-2025
@@ -140,7 +160,7 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
           key: server-windows-2025-x64
           evict-old-files: 1d
@@ -167,15 +187,27 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x -m "not slow"
+          export PYTHONIOENCODING=":replace"
+          ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:SLOW_TESTS = "1"
-          pytest -v -x
+          export SLOW_TESTS="1"
+          ./tests.sh
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-windows-2025-x64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

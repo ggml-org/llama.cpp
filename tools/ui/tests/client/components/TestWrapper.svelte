@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import Page from '../../../src/routes/(chat)/+page.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 </script>
 
 <!--

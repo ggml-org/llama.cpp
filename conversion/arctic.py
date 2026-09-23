@@ -16,6 +16,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("ArcticForCausalLM")
+@ModelBase.example("Snowflake/snowflake-arctic-instruct")
 class ArcticModel(TextModel):
     model_arch = gguf.MODEL_ARCH.ARCTIC
 

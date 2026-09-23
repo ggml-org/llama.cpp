@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { ConversationSelection } from '$lib/components/app';
+	import * as Dialog from '$lib/components/ui/dialog';
 
 	interface Props {
 		conversations: DatabaseConversation[];
@@ -58,8 +58,8 @@
 
 			<ConversationSelection
 				bind:this={conversationSelectionRef}
-				isOpen={open}
 				{conversations}
+				isOpen={open}
 				{messageCountMap}
 				{mode}
 				{onCancel}

@@ -1,5 +1,6 @@
 #include "common.h"
 #include "log.h"
+#include "json.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -36,6 +37,16 @@ void common_log_set_verbosity_thold(int verbosity) {
     common_log_verbosity_thold = verbosity;
 }
 
+static bool common_log_jsonl = false;
+
+bool common_log_get_jsonl(void) {
+    return common_log_jsonl;
+}
+
+void common_log_set_jsonl(bool jsonl) {
+    common_log_jsonl = jsonl;
+}
+
 static int64_t t_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
@@ -66,6 +77,17 @@ static const char* g_col[] = {
     "",
 };
 
+static const char * level_str(enum ggml_log_level level) {
+    switch (level) {
+        case GGML_LOG_LEVEL_DEBUG: return "debug";
+        case GGML_LOG_LEVEL_INFO:  return "info";
+        case GGML_LOG_LEVEL_WARN:  return "warn";
+        case GGML_LOG_LEVEL_ERROR: return "error";
+        case GGML_LOG_LEVEL_CONT:  return "cont";
+        default:                   return "none";
+    }
+}
+
 struct common_log_entry {
     enum ggml_log_level level {GGML_LOG_LEVEL_INFO};
 
@@ -74,6 +96,8 @@ struct common_log_entry {
     int64_t timestamp { 0 };
     bool is_end       { false }; // signals the worker thread to stop
     bool prefix       { false };
+    bool jsonl        { false };
+    bool is_json      { false }; // msg already holds a serialized JSON object
 
     common_log_entry(size_t size = 256) : msg(size) { }
 
@@ -88,9 +112,27 @@ struct common_log_entry {
 
             fcur = stdout;
 
-            if (level != GGML_LOG_LEVEL_NONE) {
+            if (level != GGML_LOG_LEVEL_NONE && !jsonl) {
                 fcur = stderr;
             }
+        }
+
+        if (jsonl) {
+            if (is_json) {
+                fprintf(fcur, "%s\n", msg.data());
+                fflush(fcur);
+                return;
+            }
+
+            common_json obj = {
+                {"type",  "log"},
+                {"time",  timestamp},
+                {"level", level_str(level)},
+                {"msg",   msg.data()},
+            };
+            fprintf(fcur, "%s\n", obj.dump_safe().c_str());
+            fflush(fcur);
+            return;
         }
 
         if (level != GGML_LOG_LEVEL_NONE && level != GGML_LOG_LEVEL_CONT && prefix) {
@@ -246,10 +288,48 @@ public:
         entry.is_end    = false;
         entry.level     = level;
         entry.prefix    = prefix;
+        entry.jsonl     = common_log_jsonl;
+        entry.is_json   = false;
         entry.timestamp = 0;
         if (timestamps) {
             entry.timestamp = t_us() - t_start;
         }
+
+        tail = (tail + 1) % queue.size();
+        cv_new.notify_one();
+    }
+
+    void add_json(const char * type, const common_json & obj) {
+        const common_json full = {
+            {"type", type},
+            {"data", obj},
+        };
+
+        const std::string text = full.dump_safe();
+
+        std::unique_lock<std::mutex> lock(mtx);
+
+        // block if the queue is full
+        cv_full.wait(lock, [this]() { return !running || !is_full(); });
+
+        if (!running) {
+            // discard messages while the worker thread is paused
+            return;
+        }
+
+        auto & entry = queue[tail];
+
+        if (entry.msg.size() < text.size() + 1) {
+            entry.msg.resize(text.size() + 1);
+        }
+        memcpy(entry.msg.data(), text.c_str(), text.size() + 1);
+
+        entry.is_end    = false;
+        entry.level     = GGML_LOG_LEVEL_NONE;
+        entry.prefix    = false;
+        entry.jsonl     = true;
+        entry.is_json   = true;
+        entry.timestamp = 0;
 
         tail = (tail + 1) % queue.size();
         cv_new.notify_one();
@@ -406,6 +486,14 @@ void common_log_add(struct common_log * log, enum ggml_log_level level, const ch
     va_end(args);
 }
 
+void common_log_add_json(struct common_log * log, const char * type, const common_json & obj) {
+    if (!common_log_jsonl) {
+        return;
+    }
+
+    log->add_json(type, obj);
+}
+
 void common_log_set_file(struct common_log * log, const char * file) {
     log->set_file(file);
 }
@@ -438,7 +526,7 @@ void common_log_flush(struct common_log * log) {
     log->resume();
 }
 
-static int common_get_verbosity(enum ggml_log_level level) {
+int common_log_get_verbosity(enum ggml_log_level level) {
     switch (level) {
         case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
         case GGML_LOG_LEVEL_INFO:  return LOG_LEVEL_TRACE;
@@ -452,7 +540,7 @@ static int common_get_verbosity(enum ggml_log_level level) {
 }
 
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * /*user_data*/) {
-    auto verbosity = common_get_verbosity(level);
+    auto verbosity = common_log_get_verbosity(level);
     if (verbosity <= common_log_verbosity_thold) {
         common_log_add(common_log_main(), level, "%s", text);
     }

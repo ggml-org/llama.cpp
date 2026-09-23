@@ -8,7 +8,7 @@ on:
 jobs:
   update:
     name: Update Winget Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # previously ubuntu-latest
     if: github.repository_owner == 'ggml-org'
 
     steps:
@@ -19,6 +19,8 @@ jobs:
         run: |
           cargo binstall komac@2.16.0 -y
 
+      # TODO: This should later be updated to publish releases instead of
+      # development release builds.
       - name: Find latest release
         id: find_latest_release
         uses: actions/github-script@v8

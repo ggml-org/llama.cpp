@@ -14,8 +14,6 @@ namespace ggml {
 
 std::string getCurrentTime();
 
-void dump_ov_model(std::shared_ptr<ov::Model> model);
-
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs);
 
 int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb);
@@ -62,7 +60,7 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
                                                            bool imrope = false,
                                                            bool stateful = false);
 
-ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len = 0);
+ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len = 0, int axis = -1);
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 

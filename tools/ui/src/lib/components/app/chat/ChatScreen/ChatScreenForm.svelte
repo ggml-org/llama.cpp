@@ -2,9 +2,9 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
-	import { isMobile } from '$lib/stores/viewport.svelte';
-	import { onMount } from 'svelte';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
+	import { deviceStore } from '$lib/stores';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -40,16 +40,19 @@
 		if (!formWrapperEl) return;
 
 		const formEl = formWrapperEl.querySelector('form') as HTMLElement | null;
+
 		if (!formEl) return;
 
 		const updateHeight = () => {
 			const height = Math.round(formEl.getBoundingClientRect().height);
+
 			document.documentElement.style.setProperty('--chat-form-height', `${height}px`);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(formEl);
 
 		return () => {
@@ -64,11 +67,11 @@
 
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
-		getMessage: () => message,
 		getFiles: () => uploadedFiles,
-		setMessage: (m) => (message = m),
+		getInitialMessage: () => initialMessage,
+		getMessage: () => message,
 		setFiles: (f) => (uploadedFiles = f),
-		getInitialMessage: () => initialMessage
+		setMessage: (m) => (message = m)
 	});
 
 	function handleFilesAdd(files: File[]) {
@@ -99,7 +102,7 @@
 	}
 
 	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+		onSystemPromptAdd?.({ files: uploadedFiles, message });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
@@ -110,18 +113,20 @@
 	// message editor opened just before a navigation)
 	function focusFormUnlessCaptured() {
 		const active = document.activeElement;
+
 		if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) return;
+
 		chatFormRef?.focus();
 	}
 
 	onMount(() => {
-		if (!isMobile.current) {
+		if (!deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null && !isMobile.current) {
+		if (navigation?.from != null && !deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
@@ -142,15 +147,14 @@
 	});
 </script>
 
-<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
+<div bind:this={formWrapperEl} class="chat-screen-form-wrapper">
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
 		bind:this={chatFormRef}
-		bind:value={message}
 		bind:uploadedFiles
+		bind:value={message}
+		class="mx-auto max-w-3xl {className}"
 		{disabled}
 		{isLoading}
-		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}
