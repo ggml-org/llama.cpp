@@ -19,13 +19,13 @@
 		Upload
 	} from '@lucide/svelte';
 	import {
-		BackendIcon,
 		DropdownMenuActions,
 		Logo,
 		ModelAvatar,
 		ModelContext,
 		ModelId,
-		ModelLoadControl
+		ModelLoadControl,
+		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
@@ -62,9 +62,8 @@
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
-	const collapsedSections = new SvelteSet<string>(['hidden']);
-	/** Families start collapsed, this tracks the ones the user opened. */
-	const expandedFamilies = new SvelteSet<string>();
+	/** Families start open, this tracks the ones folded away. */
+	const collapsedFamilies = new SvelteSet<string>();
 	/** Sections that list their models straight, without folding them into families. */
 	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>(['favorites', 'loaded']);
 	let sections = $derived(
@@ -80,19 +79,11 @@
 		deleteOpen = true;
 	}
 
-	function toggleSection(key: string): void {
-		if (collapsedSections.has(key)) {
-			collapsedSections.delete(key);
-		} else {
-			collapsedSections.add(key);
-		}
-	}
-
 	function toggleFamily(key: string): void {
-		if (expandedFamilies.has(key)) {
-			expandedFamilies.delete(key);
+		if (collapsedFamilies.has(key)) {
+			collapsedFamilies.delete(key);
 		} else {
-			expandedFamilies.add(key);
+			collapsedFamilies.add(key);
 		}
 	}
 
@@ -352,54 +343,8 @@
 	{/if}
 {/snippet}
 
-{#snippet sectionRow(group: ModelsTableGroup)}
-	{@const isExpanded = !collapsedSections.has(group.key)}
-
-	<div class="px-2">
-		<div
-			class="{rowGrid} cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
-			onclick={() => toggleSection(group.key)}
-			onkeydown={(event) => event.key === 'Enter' && toggleSection(group.key)}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex min-w-0 items-center gap-2">
-				{#if group.kind === 'provider'}
-					<BackendIcon backend={getBackend(group.backendId ?? undefined)} class="h-3.5 w-3.5" />
-				{:else if group.kind === 'favorites'}
-					<Heart class="h-3.5 w-3.5 shrink-0" />
-				{:else if group.kind === 'loaded'}
-					<Power class="h-3.5 w-3.5 shrink-0" />
-				{:else if group.kind === 'hidden'}
-					<EyeOff class="h-3.5 w-3.5 shrink-0" />
-				{:else if group.kind === 'local'}
-					<Logo class="shrink-0" style="--size: 0.875rem" />
-				{/if}
-
-				<span class="truncate text-sm font-medium">{group.label}</span>
-
-				<span class="text-xs text-muted-foreground">{group.items.length}</span>
-			</span>
-
-			<span></span>
-
-			<span></span>
-
-			<span></span>
-
-			<span class="flex justify-center">
-				{#if isExpanded}
-					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
-				{:else}
-					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
-				{/if}
-			</span>
-		</div>
-	</div>
-{/snippet}
-
-{#snippet familyRow(family: ModelFamilyGroup, indent = 0)}
-	{@const isExpanded = expandedFamilies.has(family.key)}
+{#snippet familyRow(family: ModelFamilyGroup)}
+	{@const isExpanded = !collapsedFamilies.has(family.key)}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div class="px-2">
@@ -410,7 +355,7 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+			<span class="flex min-w-0 items-center gap-3">
 				<ModelAvatar
 					option={family.entries[0].base}
 					showBaseModelAvatar
@@ -418,11 +363,9 @@
 					size="size-7"
 				/>
 
-				<span class="min-w-0">
-					<span class="block truncate text-sm font-medium">{family.label}</span>
+				<span class="truncate text-sm font-medium">{family.label}</span>
 
-					<span class="block text-xs text-muted-foreground">{countLabel}</span>
-				</span>
+				<span class="text-sm text-muted-foreground">{countLabel}</span>
 			</span>
 
 			<span></span>
@@ -473,25 +416,42 @@
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
-				{@render sectionRow(group)}
+				{#snippet groupIcon()}
+					{#if group.kind === 'favorites'}
+						<Heart class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'loaded'}
+						<Power class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'hidden'}
+						<EyeOff class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === 'local'}
+						<Logo class="shrink-0" style="--size: 0.875rem" />
+					{/if}
+				{/snippet}
 
-				{#if !collapsedSections.has(group.key)}
+				<ModelsSection
+					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
+					count={group.items.length}
+					icon={group.kind === 'provider' ? undefined : groupIcon}
+					label={group.label}
+					open={group.kind !== 'hidden'}
+					sticky
+				>
 					{#if group.flat}
 						{#each group.items as entry (entry.key)}
-							{@render entryTree(entry, 40)}
+							{@render entryTree(entry, 16)}
 						{/each}
 					{/if}
 
 					{#each group.families as family (family.key)}
-						{@render familyRow(family, 20)}
+						{@render familyRow(family)}
 
-						{#if expandedFamilies.has(family.key)}
+						{#if !collapsedFamilies.has(family.key)}
 							{#each family.entries as entry (entry.key)}
-								{@render entryTree(entry, 40)}
+								{@render entryTree(entry, 16)}
 							{/each}
 						{/if}
 					{/each}
-				{/if}
+				</ModelsSection>
 			{/if}
 		{/each}
 
