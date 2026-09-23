@@ -1845,6 +1845,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
     if (!is_pair(gate, up, routed_idx) || !is_pair(shared_gate, shared_up, shared_idx) ||
             !ggml_cuda_should_fuse_mul_mat(up, gate, routed) ||
             !ggml_cuda_should_fuse_mul_mat(shared_up, shared_gate, shared) ||
+            !up->src[0]->buffer ||
             !ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
         return false;
     }
