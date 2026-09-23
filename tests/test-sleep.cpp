@@ -3,6 +3,8 @@
 //   - the op does not return early: a chain of n sleeps must take at least n*us
 // Only a lower bound is asserted for the duration. A busy-wait cannot finish early, so that bound is
 // deterministic, whereas an upper bound would be flaky on a loaded machine.
+// Known limitation: Vulkan does not specify the tick rate of the shader clock, see ggml_vk_sleep. A driver
+// whose clock runs slower than assumed could undershoot the request and fail this bound.
 
 #include "ggml.h"
 #include "ggml-alloc.h"
