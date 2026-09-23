@@ -1117,18 +1117,18 @@ size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id) {
 
 // utils
 
-ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
-    GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
-
-    int n_tensors = 0;
+static struct ggml_tensor ** ggml_backend_alloc_ctx_tensors_from_buft_collect(
+        struct ggml_context * ctx, int * n_tensors) {
+    int n = 0;
     for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        n_tensors++;
+        n++;
     }
-    if (n_tensors == 0) {
+    *n_tensors = n;
+    if (n == 0) {
         return NULL;
     }
 
-    struct ggml_tensor ** tensors = (struct ggml_tensor **) malloc(n_tensors * sizeof(struct ggml_tensor *));
+    struct ggml_tensor ** tensors = (struct ggml_tensor **) malloc(n * sizeof(struct ggml_tensor *));
     if (tensors == NULL) {
         return NULL;
     }
@@ -1136,37 +1136,34 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
     for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
         tensors[i++] = t;
     }
+    return tensors;
+}
+
+ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
+    GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
+
+    int n_tensors = 0;
+    struct ggml_tensor ** tensors = ggml_backend_alloc_ctx_tensors_from_buft_collect(ctx, &n_tensors);
+    if (tensors == NULL) {
+        return NULL;
+    }
 
     ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer_n(buft, tensors, n_tensors);
     free(tensors);
     return buffer;
 }
 
-// TODO [TAG_ALLOC_SHARED_BUFFER_SPLIT]: reuse shared buffer-splitting logic from ggml_backend_buft_alloc_buffer_n_default
 size_t ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(ggml_get_no_alloc(ctx) == true);
 
-    size_t alignment = ggml_backend_buft_get_alignment(buft);
-    size_t max_size = ggml_backend_buft_get_max_size(buft);
-
-    size_t nbytes_total = 0;
-    size_t cur_buf_size = 0;
-
-    for (struct ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-        size_t this_size = 0;
-        if (t->data == NULL && t->view_src == NULL) {
-            this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
-        }
-
-        if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
-            nbytes_total += cur_buf_size;
-            cur_buf_size = this_size;
-        } else {
-            cur_buf_size += this_size;
-        }
+    int n_tensors = 0;
+    struct ggml_tensor ** tensors = ggml_backend_alloc_ctx_tensors_from_buft_collect(ctx, &n_tensors);
+    if (tensors == NULL) {
+        return 0;
     }
-    nbytes_total += cur_buf_size;
 
+    size_t nbytes_total = ggml_backend_buft_get_alloc_size_n(buft, tensors, n_tensors);
+    free(tensors);
     return nbytes_total;
 }
 
