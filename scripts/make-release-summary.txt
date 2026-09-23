@@ -5,7 +5,11 @@ Write a summary of the change log in a few sections:
 ```
 ## Overview
 
-[an overview using 1 to 3 sentences (no line breaks)]
+[a single paragraph overview of all changes]
+
+### Highlights (if applicable)
+
+[go through all Pull Requests and write short summaries of those that have the "highlight" label]
 
 ### API changes (if applicable)
 
@@ -39,9 +43,11 @@ Write a summary of the change log in a few sections:
 
 Guidelines:
 
-- All bullet point in the summary should be concise and rarely exceed a single line of 120 characters
+- All bullet point in the summary should be concise and rarely exceed a single line of 120 characters (excluding PR links)
 - Avoid repeating `ggml`-specific changes - these should already be covered by the `ggml` release links
 - Provide PR link for each bullet point where possible
 - Don't add bullet point to state that there are no API changes in some module
+- Combine related topics (a full list of commits will be appended independently at end of the summary)
+- Skip minor-impact notes (e.g. "fix compile warnings", "refactored code", ...)
 
-Output just the summary in a markdown block, without any extra text.
+Output just the summary in a markdown block, without any extra text. Save it to a local text file called `release-notes-vX.Y.Z.txt`.

@@ -428,15 +428,16 @@ static inline bool dma_queue_push(dma_queue *q, dma_data ddata, size_t dst_strid
 
 #define DMA_CACHE_MAX_SIZE 256U
 
+// Fully assoc LRU cache
 typedef struct {
     uint8_t *base;
     uint32_t line_size;
     uint32_t capacity;
     dma_addr_t src[DMA_CACHE_MAX_SIZE];
     uint16_t age[DMA_CACHE_MAX_SIZE];
-} dma_cache;
+} dma_cache_fa;
 
-static inline void dma_cache_init(dma_cache *c, uint8_t *base, uint32_t line_size, uint32_t capacity)
+static inline void dma_cache_fa_init(dma_cache_fa *c, uint8_t *base, uint32_t line_size, uint32_t capacity)
 {
     c->capacity  = (capacity > DMA_CACHE_MAX_SIZE) ? DMA_CACHE_MAX_SIZE : capacity;
     c->base      = base;
@@ -448,7 +449,7 @@ static inline void dma_cache_init(dma_cache *c, uint8_t *base, uint32_t line_siz
     }
 }
 
-static inline bool dma_cache_push(dma_queue *q, dma_cache *c, dma_addr_t src_addr, uint32_t dst_stride, uint32_t src_stride, uint32_t row_size, uint32_t nrows)
+static inline bool dma_cache_fa_push(dma_queue *q, dma_cache_fa *c, dma_addr_t src_addr, uint32_t dst_stride, uint32_t src_stride, uint32_t row_size, uint32_t nrows)
 {
     uint32_t o_idx = 0;
     uint16_t o_age = 0;
@@ -471,6 +472,40 @@ static inline bool dma_cache_push(dma_queue *q, dma_cache *c, dma_addr_t src_add
     }
 
     return dma_queue_push_single_1d(q, dma_make_data(dst, src_addr), 0);
+}
+
+// Direct mapped cache
+typedef struct {
+    uint8_t *base;
+    uint32_t line_size;
+    uint32_t capacity;
+    uint32_t idx_mask;
+    dma_addr_t src[DMA_CACHE_MAX_SIZE];
+} dma_cache_dm;
+
+static inline void dma_cache_dm_init(dma_cache_dm *c, uint8_t *base, uint32_t line_size, uint32_t capacity)
+{
+    c->capacity  = (capacity > DMA_CACHE_MAX_SIZE) ? DMA_CACHE_MAX_SIZE : capacity;
+    c->idx_mask  = c->capacity - 1;
+    c->base      = base;
+    c->line_size = line_size;
+
+    for (unsigned i=0; i < c->capacity; i++) {
+        c->src[i] = 0;
+    }
+}
+
+static inline bool dma_cache_dm_push(dma_queue *q, dma_cache_dm *c, uint32_t slot, dma_addr_t src_addr, uint32_t dst_stride, uint32_t src_stride, uint32_t row_size, uint32_t nrows)
+{
+    const uint32_t i = slot & c->idx_mask;
+    uint8_t * dst = c->base + (i * c->line_size);
+
+    if (c->src[i] == src_addr) {
+        return dma_queue_push_single_1d(q, dma_make_data(dst, src_addr), 0); // dummy dma
+    }
+
+    c->src[i] = src_addr;
+    return dma_queue_push(q, dma_make_data(dst, src_addr), dst_stride, src_stride, row_size, nrows);
 }
 
 #ifdef __cplusplus

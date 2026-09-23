@@ -482,14 +482,8 @@ value for_statement::execute_impl(context & ctx) const {
     const jinja::select_expression * select_expr = cast_stmt<select_expression>(iterable);
     statement_ptr test_expr_nullptr;
 
-    const statement_ptr & iter_expr = [&]() -> const statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->lhs : iterable;
-    }();
-    const statement_ptr & test_expr = [&]() -> const statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->test : test_expr_nullptr;
-    }();
+    const statement_ptr & iter_expr = select_expr ? select_expr->lhs : iterable;
+    const statement_ptr & test_expr = select_expr ? select_expr->test : test_expr_nullptr;
 
     JJ_DEBUG("Executing for statement, iterable type: %s", iter_expr->type().c_str());
 
