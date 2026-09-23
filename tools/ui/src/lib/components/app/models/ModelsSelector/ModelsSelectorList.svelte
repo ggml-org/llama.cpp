@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { Heart, Power } from '@lucide/svelte';
-	import { ModelAvatar, ModelsSelectorOption } from '$lib/components/app';
+	import { GroupedList, ModelAvatar, ModelsSelectorOption } from '$lib/components/app';
 	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
@@ -101,12 +101,8 @@
 	}
 </script>
 
-{#snippet familyRow(family: ModelFamilyGroup<ModelItem>)}
-	<!-- a sub heading of the section, sticky right below the section heading -->
-	<div
-		class="sticky z-10 flex items-center gap-2 bg-popover px-2 py-1.5 select-none"
-		style="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem)"
-	>
+{#snippet familyHeading({ group: family }: { group: ModelFamilyGroup<ModelItem> })}
+	<div class="flex items-center gap-2 px-2 py-1.5 select-none">
 		<ModelAvatar
 			option={family.entries[0].option}
 			showBaseModelAvatar
@@ -124,19 +120,25 @@
 	</div>
 {/snippet}
 
-{#snippet familyRows(items: ModelItem[], prefix: string)}
-	{#if settingsStore.config.groupModelsByFamily}
-		{#each groupModelFamilies(items, (item) => item.option.model) as family (`${prefix}-${family.key}`)}
-			{@render familyRow(family)}
+{#snippet listItem({ depth, entry }: { depth: number; entry: ModelItem })}
+	<div style="padding-left: {depth * 16}px">{@render render(entry, !showOrgName)}</div>
+{/snippet}
 
-			{#each family.entries as item (`family-${prefix}-${item.option.id}`)}
-				<div class="pl-4">{@render render(item, !showOrgName)}</div>
-			{/each}
-		{/each}
+{#snippet listRows(items: ModelItem[], prefix: string)}
+	{#if settingsStore.config.groupModelsByFamily}
+		<GroupedList
+			group={familyHeading}
+			groups={groupModelFamilies(items, (row) => row.option.model).map((family) => ({
+				entries: family.entries,
+				group: family,
+				key: `${prefix}-${family.key}`
+			}))}
+			item={listItem}
+			keyOf={(row) => `${prefix}-${row.option.id}`}
+			stickyStyle="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem)"
+		/>
 	{:else}
-		{#each items as item (`plain-${prefix}-${item.option.id}`)}
-			{@render render(item, !showOrgName)}
-		{/each}
+		<GroupedList item={listItem} {items} keyOf={(row) => `${prefix}-${row.option.id}`} />
 	{/if}
 {/snippet}
 
@@ -197,7 +199,7 @@
 		{@render render(item, !showOrgName)}
 	{/each}
 
-	{@render familyRows(
+	{@render listRows(
 		localGroups.available.flatMap((group) => group.items),
 		'local'
 	)}
@@ -229,7 +231,7 @@
 		sticky
 	>
 		{#if provider.items.length > 0}
-			{@render familyRows(provider.items, provider.backendId)}
+			{@render listRows(provider.items, provider.backendId)}
 
 			{#if onProviderOpen && provider.matched > provider.items.length}
 				<!-- same box as a model row, it opens the provider's full list -->

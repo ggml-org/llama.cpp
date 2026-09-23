@@ -12,8 +12,8 @@
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
-		/** Heading of one group, wrapping its entries. */
-		group: Snippet<
+		/** Heading of one group. Omit it for a list whose rows need no heading. */
+		group?: Snippet<
 			[{ depth: number; expanded: boolean; group: G; key: string; toggle: () => void }]
 		>;
 		/** Groups to render. Omit to render `items` as a flat list. */
@@ -105,15 +105,17 @@
 	{#each windowed as entry (entry.key)}
 		{@const expanded = !collapsed.has(entry.key)}
 
-		<div class="sticky z-10 bg-popover" style={stickyStyle}>
-			{@render group({
-				depth: 0,
-				expanded,
-				group: entry.group,
-				key: entry.key,
-				toggle: () => toggleGroup(entry.key)
-			})}
-		</div>
+		{#if group}
+			<div class="sticky z-10 bg-popover" style={stickyStyle}>
+				{@render group({
+					depth: 0,
+					expanded,
+					group: entry.group,
+					key: entry.key,
+					toggle: () => toggleGroup(entry.key)
+				})}
+			</div>
+		{/if}
 
 		{#if expanded}
 			{#each entry.rows as row (keyOf(row))}
