@@ -281,18 +281,18 @@ static bool is_char_element(llama_grammar_element elem) {
 static void print_rule_binary(FILE * file, const llama_grammar_rule & rule) {
     for (auto elem : rule) {
         switch (elem.type) {
-            case LLAMA_GRETYPE_END:            fprintf(file, "END");            break;
-            case LLAMA_GRETYPE_ALT:            fprintf(file, "ALT");            break;
-            case LLAMA_GRETYPE_RULE_REF:       fprintf(file, "RULE_REF");       break;
-            case LLAMA_GRETYPE_CHAR:           fprintf(file, "CHAR");           break;
-            case LLAMA_GRETYPE_CHAR_NOT:       fprintf(file, "CHAR_NOT");       break;
-            case LLAMA_GRETYPE_CHAR_RNG_UPPER: fprintf(file, "CHAR_RNG_UPPER"); break;
-            case LLAMA_GRETYPE_CHAR_ALT:       fprintf(file, "CHAR_ALT");       break;
-            case LLAMA_GRETYPE_CHAR_ANY:       fprintf(file, "CHAR_ANY");       break;
-            case LLAMA_GRETYPE_TOKEN:          fprintf(file, "TOKEN");          break;
-            case LLAMA_GRETYPE_TOKEN_NOT:      fprintf(file, "TOKEN_NOT");      break;
+            case LLAMA_GRETYPE_END:             fprintf(file, "END");             break;
+            case LLAMA_GRETYPE_ALT:             fprintf(file, "ALT");             break;
+            case LLAMA_GRETYPE_RULE_REF:        fprintf(file, "RULE_REF");        break;
+            case LLAMA_GRETYPE_CHAR:            fprintf(file, "CHAR");            break;
+            case LLAMA_GRETYPE_CHAR_NOT:        fprintf(file, "CHAR_NOT");        break;
+            case LLAMA_GRETYPE_CHAR_RNG_UPPER:  fprintf(file, "CHAR_RNG_UPPER");  break;
+            case LLAMA_GRETYPE_CHAR_ALT:        fprintf(file, "CHAR_ALT");        break;
+            case LLAMA_GRETYPE_CHAR_ANY:        fprintf(file, "CHAR_ANY");        break;
+            case LLAMA_GRETYPE_TOKEN:           fprintf(file, "TOKEN");           break;
+            case LLAMA_GRETYPE_TOKEN_NOT:       fprintf(file, "TOKEN_NOT");       break;
             case LLAMA_GRETYPE_TOKEN_RNG_UPPER: fprintf(file, "TOKEN_RNG_UPPER"); break;
-            case LLAMA_GRETYPE_TOKEN_ALT:      fprintf(file, "TOKEN_ALT");      break;
+            case LLAMA_GRETYPE_TOKEN_ALT:       fprintf(file, "TOKEN_ALT");       break;
         }
         switch (elem.type) {
             case LLAMA_GRETYPE_END:
