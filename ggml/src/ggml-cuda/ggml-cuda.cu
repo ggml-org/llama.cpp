@@ -3470,6 +3470,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         ggml_cuda_topk_moe_args args;
         const bool              can_fuse = ggml_cuda_topk_moe_fusion(cgraph, i, args);
         std::vector<ggml_op>    ops;
+        ops.reserve(13);  // max ops; avoids gcc -Wstringop-overflow false positive
 
         if (can_fuse) {
             const ggml_tensor * logits  = node->src[0];
@@ -4539,6 +4540,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 ggml_cuda_topk_moe_args args;
                 const bool              can_fuse = ggml_cuda_topk_moe_fusion(cgraph, i, args);
                 std::vector<ggml_op>    ops;
+                ops.reserve(13);  // max ops; avoids gcc -Wstringop-overflow false positive
 
                 const ggml_tensor * node = cgraph->nodes[i];
 
