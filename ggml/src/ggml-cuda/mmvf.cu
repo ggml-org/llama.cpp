@@ -356,23 +356,7 @@ static __global__ void mul_mat_vec_f(
             if (use_gate_bias) {
                 gate_value += gate_bias[tid*stride_col_dst + row];
             }
-            switch (glu_op) {
-                case GGML_GLU_OP_SWIGLU:
-                    value *= ggml_cuda_op_silu_single(gate_value);
-                    break;
-                case GGML_GLU_OP_GEGLU:
-                    value *= ggml_cuda_op_gelu_single(gate_value);
-                    break;
-                case GGML_GLU_OP_SWIGLU_OAI: {
-                    value = ggml_cuda_op_swiglu_oai_single(gate_value, value);
-                    break;
-                }
-                case GGML_GLU_OP_SWIGLU_CLAMP:
-                    value = ggml_cuda_op_swiglu_clamp_single(gate_value, value, glu_limit);
-                    break;
-                default:
-                    break;
-            }
+            value = ggml_cuda_op_glu_single(glu_op, gate_value, value, glu_limit);
         }
     }
 

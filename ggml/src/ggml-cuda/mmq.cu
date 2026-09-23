@@ -6,14 +6,6 @@
 #include <cstdint>
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-    if (args.x_gate) {
-        GGML_ASSERT(args.type_x == GGML_TYPE_Q4_K);
-        mul_mat_q_gate_up_swiglu_case<GGML_TYPE_Q4_K>(ctx, args, stream);
-        return;
-    }
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
     switch (args.type_x) {
         case GGML_TYPE_Q1_0:
             mul_mat_q_case<GGML_TYPE_Q1_0>(ctx, args, stream);
@@ -90,17 +82,18 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-// gate != nullptr selects the fused dense Q4_K gate+up+SwiGLU kernel: src0 is the up weight, dst the SwiGLU output.
-static void ggml_cuda_mul_mat_q_impl(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * ids, ggml_tensor * dst, const ggml_tensor * gate) {
+void ggml_cuda_mul_mat_q(
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
+    // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
+    const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
     if (gate) {
         GGML_ASSERT(ids == nullptr);
-        GGML_ASSERT(src0->type == GGML_TYPE_Q4_K && gate->type == GGML_TYPE_Q4_K);
+        GGML_ASSERT(gate->type == src0->type);
         GGML_ASSERT(ggml_are_same_shape(src0, gate));
         GGML_ASSERT(ggml_are_same_stride(src0, gate));
     }
@@ -144,14 +137,8 @@ static void ggml_cuda_mul_mat_q_impl(
     const size_t y_values_per_block = use_native_fp4 ? QK_FP4_MMQ            : QK8_1_MMQ;
 
     if (!ids) {
-        int64_t J_padding = ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11);
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-        if (gate) {
-            J_padding = GGML_CUDA_MMQ_GATE_UP_SWIGLU_J_MAX;
-        }
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block +
-            J_padding * sizeof(block_q8_1_mmq);
+            ggml_cuda_mmq_get_J_max(src0->type, fallback, cc, ne11) * sizeof(block_q8_1_mmq);
         ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
         if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
@@ -189,7 +176,11 @@ static void ggml_cuda_mul_mat_q_impl(
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             ne1, ne1};
-        args.x_gate = gate ? (const char *) gate->data : nullptr;
+        if (gate) {
+            args.fusion.gate      = gate->data;
+            args.fusion.glu_op    = fusion->glu_op;
+            args.fusion.glu_limit = fusion->glu_limit;
+        }
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -280,21 +271,6 @@ static void ggml_cuda_mul_mat_q_impl(
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
-
-void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
-        const ggml_tensor * ids, ggml_tensor * dst) {
-    ggml_cuda_mul_mat_q_impl(ctx, src0, src1, ids, dst, nullptr);
-}
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-void ggml_cuda_mul_mat_q_gate_up_swiglu(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * up, const ggml_tensor * gate,
-        const ggml_tensor * src, ggml_tensor * dst) {
-    GGML_ASSERT(gate != nullptr);
-    ggml_cuda_mul_mat_q_impl(ctx, up, src, nullptr, dst, gate);
-}
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts) {
 #ifdef GGML_CUDA_FORCE_CUBLAS

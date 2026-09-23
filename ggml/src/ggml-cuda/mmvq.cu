@@ -812,23 +812,7 @@ static __global__ void mul_mat_vec_q(
                             gate_value *= gate_scales;
                         }
                         gate_value += gate_biases[j];
-                        switch (active_glu) {
-                            case GGML_GLU_OP_SWIGLU:
-                                result *= ggml_cuda_op_silu_single(gate_value);
-                                break;
-                            case GGML_GLU_OP_GEGLU:
-                                result *= ggml_cuda_op_gelu_single(gate_value);
-                                break;
-                            case GGML_GLU_OP_SWIGLU_OAI:
-                                result = ggml_cuda_op_swiglu_oai_single(gate_value, result);
-                                break;
-                            case GGML_GLU_OP_SWIGLU_CLAMP:
-                                result = ggml_cuda_op_swiglu_clamp_single(gate_value, result, glu_limit);
-                                break;
-                            default:
-                                result = result * gate_value;
-                                break;
-                        }
+                        result = ggml_cuda_op_glu_single(active_glu, gate_value, result, glu_limit);
                     }
                 }
                 dst[j*stride_col_dst + i] = result;
@@ -966,23 +950,7 @@ static __global__ void mul_mat_vec_q_moe(
                 if (gate_bias) {
                     gate_value += gate_bias[bias_idx];
                 }
-                switch (active_glu) {
-                    case GGML_GLU_OP_SWIGLU:
-                        result *= ggml_cuda_op_silu_single(gate_value);
-                        break;
-                    case GGML_GLU_OP_GEGLU:
-                        result *= ggml_cuda_op_gelu_single(gate_value);
-                        break;
-                    case GGML_GLU_OP_SWIGLU_OAI:
-                        result = ggml_cuda_op_swiglu_oai_single(gate_value, result);
-                        break;
-                    case GGML_GLU_OP_SWIGLU_CLAMP:
-                        result = ggml_cuda_op_swiglu_clamp_single(gate_value, result, glu_limit);
-                        break;
-                    default:
-                        result = result * gate_value;
-                        break;
-                }
+                result = ggml_cuda_op_glu_single(active_glu, gate_value, result, glu_limit);
             }
         }
         dst[channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x] = result;
