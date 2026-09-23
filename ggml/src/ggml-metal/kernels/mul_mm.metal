@@ -132,6 +132,9 @@ kernel void kernel_mul_mm(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
+    // Store result tile to output matrix (with batch offset)
+    // a slice is not used because its byte offset is int32 and wraps at 2 GiB
+    // ref: https://github.com/ggml-org/llama.cpp/pull/28748
     const int tileM = min(NRA, M - ra);
     const int tileN = min(NRB, N - rb);
 
