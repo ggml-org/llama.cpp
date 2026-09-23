@@ -279,7 +279,10 @@ struct server_slot {
     std::string  generated_text;
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
-    size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
+    std::vector<size_t> generated_token_pos; // where the piece of each generated token starts in generated_text
+    size_t n_sent_text    = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
+    size_t n_ready_tokens = 0; // number of generated tokens whose text has been released for sending
+    size_t n_sent_tokens  = 0; // number of generated tokens sent with the streamed text
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -378,6 +381,8 @@ struct server_slot {
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
+        n_ready_tokens = 0;
+        n_sent_tokens  = 0;
 
         if (can_speculate()) {
             spec_draft.clear();
@@ -385,6 +390,7 @@ struct server_slot {
             spec_ckpt.clear();
         }
         generated_tokens.clear();
+        generated_token_pos.clear();
         generated_token_probs.clear();
         json_schema = json();
 
@@ -1835,10 +1841,9 @@ private:
         const std::string token_str = result.text_to_send;
         slot.sampled = result.tok;
 
+        slot.generated_tokens.push_back(result.tok);
+        slot.generated_token_pos.push_back(slot.generated_text.size());
         slot.generated_text += token_str;
-        if (slot.task->params.return_tokens) {
-            slot.generated_tokens.push_back(result.tok);
-        }
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
@@ -1867,6 +1872,7 @@ private:
                 // no send the stop word in the response
                 result.text_to_send = slot.generated_text.substr(pos, std::string::npos);
                 slot.n_sent_text += result.text_to_send.size();
+                slot.n_ready_tokens = slot.generated_tokens.size();
                 // add the token to slot queue and cache
             } else {
                 result.text_to_send = "";
@@ -2060,7 +2066,16 @@ private:
             res->is_begin = true;
         } else {
             res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
+
+            // the released tokens not sent yet, positioned relative to the content
+            const size_t start = slot.n_sent_text - tkn.text_to_send.size();
+            for (; slot.n_sent_tokens < slot.n_ready_tokens; slot.n_sent_tokens++) {
+                const size_t pos = slot.generated_token_pos[slot.n_sent_tokens];
+                if (pos >= start) {
+                    res->tokens.push_back(slot.generated_tokens[slot.n_sent_tokens]);
+                    res->token_pos.push_back(pos - start);
+                }
+            }
         }
 
         res->n_decoded             = slot.stats.n_gen;
@@ -2106,6 +2121,7 @@ private:
         } else {
             res->content     = std::move(slot.generated_text);
             res->tokens      = std::move(slot.generated_tokens);
+            res->token_pos   = std::move(slot.generated_token_pos);
         }
         res->stats           = slot.stats;
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);
@@ -4035,7 +4051,7 @@ private:
     }
 
     server_response_reader get_response_reader() {
-        return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
+        return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS, common_chat_templates_make_input(chat_params.tmpls.get()));
     }
 
     //
@@ -4523,7 +4539,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 }
 
 std::unique_ptr<server_res_generator> server_routes::create_response(bool bypass_sleep) {
-    return std::make_unique<server_res_generator>(queue_tasks, queue_results, params.sleep_idle_seconds, bypass_sleep);
+    auto res = std::make_unique<server_res_generator>(queue_tasks, queue_results, params.sleep_idle_seconds, bypass_sleep);
+    // the templates only exist once the server is awake
+    if (!bypass_sleep && meta) {
+        res->rd.input = common_chat_templates_make_input(meta->chat_params.tmpls.get());
+    }
+    return res;
 }
 
 server_routes::server_routes(const common_params & params, server_context & ctx_server)
