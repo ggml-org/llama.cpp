@@ -2,6 +2,8 @@
 
 #include "json-schema.h"
 #include "json.h"
+#include "llama.h"
+#include "trie.h"
 
 #include <memory>
 #include <set>
@@ -181,8 +183,45 @@ inline common_peg_parse_flags operator~(common_peg_parse_flags a) {
     return static_cast<common_peg_parse_flags>(~int(a));
 }
 
+struct common_peg_token {
+    std::string      text;
+    llama_token_attr attr;
+};
+
+struct common_peg_token_table {
+    std::unordered_map<llama_token, common_peg_token> tokens;
+    std::unordered_map<std::string, llama_token>      ids;
+
+    common_peg_token_table() = default;
+    explicit common_peg_token_table(const llama_vocab * vocab);
+
+    // LLAMA_TOKEN_NULL if text is not a special token
+    llama_token token_id(const std::string & text) const;
+};
+
+struct common_peg_input {
+    std::string              text;
+    std::vector<llama_token> token_map;
+
+    common_peg_input() = default;
+
+    // plain text, with no tokens
+    explicit common_peg_input(std::string text) : text(std::move(text)), token_map(this->text.size(), LLAMA_TOKEN_NULL) {}
+
+    void append(const std::string & piece, llama_token token);
+
+    // append a chunk of text with its token map
+    void append(const std::string & chunk, const std::vector<llama_token> & chunk_map);
+
+    // prefix plain text, shifting the tokens after it
+    void prepend(const std::string & prefix);
+
+    // prefix another input and its tokens, shifting the tokens after it
+    void prepend(const common_peg_input & prefix);
+};
+
 struct common_peg_parse_context {
-    std::string input;
+    common_peg_input input;
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
@@ -191,8 +230,11 @@ struct common_peg_parse_context {
     common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : flags(flags), parse_depth(0) {}
 
+    common_peg_parse_context(common_peg_input input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), flags(flags), parse_depth(0) {}
+
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
-        : input(input), flags(flags), parse_depth(0) {}
+        : input(common_peg_input(input)), flags(flags), parse_depth(0) {}
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
@@ -209,6 +251,11 @@ struct common_peg_end_parser {};
 
 struct common_peg_literal_parser {
     std::string literal;
+};
+
+struct common_peg_token_parser {
+    llama_token token;
+    std::string piece;
 };
 
 struct common_peg_sequence_parser {
@@ -256,7 +303,9 @@ struct common_peg_string_parser {
 };
 
 struct common_peg_until_parser {
-    std::vector<std::string> delimiters;
+    std::vector<std::string>          delimiters;
+    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID;
+    common_trie                       matcher;
 };
 
 struct common_peg_schema_parser {
@@ -294,8 +343,10 @@ struct common_peg_gbnf_parser {
 };
 
 struct common_peg_ac_parser {
-    common_peg_parser_id child;
-    std::vector<std::string> delimiters;
+    common_peg_parser_id              child;
+    std::vector<std::string>          delimiters;
+    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID; // set when the delimiters were given as a parser
+    common_trie                       matcher;
 };
 
 // Variant holding all parser types
@@ -304,6 +355,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_start_parser,
     common_peg_end_parser,
     common_peg_literal_parser,
+    common_peg_token_parser,
     common_peg_sequence_parser,
     common_peg_choice_parser,
     common_peg_repetition_parser,
@@ -327,6 +379,7 @@ class common_peg_arena {
     std::vector<common_peg_parser_variant> parsers_;
     std::unordered_map<std::string, common_peg_parser_id> rules_;
     common_peg_parser_id root_ = COMMON_PEG_INVALID_PARSER_ID;
+    common_peg_token_table token_table_;
 
   public:
     const common_peg_parser_variant & get(common_peg_parser_id id) const { return parsers_.at(id); }
@@ -340,6 +393,8 @@ class common_peg_arena {
 
     common_peg_parser_id root() const { return root_; }
     void set_root(common_peg_parser_id id) { root_ = id; }
+
+    const common_peg_token_table & token_table() const { return token_table_; }
 
     common_peg_parse_result parse(common_peg_parse_context & ctx, size_t start = 0) const;
     common_peg_parse_result parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const;
@@ -375,6 +430,7 @@ class common_peg_parser_builder {
 
   public:
     common_peg_parser_builder();
+    explicit common_peg_parser_builder(common_peg_token_table token_table);
 
     // Match nothing, always succeed.
     //   S -> ε
@@ -391,6 +447,10 @@ class common_peg_parser_builder {
     // Matches an exact literal string.
     //   S -> "hello"
     common_peg_parser literal(const std::string & literal) { return add(common_peg_literal_parser{literal}); }
+
+    // Matches a token or fallback to literal if the token is not registered with the builder.
+    //   S -> <[token-id]>
+    common_peg_parser token(const std::string & piece);
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
@@ -448,11 +508,16 @@ class common_peg_parser_builder {
     // Matches all characters until a delimiter is found (delimiter not consumed).
     // Invalid UTF-8 is consumed and recorded on the AST nodes.
     //   S -> (!delim .)*
-    common_peg_parser until(const std::string & delimiter) { return add(common_peg_until_parser{{delimiter}}); }
+    common_peg_parser until(const std::string & delimiter) { return until_one_of({delimiter}); }
 
     // Matches all characters until one of the delimiters in the list is found (delimiter not consumed).
     //   S -> (!delim .)*
-    common_peg_parser until_one_of(const std::vector<std::string> & delimiters) { return add(common_peg_until_parser{delimiters}); }
+    common_peg_parser until_one_of(const std::vector<std::string> & delimiters);
+
+    // Matches all characters until the delimiter is found (delimiter not consumed). The delimiter may only contain
+    // sequences, choices, literals, and tokens, and it is expanded into every string of text and tokens it matches.
+    //   S -> (!delim .)*
+    common_peg_parser until(const common_peg_parser & delimiter);
 
     // Matches everything
     //   S -> .*
@@ -547,6 +612,7 @@ class common_peg_parser_builder {
     // responsible for consuming the delimiter (e.g. until(D) + literal(D)).
     common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);
     common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
+    common_peg_parser ac(const common_peg_parser & p, const common_peg_parser & delimiter);
 
     void set_root(const common_peg_parser & p);
 

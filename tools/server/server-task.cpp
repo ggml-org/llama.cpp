@@ -155,20 +155,21 @@ task_result_state::task_result_state(const common_chat_parser_params & chat_pars
     , oai_resp_message_id("msg_" + random_string()) {
     if (chat_parser_params.is_continuation && !chat_parser_params.echo) {
         // initialize chat_msg to avoid emitting a delta containing the assistant prefill
-        chat_msg = common_chat_parse("", true, chat_parser_params);
+        chat_msg = common_chat_parse(generated_input, true, chat_parser_params);
     }
 }
 
 common_chat_msg task_result_state::update_chat_msg(
         const std::string & text_added,
+        const std::vector<llama_token> & token_map_added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls) {
-    generated_text += text_added;
+    generated_input.append(text_added, token_map_added);
     auto msg_prv_copy = chat_msg;
-    //SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    //SRV_DBG("Parsing chat message: %s\n", generated_input.text.c_str());
     auto new_msg = common_chat_parse(
-        generated_text,
+        generated_input,
         is_partial,
         chat_parser_params);
     if (!new_msg.empty()) {
@@ -990,7 +991,7 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
     if (is_begin) {
         return; // begin marker only flushes headers, skip parsing
     }
-    state.update_chat_msg(content, true, oaicompat_msg_diffs);
+    state.update_chat_msg(content, token_map, true, oaicompat_msg_diffs);
 
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;

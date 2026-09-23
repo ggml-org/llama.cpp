@@ -648,8 +648,8 @@ private:
             const auto & node = trie.nodes[idx];
             std::string rejects;
             auto first = true;
-            for (const auto & [cpt, child] : node.children) {
-                std::string c = common_unicode_cpt_to_utf8(cpt);
+            for (const auto & [sym, child] : node.children) {
+                std::string c = common_unicode_cpt_to_utf8(sym.value);
                 rejects += c;
                 if (first) {
                     first = false;

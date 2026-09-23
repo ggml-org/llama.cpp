@@ -202,6 +202,127 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
+common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
+    const llama_token n_tokens = llama_vocab_n_tokens(vocab);
+    for (llama_token id = 0; id < n_tokens; ++id) {
+        const auto attr = llama_vocab_get_attr(vocab, id);
+        if (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
+            std::string text = llama_vocab_get_text(vocab, id);
+            ids.emplace(text, id);
+            tokens.emplace(id, common_peg_token{ std::move(text), attr });
+        }
+    }
+}
+
+llama_token common_peg_token_table::token_id(const std::string & text) const {
+    auto it = ids.find(text);
+    return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
+}
+
+// A single delimiter an until parser stops at, as trie symbols and as text
+struct until_delimiter {
+    std::vector<common_trie::symbol> symbols;
+    std::string                     text;
+};
+
+// Most delimiters an until parser can expand to, so a sequence of choices can't blow up
+static constexpr size_t UNTIL_MAX_DELIMITERS = 64;
+
+// Expand a delimiter parser into every delimiter it matches. Only sequences, choices, literals, and tokens are
+// allowed, a choice adds the delimiters of each branch, and a sequence joins every combination of its children.
+static std::vector<until_delimiter> expand_delimiter(const common_peg_arena & arena, common_peg_parser_id id) {
+    return std::visit([&](const auto & p) -> std::vector<until_delimiter> {
+        using T = std::decay_t<decltype(p)>;
+        if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
+            until_delimiter d;
+            size_t pos = 0;
+            while (pos < p.literal.size()) {
+                auto result = common_parse_utf8_codepoint(p.literal, pos);
+                if (result.status != utf8_parse_result::SUCCESS) {
+                    break;
+                }
+                d.symbols.push_back(common_trie::symbol::codepoint(result.codepoint));
+                pos += result.bytes_consumed;
+            }
+            d.text = p.literal;
+            return { d };
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return { until_delimiter{ { common_trie::symbol::token(p.token) }, p.piece } };
+        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
+            std::vector<until_delimiter> result;
+            for (auto child : p.children) {
+                for (auto & d : expand_delimiter(arena, child)) {
+                    result.push_back(std::move(d));
+                }
+            }
+            if (result.size() > UNTIL_MAX_DELIMITERS) {
+                throw std::invalid_argument("until delimiter expands to too many alternatives");
+            }
+            return result;
+        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
+            std::vector<until_delimiter> result = { until_delimiter{} };
+            for (auto child : p.children) {
+                auto tails = expand_delimiter(arena, child);
+                if (result.size() * tails.size() > UNTIL_MAX_DELIMITERS) {
+                    throw std::invalid_argument("until delimiter expands to too many alternatives");
+                }
+                std::vector<until_delimiter> joined;
+                for (const auto & head : result) {
+                    for (const auto & tail : tails) {
+                        until_delimiter d = head;
+                        d.symbols.insert(d.symbols.end(), tail.symbols.begin(), tail.symbols.end());
+                        d.text += tail.text;
+                        joined.push_back(std::move(d));
+                    }
+                }
+                result = std::move(joined);
+            }
+            return result;
+        } else {
+            throw std::invalid_argument("delimiters may only contain sequences, choices, literals, and tokens");
+        }
+    }, arena.get(id));
+}
+
+// Build the matcher and delimiter text of an until or ac parser from its delimiter parser
+template <typename T>
+static void build_delimiter_matcher(const common_peg_arena & arena, T & parser) {
+    parser.delimiters.clear();
+    parser.matcher = common_trie();
+    for (auto & d : expand_delimiter(arena, parser.delimiter_parser)) {
+        if (d.symbols.empty()) {
+            throw std::invalid_argument("delimiter must not match the empty string");
+        }
+        parser.matcher.insert(d.symbols);
+        parser.delimiters.push_back(std::move(d.text));
+    }
+}
+
+void common_peg_input::append(const std::string & piece, llama_token token) {
+    if (piece.empty()) {
+        return;
+    }
+    token_map.push_back(token);
+    token_map.resize(token_map.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
+    text += piece;
+}
+
+void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_map) {
+    GGML_ASSERT(chunk.size() == chunk_map.size());
+    token_map.insert(token_map.end(), chunk_map.begin(), chunk_map.end());
+    text += chunk;
+}
+
+void common_peg_input::prepend(const std::string & prefix) {
+    token_map.insert(token_map.begin(), prefix.size(), LLAMA_TOKEN_NULL);
+    text = prefix + text;
+}
+
+void common_peg_input::prepend(const common_peg_input & prefix) {
+    token_map.insert(token_map.begin(), prefix.token_map.begin(), prefix.token_map.end());
+    text = prefix.text + text;
+}
+
 struct parser_executor;
 
 common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
@@ -233,10 +354,10 @@ struct parser_executor {
     std::string debug_indent() const { return std::string(ctx.parse_depth * 2, ' '); }
 
     std::string debug_input_snippet(size_t pos, size_t len = 60) const {
-        if (pos >= ctx.input.size()) {
+        if (pos >= ctx.input.text.size()) {
             return "<EOF>";
         }
-        auto        snippet = ctx.input.substr(pos, len);
+        auto        snippet = ctx.input.text.substr(pos, len);
         // Escape newlines for display
         std::string result;
         for (char c : snippet) {
@@ -250,7 +371,7 @@ struct parser_executor {
                 result += c;
             }
         }
-        if (pos + len < ctx.input.size()) {
+        if (pos + len < ctx.input.text.size()) {
             result += "...";
         }
         return result;
@@ -269,7 +390,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_end_parser & /* p */) const {
         return common_peg_parse_result(
-            start_pos >= ctx.input.size() ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
+            start_pos >= ctx.input.text.size() ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
             start_pos
         );
     }
@@ -277,15 +398,38 @@ struct parser_executor {
     common_peg_parse_result operator()(const common_peg_literal_parser & p) {
         auto pos = start_pos;
         for (auto i = 0u; i < p.literal.size(); ++i) {
-            if (pos >= ctx.input.size()) {
+            if (pos >= ctx.input.text.size()) {
                 if (!ctx.is_lenient()) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
-            if (ctx.input[pos] != p.literal[i]) {
+            if (ctx.input.text[pos] != p.literal[i]) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
+            ++pos;
+        }
+
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_peg_parse_result operator()(const common_peg_token_parser & p) {
+        const auto & input = ctx.input;
+
+        if (start_pos >= input.text.size()) {
+            if (!ctx.is_lenient()) {
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
+            }
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
+        }
+
+        if (input.token_map[start_pos] != p.token) {
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
+        }
+
+        // Skip the rest of the piece, up to the next token or the end of the input
+        auto pos = start_pos + 1;
+        while (pos < input.text.size() && input.token_map[pos] == LLAMA_TOKEN_NULL) {
             ++pos;
         }
 
@@ -395,7 +539,7 @@ struct parser_executor {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
-            if (pos >= ctx.input.size()) {
+            if (pos >= ctx.input.text.size()) {
                 if (ctx.is_debug()) {
                     fprintf(stderr, "%sREPEAT: at end of input, count=%d\n", debug_indent().c_str(), match_count);
                 }
@@ -453,7 +597,7 @@ struct parser_executor {
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
             ctx.parse_depth--;
-            if (pos >= ctx.input.size() && ctx.is_lenient()) {
+            if (pos >= ctx.input.text.size() && ctx.is_lenient()) {
                 if (ctx.is_debug()) {
                     fprintf(stderr, "%sREPEAT -> NEED_MORE (not enough matches: %d < %d)\n", debug_indent().c_str(),
                             match_count, p.min_count);
@@ -500,7 +644,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_any_parser & /* p */) const {
         // Parse a single UTF-8 codepoint (not just a single byte)
-        auto result = common_parse_utf8_codepoint(ctx.input, start_pos);
+        auto result = common_parse_utf8_codepoint(ctx.input.text, start_pos);
 
         if (result.status == utf8_parse_result::INCOMPLETE) {
             if (!ctx.is_lenient()) {
@@ -516,8 +660,8 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_space_parser & /* p */) {
         auto pos = start_pos;
-        while (pos < ctx.input.size()) {
-            auto c = static_cast<unsigned char>(ctx.input[pos]);
+        while (pos < ctx.input.text.size()) {
+            auto c = static_cast<unsigned char>(ctx.input.text[pos]);
             if (std::isspace(c)) {
                 ++pos;
             } else {
@@ -534,7 +678,7 @@ struct parser_executor {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
-            auto result = common_parse_utf8_codepoint(ctx.input, pos);
+            auto result = common_parse_utf8_codepoint(ctx.input.text, pos);
 
             if (result.status == utf8_parse_result::INCOMPLETE) {
                 if (match_count >= p.min_count) {
@@ -583,7 +727,7 @@ struct parser_executor {
 
         // Check if we got enough matches
         if (match_count < p.min_count) {
-            if (pos >= ctx.input.size() && ctx.is_lenient()) {
+            if (pos >= ctx.input.text.size() && ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
@@ -596,7 +740,7 @@ struct parser_executor {
         auto save = pos;
 
         ++pos; // consume '\'
-        if (pos >= ctx.input.size()) {
+        if (pos >= ctx.input.text.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
@@ -604,7 +748,7 @@ struct parser_executor {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
-        char c = ctx.input[pos];
+        char c = ctx.input.text[pos];
 
         if (c == delimiter || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
             ++pos;
@@ -626,13 +770,13 @@ struct parser_executor {
     static common_peg_parse_result handle_unicode_escape(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume 'u'
         for (int i = 0; i < 4; ++i) {
-            if (pos >= ctx.input.size()) {
+            if (pos >= ctx.input.text.size()) {
                 if (!ctx.is_lenient()) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
-            if (!is_hex_digit(ctx.input[pos])) {
+            if (!is_hex_digit(ctx.input.text[pos])) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
             ++pos;
@@ -644,8 +788,8 @@ struct parser_executor {
         auto pos = start_pos;
 
         // Parse string content (without quotes)
-        while (pos < ctx.input.size()) {
-            char c = ctx.input[pos];
+        while (pos < ctx.input.text.size()) {
+            char c = ctx.input.text[pos];
 
             if (c == p.delimiter) {
                 // Found closing delimiter - success (don't consume it)
@@ -658,7 +802,7 @@ struct parser_executor {
                     return result;
                 }
             } else {
-                auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
+                auto utf8_result = common_parse_utf8_codepoint(ctx.input.text, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
                     if (!ctx.is_lenient()) {
@@ -683,32 +827,32 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_until_parser & p) const {
-        common_trie matcher(p.delimiters);
+        const auto & matcher = p.matcher;
 
         // Scan input and check for delimiters
         size_t pos = start_pos;
         size_t last_valid_pos = start_pos;
         std::vector<common_peg_invalid_utf8> invalid_utf8;
 
-        while (pos < ctx.input.size()) {
-            auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
+        while (pos < ctx.input.text.size()) {
+            auto step = matcher.next_symbol(ctx.input.text, ctx.input.token_map, pos);
 
-            if (utf8_result.status == utf8_parse_result::INCOMPLETE && ctx.is_lenient()) {
+            if (step.status == utf8_parse_result::INCOMPLETE && ctx.is_lenient()) {
                 // The rest of the sequence may still arrive, return what we have so far
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos, {}, std::move(invalid_utf8));
             }
 
-            if (utf8_result.status != utf8_parse_result::SUCCESS) {
+            if (step.status != utf8_parse_result::SUCCESS) {
                 // Malformed UTF-8, or a sequence truncated by the end of a complete input.
                 // A delimiter cannot start inside bytes that fail to decode, so consume them and move on
-                invalid_utf8.push_back({pos, utf8_result.bytes_consumed});
-                pos += utf8_result.bytes_consumed;
+                invalid_utf8.push_back({pos, step.bytes_consumed});
+                pos += step.bytes_consumed;
                 last_valid_pos = pos;
                 continue;
             }
 
             // Check if a delimiter starts at this position
-            auto match = matcher.check_at(ctx.input, pos);
+            auto match = matcher.check_at(ctx.input.text, ctx.input.token_map, pos);
 
             if (match == common_trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
@@ -720,11 +864,11 @@ struct parser_executor {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos, {}, std::move(invalid_utf8));
             }
 
-            pos += utf8_result.bytes_consumed;
+            pos += step.bytes_consumed;
             last_valid_pos = pos;
         }
 
-        if (last_valid_pos == ctx.input.size() && ctx.is_lenient()) {
+        if (last_valid_pos == ctx.input.text.size() && ctx.is_lenient()) {
             // Reached the end of a partial stream, there might still be more input that we need to consume.
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos, {}, std::move(invalid_utf8));
         }
@@ -741,8 +885,8 @@ struct parser_executor {
 
         if (!result.fail()) {
             std::string_view text;
-            if (result.start < ctx.input.size()) {
-                text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
+            if (result.start < ctx.input.text.size()) {
+                text = std::string_view(ctx.input.text).substr(result.start, result.end - result.start);
             }
 
             auto node_id = ctx.ast.add_node(
@@ -771,8 +915,8 @@ struct parser_executor {
 
         if (!result.fail()) {
             std::string_view text;
-            if (result.start < ctx.input.size()) {
-                text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
+            if (result.start < ctx.input.text.size()) {
+                text = std::string_view(ctx.input.text).substr(result.start, result.end - result.start);
             }
 
             auto node_id = ctx.ast.add_node(
@@ -894,6 +1038,7 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_ref_parser> ||
                                  std::is_same_v<T, common_peg_until_parser> ||
                                  std::is_same_v<T, common_peg_literal_parser> ||
+                                 std::is_same_v<T, common_peg_token_parser> ||
                                  std::is_same_v<T, common_peg_string_parser> ||
                                  std::is_same_v<T, common_peg_chars_parser> ||
                                  std::is_same_v<T, common_peg_any_parser> ||
@@ -937,6 +1082,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
             return "End";
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return "Literal(" + p.literal + ")";
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return "Token(" + p.piece + ", " + std::to_string(p.token) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             std::vector<std::string> parts;
             for (const auto & child : p.children) {
@@ -1075,6 +1222,33 @@ static std::string rule_name(const std::string & name) {
 }
 
 common_peg_parser_builder::common_peg_parser_builder() {}
+
+common_peg_parser_builder::common_peg_parser_builder(common_peg_token_table token_table) {
+    arena_.token_table_ = std::move(token_table);
+}
+
+common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
+    common_peg_until_parser p;
+    p.delimiters = delimiters;
+    p.matcher    = common_trie(delimiters);
+    return add(std::move(p));
+}
+
+common_peg_parser common_peg_parser_builder::until(const common_peg_parser & delimiter) {
+    common_peg_until_parser p;
+    p.delimiter_parser = delimiter.id();
+    build_delimiter_matcher(arena_, p);
+    return add(std::move(p));
+}
+
+common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
+    auto token = arena_.token_table_.token_id(piece);
+    if (token == LLAMA_TOKEN_NULL) {
+        // Return a literal if the token is not registered with the builder
+        return literal(piece);
+    }
+    return add(common_peg_token_parser{token, piece});
+}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested sequences
@@ -1383,7 +1557,19 @@ common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, con
     if (delimiters.empty()) {
         throw std::runtime_error("ac parser requires at least one delimiter");
     }
-    return add(common_peg_ac_parser{p, delimiters});
+    common_peg_ac_parser ac;
+    ac.child      = p.id();
+    ac.delimiters = delimiters;
+    ac.matcher    = common_trie(delimiters);
+    return add(std::move(ac));
+}
+
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const common_peg_parser & delimiter) {
+    common_peg_ac_parser ac;
+    ac.child            = p.id();
+    ac.delimiter_parser = delimiter.id();
+    build_delimiter_matcher(arena_, ac);
+    return add(std::move(ac));
 }
 
 static std::string gbnf_escape_char_class(uint32_t c) {
@@ -1444,15 +1630,63 @@ static std::string gbnf_char_class(const std::vector<uint32_t> & chars, bool neg
     return s + "]";
 }
 
+// Token set such as <[1,5-9]>, with consecutive ids collapsed into ranges
+static std::string gbnf_token_set(const std::vector<uint32_t> & tokens, bool negate) {
+    std::string s = negate ? "!<[" : "<[";
+    for (size_t i = 0; i < tokens.size();) {
+        size_t j = i;
+        while (j + 1 < tokens.size() && tokens[j + 1] == tokens[j] + 1) {
+            j++;
+        }
+        s += (i == 0 ? "" : ",") + std::to_string(tokens[i]);
+        if (j > i) {
+            s += "-" + std::to_string(tokens[j]);
+        }
+        i = j + 1;
+    }
+    return s + "]>";
+}
+
+// Symbols on the transitions out of an automaton state, codepoints and tokens kept apart
+struct gbnf_ac_symbols {
+    std::vector<uint32_t> chars;
+    std::vector<uint32_t> tokens;
+
+    void add(const common_trie::symbol & sym) {
+        (sym.is_token() ? tokens : chars).push_back(sym.value);
+    }
+
+    // One alternative for the codepoints and one for the tokens, each followed by next if given
+    std::vector<std::string> alternatives(const std::string & next = "") const {
+        std::vector<std::string> alts;
+        const std::string tail = next.empty() ? "" : " " + next;
+        if (!chars.empty()) {
+            alts.push_back(gbnf_char_class(chars, false) + tail);
+        }
+        if (!tokens.empty()) {
+            alts.push_back(gbnf_token_set(tokens, false) + tail);
+        }
+        return alts;
+    }
+};
+
 static std::string gbnf_ac_grammar(
-    const common_grammar_builder &   builder,
-    const std::string &              prefix,
-    const std::vector<std::string> & strings,
-    const std::function<std::string(const std::vector<uint32_t> &,
-                                    const std::map<size_t, std::vector<uint32_t>> &,
-                                    const std::vector<uint32_t> &,
+    const common_grammar_builder & builder,
+    const std::string &            prefix,
+    const common_trie &            trie,
+    const std::function<std::string(const gbnf_ac_symbols &,
+                                    const std::map<size_t, gbnf_ac_symbols> &,
+                                    const std::string &,
                                     const std::function<std::string(size_t)> &)> & build_rule) {
-    common_aho_corasick ac(strings);
+    common_aho_corasick ac(trie);
+
+    // Without codepoints every step is a whole token, so anything else can go back to the start as
+    // one token. Otherwise text has to be matched a codepoint at a time, which also lets the text
+    // of a token in the alphabet through.
+    bool token_only = true;
+    for (const auto & sym : ac.alphabet) {
+        token_only = token_only && sym.is_token();
+    }
 
     auto state_name = [&](size_t s) -> std::string {
         if (s == 0) {
@@ -1468,21 +1702,32 @@ static std::string gbnf_ac_grammar(
             continue; // match states
         }
 
-        std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> completing;  // chars that complete a delimiter
-        std::vector<uint32_t> specific;    // chars with an explicit transition
-        for (uint32_t c : ac.alphabet) {
-            size_t d = ac.next(q, c);
+        std::map<size_t, gbnf_ac_symbols> buckets;
+        gbnf_ac_symbols completing;  // symbols that complete a delimiter
+        gbnf_ac_symbols specific;    // symbols with an explicit transition
+        for (const auto & sym : ac.alphabet) {
+            size_t d = ac.next(q, sym);
             if (ac.is_terminal(d)) {
-                completing.push_back(c);
-                specific.push_back(c);
+                completing.add(sym);
+                specific.add(sym);
             } else if (d != 0) {
-                buckets[d].push_back(c); // specific non-root destination
-                specific.push_back(c);
+                buckets[d].add(sym); // specific non-root destination
+                specific.add(sym);
             }
         }
 
-        builder.add_rule(state_name(q), build_rule(completing, buckets, specific, state_name));
+        // every other symbol goes back to the start
+        std::string fallback;
+        if (token_only) {
+            fallback = gbnf_token_set(specific.tokens, true);
+        } else if (specific.chars.empty()) {
+            fallback = ".";
+        } else {
+            fallback = gbnf_char_class(specific.chars, true);
+        }
+        fallback += " " + state_name(0);
+
+        builder.add_rule(state_name(q), build_rule(completing, buckets, fallback, state_name));
     }
 
     // An empty delimiter makes the start state terminal. Emit an entry rule
@@ -1501,19 +1746,21 @@ static std::string gbnf_ac_grammar(
 // ref: https://github.com/ggml-org/llama.cpp/pull/24839
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
-                                          const std::vector<std::string> & strings) {
-    return gbnf_ac_grammar(builder, prefix, strings,
-        [](const std::vector<uint32_t> & /*completing*/,
-           const std::map<size_t, std::vector<uint32_t>> & buckets,
-           const std::vector<uint32_t> & specific,
+                                          const common_trie &            trie) {
+    return gbnf_ac_grammar(builder, prefix, trie,
+        [](const gbnf_ac_symbols & /*completing*/,
+           const std::map<size_t, gbnf_ac_symbols> & buckets,
+           const std::string & fallback,
            const std::function<std::string(size_t)> & state_name) {
-            // every state is accepting and completing chars get no
+            // every state is accepting and completing symbols get no
             // alternative, so a forbidden string can never be matched
             std::string rhs = "|";
-            for (const auto & [d, chars] : buckets) {
-                rhs += " " + gbnf_char_class(chars, false) + " " + state_name(d) + " |";
+            for (const auto & [d, symbols] : buckets) {
+                for (const auto & alt : symbols.alternatives(state_name(d))) {
+                    rhs += " " + alt + " |";
+                }
             }
-            rhs += " " + gbnf_char_class(specific, true) + " " + state_name(0);
+            rhs += " " + fallback;
             return rhs;
         });
 }
@@ -1523,21 +1770,20 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
 // the start state rule name.
 static std::string gbnf_including_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
-                                          const std::vector<std::string> & strings) {
-    return gbnf_ac_grammar(builder, prefix, strings,
-        [](const std::vector<uint32_t> & completing,
-           const std::map<size_t, std::vector<uint32_t>> & buckets,
-           const std::vector<uint32_t> & specific,
+                                          const common_trie &            trie) {
+    return gbnf_ac_grammar(builder, prefix, trie,
+        [](const gbnf_ac_symbols & completing,
+           const std::map<size_t, gbnf_ac_symbols> & buckets,
+           const std::string & fallback,
            const std::function<std::string(size_t)> & state_name) {
-            std::vector<std::string> alts;
-            if (!completing.empty()) {
-                alts.push_back(gbnf_char_class(completing, false)); // terminate on match
+            std::vector<std::string> alts = completing.alternatives(); // terminate on match
+            for (const auto & [d, symbols] : buckets) {
+                for (auto & alt : symbols.alternatives(state_name(d))) {
+                    alts.push_back(std::move(alt));
+                }
             }
-            for (const auto & [d, chars] : buckets) {
-                alts.push_back(gbnf_char_class(chars, false) + " " + state_name(d));
-            }
-            // every other character keeps scanning from the start state
-            alts.push_back(gbnf_char_class(specific, true) + " " + state_name(0));
+            // every other symbol keeps scanning from the start state
+            alts.push_back(fallback);
             return string_join(alts, " | ");
         });
 }
@@ -1560,6 +1806,7 @@ static std::set<std::string> collect_reachable_rules(
                           std::is_same_v<T, common_peg_end_parser> ||
                           std::is_same_v<T, common_peg_until_parser> ||
                           std::is_same_v<T, common_peg_literal_parser> ||
+                          std::is_same_v<T, common_peg_token_parser> ||
                           std::is_same_v<T, common_peg_chars_parser> ||
                           std::is_same_v<T, common_peg_space_parser> ||
                           std::is_same_v<T, common_peg_any_parser> ||
@@ -1642,6 +1889,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return "";
             } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
                 return gbnf_format_literal(p.literal);
+            } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+                return "<[" + std::to_string(p.token) + "]>";
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
@@ -1736,7 +1985,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (p.delimiters.empty()) {
                     return ".*";
                 }
-                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.delimiters);
+                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.matcher);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
@@ -1754,7 +2003,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
                 return p.grammar;
             } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.delimiters);
+                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.matcher);
             } else {
                 static_assert(is_always_false_v<T>);
             }
@@ -1828,6 +2077,8 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
             return json{{"type", "end"}};
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return json{{"type", "literal"}, {"literal", p.literal}};
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return json{{"type", "token"}, {"token", p.token}, {"piece", p.piece}};
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             return json{{"type", "sequence"}, {"children", p.children}};
         } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
@@ -1863,7 +2114,11 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
         } else if constexpr (std::is_same_v<T, common_peg_string_parser>) {
             return json{{"type", "string"}, {"delimiter", std::string(1, p.delimiter)}};
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            return json{{"type", "until"}, {"delimiters", p.delimiters}};
+            json j{{"type", "until"}, {"delimiters", p.delimiters}};
+            if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
+                j["delimiter_parser"] = p.delimiter_parser;
+            }
+            return j;
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return json{
                 {"type", "schema"},
@@ -1891,7 +2146,11 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
         } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
             return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
         } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-            return json{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
+            json j{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
+            if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
+                j["delimiter_parser"] = p.delimiter_parser;
+            }
+            return j;
         }
     }, variant);
 }
@@ -1901,10 +2160,15 @@ common_json common_peg_arena::to_json() const {
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
+    auto token_table = common_json::array();
+    for (const auto & [id, token] : token_table_.tokens) {
+        token_table.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
+    }
     return common_json{
         {"parsers", parsers},
         {"rules", rules_},
-        {"root", root_}
+        {"root", root_},
+        {"token_table", token_table}
     };
 }
 
@@ -1929,6 +2193,15 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             throw std::runtime_error("literal parser missing or invalid 'literal' field");
         }
         return common_peg_literal_parser{j["literal"]};
+    }
+    if (type == "token") {
+        if (!j.contains("token") || !j.contains("piece") || !j["piece"].is_string()) {
+            throw std::runtime_error("token parser missing required fields");
+        }
+        return common_peg_token_parser{
+            j["token"].get<llama_token>(),
+            j["piece"].get<std::string>(),
+        };
     }
     if (type == "sequence") {
         if (!j.contains("children") || !j["children"].is_array()) {
@@ -2005,7 +2278,12 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
             throw std::runtime_error("until parser missing or invalid 'delimiters' field");
         }
-        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
+        common_peg_until_parser parser;
+        parser.delimiters = j["delimiters"].get<std::vector<std::string>>();
+        if (j.contains("delimiter_parser")) {
+            parser.delimiter_parser = j["delimiter_parser"].get<common_peg_parser_id>();
+        }
+        return parser;
     }
     if (type == "schema") {
         if (!j.contains("child") || !j.contains("name") || !j.contains("raw")) {
@@ -2065,10 +2343,13 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
             throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
         }
-        return common_peg_ac_parser{
-            j["child"].get<common_peg_parser_id>(),
-            j["delimiters"].get<std::vector<std::string>>(),
-        };
+        common_peg_ac_parser parser;
+        parser.child      = j["child"].get<common_peg_parser_id>();
+        parser.delimiters = j["delimiters"].get<std::vector<std::string>>();
+        if (j.contains("delimiter_parser")) {
+            parser.delimiter_parser = j["delimiter_parser"].get<common_peg_parser_id>();
+        }
+        return parser;
     }
 
     throw std::runtime_error("Unknown parser type: " + type);
@@ -2093,6 +2374,23 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
         arena.parsers_.push_back(deserialize_parser_variant(parser_json));
     }
 
+    auto rebuild_matcher = [&](auto & p) {
+        if (p.delimiter_parser == COMMON_PEG_INVALID_PARSER_ID) {
+            p.matcher = common_trie(p.delimiters);
+        } else if (p.delimiter_parser >= arena.parsers_.size()) {
+            throw std::runtime_error("delimiter references invalid parser ID: " + std::to_string(p.delimiter_parser));
+        } else {
+            build_delimiter_matcher(arena, p);
+        }
+    };
+    for (auto & parser : arena.parsers_) {
+        if (auto * until = std::get_if<common_peg_until_parser>(&parser)) {
+            rebuild_matcher(*until);
+        } else if (auto * ac = std::get_if<common_peg_ac_parser>(&parser)) {
+            rebuild_matcher(*ac);
+        }
+    }
+
     arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_peg_parser_id>>();
 
     for (const auto & [name, id] : arena.rules_) {
@@ -2104,6 +2402,21 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
     arena.root_ = j["root"].get<common_peg_parser_id>();
     if (arena.root_ != COMMON_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
         throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
+    }
+
+    if (j.contains("token_table")) {
+        for (const auto & token_json : j["token_table"]) {
+            if (!token_json.contains("id") || !token_json.contains("text") || !token_json.contains("attr")) {
+                throw std::runtime_error("special token missing required fields");
+            }
+            auto id   = token_json["id"].get<llama_token>();
+            auto text = token_json["text"].get<std::string>();
+            arena.token_table_.ids.emplace(text, id);
+            arena.token_table_.tokens.emplace(id, common_peg_token{
+                std::move(text),
+                static_cast<llama_token_attr>(token_json["attr"].get<int>()),
+            });
+        }
     }
 
     return arena;

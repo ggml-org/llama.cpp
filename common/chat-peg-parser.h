@@ -59,6 +59,8 @@ constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
 
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
+    using common_peg_parser_builder::common_peg_parser_builder;
+
     // Tag constants (from former common_chat_peg_base_builder)
     static constexpr const char * REASONING_BLOCK = "reasoning-block";
     static constexpr const char * REASONING       = "reasoning";
@@ -182,6 +184,14 @@ class common_chat_peg_builder : public common_peg_parser_builder {
 inline common_peg_arena build_chat_peg_parser(
   const std::function<common_peg_parser(common_chat_peg_builder & builder)> & fn) {
   common_chat_peg_builder builder;
+  builder.set_root(fn(builder));
+  return builder.build();
+}
+
+inline common_peg_arena build_chat_peg_parser(
+  const common_peg_token_table & token_table,
+  const std::function<common_peg_parser(common_chat_peg_builder & builder)> & fn) {
+  common_chat_peg_builder builder(token_table);
   builder.set_root(fn(builder));
   return builder.build();
 }
