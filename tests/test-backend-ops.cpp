@@ -10991,6 +10991,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1},  113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1}, 1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1}, 1024,  64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
+    test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1},  512,  24, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
+    test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1},  512,  24, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {0, 1, 2, 3}, true, true));
 
     // Sparse mask hint: supported decode/prefill layouts and dense fallbacks.
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
@@ -11896,7 +11898,7 @@ static bool run_fa_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, con
     // every head size the wide tile fits in the threadgroup memory for, then two where it falls back
     const shape_t   shapes[]   = { { 32, 32 }, { 40, 40 }, { 48, 48 }, { 64, 64 }, { 72, 72 }, { 80, 80 }, { 96, 96 }, { 96, 64 },
                                    { 112, 112 }, { 128, 128 }, { 192, 192 }, { 192, 128 }, { 256, 256 }, { 320, 256 }, { 576, 512 } };
-    const int       ne01_pts[] = { 64, 77 };                                                // full and partial tiles
+    const int       ne01_pts[] = { 64, 72, 77 };                                            // full tiles, and a last tile of 8 and of 13 rows
     const int       ne11_pts[] = { 512, 4097 };                                             // without and with kvpad
     const ggml_type types[]    = { GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_BF16 };         // wide, dequantized first, falls back
 

@@ -89,10 +89,11 @@ void kernel_flash_attn_ext_impl(
 
     constexpr short NW  = N_SIMDWIDTH;
     constexpr short NQ  = Q/NSG;
-    constexpr short NQB = Q/8; // 8x8 query blocks per K/V load (note: NQB > 1 requires F16 K/V)
+    constexpr short NQB = Q/8; // 8x8 query blocks per K/V load
     constexpr short SH  = 2*C; // shared memory per simdgroup (s_t == float)
 
     static_assert(Q % 8 == 0, "");
+    static_assert(NQB == 1 || (is_same<kd4x4_t, k4x4_t>::value && is_same<vd4x4_t, v4x4_t>::value), "the quantized K/V branches handle 8 queries only");
 
     constexpr short TS = 2*SH;
     constexpr short T  = DK + 2*PV; // shared memory size per query in (half)
