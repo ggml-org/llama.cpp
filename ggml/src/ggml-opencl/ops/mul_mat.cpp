@@ -1203,64 +1203,6 @@ static cl_mem ggml_cl_mul_mat_dequant_quant_to_f16(
     return out;
 }
 
-// look up or create a pooled image1d_buffer over a KV-cache view.
-cl_mem ggml_cl_img_pool_get_or_create(
-    ggml_backend_opencl_context * backend_ctx,
-    std::map<ggml_backend_opencl_context::ImagePoolKey,
-             ggml_backend_opencl_context::ImagePoolEntry> & pool,
-    cl_mem data_device,
-    cl_ulong offset0,
-    size_t required_bytes,
-    cl_channel_type channel_data_type
-) {
-    ggml_backend_opencl_context::ImagePoolKey key{(uintptr_t)data_device, (uint64_t)offset0};
-    auto it = pool.find(key);
-    if (it != pool.end()
-        && it->second.k_bytes >= required_bytes
-        && it->second.channel_data_type == channel_data_type
-        && it->second.image != nullptr) {
-        return it->second.image;
-    }
-
-    // need to create or recreate and release any stale entry first.
-    if (it != pool.end()) {
-        if (it->second.image)      { CL_CHECK(clReleaseMemObject(it->second.image)); }
-        if (it->second.sub_buffer) {CL_CHECK(clReleaseMemObject(it->second.sub_buffer)); }
-        pool.erase(it);
-    }
-
-    cl_int status = CL_SUCCESS;
-    cl_buffer_region region = {};
-    region.origin = (size_t)offset0;
-    region.size   = required_bytes;
-    cl_mem sub = clCreateSubBuffer(data_device, 0,
-                                   CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
-    if (status != CL_SUCCESS) {
-        return nullptr;
-    }
-
-    const size_t pixel_size = (channel_data_type == CL_HALF_FLOAT) ? 8 : 16;
-    cl_image_format fmt = {CL_RGBA, channel_data_type};
-    cl_image_desc   desc = {};
-    desc.image_type   = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-    desc.image_width  = required_bytes / pixel_size;
-    desc.buffer       = sub;
-    cl_mem img = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY,
-                               &fmt, &desc, NULL, &status);
-    if (status != CL_SUCCESS) {
-        CL_CHECK(clReleaseMemObject(sub));
-        return nullptr;
-    }
-
-    ggml_backend_opencl_context::ImagePoolEntry entry;
-    entry.sub_buffer = sub;
-    entry.image      = img;
-    entry.k_bytes    = required_bytes;
-    entry.channel_data_type = channel_data_type;
-    pool[key] = entry;
-    return img;
-}
-
 static bool ggml_cl_mm_f32_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
 

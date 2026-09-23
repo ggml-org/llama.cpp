@@ -1244,16 +1244,6 @@ static void ggml_cl_flash_attn_read_tensor_host(
     GGML_ASSERT(dst_off == total_bytes);
 }
 
-// forward decl: used by the FA decode dispatch (K-image variant) below.
-cl_mem ggml_cl_img_pool_get_or_create(
-    ggml_backend_opencl_context * backend_ctx,
-    std::map<ggml_backend_opencl_context::ImagePoolKey,
-             ggml_backend_opencl_context::ImagePoolEntry> & pool,
-    cl_mem data_device,
-    cl_ulong offset0,
-    size_t required_bytes,
-    cl_channel_type channel_data_type);
-
 // Rebuild AoS q8_0/q4_0 bytes from a SoA tensor into a temp buffer.
 // Returns false if the tensor is not SoA-quantised (already AoS).
 static bool ggml_cl_flash_attn_reconstruct_aos(
