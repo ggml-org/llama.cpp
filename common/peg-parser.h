@@ -247,6 +247,11 @@ struct common_peg_literal_parser {
     std::string literal;
 };
 
+struct common_peg_token_parser {
+    llama_token token;
+    std::string piece;
+};
+
 struct common_peg_sequence_parser {
     std::vector<common_peg_parser_id> children;
 };
@@ -340,6 +345,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_start_parser,
     common_peg_end_parser,
     common_peg_literal_parser,
+    common_peg_token_parser,
     common_peg_sequence_parser,
     common_peg_choice_parser,
     common_peg_repetition_parser,
@@ -363,6 +369,7 @@ class common_peg_arena {
     std::vector<common_peg_parser_variant> parsers_;
     std::unordered_map<std::string, common_peg_parser_id> rules_;
     common_peg_parser_id root_ = COMMON_PEG_INVALID_PARSER_ID;
+    common_peg_special_tokens tokens_;
 
   public:
     const common_peg_parser_variant & get(common_peg_parser_id id) const { return parsers_.at(id); }
@@ -376,6 +383,8 @@ class common_peg_arena {
 
     common_peg_parser_id root() const { return root_; }
     void set_root(common_peg_parser_id id) { root_ = id; }
+
+    const common_peg_special_tokens & special_tokens() const { return tokens_; }
 
     common_peg_parse_result parse(common_peg_parse_context & ctx, size_t start = 0) const;
     common_peg_parse_result parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const;
@@ -405,6 +414,7 @@ class common_peg_parser_builder {
 
   public:
     common_peg_parser_builder();
+    explicit common_peg_parser_builder(common_peg_special_tokens tokens);
 
     // Match nothing, always succeed.
     //   S -> ε
@@ -421,6 +431,10 @@ class common_peg_parser_builder {
     // Matches an exact literal string.
     //   S -> "hello"
     common_peg_parser literal(const std::string & literal) { return add(common_peg_literal_parser{literal}); }
+
+    // Matches a token or fallback to literal if the token is not registered with the builder.
+    //   S -> <[token-id]>
+    common_peg_parser token(const std::string & piece);
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
