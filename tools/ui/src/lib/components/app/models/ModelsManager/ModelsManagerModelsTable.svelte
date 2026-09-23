@@ -25,14 +25,11 @@
 		ModelAvatar,
 		ModelContext,
 		ModelId,
-		ModelLoadControl,
-		ModelsSection
+		ModelLoadControl
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -65,14 +62,9 @@
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
-	/** Header mode: families start open, this tracks the ones folded away. */
-	const collapsedFamilies = new SvelteSet<string>();
-	/** Row mode: families start collapsed, this tracks the ones opened. */
-	const expandedFamilies = new SvelteSet<string>();
-	/** Sections rendered as collapsible table rows instead of headers. */
-	let collapsibleRows = $state(false);
 	const collapsedSections = new SvelteSet<string>(['hidden']);
-	/** Sections with their repos folded into families, when that view is on. */
+	/** Families start collapsed, this tracks the ones the user opened. */
+	const expandedFamilies = new SvelteSet<string>();
 	/** Sections that list their models straight, without folding them into families. */
 	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>(['favorites', 'loaded']);
 	let sections = $derived(
@@ -96,17 +88,11 @@
 		}
 	}
 
-	function isFamilyExpanded(key: string): boolean {
-		return collapsibleRows ? expandedFamilies.has(key) : !collapsedFamilies.has(key);
-	}
-
 	function toggleFamily(key: string): void {
-		const folded = collapsibleRows ? expandedFamilies : collapsedFamilies;
-
-		if (folded.has(key)) {
-			folded.delete(key);
+		if (expandedFamilies.has(key)) {
+			expandedFamilies.delete(key);
 		} else {
-			folded.add(key);
+			expandedFamilies.add(key);
 		}
 	}
 
@@ -413,7 +399,7 @@
 {/snippet}
 
 {#snippet familyRow(family: ModelFamilyGroup, indent = 0)}
-	{@const isExpanded = isFamilyExpanded(family.key)}
+	{@const isExpanded = expandedFamilies.has(family.key)}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div class="px-2">
@@ -424,38 +410,20 @@
 			role="button"
 			tabindex="0"
 		>
-			{#if collapsibleRows}
-				<!-- with sections as rows, every level reads as a model row -->
-				<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-					<ModelAvatar
-						option={family.entries[0].base}
-						showBaseModelAvatar
-						showQuantBadge={false}
-						size="size-9"
-					/>
+			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+				<ModelAvatar
+					option={family.entries[0].base}
+					showBaseModelAvatar
+					showQuantBadge={false}
+					size="size-7"
+				/>
 
-					<span class="min-w-0">
-						<span class="block truncate text-sm font-medium">{family.label}</span>
+				<span class="min-w-0">
+					<span class="block truncate text-sm font-medium">{family.label}</span>
 
-						<span class="block text-xs text-muted-foreground">
-							{countLabel}
-						</span>
-					</span>
+					<span class="block text-xs text-muted-foreground">{countLabel}</span>
 				</span>
-			{:else}
-				<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-					<ModelAvatar
-						option={family.entries[0].base}
-						showBaseModelAvatar
-						showQuantBadge={false}
-						size="size-7"
-					/>
-
-					<span class="truncate text-sm font-medium">{family.label}</span>
-
-					<span class="text-sm text-muted-foreground">{countLabel}</span>
-				</span>
-			{/if}
+			</span>
 
 			<span></span>
 
@@ -485,14 +453,6 @@
 	<div class="flex shrink-0 items-center gap-2 py-4">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
 
-		<span class="flex items-center gap-2">
-			<Checkbox bind:checked={collapsibleRows} id="collapsible-rows" />
-
-			<Label class="cursor-pointer text-xs text-muted-foreground" for="collapsible-rows">
-				Collapsible rows
-			</Label>
-		</span>
-
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
 	</div>
 
@@ -513,63 +473,24 @@
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
-				{#snippet groupIcon()}
-					{#if group.kind === 'favorites'}
-						<Heart class="h-3.5 w-3.5 shrink-0" />
-					{:else if group.kind === 'loaded'}
-						<Power class="h-3.5 w-3.5 shrink-0" />
-					{:else if group.kind === 'hidden'}
-						<EyeOff class="h-3.5 w-3.5 shrink-0" />
-					{:else if group.kind === 'local'}
-						<Logo class="shrink-0" style="--size: 0.875rem" />
+				{@render sectionRow(group)}
+
+				{#if !collapsedSections.has(group.key)}
+					{#if group.flat}
+						{#each group.items as entry (entry.key)}
+							{@render entryTree(entry, 40)}
+						{/each}
 					{/if}
-				{/snippet}
 
-				{#if collapsibleRows}
-					{@render sectionRow(group)}
+					{#each group.families as family (family.key)}
+						{@render familyRow(family, 20)}
 
-					{#if !collapsedSections.has(group.key)}
-						{#if group.flat}
-							{#each group.items as entry (entry.key)}
+						{#if expandedFamilies.has(family.key)}
+							{#each family.entries as entry (entry.key)}
 								{@render entryTree(entry, 40)}
 							{/each}
 						{/if}
-
-						{#each group.families as family (family.key)}
-							{@render familyRow(family, 20)}
-
-							{#if isFamilyExpanded(family.key)}
-								{#each family.entries as entry (entry.key)}
-									{@render entryTree(entry, 40)}
-								{/each}
-							{/if}
-						{/each}
-					{/if}
-				{:else}
-					<ModelsSection
-						backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
-						count={group.items.length}
-						icon={group.kind === 'provider' ? undefined : groupIcon}
-						label={group.label}
-						open={group.kind !== 'hidden'}
-						sticky
-					>
-						{#if group.flat}
-							{#each group.items as entry (entry.key)}
-								{@render entryTree(entry, 16)}
-							{/each}
-						{/if}
-
-						{#each group.families as family (family.key)}
-							{@render familyRow(family)}
-
-							{#if isFamilyExpanded(family.key)}
-								{#each family.entries as entry (entry.key)}
-									{@render entryTree(entry, 16)}
-								{/each}
-							{/if}
-						{/each}
-					</ModelsSection>
+					{/each}
 				{/if}
 			{/if}
 		{/each}
