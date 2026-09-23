@@ -68,3 +68,4 @@ export { default as Logo } from './Logo.svelte';
  * transition, so hidden rows never reach menu keyboard navigation.
  */
 export { default as CollapsibleSection } from './CollapsibleSection.svelte';
+export { default as GroupedList, type GroupedListGroup } from './GroupedList.svelte';
