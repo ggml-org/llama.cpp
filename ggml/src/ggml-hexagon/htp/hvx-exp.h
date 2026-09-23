@@ -173,7 +173,7 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
         HVX_Vector * p_vec_in1 = (HVX_Vector *) src;
         HVX_Vector * p_vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+        #pragma unroll(2)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             if (true == negate) {
                 HVX_Vector neg_vec_in = hvx_vec_neg_f32(*p_vec_in1++);
@@ -183,7 +183,7 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
             }
         }
     } else {
-        #pragma unroll(4)
+        #pragma unroll(2)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 

@@ -13,6 +13,7 @@
 #include <openvino/op/relu.hpp>
 #include <openvino/op/sigmoid.hpp>
 #include <openvino/op/subtract.hpp>
+#include <openvino/op/swish.hpp>
 #include <openvino/op/tanh.hpp>
 
 namespace ov {
@@ -50,10 +51,9 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_TRANSPOSE",       op::translate_transpose                        },
         {"GGML_UNARY_OP_GELU",      op::translate_1to1_match_1_input<v7::Gelu>     },
         {"GGML_UNARY_OP_SIGMOID",   op::translate_1to1_match_1_input<v0::Sigmoid>  },
-        {"GGML_UNARY_OP_SILU",      op::translate_unary_silu                       },
+        {"GGML_UNARY_OP_SILU",      op::translate_1to1_match_1_input<v4::Swish>    },
         {"GGML_UNARY_OP_SOFTPLUS",  op::translate_unary_softplus                   },
         {"GGML_UNARY_OP_TANH",      op::translate_1to1_match_1_input<v0::Tanh>     },
-        {"GGML_UNARY_OP_SIGMOID",   op::translate_1to1_match_1_input<v0::Sigmoid>  },
         {"GGML_UNARY_OP_EXP",       op::translate_1to1_match_1_input<v0::Exp>      },
         {"GGML_UNARY_OP_NEG",       op::translate_1to1_match_1_input<v0::Negative> },
         {"GGML_UNARY_OP_RELU",      op::translate_1to1_match_1_input<v0::Relu>     },

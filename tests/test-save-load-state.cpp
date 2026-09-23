@@ -11,6 +11,43 @@
 #include <string>
 #include <vector>
 
+constexpr double NMSE_THRESHOLD = 1e-5;
+
+// normalized mean squared error = mse(a, b) / mse(a, 0)
+static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
+    GGML_ASSERT(a.size() == b.size());
+    double mse_a_b = 0.0;
+    double mse_a_0 = 0.0;
+
+    for (size_t i = 0; i < a.size(); i++) {
+        const float a_i = a[i];
+        const float b_i = b[i];
+
+        mse_a_b += (double) (a_i - b_i) * (a_i - b_i);
+        mse_a_0 += (double) a_i * a_i;
+    }
+
+    return mse_a_b / mse_a_0;
+}
+
+struct generation_result {
+    llama_tokens tokens;
+    std::vector<std::vector<float>> logits;
+
+    bool empty() const { return tokens.empty(); }
+};
+
+static bool get_current_logits(llama_context * ctx, std::vector<float> & out) {
+    const auto * vocab = llama_model_get_vocab(llama_get_model(ctx));
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const float * logits = llama_get_logits_ith(ctx, -1);
+    if (logits == nullptr) {
+        return false;
+    }
+    out.assign(logits, logits + n_vocab);
+    return true;
+}
+
 struct llama_batch_ptr {
     llama_batch batch;
 
@@ -28,15 +65,22 @@ struct llama_batch_ptr {
     const llama_batch & get() const { return batch; }
 };
 
-static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
-    llama_tokens result;
+static generation_result generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
+    generation_result result;
     llama_batch_ptr batch(1, 0, 1);
 
     for (int i = 0; i < n_predict; i++) {
+        std::vector<float> logits;
+        if (!get_current_logits(ctx, logits)) {
+            LOG_ERR("\n%s: failed to get logits\n", __func__);
+            return {};
+        }
+
         auto next_token = llama_sampler_sample(smpl, ctx, -1);
 
         LOG("%d ", next_token);
-        result.push_back(next_token);
+        result.tokens.push_back(next_token);
+        result.logits.push_back(std::move(logits));
 
         common_batch_clear(batch.get());
         common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
@@ -51,12 +95,61 @@ static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, i
     return result;
 }
 
+static bool generate_tokens_compare(
+        llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id,
+        const generation_result & expected) {
+    if (expected.tokens.size() != expected.logits.size() || expected.tokens.size() < (size_t) n_predict) {
+        LOG_ERR("\n%s: invalid expected generation\n", __func__);
+        return false;
+    }
+
+    llama_batch_ptr batch(1, 0, 1);
+
+    for (int i = 0; i < n_predict; i++) {
+        std::vector<float> logits;
+        if (!get_current_logits(ctx, logits)) {
+            LOG_ERR("\n%s: failed to get logits\n", __func__);
+            return false;
+        }
+        if (logits.size() != expected.logits[i].size()) {
+            LOG_ERR("\n%s: logits size mismatch at step %d: %zu != %zu\n", __func__, i, logits.size(), expected.logits[i].size());
+            return false;
+        }
+
+        const double nmse_val = nmse(expected.logits[i], logits);
+        LOG_TRC("%s: step %d nmse = %.6e\n", __func__, i, nmse_val);
+        if (nmse_val > NMSE_THRESHOLD) {
+            LOG_ERR("\n%s: error: NMSE at step %d is %.6e (threshold %.1e)\n", __func__, i, nmse_val, NMSE_THRESHOLD);
+            return false;
+        }
+
+        const auto next_token = llama_sampler_sample(smpl, ctx, -1);
+        const auto expected_token = expected.tokens[i];
+
+        LOG("%d ", next_token);
+        if (next_token != expected_token) {
+            LOG_TRC("%s: sampled token %d differs from expected %d, using expected token\n", __func__, next_token, expected_token);
+        }
+
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), expected_token, n_past, {seq_id}, true);
+
+        if (llama_decode(ctx, batch.get())) {
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
+            return false;
+        }
+        n_past++;
+    }
+
+    return true;
+}
+
 // Test 1: baseline
 // - decode all but the last token
 // - save state to disk
 // - decode the last token
 // - generate n_predict tokens
-static llama_tokens test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
+static generation_result test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -109,7 +202,7 @@ static bool test_seq_rm_isolated(
     for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
         llama_batch_ptr batch(n_tokens, 0, 1);
         for (size_t i = 0; i < n_tokens; ++i) {
-            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, i == n_tokens - 1);
         }
 
         if (llama_decode(ctx.get(), batch.get())) {
@@ -166,7 +259,7 @@ static bool test_seq_rm_isolated(
 // - load state from file
 // - replay the last prompt token
 // - generate n_predict tokens and compare against expected result
-static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -195,14 +288,8 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     }
     n_past++;
 
-    // Generate tokens
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
-    if (result.empty()) {
-        return false;
-    }
-
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 0, expected_result)) {
         return false;
     }
 
@@ -217,7 +304,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the CPU path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -267,14 +354,8 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
-    // Generate tokens on seq 1
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
-    if (result.empty()) {
-        return false;
-    }
-
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 1, expected_result)) {
         return false;
     }
 
@@ -289,7 +370,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the on-device path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -339,14 +420,8 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
-    // Generate tokens on seq 1
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
-    if (result.empty()) {
-        return false;
-    }
-
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 1, expected_result)) {
         return false;
     }
 
@@ -373,7 +448,7 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
 
     auto decode_one = [&](llama_token tok, int pos, llama_seq_id seq) {
         llama_batch_ptr batch(1, 0, 1);
-        common_batch_add(batch.get(), tok, pos, { seq }, false);
+        common_batch_add(batch.get(), tok, pos, { seq }, true);
         return llama_decode(ctx.get(), batch.get()) == 0;
     };
 

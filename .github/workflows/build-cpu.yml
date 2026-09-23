@@ -88,7 +88,7 @@ jobs:
         run: |
           export PIP_BREAK_SYSTEM_PACKAGES="1"
           python3 -m pip install --upgrade pip setuptools
-          pip3 install ./gguf-py
+          pip3 install ./gguf-py jinja2==3.1.6
 
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
@@ -124,7 +124,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main --verbose --timeout 900
+          ctest -L 'main|python' --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test
@@ -221,7 +221,6 @@ jobs:
       #     7z x "-o${env:RUNNER_TEMP}" $env:RUNNER_TEMP/sde.tar
       #     $sde = $(join-path $env:RUNNER_TEMP sde-external-${env:SDE_VERSION}-win/sde.exe)
       #     cd build
-      #     $env:LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR = 1
       #     & $sde -future -- ctest -L main -C Release --verbose --timeout 900
 
       - name: ccache-clear

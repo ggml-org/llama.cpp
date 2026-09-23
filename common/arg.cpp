@@ -872,17 +872,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     arg.c_str(), e.what(), opt.to_string().c_str()));
             }
         }
-
-        // TODO: remove this check after deprecating --mmap|mlock|dio
-        auto has_arg = [&](std::initializer_list<const char *> names) {
-            return std::any_of(names.begin(), names.end(), [&](const char * name) {
-                return seen_args.count(name);
-            });
-        };
-        if (has_arg({"-lm", "--load-mode"}) &&
-            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"})) {
-            LOG_WRN("DEPRECATED: `--load-mode` and `--mlock`/`--mmap`/`--direct-io` should not be combined; only the last flag on the command line will take effect\n");
-        }
     };
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
@@ -2027,7 +2016,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.temp = std::max(params.sampling.temp, 0.0f);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_TEMPERATURE"));
     add_opt(common_arg(
         {"--top-k"}, "N",
         string_format("top-k sampling (default: %d, 0 = disabled)", params.sampling.top_k),
@@ -2043,7 +2032,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.top_p = std::stof(value);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TOP_P;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_TOP_P"));
     add_opt(common_arg(
         {"--min-p"}, "N",
         string_format("min-p sampling (default: %.2f, 0.0 = disabled)", (double)params.sampling.min_p),
@@ -2051,7 +2040,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.min_p = std::stof(value);
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIN_P;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_MIN_P"));
     add_opt(common_arg(
         {"--top-nsigma", "--top-n-sigma"}, "N",
         string_format("top-n-sigma sampling (default: %.2f, -1.0 = disabled)", params.sampling.top_n_sigma),
@@ -2107,7 +2096,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sampling.penalty_repeat = penalty_repeat;
             params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_REPEAT_PENALTY"));
     add_opt(common_arg(
         {"--presence-penalty"}, "N",
         string_format("repeat alpha presence penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_present),
@@ -2118,7 +2107,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.sampling.penalty_present = penalty_present;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_PRESENCE_PENALTY"));
     add_opt(common_arg(
         {"--frequency-penalty"}, "N",
         string_format("repeat alpha frequency penalty (default: %.2f, 0.0 = disabled)", (double)params.sampling.penalty_freq),
@@ -2129,7 +2118,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.sampling.penalty_freq = penalty_freq;
         }
-    ).set_sampling());
+    ).set_sampling().set_env("LLAMA_ARG_FREQUENCY_PENALTY"));
     add_opt(common_arg(
         {"--dry-multiplier"}, "N",
         string_format("set DRY sampling multiplier (default: %.2f, 0.0 = disabled)", (double)params.sampling.dry_multiplier),
@@ -2288,14 +2277,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sampling());
     add_opt(common_arg(
         {"-j", "--json-schema"}, "SCHEMA",
-        "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
+        "JSON schema to constrain generations (https://json-schema.org/), e.g. `{\"type\": \"object\"}` for any JSON object",
         [](common_params & params, const std::string & value) {
             params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
         }
     ).set_sampling());
     add_opt(common_arg(
         {"-jf", "--json-schema-file"}, "FILE",
-        "File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
+        "File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{\"type\": \"object\"}` for any JSON object",
         [](common_params & params, const std::string & value) {
             std::ifstream file(value);
             if (!file) {
@@ -2694,32 +2683,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         ).set_env("LLAMA_ARG_RPC"));
     }
-    add_opt(common_arg(
-        {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
-        [](common_params & params) {
-            LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
-            params.load_mode = LLAMA_LOAD_MODE_MLOCK;
-        }
-    ).set_env("LLAMA_ARG_MLOCK"));
-    add_opt(common_arg(
-        {"--mmap"},
-        {"--no-mmap"},
-        "DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_MMAP"));
-    add_opt(common_arg(
-        {"-dio", "--direct-io"},
-        {"-ndio", "--no-direct-io"},
-        "DEPRECATED in favor of `--load-mode`: use DirectIO if available",
-        [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
-            params.load_mode = value ? LLAMA_LOAD_MODE_DIRECT_IO : LLAMA_LOAD_MODE_NONE;
-        }
-    ).set_env("LLAMA_ARG_DIO"));
     add_opt(common_arg(
         {"-lm", "--load-mode"}, "MODE",
         "model loading mode (default: auto)\n"
@@ -3345,9 +3308,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
         {"--host"}, "HOST",
-        string_format("ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: %s)", params.hostname.c_str()),
+        string_format("IP addresses to listen on, comma-separated, or UNIX socket paths ending in .sock; with multiple TCP addresses, :: binds IPv6 only; overlapping addresses result in undefined behavior (default: %s)", params.hostnames[0].c_str()),
         [](common_params & params, const std::string & value) {
-            params.hostname = value;
+            params.hostnames.clear();
+            for (auto & host : parse_csv_row(value)) {
+                host = string_strip(host);
+                if (!host.empty()) {
+                    params.hostnames.push_back(host);
+                }
+            }
+            if (params.hostnames.empty()) {
+                throw std::invalid_argument("--host requires at least one address");
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_HOST"));
     add_opt(common_arg(
@@ -3912,7 +3884,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-log-jsonl"},
         "Log as JSONL (one JSON object per line) to stdout, this also disables colored logging (default: disabled)",
         [](common_params &, bool value) {
-            common_log_set_jsonl(common_log_main(), value);
+            common_log_set_jsonl(value);
         }
     ).set_env("LLAMA_ARG_LOG_JSONL"));
     add_opt(common_arg(
