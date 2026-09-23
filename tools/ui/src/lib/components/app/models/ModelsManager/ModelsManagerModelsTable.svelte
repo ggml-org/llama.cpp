@@ -73,11 +73,13 @@
 	let collapsibleRows = $state(false);
 	const collapsedSections = new SvelteSet<string>(['hidden']);
 	/** Sections with their repos folded into families, when that view is on. */
+	/** Sections that list their models straight, without folding them into families. */
+	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>(['favorites', 'loaded']);
 	let sections = $derived(
 		groups.map((group) => {
-			const families = groupModelFamilies(group.items);
+			const flat = FLAT_SECTIONS.has(group.kind);
 
-			return { ...group, families };
+			return { ...group, families: flat ? [] : groupModelFamilies(group.items), flat };
 		})
 	);
 
@@ -517,6 +519,12 @@
 					{@render sectionRow(group)}
 
 					{#if !collapsedSections.has(group.key)}
+						{#if group.flat}
+							{#each group.items as entry (entry.key)}
+								{@render entryTree(entry, 40)}
+							{/each}
+						{/if}
+
 						{#each group.families as family (family.key)}
 							{@render familyRow(family, 20)}
 
@@ -536,6 +544,12 @@
 						open={group.kind !== 'hidden'}
 						sticky
 					>
+						{#if group.flat}
+							{#each group.items as entry (entry.key)}
+								{@render entryTree(entry, 16)}
+							{/each}
+						{/if}
+
 						{#each group.families as family (family.key)}
 							{@render familyRow(family)}
 
