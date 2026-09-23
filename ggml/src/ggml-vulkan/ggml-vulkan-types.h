@@ -390,6 +390,7 @@ enum vk_device_architecture {
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
+    QUALCOMM_ADRENO,
 };
 
 enum vk_conv_shapes {
