@@ -10157,7 +10157,8 @@ void ggml_vk_fill(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor
 static void ggml_vk_sleep(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_sleep(dst=" << dst << ", us=" << ggml_get_op_params_i32(dst, 0) << ")");
 
-    // Vulkan does not specify the period of the shader realtime clock, assume it matches the timestamp counter
+    // Vulkan does not specify the period of the shader realtime clock this assumes it matches the timestamp counter.
+    // A driver where this does not hold could sleep too short or too long by that ratio
     const float    ns_per_tick = ctx->device->properties.limits.timestampPeriod;
     const uint64_t ns          = 1000 * (uint64_t) ggml_get_op_params_i32(dst, 0);
     const uint64_t ticks       = std::min<uint64_t>(ns_per_tick > 0.0f ? (uint64_t)(ns / ns_per_tick) : ns, std::numeric_limits<uint32_t>::max());
