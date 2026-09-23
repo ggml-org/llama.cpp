@@ -31,7 +31,7 @@
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
-	import { MODEL_ROW_WINDOW } from '$lib/constants';
+	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -83,6 +83,16 @@
 
 	/** Rows mounted per section, grown by the show more row. */
 	const sectionLimits = new SvelteMap<string, number>();
+	/** Models mounted per family, grown the same way. */
+	const familyLimits = new SvelteMap<string, number>();
+
+	function familyLimit(key: string): number {
+		return familyLimits.get(key) ?? FAMILY_ROW_WINDOW;
+	}
+
+	function growFamily(key: string): void {
+		familyLimits.set(key, familyLimit(key) + FAMILY_ROW_WINDOW);
+	}
 
 	function sectionLimit(key: string): number {
 		return sectionLimits.get(key) ?? MODEL_ROW_WINDOW;
@@ -124,7 +134,9 @@
 			if (shown >= limit) break;
 
 			families.push(family);
-			shown += family.entries.reduce((sum, entry) => sum + entry.quants.length, 0);
+			shown += family.entries
+				.slice(0, FAMILY_ROW_WINDOW)
+				.reduce((sum, entry) => sum + entry.quants.length, 0);
 		}
 
 		return {
@@ -541,9 +553,23 @@
 						{@render familyRow(family)}
 
 						{#if !collapsedFamilies.has(family.key)}
-							{#each family.entries as entry (entry.key)}
+							{@const entries = family.entries.slice(0, familyLimit(family.key))}
+
+							{#each entries as entry (entry.key)}
 								{@render entryTree(entry, 16)}
 							{/each}
+
+							{#if family.entries.length > entries.length}
+								<div class="px-2">
+									<button
+										class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
+										onclick={() => growFamily(family.key)}
+										type="button"
+									>
+										Show {Math.min(FAMILY_ROW_WINDOW, family.entries.length - entries.length)} more models
+									</button>
+								</div>
+							{/if}
 						{/if}
 					{/each}
 

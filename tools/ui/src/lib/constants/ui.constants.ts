@@ -59,6 +59,9 @@ export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
  */
 export const MODEL_ROW_WINDOW = 50;
 
+/** Models of one family shown before the rest fold behind a "show more" row. */
+export const FAMILY_ROW_WINDOW = 6;
+
 /** Recently used models kept per browser, most recent first. */
 export const RECENT_MODEL_LIMIT = 20;
 
