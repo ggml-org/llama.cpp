@@ -30,6 +30,8 @@
 		items?: E[];
 		/** Entries of the list shown before its show more row. 0 shows every entry. */
 		sectionWindow?: number;
+		/** Sticky class of a group heading, so a surface can shade it differently. */
+		stickyClass?: string;
 		/** Sticky offset of a group heading, e.g. `top: 2.25rem`. Empty keeps it scrolling. */
 		stickyStyle?: string;
 		/** Weight of one entry against a window, e.g. the rows it renders. */
@@ -45,6 +47,7 @@
 		keyOf,
 		more,
 		sectionWindow = 0,
+		stickyClass = 'bg-popover',
 		stickyStyle = '',
 		weightOf
 	}: Props = $props();
@@ -106,7 +109,7 @@
 		{@const expanded = !collapsed.has(entry.key)}
 
 		{#if group}
-			<div class="sticky z-10 bg-popover" style={stickyStyle}>
+			<div class="sticky z-10 {stickyClass}" style={stickyStyle}>
 				{@render group({
 					depth: 0,
 					expanded,

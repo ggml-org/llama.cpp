@@ -23,6 +23,8 @@
 		open?: boolean;
 		revealChevronOnHover?: boolean;
 		sectionHeaderClass?: string;
+		/** Sticky class of the header, so a surface can shade it differently. */
+		stickyClass?: string;
 		/** Sticks the header to the top of the scrollport. */
 		sticky?: boolean;
 	}
@@ -39,11 +41,12 @@
 		open = true,
 		revealChevronOnHover = false,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none',
-		sticky = false
+		sticky = false,
+		stickyClass = 'sticky z-10 bg-popover'
 	}: Props = $props();
 
 	let triggerClass = $derived(
-		`${sectionHeaderClass} flex w-full cursor-pointer items-center gap-1.5 text-left${sticky ? ' sticky z-10 bg-popover' : ''}`
+		`${sectionHeaderClass} flex w-full cursor-pointer items-center gap-1.5 text-left${sticky ? ` ${stickyClass}` : ''}`
 	);
 	// the dropdown publishes its search block height, surfaces without one fall back to 0
 	let triggerStyle = $derived(sticky ? 'top: var(--dropdown-sticky-height, 0px)' : '');

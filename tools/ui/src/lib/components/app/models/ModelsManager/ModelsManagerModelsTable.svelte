@@ -507,6 +507,7 @@
 					label={group.label}
 					open={group.kind !== 'hidden'}
 					sticky
+					stickyClass="sticky z-10 bg-muted/60 backdrop-blur-sm"
 				>
 					<GroupedList
 						group={familyRow}
@@ -517,6 +518,7 @@
 						keyOf={(entry) => entry.key}
 						more={showMore}
 						sectionWindow={MODEL_ROW_WINDOW}
+						stickyClass="bg-muted/30 backdrop-blur-sm"
 						stickyStyle="top: calc(2.25rem - 1px)"
 						weightOf={(entry) => entry.quants.length}
 					/>
