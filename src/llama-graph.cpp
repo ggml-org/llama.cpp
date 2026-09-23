@@ -176,7 +176,29 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
 
-        ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+        const bool use_time_slot = mrope_time_slot >= 0 && n_pos_per_embd == 4 && (ubatch->is_mixed() || ubatch->token == nullptr);
+
+        if (use_time_slot) {
+            // embedding entries (images) fill the 4 slots as [key, height, width, time] and the time component has to feed RoPE section 0, so slot 0 stays a strictly increasing cache key. token entries are expanded to [p, p, p, 0] by the batch layer and keep p in section 0.
+            const int64_t t = mrope_time_slot;
+            std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+            for (int64_t i = 0; i < n_tokens; ++i) {
+                const bool is_embd = ubatch->is_mixed() ? (ubatch->type[i] != 0) : true;
+                if (!is_embd) {
+                    for (int64_t j = 0; j < n_pos_per_embd; ++j) {
+                        pos_data[j*n_tokens + i] = ubatch->pos[j*n_tokens + i];
+                    }
+                    continue;
+                }
+                pos_data[                i] = ubatch->pos[    t*n_tokens + i]; // time
+                pos_data[    n_tokens + i] = ubatch->pos[    n_tokens + i]; // height
+                pos_data[2 * n_tokens + i] = ubatch->pos[2 * n_tokens + i]; // width
+                pos_data[3 * n_tokens + i] = 0; // unused by RoPE (section 3 has 0 dims)
+            }
+            ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
+        } else {
+            ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+        }
     }
 }
 
@@ -2586,7 +2608,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
+    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd(), hparams.rope_mrope_time_slot);
 
     auto & cur = inp->pos;
 
