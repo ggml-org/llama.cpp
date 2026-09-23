@@ -202,19 +202,19 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
-common_peg_special_tokens::common_peg_special_tokens(const llama_vocab * vocab) {
+common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
     const llama_token n_tokens = llama_vocab_n_tokens(vocab);
     for (llama_token id = 0; id < n_tokens; ++id) {
         const auto attr = llama_vocab_get_attr(vocab, id);
         if (attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) {
             std::string text = llama_vocab_get_text(vocab, id);
             ids.emplace(text, id);
-            tokens.emplace(id, common_peg_special_token{ std::move(text), attr });
+            tokens.emplace(id, common_peg_token{ std::move(text), attr });
         }
     }
 }
 
-llama_token common_peg_special_tokens::token_id(const std::string & text) const {
+llama_token common_peg_token_table::token_id(const std::string & text) const {
     auto it = ids.find(text);
     return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
 }
@@ -296,20 +296,6 @@ static void build_delimiter_matcher(const common_peg_arena & arena, T & parser) 
         parser.matcher.insert(d.symbols);
         parser.delimiters.push_back(std::move(d.text));
     }
-}
-
-bool common_peg_special_tokens::is_special(llama_token id) const {
-    return tokens.find(id) != tokens.end();
-}
-
-bool common_peg_special_tokens::is_control(llama_token id) const {
-    auto it = tokens.find(id);
-    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_CONTROL);
-}
-
-bool common_peg_special_tokens::is_user_defined(llama_token id) const {
-    auto it = tokens.find(id);
-    return it != tokens.end() && (it->second.attr & LLAMA_TOKEN_ATTR_USER_DEFINED);
 }
 
 void common_peg_input::append(const std::string & piece, llama_token token) {
@@ -1237,8 +1223,8 @@ static std::string rule_name(const std::string & name) {
 
 common_peg_parser_builder::common_peg_parser_builder() {}
 
-common_peg_parser_builder::common_peg_parser_builder(common_peg_special_tokens tokens) {
-    arena_.tokens_ = std::move(tokens);
+common_peg_parser_builder::common_peg_parser_builder(common_peg_token_table token_table) {
+    arena_.token_table_ = std::move(token_table);
 }
 
 common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
@@ -1256,7 +1242,7 @@ common_peg_parser common_peg_parser_builder::until(const common_peg_parser & del
 }
 
 common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
-    auto token = arena_.tokens_.token_id(piece);
+    auto token = arena_.token_table_.token_id(piece);
     if (token == LLAMA_TOKEN_NULL) {
         // Return a literal if the token is not registered with the builder
         return literal(piece);
@@ -2174,15 +2160,15 @@ common_json common_peg_arena::to_json() const {
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
-    auto special_tokens = common_json::array();
-    for (const auto & [id, token] : tokens_.tokens) {
-        special_tokens.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
+    auto token_table = common_json::array();
+    for (const auto & [id, token] : token_table_.tokens) {
+        token_table.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
     }
     return common_json{
         {"parsers", parsers},
         {"rules", rules_},
         {"root", root_},
-        {"special_tokens", special_tokens}
+        {"token_table", token_table}
     };
 }
 
@@ -2418,15 +2404,15 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
         throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
     }
 
-    if (j.contains("special_tokens")) {
-        for (const auto & token_json : j["special_tokens"]) {
+    if (j.contains("token_table")) {
+        for (const auto & token_json : j["token_table"]) {
             if (!token_json.contains("id") || !token_json.contains("text") || !token_json.contains("attr")) {
                 throw std::runtime_error("special token missing required fields");
             }
             auto id   = token_json["id"].get<llama_token>();
             auto text = token_json["text"].get<std::string>();
-            arena.tokens_.ids.emplace(text, id);
-            arena.tokens_.tokens.emplace(id, common_peg_special_token{
+            arena.token_table_.ids.emplace(text, id);
+            arena.token_table_.tokens.emplace(id, common_peg_token{
                 std::move(text),
                 static_cast<llama_token_attr>(token_json["attr"].get<int>()),
             });

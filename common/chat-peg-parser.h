@@ -189,9 +189,9 @@ inline common_peg_arena build_chat_peg_parser(
 }
 
 inline common_peg_arena build_chat_peg_parser(
-  const common_peg_special_tokens & special_tokens,
+  const common_peg_token_table & token_table,
   const std::function<common_peg_parser(common_chat_peg_builder & builder)> & fn) {
-  common_chat_peg_builder builder(special_tokens);
+  common_chat_peg_builder builder(token_table);
   builder.set_root(fn(builder));
   return builder.build();
 }
