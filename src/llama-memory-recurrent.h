@@ -2,6 +2,7 @@
 
 #include "llama-batch.h"
 #include "llama-graph.h"
+#include "llama-memory-recurrent-spill.h"
 #include "llama-memory.h"
 
 #include <map>
@@ -70,6 +71,12 @@ public:
     uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
 
+    bool spill_enabled() const noexcept;
+    bool complete_spill();
+    bool capture_spill(ggml_backend_sched_t sched,
+            const std::vector<llm_graph_recurrent_snapshot> & outputs);
+    const llama_recurrent_spill_bank * spill_bank() const noexcept;
+    uint64_t spill_generation() const noexcept;
     // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
     uint32_t n_rs_seq = 0;
 
@@ -115,6 +122,11 @@ public:
     std::vector<ggml_tensor *> p_l;
 
 private:
+    std::unique_ptr<llama_recurrent_spill_bank> spill;
+    bool restore_spill_slot(uint32_t slot);
+    uint64_t spill_cache_id = 0;
+    uint64_t spill_epoch = 0;
+    bool spill_pending = false;
     //const llama_model & model;
     const llama_hparams & hparams;
 
@@ -170,6 +182,7 @@ public:
     //
     // llama_memory_recurrent_context specific API
     //
+    bool spill_enabled() const;
 
     uint32_t get_n_rs() const;
     uint32_t get_head() const;

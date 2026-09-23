@@ -92,10 +92,14 @@ add_library(llama
             llama-memory-budget.h
             llama-memory-phase.cpp
             llama-memory-phase.h
+            llama-memory-phase-owner.cpp
+            llama-memory-phase-owner.h
             llama-memory-plan.cpp
             llama-memory-plan.h
             llama-memory-requirements.cpp
             llama-memory-requirements.h
+            llama-memory-recurrent-spill.cpp
+            llama-memory-recurrent-spill.h
             unicode.h
             ${LLAMA_MODELS_SOURCES}
             )

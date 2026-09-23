@@ -1375,6 +1375,7 @@ void llm_graph_result::reset() {
 
     inputs.clear();
     fused_nodes.clear();
+    recurrent_snapshots.clear();
 
     buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
 
@@ -1437,6 +1438,7 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
             ggml_set_output(tensor);
         }
     }
+    for (const auto & snapshot : recurrent_snapshots) ggml_set_output(snapshot.tensor);
 }
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
@@ -1478,6 +1480,10 @@ llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
 
 void llm_graph_result::add_fused_node(llm_graph_fused_node result) {
     fused_nodes.push_back(result);
+}
+
+void llm_graph_result::add_recurrent_snapshot(llm_graph_recurrent_snapshot result) {
+    recurrent_snapshots.push_back(result);
 }
 
 void llm_graph_result::set_params(const llm_graph_params & params) {

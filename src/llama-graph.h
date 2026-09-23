@@ -904,6 +904,13 @@ struct llm_graph_fused_node {
     int il;
 };
 
+struct llm_graph_recurrent_snapshot {
+    ggml_tensor * tensor = nullptr;
+    uint32_t layer = 0, slot = 0;
+    bool value = false;
+    size_t offset = 0;
+};
+
 class llm_graph_result {
 public:
     llm_graph_result(int64_t max_nodes);
@@ -938,6 +945,8 @@ public:
     llm_graph_input_i * add_input(llm_graph_input_ptr input);
 
     void add_fused_node(llm_graph_fused_node result);
+    void add_recurrent_snapshot(llm_graph_recurrent_snapshot result);
+    const std::vector<llm_graph_recurrent_snapshot> & get_recurrent_snapshots() const { return recurrent_snapshots; }
 
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
 
@@ -960,6 +969,7 @@ public:
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
+    std::vector<llm_graph_recurrent_snapshot> recurrent_snapshots;
 
     ggml_context_ptr ctx_compute;
 

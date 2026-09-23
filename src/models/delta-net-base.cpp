@@ -511,13 +511,16 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
                         conv_input->nb[1], conv_input->nb[2],
                         ggml_row_size(conv_input->type, s_idx));
 
-            ggml_tensor * conv_state_update =
-                ggml_view_2d(ctx0,
-                        conv_states_all, row_count, n_seqs,
-                        conv_states_all->nb[1],
-                        (s_slot * mem_size + kv_head) * row_size);
+            ggml_tensor * conv_state_update = mctx_cur->spill_enabled() && s_slot > 0
+                ? ggml_new_tensor_2d(ctx0, conv_states_all->type, row_count, n_seqs)
+                : ggml_view_2d(ctx0,
+                    conv_states_all, row_count, n_seqs,
+                    conv_states_all->nb[1],
+                    (s_slot * mem_size + kv_head) * row_size);
 
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
+            if (mctx_cur->spill_enabled() && s_slot > 0)
+                res->add_recurrent_snapshot({conv_state_update,uint32_t(il),uint32_t(s_slot),false,0});
         }
     }
 
@@ -594,13 +597,24 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         ggml_row_size(gdn_out->type, state_size_per_snap),
         ggml_row_size(gdn_out->type, attn_score_elems));
 
-    ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
-        D, n_seqs, n_written,
-        ssm_states_all->nb[1],
-        (size_t) mem_size * row_size,
-        (size_t) kv_head * row_size);
-
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+    if (mctx_cur->spill_enabled()) {
+        for (int64_t slot=0;slot<n_written;++slot) {
+            auto * source = ggml_view_2d(ctx0, src, D, n_seqs, src->nb[1], size_t(slot)*src->nb[2]);
+            auto * destination = slot == 0
+                ? ggml_view_2d(ctx0, ssm_states_all, D, n_seqs, ssm_states_all->nb[1], size_t(kv_head)*row_size)
+                : ggml_new_tensor_2d(ctx0, ssm_states_all->type, D, n_seqs);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, source, destination));
+            if (slot > 0)
+                res->add_recurrent_snapshot({destination,uint32_t(il),uint32_t(slot),true,0});
+        }
+    } else {
+        ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
+            D, n_seqs, n_written,
+            ssm_states_all->nb[1],
+            (size_t) mem_size * row_size,
+            (size_t) kv_head * row_size);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+    }
 
     return output;
 }

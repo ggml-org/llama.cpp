@@ -7,6 +7,8 @@
 #include "llama-model.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <cassert>
 #include <cstring>
 #include <limits>
@@ -15,6 +17,8 @@
 
 //
 // llama_memory_recurrent
+static std::atomic<uint64_t> next_spill_cache_id{1};
+
 //
 
 llama_memory_recurrent::llama_memory_recurrent(
@@ -34,6 +38,10 @@ llama_memory_recurrent::llama_memory_recurrent(
 
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
+    const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
+    const bool want_spill = n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0;
+    if (want_spill && n_seq_max != 1) throw std::runtime_error("recurrent host spill requires one serial sequence");
+
 
     cells.clear();
     cells.resize(mem_size);
@@ -98,7 +106,7 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+        const uint32_t n_rows = mem_size * (want_spill ? 1 : (1 + n_rs_seq));
         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
@@ -125,10 +133,35 @@ llama_memory_recurrent::llama_memory_recurrent(
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
-    if (is_empty()) {
-        if (n_rs_seq > 0) {
-            n_rs_seq = 0;
-            LLAMA_LOG_INFO("%s: disabling rollback snapshots because the memory module is empty\n", __func__);
+    if (is_empty() && n_rs_seq > 0) {
+        this->n_rs_seq = 0;
+        LLAMA_LOG_INFO("%s: disabling rollback snapshots because the memory module is empty\n", __func__);
+    }
+
+    if (want_spill && !is_empty()) {
+        std::vector<llama_recurrent_spill_layer> specs(r_l.size());
+        ggml_backend_dev_t device=nullptr;
+        for (size_t i=0;i<r_l.size();++i) {
+            if (!r_l[i]) continue;
+            if (!s_l[i]) throw std::runtime_error("incomplete recurrent layer storage");
+            specs[i]={r_l[i]->type,s_l[i]->type,uint64_t(r_l[i]->ne[0]),uint64_t(s_l[i]->ne[0]),true};
+            if (offload) {
+                auto * layer_device=model.dev_layer(int(i));
+                if (device && device != layer_device) throw std::runtime_error("recurrent spill requires one device");
+                device=layer_device;
+            }
+        }
+        llama_recurrent_spill_layout layout;
+        if (!llama_recurrent_spill_layout_make(specs,mem_size,n_rs_seq,layout))
+            throw std::runtime_error("invalid recurrent spill layout");
+        auto * host_type=device ? ggml_backend_dev_host_buffer_type(device) : nullptr;
+        if (!host_type) host_type=ggml_backend_cpu_buffer_type();
+        spill_cache_id=next_spill_cache_id.fetch_add(1,std::memory_order_relaxed);
+        spill=llama_recurrent_spill_bank::create(layout,host_type,spill_cache_id,0);
+        if (!spill) {
+            LLAMA_LOG_ERROR("%s: host recurrent snapshot allocation failed: buft=%s, bytes=%zu, cells=%u, depth=%u\n",
+                    __func__, host_type ? ggml_backend_buft_name(host_type) : "null", layout.host_snapshot_bytes, mem_size, n_rs_seq);
+            throw std::runtime_error("failed to allocate pinned recurrent snapshots");
         }
     }
 
@@ -146,6 +179,11 @@ llama_memory_recurrent::llama_memory_recurrent(
 }
 
 void llama_memory_recurrent::clear(bool data) {
+    if (spill) {
+        spill->reset(data);
+        spill_pending=false;
+    }
+
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
         cells[i].seq_id.clear();
@@ -175,15 +213,22 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
-
-    if ((uint32_t) seq_id >= this->n_seq_max) {
+    if (seq_id >= 0 && (uint32_t) seq_id >= this->n_seq_max) {
         LLAMA_LOG_ERROR("%s: invalid seq_id (%d) - larger than n_seq_max (%d)\n", __func__, seq_id, this->n_seq_max);
         return false;
     }
 
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
-        set_rs_idx(seq_id, 0);
+        if (spill) {
+            spill->reset(false);
+            spill_pending=false;
+        }
+        if (seq_id >= 0) {
+            set_rs_idx(seq_id, 0);
+        } else {
+            std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        }
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -209,10 +254,10 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                     return true;
                 }
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                // pending rollback is single-use
                 const bool pending = rs_idx[seq_id] != 0;
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
-                    set_rs_idx(seq_id, (uint32_t) rollback);
+                    if (spill && !restore_spill_slot(uint32_t(rollback))) return false;
+                    set_rs_idx(seq_id, spill ? 0 : uint32_t(rollback));
                     cell.pos = p0 - 1;
                     return true;
                 }
@@ -440,6 +485,67 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_brea
     }
     return ret;
 }
+
+bool llama_memory_recurrent::restore_spill_slot(uint32_t slot) {
+    if (!spill || !complete_spill() || !spill_epoch || slot == 0 || slot > n_rs_seq) return false;
+    struct pending_restore { ggml_tensor * tensor; const void * data; };
+    std::vector<pending_restore> rows;
+    rows.reserve(2*r_l.size());
+    size_t largest=0;
+    for (size_t layer=0;layer<r_l.size();++layer) {
+        if (!r_l[layer]) continue;
+        for (bool value : {false,true}) {
+            auto * tensor=value ? s_l[layer] : r_l[layer];
+            if (!tensor) return false;
+            const auto generation=spill->snapshot_generation(layer,value,slot);
+            if (!generation && !spill->snapshot_pristine(layer,value,slot)) return false;
+            const auto * data=generation ? spill->snapshot_data(layer,value,slot,generation) : nullptr;
+            if (generation && !data) return false;
+            largest=std::max(largest,ggml_nbytes(tensor));
+            rows.push_back({tensor,data});
+        }
+    }
+    if (rows.empty()) return false;
+    // This conservative boundary keeps checkpoint/state APIs valid before the next graph uses slot 0.
+    std::vector<uint8_t> zero(largest,0);
+    for (const auto & row : rows) ggml_backend_tensor_set(row.tensor,row.data ? row.data : zero.data(),0,ggml_nbytes(row.tensor));
+    return true;
+}
+
+
+bool llama_memory_recurrent::spill_enabled() const noexcept { return bool(spill); }
+
+bool llama_memory_recurrent::complete_spill() {
+    if (!spill_pending) return true;
+    if (!spill || !spill->complete_capture()) return false;
+    spill_pending=false;
+    return true;
+}
+
+bool llama_memory_recurrent::capture_spill(ggml_backend_sched_t sched,
+        const std::vector<llm_graph_recurrent_snapshot> & outputs) {
+    if (!spill) return true;
+    if (!sched || outputs.empty() || !complete_spill() || spill_epoch == UINT64_MAX) return false;
+    const uint64_t next=spill_epoch+1;
+    if (!spill->begin_capture({spill_cache_id,0,next})) return false;
+    for (const auto & output : outputs) {
+        auto * backend=output.tensor ? ggml_backend_sched_get_tensor_backend(sched,output.tensor) : nullptr;
+        if (!backend || !spill->capture(backend,output.layer,output.value,output.slot,
+                output.tensor,output.offset)) {
+            spill->cancel();
+            return false;
+        }
+    }
+    if (!spill->publish_capture()) { spill->cancel(); return false; }
+    spill_epoch=next;
+    spill_pending=true;
+    return true;
+}
+
+const llama_recurrent_spill_bank * llama_memory_recurrent::spill_bank() const noexcept { return spill.get(); }
+uint64_t llama_memory_recurrent::spill_generation() const noexcept { return spill_epoch; }
+
+bool llama_memory_recurrent_context::spill_enabled() const { return mem && mem->spill_enabled(); }
 
 llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
@@ -892,6 +998,10 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
         throw std::runtime_error("failed to restore kv cache");
     }
 
+    if (spill) {
+        spill->reset(true);
+        spill_pending=false;
+    }
     if (n_rs_seq != 0) {
         set_rs_idx(seq_id, 0);
     }

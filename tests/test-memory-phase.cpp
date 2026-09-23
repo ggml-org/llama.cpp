@@ -81,5 +81,34 @@ int main() {
         }
     });
 
+    t.test("speculative_phases_are_explicit_and_repeated_work_does_not_replan", [](testing & t) {
+        llama_memory_work_phase_tracker tracker;
+        using phase=llama_memory_work_phase;
+        using status=llama_memory_work_phase_status;
+        for (phase item : {phase::target_prefill,phase::mtp_draft,phase::target_verify,
+                phase::recurrent_spill,phase::mtp_catchup,phase::recurrent_restore,phase::mtp_draft}) {
+            const auto before=tracker.snapshot();
+            const auto result=tracker.notify({item,4,true});
+            t.assert_true(result.status == status::changed);
+            t.assert_equal(before.revision+1,result.revision);
+            t.assert_true(result.after == item);
+            t.assert_true(tracker.notify({item,1,true}).status == status::unchanged);
+            t.assert_equal(result.revision,tracker.snapshot().revision);
+        }
+        t.assert_equal(uint64_t(14),tracker.snapshot().notifications);
+    });
+
+    t.test("invalid_speculative_signals_leave_phase_identity_unchanged", [](testing & t) {
+        llama_memory_work_phase_tracker tracker;
+        using phase=llama_memory_work_phase;
+        using status=llama_memory_work_phase_status;
+        t.assert_true(tracker.notify({phase::target_verify,1,true}).status == status::changed);
+        const auto before=tracker.snapshot();
+        t.assert_true(tracker.notify({phase::recurrent_spill,0,true}).status == status::invalid_signal);
+        t.assert_true(tracker.notify({phase::mtp_draft,1,false}).status == status::unsupported_execution);
+        t.assert_true(tracker.snapshot().phase == before.phase);
+        t.assert_equal(before.notifications,tracker.snapshot().notifications);
+    });
+
     return t.summary();
 }

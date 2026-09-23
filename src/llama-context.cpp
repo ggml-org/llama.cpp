@@ -773,7 +773,24 @@ void llama_context::sched_reserve() {
         auto * gf_tg = graph_reserve(
             n_seqs, n_seqs, n_seqs, mctx.get(), true,
             measurements.data() + backend_ptrs.size());
-        return gf_pp && gf_tg && prepare_compute_arenas(measurements, 2);
+        if (!gf_pp || !gf_tg) return false;
+        const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
+        if (cparams.n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0 && n_seqs == 1) {
+            const uint32_t width=std::min(n_tokens,cparams.n_rs_seq+1);
+            if (width > 1) {
+                std::vector<size_t> verify(backend_ptrs.size());
+                std::vector<size_t> verify_all(backend_ptrs.size());
+                if (!graph_reserve(width,1,1,mctx.get(),true,verify.data()) ||
+                        !graph_reserve(width,1,std::min(width,cparams.n_outputs_max),
+                            mctx.get(),true,verify_all.data())) return false;
+                for (size_t i=0;i<backend_ptrs.size();++i) {
+                    const size_t required=std::max(verify[i],verify_all[i]);
+                    measurements[i]=std::max(measurements[i],required);
+                    measurements[backend_ptrs.size()+i]=std::max(measurements[backend_ptrs.size()+i],required);
+                }
+            }
+        }
+        return prepare_compute_arenas(measurements, 2);
     };
 
     if (!model.hparams.no_alloc && !prepare_arenas()) {
@@ -1536,6 +1553,14 @@ bool llama_context::set_adapter_cvec(
 llm_graph_result * llama_context::process_ubatch(
         const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx,
         llama_memory_text_phase phase, ggml_status & ret) {
+    llama_memory_recurrent * rs_spill = nullptr;
+    if (model.arch == LLM_ARCH_QWEN35 && cparams.n_rs_seq && gtype == LLM_GRAPH_TYPE_DEFAULT && memory) {
+        rs_spill = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        if (rs_spill && rs_spill->spill_enabled() && !rs_spill->complete_spill()) {
+            ret = GGML_STATUS_FAILED;
+            return nullptr;
+        }
+    }
     llama_kv_stream_model * stream = nullptr;
     if (cparams.kv_streaming()) {
         static const std::vector<ggml_backend_memory_lease_t> empty;
@@ -1624,6 +1649,13 @@ llm_graph_result * llama_context::process_ubatch(
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
+        return nullptr;
+    }
+
+    if (rs_spill && rs_spill->spill_enabled() &&
+            !rs_spill->capture_spill(sched.get(), res->get_recurrent_snapshots())) {
+        LLAMA_LOG_ERROR("%s: failed to capture recurrent snapshots\n", __func__);
+        ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
