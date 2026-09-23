@@ -313,6 +313,10 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class SystemOne:
+        LABELS             = "system_one.labels"
+        SEGMENT_SEPARATOR  = "system_one.segment_separator"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"

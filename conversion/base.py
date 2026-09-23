@@ -131,7 +131,8 @@ class ModelBase:
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False,
-                 fuse_qkv: bool = False):
+                 fuse_qkv: bool = False,
+                 system_one: dict[str, Any] | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -141,6 +142,7 @@ class ModelBase:
             raise ImportError(_mistral_import_error_msg)
 
         self.dir_model = dir_model
+        self.system_one = system_one or {}
         self.ftype = ftype
         self.fname_out = fname_out
         self.is_big_endian = is_big_endian
@@ -1184,6 +1186,21 @@ class ModelBase:
 
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
+
+        self.set_system_one_metadata()
+
+    def set_system_one_metadata(self):
+        if not self.system_one:
+            return
+
+        if "template" in self.system_one:
+            self.gguf_writer.add_chat_template([{"name": "system_one", "template": self.system_one["template"]}])
+        if "labels" in self.system_one:
+            self.gguf_writer.add_system_one_labels(self.system_one["labels"])
+        if "segment_separator" in self.system_one:
+            self.gguf_writer.add_system_one_segment_separator(self.system_one["segment_separator"])
+
+        logger.info(f"Set System One metadata ({', '.join(sorted(self.system_one))})")
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")

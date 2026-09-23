@@ -108,6 +108,7 @@ enum llama_example {
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
     LLAMA_EXAMPLE_TOKENIZE,
+    LLAMA_EXAMPLE_SYSTEM_ONE,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -754,6 +755,18 @@ struct common_params {
     // TTS params
     std::string tts_lang = "";
     std::string tts_speaker_file = "";
+
+    // System One params
+    std::string so_state          = "";  // the context the questions are asked about
+    std::string so_state_file     = "";  // ... or the file holding it
+    std::string so_request_file   = "";  // a /v1/systemone JSON body, instead of the flags below
+    std::string so_template_file  = "";  // override the System One template in the checkpoint
+    std::string so_labels         = "";  // ... and the labels its answers are read at
+    float       so_temperature    = 0.0f; // rescale every answer; 0 = use the request's value
+    bool        so_json           = false;  // --json
+    std::vector<std::string> so_noul;    // KEY:INSTRUCTIONS
+    std::vector<std::string> so_choice;  // KEY:INSTRUCTIONS:opt[=desc][,opt[=desc]...]
+    std::vector<std::string> so_score;   // KEY:INSTRUCTIONS:level[,level...]
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
 };
