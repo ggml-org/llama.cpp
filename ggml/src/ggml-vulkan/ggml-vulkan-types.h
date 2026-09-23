@@ -85,9 +85,12 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 
 #include <thread>
 
+#include <atomic>
+
 #if defined(_MSC_VER)
 # define NOMINMAX 1
 # include <windows.h>
+# include <malloc.h>
 # define YIELD() YieldProcessor()
 #elif defined(__clang__) || defined(__GNUC__)
 # if defined(__x86_64__) ||defined(__i386__)
@@ -684,6 +687,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_semaphore {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -1226,6 +1230,10 @@ struct ggml_backend_vk_context {
     std::string name;
 
     vk_device device;
+
+    bool          comm_active = false;
+    vk::Semaphore comm_prog_sem = VK_NULL_HANDLE;
+    uint64_t      comm_prog_val = 0;
 
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
