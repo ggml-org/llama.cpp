@@ -65,7 +65,10 @@
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
+	/** Header mode: families start open, this tracks the ones folded away. */
 	const collapsedFamilies = new SvelteSet<string>();
+	/** Row mode: families start collapsed, this tracks the ones opened. */
+	const expandedFamilies = new SvelteSet<string>();
 	/** Sections rendered as collapsible table rows instead of headers. */
 	let collapsibleRows = $state(false);
 	const collapsedSections = new SvelteSet<string>(['hidden']);
@@ -97,11 +100,17 @@
 		}
 	}
 
+	function isFamilyExpanded(key: string): boolean {
+		return collapsibleRows ? expandedFamilies.has(key) : !collapsedFamilies.has(key);
+	}
+
 	function toggleFamily(key: string): void {
-		if (collapsedFamilies.has(key)) {
-			collapsedFamilies.delete(key);
+		const folded = collapsibleRows ? expandedFamilies : collapsedFamilies;
+
+		if (folded.has(key)) {
+			folded.delete(key);
 		} else {
-			collapsedFamilies.add(key);
+			folded.add(key);
 		}
 	}
 
@@ -190,7 +199,7 @@
 	/>
 {/snippet}
 
-{#snippet row(option: ModelOption)}
+{#snippet row(option: ModelOption, indent = 0)}
 	{@const isLoaded = isLoadedOption(option)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -209,7 +218,7 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="flex min-w-0 items-center gap-3">
+			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 				<ModelAvatar {option} showBaseModelAvatar size="size-9" />
 
 				<ModelId
@@ -244,7 +253,7 @@
 	</div>
 {/snippet}
 
-{#snippet repoRow(entry: ModelQuantGroup)}
+{#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
 
@@ -256,7 +265,7 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="flex min-w-0 items-center gap-3">
+			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 				<ModelAvatar option={entry.base} showBaseModelAvatar size="size-9" />
 
 				<span class="min-w-0">
@@ -301,7 +310,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption)}
+{#snippet quantRow(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isLoaded = isLoadedOption(option)}
@@ -312,7 +321,7 @@
 		<div
 			class={[
 				rowGrid,
-				'cursor-pointer rounded-md py-2 pr-2 pl-13 transition',
+				'cursor-pointer rounded-md px-2 py-2 transition',
 				isHidden && 'opacity-60',
 				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 			]}
@@ -321,7 +330,7 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="flex min-w-0 items-center gap-3">
+			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
 
 				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
@@ -347,17 +356,17 @@
 	</div>
 {/snippet}
 
-{#snippet entryTree(entry: ModelQuantGroup)}
+{#snippet entryTree(entry: ModelQuantGroup, indent = 0)}
 	{#if entry.quants.length > 1}
-		{@render repoRow(entry)}
+		{@render repoRow(entry, indent)}
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant)}
+				{@render quantRow(quant, indent + 24)}
 			{/each}
 		{/if}
 	{:else}
-		{@render row(entry.base)}
+		{@render row(entry.base, indent)}
 	{/if}
 {/snippet}
 
@@ -407,8 +416,8 @@
 	</div>
 {/snippet}
 
-{#snippet familyRow(family: ModelFamilyGroup)}
-	{@const isExpanded = !collapsedFamilies.has(family.key)}
+{#snippet familyRow(family: ModelFamilyGroup, indent = 0)}
+	{@const isExpanded = isFamilyExpanded(family.key)}
 
 	<div class="px-2">
 		<div
@@ -420,7 +429,7 @@
 		>
 			{#if collapsibleRows}
 				<!-- with sections as rows, every level reads as a model row -->
-				<span class="flex min-w-0 items-center gap-3">
+				<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 					<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-9" />
 
 					<span class="min-w-0">
@@ -432,9 +441,11 @@
 					</span>
 				</span>
 			{:else}
-				<span class="truncate text-sm font-medium">{family.label}</span>
+				<span class="flex min-w-0 items-center gap-2" style="padding-left: {indent}px">
+					<span class="truncate text-sm font-medium">{family.label}</span>
 
-				<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+					<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+				</span>
 			{/if}
 
 			<span></span>
@@ -509,21 +520,19 @@
 					{@render sectionRow(group)}
 
 					{#if !collapsedSections.has(group.key)}
-						<div class="pl-6">
-							{#each group.families as family (family.key)}
-								{@render familyRow(family)}
+						{#each group.families as family (family.key)}
+							{@render familyRow(family, 20)}
 
-								{#if !collapsedFamilies.has(family.key)}
-									{#each family.entries as entry (entry.key)}
-										{@render entryTree(entry)}
-									{/each}
-								{/if}
-							{/each}
+							{#if isFamilyExpanded(family.key)}
+								{#each family.entries as entry (entry.key)}
+									{@render entryTree(entry, 40)}
+								{/each}
+							{/if}
+						{/each}
 
-							{#each group.singles as entry (entry.key)}
-								{@render entryTree(entry)}
-							{/each}
-						</div>
+						{#each group.singles as entry (entry.key)}
+							{@render entryTree(entry, 40)}
+						{/each}
 					{/if}
 				{:else}
 					<ModelsSection
@@ -537,15 +546,15 @@
 						{#each group.families as family (family.key)}
 							{@render familyRow(family)}
 
-							{#if !collapsedFamilies.has(family.key)}
+							{#if isFamilyExpanded(family.key)}
 								{#each family.entries as entry (entry.key)}
-									{@render entryTree(entry)}
+									{@render entryTree(entry, 16)}
 								{/each}
 							{/if}
 						{/each}
 
 						{#each group.singles as entry (entry.key)}
-							{@render entryTree(entry)}
+							{@render entryTree(entry, 16)}
 						{/each}
 					</ModelsSection>
 				{/if}
