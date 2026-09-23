@@ -4,12 +4,14 @@
 #include "ggml.h"
 
 #include <memory>
+#include <openvino/core/type.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/divide.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sigmoid.hpp>
+#include <openvino/op/swish.hpp>
 #include <openvino/op/tile.hpp>
 #include <openvino/op/util/precision_sensitive_attribute.hpp>
 #include <vector>
@@ -33,22 +35,12 @@ bool is_silu_div_pattern(const ov::Output<ov::Node> & numerator,
         return false;
     }
 
-    auto mul = std::dynamic_pointer_cast<ov::op::v1::Multiply>(numerator.get_node_shared_ptr());
-    if (!mul) {
-        return false;
-    }
-
     const auto denom_node = denominator.get_node_shared_ptr();
-    const auto mul_input_0 = mul->input_value(0).get_node_shared_ptr();
-    const auto mul_input_1 = mul->input_value(1).get_node_shared_ptr();
 
-    auto sigmoid = std::dynamic_pointer_cast<ov::op::v0::Sigmoid>(mul_input_1);
-    if (mul_input_0 == denom_node && sigmoid && sigmoid->input_value(0).get_node_shared_ptr() == denom_node) {
-        return true;
+    if (auto swish = ov::as_type_ptr<ov::op::v4::Swish>(numerator.get_node_shared_ptr())) {
+        return swish->input_value(0).get_node_shared_ptr() == denom_node;
     }
-
-    sigmoid = std::dynamic_pointer_cast<ov::op::v0::Sigmoid>(mul_input_0);
-    return mul_input_1 == denom_node && sigmoid && sigmoid->input_value(0).get_node_shared_ptr() == denom_node;
+    return false;
 }
 
 ov::Output<ov::Node> repeat_input_to_match(const NodeContext & context,

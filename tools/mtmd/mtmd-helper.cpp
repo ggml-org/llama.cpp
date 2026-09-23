@@ -371,6 +371,7 @@ static bool is_webp_file(const unsigned char * buf, size_t len) {
 #ifdef MTMD_VIDEO
 static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
                                              const mtmd_helper_video_init_params & params);
+static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id);
 #endif
 
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder,
@@ -436,6 +437,7 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(const mtmd_context *
             LOG_ERR("%s: failed to decode buffer as either image/audio/video\n", __func__);
             return {nullptr, nullptr};
         }
+        mtmd_helper_video_set_id(video_ctx, id); // propagate the hash to the frames
         result = mtmd_bitmap_init_lazy(ctx,
             id.empty() ? nullptr : id.c_str(),
             video_ctx,
@@ -527,6 +529,7 @@ struct mtmd_helper_video {
     std::string ffprobe_bin;
     float fps_target = 0.0f;
     mtmd_helper_video_info info = {};
+    std::string id; // hash of the input video
 
     // RAII wrapper for managing subprocess
     struct subprocess_handle {
@@ -785,9 +788,14 @@ struct mtmd_helper_video {
         }
 
         LOG_DBG("%s: frame %d read OK\n", __func__, current_frame);
-        current_frame++;
         mtmd_bitmap * frame = mtmd_bitmap_init(info.width, info.height, frame_buf.data());
         mtmd_bitmap_set_mergeable(frame, true);
+        if (!id.empty()) {
+            // each frame gets a unique id in the form of {hash}+{frame}, so that it can be identified in cache
+            std::string frame_id = id + "+" + std::to_string(current_frame);
+            mtmd_bitmap_set_id(frame, frame_id.c_str());
+        }
+        current_frame++;
         return frame;
     }
 
@@ -886,6 +894,10 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
 }
 
 #ifdef MTMD_VIDEO
+static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string & id) {
+    vctx->id = id;
+}
+
 static mtmd_bitmap * decode_webp_with_ffmpeg(const mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder,
                                              const mtmd_helper_video_init_params & params) {
     mtmd_helper_video vctx;

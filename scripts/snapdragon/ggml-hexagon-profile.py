@@ -54,6 +54,7 @@ def device_matches(record_device, target_device):
     return False
 
 
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("ggml-hexagon-profile")
 
 
@@ -648,7 +649,7 @@ def main():
 
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     if "pmu" in args.sort and args.pmu_index is None:
         logger.error(f"Cannot sort by '{args.sort}' without --pmu-index.")
