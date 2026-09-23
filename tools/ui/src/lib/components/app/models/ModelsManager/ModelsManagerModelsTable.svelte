@@ -17,6 +17,7 @@
 		ActionIcon,
 		DropdownMenuActions,
 		GroupedList,
+		type GroupedListGroup,
 		Logo,
 		ModelAvatar,
 		ModelContext,
@@ -75,6 +76,22 @@
 			};
 		})
 	);
+
+	/** Families of one section, the ones the user pinned leading it. */
+	function familyGroups(
+		group: (typeof sections)[number]
+	): GroupedListGroup<ModelFamilyGroup<ModelQuantGroup>, ModelQuantGroup>[] {
+		return group.families
+			.map((family) => ({
+				entries: family.entries,
+				group: family,
+				key: `${group.key}::${family.key}`
+			}))
+			.sort(
+				(a, b) =>
+					Number(modelsStore.isFavoriteFamily(b.key)) - Number(modelsStore.isFavoriteFamily(a.key))
+			);
+	}
 
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
@@ -172,57 +189,57 @@
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
 
-	<div class="px-2">
-		<div
-			class={[
-				rowGrid,
-				'cursor-pointer rounded-md px-2 py-2.5 transition',
-				isHidden && 'opacity-60',
-				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
-			]}
-			onclick={() => onSelect(option)}
-			onkeydown={(event) => event.key === 'Enter' && onSelect(option)}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<ModelAvatar
-					{option}
-					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
-					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-					size="size-9"
-				/>
+	<!-- <div class="px-2"> -->
+	<div
+		class={[
+			rowGrid,
+			'cursor-pointer rounded-md px-2 py-2.5 transition',
+			isHidden && 'opacity-60',
+			selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
+		]}
+		onclick={() => onSelect(option)}
+		onkeydown={(event) => event.key === 'Enter' && onSelect(option)}
+		role="button"
+		tabindex="0"
+	>
+		<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+			<ModelAvatar
+				{option}
+				showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+				showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+				size="size-9"
+			/>
 
-				<ModelId
-					aliases={option.aliases}
-					class="min-w-0 flex-1"
-					modalities={option.modalities}
-					modelId={option.model}
-					supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
-					supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
-					tags={option.tags}
-					title={option.model}
-				/>
-			</span>
+			<ModelId
+				aliases={option.aliases}
+				class="min-w-0 flex-1"
+				modalities={option.modalities}
+				modelId={option.model}
+				supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
+				supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
+				tags={option.tags}
+				title={option.model}
+			/>
+		</span>
 
-			<ModelContext class="justify-self-end" {option} />
+		<ModelContext class="justify-self-end" {option} />
 
-			<span class="justify-self-end text-sm text-muted-foreground">
-				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
-			</span>
+		<span class="justify-self-end text-sm text-muted-foreground">
+			{formatLastUsed(modelsStore.recentModelUsage[option.id])}
+		</span>
 
-			{@render statusDot(option)}
+		{@render statusDot(option)}
 
-			<div class="flex items-center justify-center justify-self-center">
-				<DropdownMenuActions
-					actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
-					align="end"
-					triggerIcon={MoreHorizontal}
-					triggerTooltip="Model actions"
-				/>
-			</div>
+		<div class="flex items-center justify-center justify-self-center">
+			<DropdownMenuActions
+				actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
+				align="end"
+				triggerIcon={MoreHorizontal}
+				triggerTooltip="Model actions"
+			/>
 		</div>
 	</div>
+	<!-- </div> -->
 {/snippet}
 
 {#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
@@ -352,15 +369,16 @@
 {#snippet familyRow({
 	expanded,
 	group: family,
+	key,
 	toggle
 }: {
 	expanded: boolean;
 	group: ModelFamilyGroup<ModelQuantGroup>;
+	key: string;
 	toggle: () => void;
 })}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
-	{@const options = family.entries.flatMap((entry) => entry.quants)}
-	{@const favorite = options.some((option) => isFavorite(option))}
+	{@const favorite = modelsStore.isFavoriteFamily(key)}
 
 	<div class="px-2">
 		<div
@@ -390,14 +408,10 @@
 				>
 					{#if favorite}
 						<ActionIcon
-							class="h-5 w-5 text-rose-500 hover:text-foreground"
-							icon={HeartOff}
+							class="h-5 w-5 text-rose-500 hover:text-rose-400"
+							icon={Heart}
 							iconSize="h-4 w-4"
-							onclick={() =>
-								modelsStore.setFavorites(
-									options.map((option) => option.model),
-									false
-								)}
+							onclick={() => modelsStore.toggleFamilyFavorite(key)}
 							tooltip="Remove family from favorites"
 							tooltipAsTitle
 						/>
@@ -406,11 +420,7 @@
 							class="h-5 w-5 opacity-0 transition group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 							icon={Heart}
 							iconSize="h-4 w-4"
-							onclick={() =>
-								modelsStore.setFavorites(
-									options.map((option) => option.model),
-									true
-								)}
+							onclick={() => modelsStore.toggleFamilyFavorite(key)}
 							tooltip="Add family to favorites"
 							tooltipAsTitle
 						/>
@@ -513,13 +523,7 @@
 					<GroupedList
 						group={familyRow}
 						groupWindow={FAMILY_ROW_WINDOW}
-						groups={group.flat
-							? null
-							: group.families.map((family) => ({
-									entries: family.entries,
-									group: family,
-									key: family.key
-								}))}
+						groups={group.flat ? null : familyGroups(group)}
 						item={listItem}
 						items={group.flat ? group.items : []}
 						keyOf={(entry) => entry.key}

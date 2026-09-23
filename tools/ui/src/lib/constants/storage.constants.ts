@@ -31,6 +31,9 @@ export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabled
 export const DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolCategories`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 
+/** Model families pinned to the top of their provider section. */
+export const FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModelFamilies`;
+
 /** Per-model load and inference overrides, keyed by backend-qualified model id. */
 export const MODEL_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelOverrides`;
 

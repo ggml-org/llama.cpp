@@ -9,6 +9,7 @@
 
 import { browser } from '$app/environment';
 import {
+	FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	RECENT_MODEL_LIMIT,
@@ -82,6 +83,19 @@ function loadHiddenModels(): Set<string> {
 	}
 }
 
+/** Family keys pinned to the top of their provider section. */
+function loadFavoriteFamilies(): Set<string> {
+	if (!browser) return new SvelteSet<string>();
+
+	try {
+		const raw = localStorage.getItem(FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY);
+
+		return raw ? new SvelteSet(JSON.parse(raw) as string[]) : new SvelteSet<string>();
+	} catch {
+		return new SvelteSet<string>();
+	}
+}
+
 /** Recently used backend-qualified ids, most recent first. */
 function loadRecentModels(): string[] {
 	if (!browser) return [];
@@ -104,6 +118,7 @@ function loadRecentModels(): string[] {
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
+	favoriteFamilyIds = $state<Set<string>>(loadFavoriteFamilies());
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
@@ -424,6 +439,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.favoriteModelIds.has(modelId);
 	}
 
+	isFavoriteFamily(key: string): boolean {
+		return this.favoriteFamilyIds.has(key);
+	}
+
 	isHidden(modelId: string): boolean {
 		return this.hiddenModelIds.has(modelId);
 	}
@@ -589,6 +608,25 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const candidate = segments.pop();
 
 		return candidate && candidate.trim().length > 0 ? candidate : id;
+	}
+
+	/** Pin a family to the top of its provider section. */
+	toggleFamilyFavorite(key: string): void {
+		const next = new SvelteSet(this.favoriteFamilyIds);
+
+		if (next.has(key)) {
+			next.delete(key);
+		} else {
+			next.add(key);
+		}
+
+		this.favoriteFamilyIds = next;
+
+		try {
+			localStorage.setItem(FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save favorite model families to local storage');
+		}
 	}
 
 	toggleFavorite(modelId: string): void {
