@@ -19,6 +19,7 @@
 		Upload
 	} from '@lucide/svelte';
 	import {
+		BackendIcon,
 		DropdownMenuActions,
 		Logo,
 		ModelAvatar,
@@ -65,7 +66,9 @@
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
 	const collapsedFamilies = new SvelteSet<string>();
-	let groupFamilies = $state(false);
+	/** Sections rendered as collapsible table rows instead of headers. */
+	let collapsibleRows = $state(false);
+	const collapsedSections = new SvelteSet<string>(['hidden']);
 	/** Sections with their repos folded into families, when that view is on. */
 	let sections = $derived(
 		groups.map((group) => {
@@ -73,12 +76,10 @@
 
 			return {
 				...group,
-				families: groupFamilies ? families.filter((family) => family.entries.length > 1) : null,
-				singles: groupFamilies
-					? families
-							.filter((family) => family.entries.length === 1)
-							.flatMap((family) => family.entries)
-					: []
+				families: families.filter((family) => family.entries.length > 1),
+				singles: families
+					.filter((family) => family.entries.length === 1)
+					.flatMap((family) => family.entries)
 			};
 		})
 	);
@@ -86,6 +87,14 @@
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
+	}
+
+	function toggleSection(key: string): void {
+		if (collapsedSections.has(key)) {
+			collapsedSections.delete(key);
+		} else {
+			collapsedSections.add(key);
+		}
 	}
 
 	function toggleFamily(key: string): void {
@@ -352,6 +361,52 @@
 	{/if}
 {/snippet}
 
+{#snippet sectionRow(group: ModelsTableGroup)}
+	{@const isExpanded = !collapsedSections.has(group.key)}
+
+	<div class="px-2">
+		<div
+			class="{rowGrid} cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
+			onclick={() => toggleSection(group.key)}
+			onkeydown={(event) => event.key === 'Enter' && toggleSection(group.key)}
+			role="button"
+			tabindex="0"
+		>
+			<span class="flex min-w-0 items-center gap-2">
+				{#if group.kind === 'provider'}
+					<BackendIcon backend={getBackend(group.backendId ?? undefined)} class="h-3.5 w-3.5" />
+				{:else if group.kind === 'favorites'}
+					<Heart class="h-3.5 w-3.5 shrink-0" />
+				{:else if group.kind === 'loaded'}
+					<Power class="h-3.5 w-3.5 shrink-0" />
+				{:else if group.kind === 'hidden'}
+					<EyeOff class="h-3.5 w-3.5 shrink-0" />
+				{:else if group.kind === 'local'}
+					<Logo class="shrink-0" style="--size: 0.875rem" />
+				{/if}
+
+				<span class="truncate text-sm font-medium">{group.label}</span>
+
+				<span class="text-xs text-muted-foreground">{group.items.length}</span>
+			</span>
+
+			<span></span>
+
+			<span></span>
+
+			<span></span>
+
+			<span class="flex justify-center">
+				{#if isExpanded}
+					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				{:else}
+					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+				{/if}
+			</span>
+		</div>
+	</div>
+{/snippet}
+
 {#snippet familyRow(family: ModelFamilyGroup)}
 	{@const isExpanded = !collapsedFamilies.has(family.key)}
 
@@ -394,10 +449,10 @@
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
 
 		<span class="flex items-center gap-2">
-			<Checkbox bind:checked={groupFamilies} id="group-families" />
+			<Checkbox bind:checked={collapsibleRows} id="collapsible-rows" />
 
-			<Label class="cursor-pointer text-xs text-muted-foreground" for="group-families">
-				Group families
+			<Label class="cursor-pointer text-xs text-muted-foreground" for="collapsible-rows">
+				Collapsible rows
 			</Label>
 		</span>
 
@@ -433,15 +488,35 @@
 					{/if}
 				{/snippet}
 
-				<ModelsSection
-					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
-					count={group.items.length}
-					icon={group.kind === 'provider' ? undefined : groupIcon}
-					label={group.label}
-					open={group.kind !== 'hidden'}
-					sticky
-				>
-					{#if group.families}
+				{#if collapsibleRows}
+					{@render sectionRow(group)}
+
+					{#if !collapsedSections.has(group.key)}
+						<div class="pl-6">
+							{#each group.families as family (family.key)}
+								{@render familyRow(family)}
+
+								{#if !collapsedFamilies.has(family.key)}
+									{#each family.entries as entry (entry.key)}
+										{@render entryTree(entry)}
+									{/each}
+								{/if}
+							{/each}
+
+							{#each group.singles as entry (entry.key)}
+								{@render entryTree(entry)}
+							{/each}
+						</div>
+					{/if}
+				{:else}
+					<ModelsSection
+						backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
+						count={group.items.length}
+						icon={group.kind === 'provider' ? undefined : groupIcon}
+						label={group.label}
+						open={group.kind !== 'hidden'}
+						sticky
+					>
 						{#each group.families as family (family.key)}
 							{@render familyRow(family)}
 
@@ -455,12 +530,8 @@
 						{#each group.singles as entry (entry.key)}
 							{@render entryTree(entry)}
 						{/each}
-					{:else}
-						{#each group.items as entry (entry.key)}
-							{@render entryTree(entry)}
-						{/each}
-					{/if}
-				</ModelsSection>
+					</ModelsSection>
+				{/if}
 			{/if}
 		{/each}
 
