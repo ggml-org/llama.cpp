@@ -234,31 +234,28 @@ bool common_peg_special_tokens::is_user_defined(llama_token id) const {
 }
 
 void common_peg_input::append(const std::string & piece, llama_token token) {
-    tokens.push_back(token);
-    token_pos.push_back(text.size());
+    if (piece.empty()) {
+        return;
+    }
+    token_map.push_back(token);
+    token_map.resize(token_map.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
     text += piece;
 }
 
-void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_tokens, const std::vector<size_t> & chunk_pos) {
-    GGML_ASSERT(chunk_tokens.size() == chunk_pos.size());
-    tokens.insert(tokens.end(), chunk_tokens.begin(), chunk_tokens.end());
-    for (size_t pos : chunk_pos) {
-        token_pos.push_back(text.size() + pos);
-    }
+void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_map) {
+    GGML_ASSERT(chunk.size() == chunk_map.size());
+    token_map.insert(token_map.end(), chunk_map.begin(), chunk_map.end());
     text += chunk;
 }
 
 void common_peg_input::prepend(const std::string & prefix) {
-    for (auto & pos : token_pos) {
-        pos += prefix.size();
-    }
+    token_map.insert(token_map.begin(), prefix.size(), LLAMA_TOKEN_NULL);
     text = prefix + text;
 }
 
 void common_peg_input::prepend(const common_peg_input & prefix) {
-    prepend(prefix.text);
-    tokens.insert(tokens.begin(), prefix.tokens.begin(), prefix.tokens.end());
-    token_pos.insert(token_pos.begin(), prefix.token_pos.begin(), prefix.token_pos.end());
+    token_map.insert(token_map.begin(), prefix.token_map.begin(), prefix.token_map.end());
+    text = prefix.text + text;
 }
 
 struct parser_executor;
@@ -352,30 +349,24 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_token_parser & p) {
-        auto pos = start_pos;
-        const auto & positions = ctx.input.token_pos;
+        const auto & input = ctx.input;
 
-        if (pos >= ctx.input.text.size()) {
+        if (start_pos >= input.text.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
 
-        // Search for the first token at >= pos
-        auto it = std::lower_bound(positions.begin(), positions.end(), pos);
-        if (it == positions.end() || *it != pos) {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, pos);
+        if (input.token_map[start_pos] != p.token) {
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
         }
 
-        // Check if token at position matches
-        auto token = ctx.input.tokens[it - positions.begin()];
-        if (token != p.token) {
-            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, pos);
+        // Skip the rest of the piece, up to the next token or the end of the input
+        auto pos = start_pos + 1;
+        while (pos < input.text.size() && input.token_map[pos] == LLAMA_TOKEN_NULL) {
+            ++pos;
         }
-
-        // Move to the next token or end of the input
-        pos = ++it != positions.end() ? *it : ctx.input.text.size();
 
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }

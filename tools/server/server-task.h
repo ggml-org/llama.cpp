@@ -128,8 +128,7 @@ struct task_result_state {
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
         const std::string & text_added,
-        const llama_tokens & tokens_added,
-        const std::vector<size_t> & token_pos_added,
+        const std::vector<llama_token> & token_map_added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -322,7 +321,7 @@ struct completion_token_output {
 struct server_task_result_cmpl_final : server_task_result {
     std::string content;
     llama_tokens tokens;
-    std::vector<size_t> token_pos; // where the piece of each token starts in content
+    std::vector<llama_token> token_map; // token whose piece starts at each byte of content
 
     bool stream;
     bool include_usage;
@@ -367,7 +366,7 @@ struct server_task_result_cmpl_final : server_task_result {
 
     virtual void update(task_result_state & state) override {
         is_updated = true;
-        oaicompat_msg = state.update_chat_msg(content, tokens, token_pos, false, oaicompat_msg_diffs);
+        oaicompat_msg = state.update_chat_msg(content, token_map, false, oaicompat_msg_diffs);
 
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
@@ -398,7 +397,7 @@ struct server_task_result_cmpl_final : server_task_result {
 struct server_task_result_cmpl_partial : server_task_result {
     std::string  content;
     llama_tokens tokens;
-    std::vector<size_t> token_pos; // where the piece of each token starts in content
+    std::vector<llama_token> token_map; // token whose piece starts at each byte of content
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
