@@ -11,7 +11,7 @@
 		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
-	import { backendsStore, conversationsStore, modelsStore } from '$lib/stores';
+	import { backendsStore, conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -162,6 +162,19 @@
 		]
 			.filter(Boolean)
 			.join(' · ');
+	});
+
+	// a caller can ask for one model to be revealed, the download rows do
+	$effect(() => {
+		const focus = uiStore.manageModelFocus;
+
+		if (!focus) return;
+
+		const option = allModels.find((model) => model.id === focus || model.model === focus);
+
+		if (option) selectedId = option.id;
+
+		uiStore.manageModelFocus = null;
 	});
 
 	async function toggleLoad(option: ModelOption): Promise<void> {

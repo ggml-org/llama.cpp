@@ -18,9 +18,9 @@
 
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360! flex flex-col"
+		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360! flex flex-col p-4"
 	>
-		<Dialog.Header>
+		<Dialog.Header class="p-2">
 			<Dialog.Title class="flex items-center gap-2">
 				<Logo class="h-5 w-5" style="--size: 1.25rem" />
 

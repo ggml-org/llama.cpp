@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverDownloadProgressBar from '../discover/ModelsDiscoverDownloadProgressBar.svelte';
-	import { Loader2, Pause, Play, X } from '@lucide/svelte';
+	import { Boxes, Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
+	import { modelsStore, uiStore } from '$lib/stores';
 	import type { ModelDownloadProgress } from '$lib/types';
 
 	interface Props {
@@ -106,6 +106,15 @@
 				/>
 			{/if}
 		</span>
+	</button>
+
+	<button
+		aria-label="Manage model"
+		class="inline-flex h-4 w-4 shrink-0 scale-75 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-foreground group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+		onclick={() => uiStore.openModelsManager(entry.repoWithTag)}
+		type="button"
+	>
+		<Boxes class="h-4 w-4" />
 	</button>
 
 	<button
