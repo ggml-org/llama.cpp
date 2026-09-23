@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverDownloadProgressBar from '../discover/ModelsDiscoverDownloadProgressBar.svelte';
-	import { Boxes, Loader2, Pause, Play, X } from '@lucide/svelte';
+	import { Cog, Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore, uiStore } from '$lib/stores';
@@ -114,7 +114,7 @@
 		onclick={() => uiStore.openModelsManager(entry.repoWithTag)}
 		type="button"
 	>
-		<Boxes class="h-4 w-4" />
+		<Cog class="h-4 w-4" />
 	</button>
 
 	<button

@@ -1,20 +1,17 @@
 <script lang="ts">
-	import { Boxes, Heart, HeartOff, Info } from '@lucide/svelte';
+	import { Cog, Heart, HeartOff } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import { modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
 		isFav: boolean;
-		isLoaded: boolean;
-		/** Renders the info action for a loaded model, when the caller can show it. */
-		onInfo?: (model: string) => void;
 		option: ModelOption;
 		/** Selector rows reveal the actions on hover, table rows keep them visible. */
 		revealOnHover?: boolean;
 	}
 
-	let { isFav, isLoaded, onInfo, option, revealOnHover = true }: Props = $props();
+	let { isFav, option, revealOnHover = true }: Props = $props();
 </script>
 
 <div
@@ -28,20 +25,9 @@
 	onkeydown={(event) => event.stopPropagation()}
 	role="presentation"
 >
-	{#if isLoaded && onInfo}
-		<ActionIcon
-			class="h-5 w-5 hover:text-foreground"
-			icon={Info}
-			iconSize="h-4 w-4"
-			onclick={() => onInfo?.(option.model)}
-			tooltip="Model information"
-			tooltipAsTitle
-		/>
-	{/if}
-
 	<ActionIcon
 		class="h-5 w-5 hover:text-foreground"
-		icon={Boxes}
+		icon={Cog}
 		iconSize="h-4 w-4"
 		onclick={() => uiStore.openModelsManager(option.id)}
 		tooltip="Manage model"
