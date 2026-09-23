@@ -666,11 +666,16 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
 
         if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias)) {
-            const int64_t n_embd      = hparams.n_head(il) * hparams.n_embd_head_k(il);
-            const int64_t n_embd_gqa  = hparams.n_embd_v_gqa(il);
-            GGML_ASSERT(hparams.n_embd_k_gqa(il) == n_embd_gqa);
-            GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
-            return {{n_embd, 1}, {n_embd_gqa, 2}};
+            const int64_t n_embd_q = hparams.n_head(il) * hparams.n_embd_head_k(il);
+            const int64_t n_embd_k = hparams.n_embd_k_gqa(il);
+            const int64_t n_embd_v = hparams.n_embd_v_gqa(il);
+            GGML_ASSERT(tensor->ne[axis] == n_embd_q + n_embd_k + n_embd_v);
+            if (n_embd_k == n_embd_v) {
+                return {{n_embd_q, 1}, {n_embd_k, 2}};
+            }
+            // uneven K/V head sizes (e.g. MiMo d_k=192 d_v=128): split K and V as separate
+            // segments so each device gets whole heads of both
+            return {{n_embd_q, 1}, {n_embd_k, 1}, {n_embd_v, 1}};
         }
         if (std::regex_match(tensor_name, pattern_ffn_up_weight) || std::regex_match(tensor_name, pattern_ffn_up_bias)) {
             const int64_t n_ff = hparams.n_ff(il);
@@ -774,20 +779,29 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
 
             const int64_t granularity_kv = granularity_q / n_gqa;
+            // the V head size can differ from the K head size (e.g. MiMo d_k=192 d_v=128):
+            // align V tensors to whole V heads at the same head-index scale as Q and K so all
+            // three stay in lockstep per device
+            const int64_t granularity_v  = (granularity_kv / hparams.n_embd_head_k(il)) * hparams.n_embd_head_v(il);
             if (std::regex_match(tensor_name, pattern_kv_weight) ||
                 std::regex_match(tensor_name, pattern_kv_bias) ||
                 std::regex_match(tensor_name, pattern_kv_cache)) {
                 GGML_ASSERT(segments.size() == 1);
-                return {granularity_kv};
+                const bool is_v = tensor_name.find("attn_v") != std::string::npos || tensor_name.find("cache_v") != std::string::npos;
+                return {is_v ? granularity_v : granularity_kv};
             }
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias)) {
-                GGML_ASSERT(segments.size() == 2);
                 // fused full attention layers need Q gate tensors handled like above:
                 // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
                 if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
                         ud->model->arch == LLM_ARCH_QWEN4EXP) {
                     return {std::lcm(2*n_embd_q, blck_size_perf), granularity_kv};
                 }
+                if (segments.size() == 3) {
+                    // uneven K/V head sizes: per-segment granularity, V aligned to whole V heads
+                    return {granularity_q, granularity_kv, granularity_v};
+                }
+                GGML_ASSERT(segments.size() == 2);
                 return {granularity_q, granularity_kv};
             }
         }
