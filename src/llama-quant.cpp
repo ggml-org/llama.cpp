@@ -762,11 +762,12 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
             }
         }
         if (!named) {
-            return params->token_embedding_type;
+            // with --no-fallback it still has to fit the tensor shape
+            return params->no_fallback ? tensor_type_fallback(qs, tensor, params->token_embedding_type) : params->token_embedding_type;
         }
     }
     if (params->output_tensor_type < GGML_TYPE_COUNT && tm.category == tensor_category::OUTPUT) {
-        return params->output_tensor_type;
+        return params->no_fallback ? tensor_type_fallback(qs, tensor, params->output_tensor_type) : params->output_tensor_type;
     }
 
     ggml_type new_type = default_type;
