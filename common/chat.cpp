@@ -1539,13 +1539,6 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     return msg;
 }
 
-common_peg_input common_chat_templates_make_input(const common_chat_templates * chat_templates) {
-    if (chat_templates == nullptr) {
-        return common_peg_input();
-    }
-    return common_peg_input(chat_templates->special_tokens);
-}
-
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates) {
     GGML_ASSERT(chat_templates != nullptr);
     GGML_ASSERT(chat_templates->template_default != nullptr);

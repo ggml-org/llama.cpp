@@ -368,9 +368,6 @@ common_json common_chat_tool_parameters(const common_json & function);
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
 
-// empty parse input that knows the model's special tokens, to append generated text to
-common_peg_input common_chat_templates_make_input(const common_chat_templates * chat_templates);
-
 std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs);

@@ -212,12 +212,9 @@ struct server_response_reader {
     // only used by streaming completions
     std::vector<task_result_state> states;
 
-    // empty parse input each state starts from
-    common_peg_input input;
-
     // should_stop function will be called each polling_interval_seconds
-    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds, common_peg_input input = {})
-        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds), input(std::move(input)) {}
+    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
+        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
     ~server_response_reader() {
         stop();
     }
