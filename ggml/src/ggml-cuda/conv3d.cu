@@ -75,13 +75,15 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
                                                 const half * __restrict__ weight,
                                                 float * __restrict__ output,
                                                 const conv3d_params P,
-                                                const int           split_k) {
+                                                const int           split_k,
+                                                const bool          aligned_weights) {
     using namespace ggml_cuda_mma;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nthreads  = 4 * warp_size;
     constexpr int BM = 64, BN = 64, BK = 64;
     constexpr int AS = BK / 2 + 4;
     constexpr int BS = BN / 2 + 4;
+    static_assert(AS * sizeof(half2) % sizeof(int4) == 0, "shared weight rows must be 16-byte aligned");
     __shared__ __align__(16) half2 a_s[BM][AS];
     __shared__ __align__(16) half2 b_s[BK][BS];
     const int                      tid = threadIdx.y * warp_size + threadIdx.x;
@@ -103,21 +105,14 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
     const int pos0                = (z0 * sz * ih + y0 * sy) * iw + x0 * sx;
     const int pos1                = (z1 * sz * ih + y1 * sy) * iw + x1 * sx;
     [[maybe_unused]] const int wm = threadIdx.y / 2 * 32, wn = threadIdx.y % 2 * 32;
-#if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     using tile_ab = tile<16, 8, half2, get_input_data_layout()>;
-#    if defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
+#if defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     // AMD accumulator fragments transpose the input fragment's row/column mapping.
     using tile_c = tile<16, 16, float, DATA_LAYOUT_J_MAJOR>;
-#    else
-    using tile_c = tile<16, 16, float>;
-#    endif
-    [[maybe_unused]] tile_c c[2][2];
 #else
-    if constexpr (use_mma) {
-        NO_DEVICE_CODE;
-        return;
-    }
+    using tile_c = tile<16, 16, float>;
 #endif
+    [[maybe_unused]] tile_c    c[2][2];
     constexpr int              RM = 4, RN = BM * BN / (nthreads * RM);
     [[maybe_unused]] const int simt_m = tid / (BN / RN) * RM, simt_n = tid % (BN / RN) * RN;
     [[maybe_unused]] float     c_simt[RM][RN] = {};
@@ -125,9 +120,10 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
     const int                  begin          = int(int64_t(tiles) * split / split_k) * BK;
     const int                  end            = int(int64_t(tiles) * (split + 1) / split_k) * BK;
     for (int k0 = begin; k0 < end; k0 += BK) {
-        if (k_total % 8 == 0 && uintptr_t(weight) % 16 == 0) {
+        if (aligned_weights) {
 #pragma unroll
-            for (int i = tid; i < BM * BK / 8; i += nthreads) {
+            for (int i0 = 0; i0 < BM * BK / 8; i0 += nthreads) {
+                const int  i   = i0 + tid;
                 const int  row = i / (BK / 8), col = 8 * (i % (BK / 8));
                 const int4 v                 = m0 + row < oc && k0 + col < k_total ?
                                                    ((const int4 *) weight)[((m0 + row) * k_total + k0 + col) / 8] :
@@ -136,7 +132,8 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
             }
         } else {
 #pragma unroll
-            for (int i = tid; i < BM * BK / 2; i += nthreads) {
+            for (int i0 = 0; i0 < BM * BK / 2; i0 += nthreads) {
+                const int i   = i0 + tid;
                 const int row = i / (BK / 2), col = 2 * (i % (BK / 2));
                 half      lo = __float2half(0.0f), hi = lo;
                 if (m0 + row < oc && k0 + col < k_total) {
@@ -149,7 +146,8 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
             }
         }
 #pragma unroll
-        for (int k = load_row; k < BK; k += nthreads / (BN / 2)) {
+        for (int kb = 0; kb < BK; kb += nthreads / (BN / 2)) {
+            const int k  = kb + load_row;
             const int ki = k0 + k;
             const int ci = ki / (kw * kh * kd), kz = ki / (kw * kh) % kd, ky = ki / kw % kh, kx = ki % kw;
             const int offset = ki < k_total ? ((n * ic + ci) * id + kz * dz) * ih * iw + ky * dy * iw + kx * dx : 0;
@@ -164,24 +162,22 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
         }
         __syncthreads();
         if constexpr (use_mma) {
-#if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-#    pragma unroll
+#pragma unroll
             for (int k = 0; k < BK; k += 16) {
                 tile_ab a[2], b[2];
-#    pragma unroll
+#pragma unroll
                 for (int i = 0; i < 2; ++i) {
                     load_ldmatrix(a[i], &a_s[wm + 16 * i][k / 2], AS);
                     load_ldmatrix_trans(b[i], &b_s[k][(wn + 16 * i) / 2], BS);
                 }
-#    pragma unroll
+#pragma unroll
                 for (int i = 0; i < 2; ++i) {
-#    pragma unroll
+#pragma unroll
                     for (int j = 0; j < 2; ++j) {
                         mma(c[i][j], a[i], b[j]);
                     }
                 }
             }
-#endif
         } else {
 #pragma unroll 4
             for (int k = 0; k < BK; ++k) {
@@ -206,12 +202,11 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
         __syncthreads();
     }
     if constexpr (use_mma) {
-#if defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
-#    pragma unroll
+#pragma unroll
         for (int i = 0; i < 2; ++i) {
-#    pragma unroll
+#pragma unroll
             for (int j = 0; j < 2; ++j) {
-#    pragma unroll
+#pragma unroll
                 for (int l = 0; l < c[i][j].ne; ++l) {
                     const int co  = m0 + wm + 16 * i + c[i][j].get_i(l);
                     const int pos = n0 + wn + 16 * j + c[i][j].get_j(l);
@@ -221,7 +216,6 @@ static __global__ void conv3d_implicit_gemm_f16(const half * __restrict__ input,
                 }
             }
         }
-#endif
     } else {
 #pragma unroll
         for (int i = 0; i < RM; ++i) {
@@ -246,6 +240,7 @@ static __global__ void conv3d_reduce_split_k(const float * __restrict__ partial,
         return;
     }
     const int     n   = i / per_batch;
+    // Partial slices are ordered as [batch, split, output channel, spatial position].
     const float * src = partial + int64_t(n) * (split_k - 1) * per_batch + i;
     float         sum = 0.0f;
     for (int k = 0; k < split_k; ++k) {
@@ -263,14 +258,21 @@ static void conv3d_launch_implicit_gemm(const half *          input,
                                         dim3                  grid,
                                         dim3                  block,
                                         cudaStream_t          stream) {
+    // Vector loads require both the base pointer and each weight row to be 16-byte aligned.
+    const bool aligned_weights = uintptr_t(weight) % sizeof(int4) == 0 &&
+                                 (params.IC * params.KW * params.KH * params.KD) % (sizeof(int4) / sizeof(half)) == 0;
     if (params.KW == 3 && params.KH == 3 && params.KD == 3) {
-        conv3d_implicit_gemm_f16<3, 3, 3, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv3d_implicit_gemm_f16<3, 3, 3, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, aligned_weights);
     } else if (params.KW == 1 && params.KH == 1 && params.KD == 3) {
-        conv3d_implicit_gemm_f16<1, 1, 3, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv3d_implicit_gemm_f16<1, 1, 3, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, aligned_weights);
     } else if (params.KW == 1 && params.KH == 1 && params.KD == 1) {
-        conv3d_implicit_gemm_f16<1, 1, 1, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv3d_implicit_gemm_f16<1, 1, 1, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, aligned_weights);
     } else {
-        conv3d_implicit_gemm_f16<0, 0, 0, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv3d_implicit_gemm_f16<0, 0, 0, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, aligned_weights);
     }
 }
 
@@ -305,8 +307,8 @@ void ggml_cuda_op_conv3d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t pw = IW + 2 * int64_t(p[3]), ph = IH + 2 * int64_t(p[4]), pd = ID + 2 * int64_t(p[5]);
     const bool    padded_fits = pw > 0 && pw <= limit && ph > 0 && ph <= limit && pd > 0 && pd <= limit &&
                              pw * ph <= limit / pd && IC * B <= limit / (pw * ph * pd);
-    if (kernel->type == GGML_TYPE_F16 && ggml_nelements(input) <= limit && ggml_nelements(kernel) <= limit &&
-        total <= limit && padded_fits && p[3] >= 0 && p[4] >= 0 && p[5] >= 0 &&
+    if (kernel->type == GGML_TYPE_F16 && KW > 0 && KH > 0 && KD > 0 && ggml_nelements(input) <= limit &&
+        ggml_nelements(kernel) <= limit && total <= limit && padded_fits && p[3] >= 0 && p[4] >= 0 && p[5] >= 0 &&
         (OW - 1) * p[0] + (KW - 1) * p[6] < pw && (OH - 1) * p[1] + (KH - 1) * p[7] < ph &&
         (OD - 1) * p[2] + (KD - 1) * p[8] < pd && (OC + 63) / 64 <= 65535 && B <= 65535) {
         const int                  padded_total = int(pw * ph * pd * IC * B);
