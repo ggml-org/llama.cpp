@@ -198,14 +198,15 @@ export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 }
 
 /**
- * Family a repo belongs to, from its name: `Qwen3.8-27B` and `Qwen3.8-Flash-Next`
- * both read as `Qwen3.8`, and a name without a version keeps its first segment.
+ * Family a repo belongs to, from its name. The version is dropped, so `Qwen3.5`,
+ * `Qwen3.8-27B` and `Qwen3.8-Flash-Next` all read as `Qwen`. A name that does not
+ * start with letters keeps its first segment.
  */
 export function modelFamilyKey(repo: string): string {
 	const name = repo.split('/').pop() ?? repo;
-	const versioned = name.match(/^[A-Za-z]+\d+(?:\.\d+)?/);
+	const letters = name.match(/^[A-Za-z]+/);
 
-	return versioned ? versioned[0] : (name.split(/[-_.]/)[0] ?? name);
+	return letters ? letters[0] : (name.split(/[-_.]/)[0] ?? name);
 }
 
 /** One family of the table, the repos it covers. */
