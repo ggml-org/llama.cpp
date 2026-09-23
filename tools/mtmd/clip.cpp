@@ -1408,9 +1408,14 @@ struct clip_model_loader {
             }
 
             // Load the vision/audio feature layer indices if they are explicitly provided
-            // NOTE: gguf conversions should standardize the values of the vision feature layer to
-            // be non-negative, since we use -1 to mark values as unset here.
+            // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
             get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
+            for (const auto & v : hparams.feature_layers) {
+                if (v > (int) hparams.n_layer) {
+                    throw std::runtime_error(string_format("%s: feature layer index %d is out of range (n_layer: %d)",
+                                                           __func__, v, hparams.n_layer));
+                }
+            }
 
             // model-specific params
             switch (model.proj_type) {
@@ -1456,7 +1461,12 @@ struct clip_model_loader {
                         std::vector<int> wa_layer_indexes_vec;
                         get_arr_int(KEY_WIN_ATTN_LAYER_INDEXES, wa_layer_indexes_vec, false);
                         if (!wa_layer_indexes_vec.empty()) {
-                            hparams.insert_layer_id = wa_layer_indexes_vec[0];
+                            const int insert_lid = wa_layer_indexes_vec[0];
+                            if (insert_lid < 0 || insert_lid >= (int) hparams.n_layer) {
+                                throw std::runtime_error(string_format("%s: layer index %d is out of range (n_layer: %d)",
+                                                                       __func__, insert_lid, hparams.n_layer));
+                            }
+                            hparams.insert_layer_id = insert_lid;
                         }
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
@@ -3226,6 +3236,7 @@ struct clip_model_loader {
                     model.pos_embed          = get_tensor(string_format(TN_SAM_POS_EMBD,   "weight"));
                     model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
                     model.patch_embed_proj_b = get_tensor(string_format(TN_SAM_PATCH_EMBD, "bias"));
+                    model.n_sam_layers = hparams.sam_n_layer;
                     model.sam_layers.resize(model.n_sam_layers);
                     for (int il = 0; il < model.n_sam_layers; ++il) {
                         auto & layer    = model.sam_layers[il];
@@ -4436,7 +4447,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs, params)->build();
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+        LOG_ERR("%s: failed to allocate compute graph\n", __func__);
+        return false;
+    }
 
     // set inputs
     const auto & model   = ctx->model;
@@ -4649,8 +4663,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                // note: sized by the actual patch counts; a tall/wide image produces more
+                // than 1024 patches per side and a fixed [1024] array would be overrun
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }
@@ -4693,8 +4709,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }

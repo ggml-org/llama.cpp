@@ -68,7 +68,6 @@ struct server_http_context {
     class Impl;
     std::unique_ptr<Impl> pimpl;
 
-    std::thread thread; // server thread
     std::atomic<bool> is_ready = false;
 
     // note: the handler should never throw exceptions
@@ -76,7 +75,6 @@ struct server_http_context {
     mutable std::unordered_map<std::string, handler_t> handlers;
 
     std::string path_prefix;
-    std::string hostname;
     int port    = 8080;
     bool is_ssl = false;
 
@@ -86,6 +84,7 @@ struct server_http_context {
     bool init(const common_params & params);
     bool start();
     void stop() const;
+    void join();
 
     void get(const std::string & path, const handler_t & handler) const;
     void post(const std::string & path, const handler_t & handler) const;
@@ -96,5 +95,8 @@ struct server_http_context {
     void register_gcp_compat() const;
 
     // for debugging
-    std::string listening_address;
+    std::vector<std::string> listening_addresses;
+
+private:
+    bool init_listener(const common_params & params);
 };

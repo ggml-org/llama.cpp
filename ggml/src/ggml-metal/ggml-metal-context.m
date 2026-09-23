@@ -30,7 +30,8 @@ struct ggml_metal {
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
 
-    ggml_metal_event_t ev_cpy; // for async copies
+    ggml_metal_event_t ev_cpy;  // for async copies
+    ggml_metal_event_t ev_sync; // destination completion signal
 
     dispatch_queue_t d_queue;
 
@@ -129,7 +130,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             }
         }
 
-        res->ev_cpy = ggml_metal_device_event_init(dev);
+        res->ev_cpy  = ggml_metal_device_event_init(dev);
+        res->ev_sync = ggml_metal_device_event_init(dev);
 
         const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
@@ -240,6 +242,7 @@ void ggml_metal_free(ggml_metal_t ctx) {
     dispatch_release(ctx->d_queue);
 
     ggml_metal_device_event_free(ctx->dev, ctx->ev_cpy);
+    ggml_metal_device_event_free(ctx->dev, ctx->ev_sync);
 
     free(ctx);
 }
@@ -421,10 +424,23 @@ bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, con
             return false;
         }
 
+        id<MTLCommandQueue> dst_queue = ggml_metal_device_get_queue(ctx_dst->dev);
+        id<MTLCommandBuffer> sync_cmd_buf = [dst_queue commandBuffer];
+
+        ggml_metal_event_encode_signal(ctx_dst->ev_sync, sync_cmd_buf);
+
+        [sync_cmd_buf commit];
+
+        [ctx_dst->cmd_bufs_ext addObject:sync_cmd_buf];
+        ctx_dst->cmd_buf_last = sync_cmd_buf;
+
+        [sync_cmd_buf retain];
+
         // queue the copy operation into the Metal context
         // this will be queued at the end, after any currently ongoing GPU operations
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx_src->dev);
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
+        ggml_metal_event_encode_wait(ctx_dst->ev_sync, cmd_buf);
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:bid_src.metal

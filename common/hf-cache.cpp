@@ -35,8 +35,8 @@ static std::string path_to_utf8(const fs::path & p) {
     return std::string(s.begin(), s.end());
 }
 
-static fs::path get_cache_directory() {
-    static const fs::path cache = []() {
+std::string get_cache_path() {
+    static const std::string cache = []() {
         struct {
             const char * var;
             fs::path path;
@@ -51,14 +51,14 @@ static fs::path get_cache_directory() {
         for (const auto & entry : entries) {
             if (auto * p = std::getenv(entry.var); p && *p) {
                 fs::path base(p);
-                return entry.path.empty() ? base : base / entry.path;
+                return (entry.path.empty() ? base : base / entry.path).string();
             }
         }
 #ifndef _WIN32
         const struct passwd * pw = getpwuid(getuid());
 
         if (pw && pw->pw_dir && *pw->pw_dir) {
-            return fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub";
+            return (fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub").string();
         }
 #endif
         throw std::runtime_error("Failed to determine HF cache directory");
@@ -85,7 +85,7 @@ static std::string repo_to_folder_name(const std::string & repo_id) {
 }
 
 static fs::path get_repo_path(const std::string & repo_id) {
-    return get_cache_directory() / repo_to_folder_name(repo_id);
+    return fs::path(get_cache_path()) / repo_to_folder_name(repo_id);
 }
 
 static bool is_hex_char(const char c) {
@@ -398,8 +398,8 @@ static std::string get_cached_ref(const fs::path & repo_path) {
 }
 
 hf_files get_cached_files(const std::string & repo_id) {
-    fs::path cache_dir = get_cache_directory();
-    if (!fs::exists(cache_dir)) {
+    const fs::path cache_path = get_cache_path();
+    if (!fs::exists(cache_path)) {
         return {};
     }
 
@@ -410,7 +410,7 @@ hf_files get_cached_files(const std::string & repo_id) {
 
     hf_files files;
 
-    for (const auto & repo : fs::directory_iterator(cache_dir)) {
+    for (const auto & repo : fs::directory_iterator(cache_path)) {
         if (!repo.is_directory()) {
             continue;
         }
