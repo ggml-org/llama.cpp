@@ -1,15 +1,6 @@
 #include "common.cuh"
+#include "convert.cuh"
 #include "fwht.cuh"
-
-template <typename T>
-static __device__ __forceinline__ float fwht_load(const T value) {
-    return value;
-}
-
-template <>
-__device__ __forceinline__ float fwht_load<half>(const half value) {
-    return __half2float(value);
-}
 
 template <int N, typename T>
 __launch_bounds__(4*ggml_cuda_get_physical_warp_size(), 1)
@@ -32,7 +23,7 @@ __global__ void fwht_cuda(const T * src, float * dst, const int64_t n_rows, cons
     ggml_cuda_pdl_sync();
 #pragma unroll
     for (int i = 0; i < el_w; ++i) {
-        reg[i] = fwht_load(src[i * warp_size + lane]) * scale;
+        reg[i] = ggml_cuda_cast<float>(src[i * warp_size + lane]) * scale;
     }
 
 #pragma unroll
