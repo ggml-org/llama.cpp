@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { ChevronDown, ChevronRight, Heart, Power } from '@lucide/svelte';
+	import { Heart, Power } from '@lucide/svelte';
 	import { ModelAvatar, ModelsSelectorOption } from '$lib/components/app';
 	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
@@ -14,7 +14,6 @@
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
-	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		groups: GroupedModelOptions;
@@ -87,21 +86,6 @@
 	let headerClass = $derived(`${sectionHeaderClass} sticky z-10 bg-popover`);
 	const headerStyle = 'top: var(--dropdown-sticky-height, 0px)';
 
-	/** Families of each section, folded away by the user. */
-	const collapsedFamilies = new SvelteSet<string>();
-
-	function familyKey(prefix: string, key: string): string {
-		return `${prefix}-${key}`;
-	}
-
-	function toggleFamily(key: string): void {
-		if (collapsedFamilies.has(key)) {
-			collapsedFamilies.delete(key);
-		} else {
-			collapsedFamilies.add(key);
-		}
-	}
-
 	/** In-flight / paused downloads, tracked by the status feed. */
 	let getDownloadEntries = $derived(modelsStore.status.getDownloadEntries());
 
@@ -117,49 +101,37 @@
 	}
 </script>
 
-{#snippet familyRow(family: ModelFamilyGroup<ModelItem>, prefix: string)}
-	{@const key = familyKey(prefix, family.key)}
-	{@const isExpanded = !collapsedFamilies.has(key)}
-
-	<button
-		aria-expanded={isExpanded}
-		class="flex w-full cursor-pointer items-center gap-3 rounded-sm p-2 text-left transition hover:bg-accent"
-		onclick={() => toggleFamily(key)}
-		type="button"
+{#snippet familyRow(family: ModelFamilyGroup<ModelItem>)}
+	<!-- a sub heading of the section, sticky right below the section heading -->
+	<div
+		class="sticky z-10 flex items-center gap-2 bg-popover px-2 py-1.5 select-none"
+		style="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem)"
 	>
 		<ModelAvatar
 			option={family.entries[0].option}
 			showBaseModelAvatar
 			showQuantBadge={false}
-			size="size-7"
+			size="size-6"
 		/>
 
-		<span class="truncate text-sm font-medium">{family.label}</span>
+		<span class="truncate text-[13px] font-semibold text-muted-foreground/70">
+			{family.label}
+		</span>
 
 		<span class="text-xs text-muted-foreground">
 			{family.entries.length} model{family.entries.length === 1 ? '' : 's'}
 		</span>
-
-		<span class="ml-auto flex shrink-0 items-center text-muted-foreground">
-			{#if isExpanded}
-				<ChevronDown class="h-3.5 w-3.5" />
-			{:else}
-				<ChevronRight class="h-3.5 w-3.5" />
-			{/if}
-		</span>
-	</button>
+	</div>
 {/snippet}
 
 {#snippet familyRows(items: ModelItem[], prefix: string)}
 	{#if settingsStore.config.groupModelsByFamily}
-		{#each groupModelFamilies(items, (item) => item.option.model) as family (familyKey(prefix, family.key))}
-			{@render familyRow(family, prefix)}
+		{#each groupModelFamilies(items, (item) => item.option.model) as family (`${prefix}-${family.key}`)}
+			{@render familyRow(family)}
 
-			{#if !collapsedFamilies.has(familyKey(prefix, family.key))}
-				{#each family.entries as item (`family-${prefix}-${item.option.id}`)}
-					<div class="pl-4">{@render render(item, !showOrgName)}</div>
-				{/each}
-			{/if}
+			{#each family.entries as item (`family-${prefix}-${item.option.id}`)}
+				<div class="pl-4">{@render render(item, !showOrgName)}</div>
+			{/each}
 		{/each}
 	{:else}
 		{#each items as item (`plain-${prefix}-${item.option.id}`)}

@@ -135,7 +135,9 @@
 	 */
 	.collapsible-region {
 		height: 0;
-		overflow: hidden;
+		/* clip, not hidden: hidden would make the region a scrollport, and the
+		   sticky rows inside it would then never leave their opening position */
+		overflow: clip;
 		visibility: hidden;
 		interpolate-size: allow-keywords;
 		transition:
@@ -166,7 +168,7 @@
 
 		.collapsible-region-content {
 			min-height: 0;
-			overflow: hidden;
+			overflow: clip;
 		}
 	}
 </style>

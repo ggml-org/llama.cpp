@@ -420,7 +420,9 @@
 	{@const options = family.entries.flatMap((entry) => entry.quants)}
 	{@const favorite = options.some((option) => isFavorite(option))}
 
-	<div class="px-2">
+	<!-- the wrapper sticks, not the grid row: a grid child is only as tall as itself
+	     and would have no room to move under the section heading -->
+	<div class="sticky z-10 bg-popover px-2" style="top: 2.25rem">
 		<div
 			class="{rowGrid} group cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
 			onclick={() => toggleFamily(family.key)}
