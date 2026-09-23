@@ -19,6 +19,7 @@
 		Upload
 	} from '@lucide/svelte';
 	import {
+		ActionIcon,
 		DropdownMenuActions,
 		Logo,
 		ModelAvatar,
@@ -346,10 +347,12 @@
 {#snippet familyRow(family: ModelFamilyGroup)}
 	{@const isExpanded = !collapsedFamilies.has(family.key)}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
+	{@const options = family.entries.flatMap((entry) => entry.quants)}
+	{@const favorite = options.some((option) => isFavorite(option))}
 
 	<div class="px-2">
 		<div
-			class="{rowGrid} cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
+			class="{rowGrid} group cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
 			onclick={() => toggleFamily(family.key)}
 			onkeydown={(event) => event.key === 'Enter' && toggleFamily(family.key)}
 			role="button"
@@ -366,6 +369,41 @@
 				<span class="truncate text-sm font-medium">{family.label}</span>
 
 				<span class="text-sm text-muted-foreground">{countLabel}</span>
+
+				<span
+					class="flex shrink-0"
+					onclick={(event) => event.stopPropagation()}
+					onkeydown={(event) => event.stopPropagation()}
+					role="presentation"
+				>
+					{#if favorite}
+						<ActionIcon
+							class="h-5 w-5 text-rose-500 hover:text-foreground"
+							icon={HeartOff}
+							iconSize="h-4 w-4"
+							onclick={() =>
+								modelsStore.setFavorites(
+									options.map((option) => option.model),
+									false
+								)}
+							tooltip="Remove family from favorites"
+							tooltipAsTitle
+						/>
+					{:else}
+						<ActionIcon
+							class="h-5 w-5 opacity-0 transition group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+							icon={Heart}
+							iconSize="h-4 w-4"
+							onclick={() =>
+								modelsStore.setFavorites(
+									options.map((option) => option.model),
+									true
+								)}
+							tooltip="Add family to favorites"
+							tooltipAsTitle
+						/>
+					{/if}
+				</span>
 			</span>
 
 			<span></span>

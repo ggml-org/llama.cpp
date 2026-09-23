@@ -518,6 +518,27 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
+	/** Add or remove several models at once, e.g. every quant of a family. */
+	setFavorites(modelIds: string[], favorite: boolean): void {
+		const next = new SvelteSet(this.favoriteModelIds);
+
+		for (const modelId of modelIds) {
+			if (favorite) {
+				next.add(modelId);
+			} else {
+				next.delete(modelId);
+			}
+		}
+
+		this.favoriteModelIds = next;
+
+		try {
+			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save favorite models to local storage');
+		}
+	}
+
 	/**
 	 * Activate a backend for the selector tabs. Everything comes from memory:
 	 * the model list and router rows are prefetched at startup and the local
@@ -571,21 +592,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	toggleFavorite(modelId: string): void {
-		const next = new SvelteSet(this.favoriteModelIds);
-
-		if (next.has(modelId)) {
-			next.delete(modelId);
-		} else {
-			next.add(modelId);
-		}
-
-		this.favoriteModelIds = next;
-
-		try {
-			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
-		} catch {
-			toast.error('Failed to save favorite models to local storage');
-		}
+		this.setFavorites([modelId], !this.favoriteModelIds.has(modelId));
 	}
 
 	/** Models hidden from the selector stay in the manager, flagged and unhideable. */
