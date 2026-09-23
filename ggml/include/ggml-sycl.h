@@ -25,7 +25,7 @@ GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
 // split tensor buffer that splits matrices by rows across multiple devices
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type([[maybe_unused]] int main_device, const float * tensor_split);
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(int main_device, const float * tensor_split);
 
 // Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
 // trio queried by the meta-backend via ggml_backend_reg_get_proc_address.
@@ -45,7 +45,7 @@ GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int *id_list, int max_len);
 GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device,
                                                        char *description,
                                                        size_t description_size);
-GGML_BACKEND_API int  ggml_backend_sycl_get_device_count();
+GGML_BACKEND_API int  ggml_backend_sycl_get_device_count(void);
 GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t *free, size_t *total);
 
 // SYCL doesn't support registering host memory, keep here for reference
