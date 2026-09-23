@@ -352,8 +352,10 @@ struct common_peg_gbnf_parser {
 };
 
 struct common_peg_ac_parser {
-    common_peg_parser_id child;
-    std::vector<std::string> delimiters;
+    common_peg_parser_id              child;
+    std::vector<std::string>          delimiters;
+    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID; // set when the delimiters were given as a parser
+    common_trie                       matcher;
 };
 
 // Variant holding all parser types
@@ -619,6 +621,9 @@ class common_peg_parser_builder {
     // responsible for consuming the delimiter (e.g. until(D) + literal(D)).
     common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);
     common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
+
+    // Same as above, but the delimiter is a parser made of sequences, choices, literals, and tokens, like until().
+    common_peg_parser ac(const common_peg_parser & p, const common_peg_parser & delimiter);
 
     void set_root(const common_peg_parser & p);
 

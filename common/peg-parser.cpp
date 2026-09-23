@@ -279,21 +279,22 @@ static std::vector<until_delimiter> expand_delimiter(const common_peg_arena & ar
             }
             return result;
         } else {
-            throw std::invalid_argument("until delimiters may only contain sequences, choices, literals, and tokens");
+            throw std::invalid_argument("delimiters may only contain sequences, choices, literals, and tokens");
         }
     }, arena.get(id));
 }
 
-// Build the matcher and delimiter text of an until parser from its delimiter parser
-static void build_until_matcher(const common_peg_arena & arena, common_peg_until_parser & until) {
-    until.delimiters.clear();
-    until.matcher = common_trie();
-    for (auto & d : expand_delimiter(arena, until.delimiter_parser)) {
+// Build the matcher and delimiter text of an until or ac parser from its delimiter parser
+template <typename T>
+static void build_delimiter_matcher(const common_peg_arena & arena, T & parser) {
+    parser.delimiters.clear();
+    parser.matcher = common_trie();
+    for (auto & d : expand_delimiter(arena, parser.delimiter_parser)) {
         if (d.symbols.empty()) {
-            throw std::invalid_argument("until delimiter must not match the empty string");
+            throw std::invalid_argument("delimiter must not match the empty string");
         }
-        until.matcher.insert(d.symbols);
-        until.delimiters.push_back(std::move(d.text));
+        parser.matcher.insert(d.symbols);
+        parser.delimiters.push_back(std::move(d.text));
     }
 }
 
@@ -1250,7 +1251,7 @@ common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std:
 common_peg_parser common_peg_parser_builder::until(const common_peg_parser & delimiter) {
     common_peg_until_parser p;
     p.delimiter_parser = delimiter.id();
-    build_until_matcher(arena_, p);
+    build_delimiter_matcher(arena_, p);
     return add(std::move(p));
 }
 
@@ -1570,7 +1571,19 @@ common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, con
     if (delimiters.empty()) {
         throw std::runtime_error("ac parser requires at least one delimiter");
     }
-    return add(common_peg_ac_parser{p, delimiters});
+    common_peg_ac_parser ac;
+    ac.child      = p.id();
+    ac.delimiters = delimiters;
+    ac.matcher    = common_trie(delimiters);
+    return add(std::move(ac));
+}
+
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const common_peg_parser & delimiter) {
+    common_peg_ac_parser ac;
+    ac.child            = p.id();
+    ac.delimiter_parser = delimiter.id();
+    build_delimiter_matcher(arena_, ac);
+    return add(std::move(ac));
 }
 
 static std::string gbnf_escape_char_class(uint32_t c) {
@@ -1631,15 +1644,63 @@ static std::string gbnf_char_class(const std::vector<uint32_t> & chars, bool neg
     return s + "]";
 }
 
+// Token set such as <[1,5-9]>, with consecutive ids collapsed into ranges
+static std::string gbnf_token_set(const std::vector<uint32_t> & tokens, bool negate) {
+    std::string s = negate ? "!<[" : "<[";
+    for (size_t i = 0; i < tokens.size();) {
+        size_t j = i;
+        while (j + 1 < tokens.size() && tokens[j + 1] == tokens[j] + 1) {
+            j++;
+        }
+        s += (i == 0 ? "" : ",") + std::to_string(tokens[i]);
+        if (j > i) {
+            s += "-" + std::to_string(tokens[j]);
+        }
+        i = j + 1;
+    }
+    return s + "]>";
+}
+
+// Symbols on the transitions out of an automaton state, codepoints and tokens kept apart
+struct gbnf_ac_symbols {
+    std::vector<uint32_t> chars;
+    std::vector<uint32_t> tokens;
+
+    void add(const common_trie::symbol & sym) {
+        (sym.is_token() ? tokens : chars).push_back(sym.value);
+    }
+
+    // One alternative for the codepoints and one for the tokens, each followed by next if given
+    std::vector<std::string> alternatives(const std::string & next = "") const {
+        std::vector<std::string> alts;
+        const std::string tail = next.empty() ? "" : " " + next;
+        if (!chars.empty()) {
+            alts.push_back(gbnf_char_class(chars, false) + tail);
+        }
+        if (!tokens.empty()) {
+            alts.push_back(gbnf_token_set(tokens, false) + tail);
+        }
+        return alts;
+    }
+};
+
 static std::string gbnf_ac_grammar(
-    const common_grammar_builder &   builder,
-    const std::string &              prefix,
-    const std::vector<std::string> & strings,
-    const std::function<std::string(const std::vector<uint32_t> &,
-                                    const std::map<size_t, std::vector<uint32_t>> &,
-                                    const std::vector<uint32_t> &,
+    const common_grammar_builder & builder,
+    const std::string &            prefix,
+    const common_trie &            trie,
+    const std::function<std::string(const gbnf_ac_symbols &,
+                                    const std::map<size_t, gbnf_ac_symbols> &,
+                                    const std::string &,
                                     const std::function<std::string(size_t)> &)> & build_rule) {
-    common_aho_corasick ac(strings);
+    common_aho_corasick ac(trie);
+
+    // Without codepoints every step is a whole token, so anything else can go back to the start as
+    // one token. Otherwise text has to be matched a codepoint at a time, which also lets the text
+    // of a token in the alphabet through.
+    bool token_only = true;
+    for (const auto & sym : ac.alphabet) {
+        token_only = token_only && sym.is_token();
+    }
 
     auto state_name = [&](size_t s) -> std::string {
         if (s == 0) {
@@ -1655,22 +1716,32 @@ static std::string gbnf_ac_grammar(
             continue; // match states
         }
 
-        std::map<size_t, std::vector<uint32_t>> buckets;
-        std::vector<uint32_t> completing;  // chars that complete a delimiter
-        std::vector<uint32_t> specific;    // chars with an explicit transition
+        std::map<size_t, gbnf_ac_symbols> buckets;
+        gbnf_ac_symbols completing;  // symbols that complete a delimiter
+        gbnf_ac_symbols specific;    // symbols with an explicit transition
         for (const auto & sym : ac.alphabet) {
-            const uint32_t c = sym.value;
             size_t d = ac.next(q, sym);
             if (ac.is_terminal(d)) {
-                completing.push_back(c);
-                specific.push_back(c);
+                completing.add(sym);
+                specific.add(sym);
             } else if (d != 0) {
-                buckets[d].push_back(c); // specific non-root destination
-                specific.push_back(c);
+                buckets[d].add(sym); // specific non-root destination
+                specific.add(sym);
             }
         }
 
-        builder.add_rule(state_name(q), build_rule(completing, buckets, specific, state_name));
+        // every other symbol goes back to the start
+        std::string fallback;
+        if (token_only) {
+            fallback = gbnf_token_set(specific.tokens, true);
+        } else if (specific.chars.empty()) {
+            fallback = ".";
+        } else {
+            fallback = gbnf_char_class(specific.chars, true);
+        }
+        fallback += " " + state_name(0);
+
+        builder.add_rule(state_name(q), build_rule(completing, buckets, fallback, state_name));
     }
 
     // An empty delimiter makes the start state terminal. Emit an entry rule
@@ -1689,19 +1760,21 @@ static std::string gbnf_ac_grammar(
 // ref: https://github.com/ggml-org/llama.cpp/pull/24839
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
-                                          const std::vector<std::string> & strings) {
-    return gbnf_ac_grammar(builder, prefix, strings,
-        [](const std::vector<uint32_t> & /*completing*/,
-           const std::map<size_t, std::vector<uint32_t>> & buckets,
-           const std::vector<uint32_t> & specific,
+                                          const common_trie &            trie) {
+    return gbnf_ac_grammar(builder, prefix, trie,
+        [](const gbnf_ac_symbols & /*completing*/,
+           const std::map<size_t, gbnf_ac_symbols> & buckets,
+           const std::string & fallback,
            const std::function<std::string(size_t)> & state_name) {
-            // every state is accepting and completing chars get no
+            // every state is accepting and completing symbols get no
             // alternative, so a forbidden string can never be matched
             std::string rhs = "|";
-            for (const auto & [d, chars] : buckets) {
-                rhs += " " + gbnf_char_class(chars, false) + " " + state_name(d) + " |";
+            for (const auto & [d, symbols] : buckets) {
+                for (const auto & alt : symbols.alternatives(state_name(d))) {
+                    rhs += " " + alt + " |";
+                }
             }
-            rhs += " " + gbnf_char_class(specific, true) + " " + state_name(0);
+            rhs += " " + fallback;
             return rhs;
         });
 }
@@ -1711,21 +1784,20 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
 // the start state rule name.
 static std::string gbnf_including_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
-                                          const std::vector<std::string> & strings) {
-    return gbnf_ac_grammar(builder, prefix, strings,
-        [](const std::vector<uint32_t> & completing,
-           const std::map<size_t, std::vector<uint32_t>> & buckets,
-           const std::vector<uint32_t> & specific,
+                                          const common_trie &            trie) {
+    return gbnf_ac_grammar(builder, prefix, trie,
+        [](const gbnf_ac_symbols & completing,
+           const std::map<size_t, gbnf_ac_symbols> & buckets,
+           const std::string & fallback,
            const std::function<std::string(size_t)> & state_name) {
-            std::vector<std::string> alts;
-            if (!completing.empty()) {
-                alts.push_back(gbnf_char_class(completing, false)); // terminate on match
+            std::vector<std::string> alts = completing.alternatives(); // terminate on match
+            for (const auto & [d, symbols] : buckets) {
+                for (auto & alt : symbols.alternatives(state_name(d))) {
+                    alts.push_back(std::move(alt));
+                }
             }
-            for (const auto & [d, chars] : buckets) {
-                alts.push_back(gbnf_char_class(chars, false) + " " + state_name(d));
-            }
-            // every other character keeps scanning from the start state
-            alts.push_back(gbnf_char_class(specific, true) + " " + state_name(0));
+            // every other symbol keeps scanning from the start state
+            alts.push_back(fallback);
             return string_join(alts, " | ");
         });
 }
@@ -1927,7 +1999,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (p.delimiters.empty()) {
                     return ".*";
                 }
-                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.delimiters);
+                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.matcher);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
@@ -1945,7 +2017,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
                 return p.grammar;
             } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.delimiters);
+                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.matcher);
             } else {
                 static_assert(is_always_false_v<T>);
             }
@@ -2088,7 +2160,11 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
         } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
             return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
         } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-            return json{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
+            json j{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
+            if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
+                j["delimiter_parser"] = p.delimiter_parser;
+            }
+            return j;
         }
     }, variant);
 }
@@ -2281,10 +2357,13 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
             throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
         }
-        return common_peg_ac_parser{
-            j["child"].get<common_peg_parser_id>(),
-            j["delimiters"].get<std::vector<std::string>>(),
-        };
+        common_peg_ac_parser parser;
+        parser.child      = j["child"].get<common_peg_parser_id>();
+        parser.delimiters = j["delimiters"].get<std::vector<std::string>>();
+        if (j.contains("delimiter_parser")) {
+            parser.delimiter_parser = j["delimiter_parser"].get<common_peg_parser_id>();
+        }
+        return parser;
     }
 
     throw std::runtime_error("Unknown parser type: " + type);
@@ -2309,15 +2388,20 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
         arena.parsers_.push_back(deserialize_parser_variant(parser_json));
     }
 
+    auto rebuild_matcher = [&](auto & p) {
+        if (p.delimiter_parser == COMMON_PEG_INVALID_PARSER_ID) {
+            p.matcher = common_trie(p.delimiters);
+        } else if (p.delimiter_parser >= arena.parsers_.size()) {
+            throw std::runtime_error("delimiter references invalid parser ID: " + std::to_string(p.delimiter_parser));
+        } else {
+            build_delimiter_matcher(arena, p);
+        }
+    };
     for (auto & parser : arena.parsers_) {
         if (auto * until = std::get_if<common_peg_until_parser>(&parser)) {
-            if (until->delimiter_parser == COMMON_PEG_INVALID_PARSER_ID) {
-                until->matcher = common_trie(until->delimiters);
-            } else if (until->delimiter_parser >= arena.parsers_.size()) {
-                throw std::runtime_error("until delimiter references invalid parser ID: " + std::to_string(until->delimiter_parser));
-            } else {
-                build_until_matcher(arena, *until);
-            }
+            rebuild_matcher(*until);
+        } else if (auto * ac = std::get_if<common_peg_ac_parser>(&parser)) {
+            rebuild_matcher(*ac);
         }
     }
 
