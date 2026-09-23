@@ -108,7 +108,7 @@ jobs:
           rocminfo
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  gpu-rocm-1201:
+  gpu-rocm-gfx1201:
     runs-on: [self-hosted, Linux, gfx1201]
     container: "rocm/dev-ubuntu-24.04:7.2.4-complete"
 
@@ -131,7 +131,7 @@ jobs:
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
         with:
-          key: self-hosted-gpu-rocm-1201
+          key: self-hosted-gpu-rocm-gfx1201
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -147,7 +147,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: self-hosted-gpu-rocm-1201
+          key: self-hosted-gpu-rocm-gfx1201
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache
