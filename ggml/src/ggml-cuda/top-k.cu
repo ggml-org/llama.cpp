@@ -3,15 +3,15 @@
 
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC
 #    define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC 512
-#endif
+#endif // GGML_CUDA_TOP_K_NCOLS_THRESHOLD_BITONIC
 
 #ifndef GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT
 #    define GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT 4096
-#endif
+#endif // GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT
 
 #ifndef GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK
 #    define GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK 1
-#endif
+#endif // GGML_CUDA_TOP_K_NROWS_THRESHOLD_DEVICETOPK
 
 #ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
@@ -244,8 +244,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             for (int i = 0; i < nrows; i++) {
                 top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
             }
-#else // CUB_TOP_K_AVAILABLE
-#ifdef GGML_CUDA_USE_CUB
+#elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
             if (ncols > GGML_CUDA_TOP_K_NCOLS_THRESHOLD_ARGSORT) {
                 top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
             } else {
@@ -274,12 +273,12 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                     dst_d  += k     * iter_nrows;
                 }
             }
-#else // GGML_CUDA_USE_CUB
+#else                             // CUB_TOP_K_AVAILABLE
             top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
-#endif // GGML_CUDA_USE_CUB
-#endif // CUB_TOP_K_AVAILABLE
+#endif                            // CUB_TOP_K_AVAILABLE
         }
     } else {
+        GGML_ASSERT(ncols <= 1024);
         ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
         int *                     tmp_dst = temp_dst_alloc.get();
         argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
