@@ -77,13 +77,7 @@
 		groups.map((group) => {
 			const families = groupModelFamilies(group.items);
 
-			return {
-				...group,
-				families: families.filter((family) => family.entries.length > 1),
-				singles: families
-					.filter((family) => family.entries.length === 1)
-					.flatMap((family) => family.entries)
-			};
+			return { ...group, families };
 		})
 	);
 
@@ -418,6 +412,7 @@
 
 {#snippet familyRow(family: ModelFamilyGroup, indent = 0)}
 	{@const isExpanded = isFamilyExpanded(family.key)}
+	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 
 	<div class="px-2">
 		<div
@@ -436,7 +431,7 @@
 						<span class="block truncate text-sm font-medium">{family.label}</span>
 
 						<span class="block text-xs text-muted-foreground">
-							{family.entries.length} models
+							{countLabel}
 						</span>
 					</span>
 				</span>
@@ -444,7 +439,7 @@
 				<span class="flex min-w-0 items-center gap-2" style="padding-left: {indent}px">
 					<span class="truncate text-sm font-medium">{family.label}</span>
 
-					<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+					<span class="text-sm text-muted-foreground">{countLabel}</span>
 				</span>
 			{/if}
 
@@ -529,10 +524,6 @@
 								{/each}
 							{/if}
 						{/each}
-
-						{#each group.singles as entry (entry.key)}
-							{@render entryTree(entry, 40)}
-						{/each}
 					{/if}
 				{:else}
 					<ModelsSection
@@ -551,10 +542,6 @@
 									{@render entryTree(entry, 16)}
 								{/each}
 							{/if}
-						{/each}
-
-						{#each group.singles as entry (entry.key)}
-							{@render entryTree(entry, 16)}
 						{/each}
 					</ModelsSection>
 				{/if}
