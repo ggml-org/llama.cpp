@@ -16,6 +16,7 @@
 	import {
 		ActionIcon,
 		DropdownMenuActions,
+		GroupedList,
 		Logo,
 		ModelAvatar,
 		ModelContext,
@@ -33,7 +34,7 @@
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
-	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		filter?: string;
@@ -60,8 +61,6 @@
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
-	/** Families start open, this tracks the ones folded away. */
-	const collapsedFamilies = new SvelteSet<string>();
 	/** Sections that list their models straight, without folding them into families. */
 	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>(['favorites', 'loaded']);
 	let sections = $derived(
@@ -80,80 +79,6 @@
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
-	}
-
-	/** Rows mounted per section, grown by the show more row. */
-	const sectionLimits = new SvelteMap<string, number>();
-	/** Models mounted per family, grown the same way. */
-	const familyLimits = new SvelteMap<string, number>();
-
-	function familyLimit(key: string): number {
-		return familyLimits.get(key) ?? FAMILY_ROW_WINDOW;
-	}
-
-	function growFamily(key: string): void {
-		familyLimits.set(key, familyLimit(key) + FAMILY_ROW_WINDOW);
-	}
-
-	function sectionLimit(key: string): number {
-		return sectionLimits.get(key) ?? MODEL_ROW_WINDOW;
-	}
-
-	function growSection(key: string): void {
-		sectionLimits.set(key, sectionLimit(key) + MODEL_ROW_WINDOW);
-	}
-
-	/** Cut a section down to the mounted window, counting models rather than groups. */
-	function windowSection(group: (typeof sections)[number]): {
-		families: ModelFamilyGroup<ModelQuantGroup>[];
-		hidden: number;
-		items: ModelQuantGroup[];
-		unit: string;
-	} {
-		const limit = sectionLimit(group.key);
-
-		if (group.flat) {
-			const items: ModelQuantGroup[] = [];
-
-			let shown = 0;
-
-			for (const entry of group.items) {
-				if (shown >= limit) break;
-
-				items.push(entry);
-				shown += entry.quants.length;
-			}
-
-			return { families: [], hidden: group.items.length - items.length, items, unit: 'models' };
-		}
-
-		const families: ModelFamilyGroup<ModelQuantGroup>[] = [];
-
-		let shown = 0;
-
-		for (const family of group.families) {
-			if (shown >= limit) break;
-
-			families.push(family);
-			shown += family.entries
-				.slice(0, FAMILY_ROW_WINDOW)
-				.reduce((sum, entry) => sum + entry.quants.length, 0);
-		}
-
-		return {
-			families,
-			hidden: group.families.length - families.length,
-			items: [],
-			unit: 'families'
-		};
-	}
-
-	function toggleFamily(key: string): void {
-		if (collapsedFamilies.has(key)) {
-			collapsedFamilies.delete(key);
-		} else {
-			collapsedFamilies.add(key);
-		}
 	}
 
 	function toggleQuants(key: string): void {
@@ -414,19 +339,24 @@
 	{/if}
 {/snippet}
 
-{#snippet familyRow(family: ModelFamilyGroup<ModelQuantGroup>)}
-	{@const isExpanded = !collapsedFamilies.has(family.key)}
+{#snippet familyRow({
+	expanded,
+	group: family,
+	toggle
+}: {
+	expanded: boolean;
+	group: ModelFamilyGroup<ModelQuantGroup>;
+	toggle: () => void;
+})}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 	{@const options = family.entries.flatMap((entry) => entry.quants)}
 	{@const favorite = options.some((option) => isFavorite(option))}
 
-	<!-- the wrapper sticks, not the grid row: a grid child is only as tall as itself
-	     and would have no room to move under the section heading -->
-	<div class="sticky z-10 bg-popover px-2" style="top: 2.25rem">
+	<div class="px-2">
 		<div
 			class="{rowGrid} group cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
-			onclick={() => toggleFamily(family.key)}
-			onkeydown={(event) => event.key === 'Enter' && toggleFamily(family.key)}
+			onclick={toggle}
+			onkeydown={(event) => event.key === 'Enter' && toggle()}
 			role="button"
 			tabindex="0"
 		>
@@ -485,13 +415,37 @@
 			<span></span>
 
 			<span class="flex justify-center">
-				{#if isExpanded}
+				{#if expanded}
 					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
 				{:else}
 					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
 				{/if}
 			</span>
 		</div>
+	</div>
+{/snippet}
+
+{#snippet listItem({ entry }: { entry: ModelQuantGroup })}
+	{@render entryTree(entry, 16)}
+{/snippet}
+
+{#snippet showMore({
+	count,
+	onMore,
+	unit
+}: {
+	count: number;
+	onMore: () => void;
+	unit: 'entries' | 'families';
+})}
+	<div class="px-2">
+		<button
+			class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
+			onclick={onMore}
+			type="button"
+		>
+			Show {count} more {unit === 'families' ? 'families' : 'models'}
+		</button>
 	</div>
 {/snippet}
 
@@ -538,8 +492,6 @@
 					{/if}
 				{/snippet}
 
-				{@const windowed = windowSection(group)}
-
 				<ModelsSection
 					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					count={group.items.length}
@@ -548,45 +500,24 @@
 					open={group.kind !== 'hidden'}
 					sticky
 				>
-					{#each windowed.items as entry (entry.key)}
-						{@render entryTree(entry, 16)}
-					{/each}
-
-					{#each windowed.families as family (family.key)}
-						{@render familyRow(family)}
-
-						{#if !collapsedFamilies.has(family.key)}
-							{@const entries = family.entries.slice(0, familyLimit(family.key))}
-
-							{#each entries as entry (entry.key)}
-								{@render entryTree(entry, 16)}
-							{/each}
-
-							{#if family.entries.length > entries.length}
-								<div class="px-2">
-									<button
-										class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
-										onclick={() => growFamily(family.key)}
-										type="button"
-									>
-										Show {Math.min(FAMILY_ROW_WINDOW, family.entries.length - entries.length)} more models
-									</button>
-								</div>
-							{/if}
-						{/if}
-					{/each}
-
-					{#if windowed.hidden > 0}
-						<div class="px-2">
-							<button
-								class="w-full cursor-pointer rounded-md px-2 py-2 text-left text-xs text-muted-foreground transition hover:bg-muted/40"
-								onclick={() => growSection(group.key)}
-								type="button"
-							>
-								Show {Math.min(MODEL_ROW_WINDOW, windowed.hidden)} more {windowed.unit}
-							</button>
-						</div>
-					{/if}
+					<GroupedList
+						group={familyRow}
+						groupWindow={FAMILY_ROW_WINDOW}
+						groups={group.flat
+							? null
+							: group.families.map((family) => ({
+									entries: family.entries,
+									group: family,
+									key: family.key
+								}))}
+						item={listItem}
+						items={group.flat ? group.items : []}
+						keyOf={(entry) => entry.key}
+						more={showMore}
+						sectionWindow={MODEL_ROW_WINDOW}
+						stickyStyle="top: 2.25rem"
+						weightOf={(entry) => entry.quants.length}
+					/>
 				</ModelsSection>
 			{/if}
 		{/each}
