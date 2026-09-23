@@ -93,7 +93,7 @@
 
 	<ModelId
 		aliases={option.aliases}
-		class="flex-1"
+		class="min-w-0 flex-1"
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}

@@ -153,6 +153,9 @@
 	@supports not (interpolate-size: allow-keywords) {
 		.collapsible-region {
 			display: grid;
+			/* minmax(0, 1fr) pins the column to the region width: a plain auto
+			   column would size to the content and push wide rows out of the list */
+			grid-template-columns: minmax(0, 1fr);
 			grid-template-rows: 0fr;
 			/* the row owns the height here: leaving height: 0 in place would snap
 			   the region shut before the row could interpolate */
@@ -168,6 +171,7 @@
 
 		.collapsible-region-content {
 			min-height: 0;
+			min-width: 0;
 			overflow: clip;
 		}
 	}

@@ -114,7 +114,11 @@
 		{/if}
 
 		{#if hasBadges}
-			<span class="inline-flex items-center gap-1 {wrap ? 'flex-wrap' : ''}">
+			<!-- the badges do not shrink, so the group has to clip them: without this
+			     they paint over the row actions when the row is narrow -->
+			<span
+				class="inline-flex min-w-0 items-center gap-1 overflow-hidden {wrap ? 'flex-wrap' : ''}"
+			>
 				{#if parsed.sidecar}
 					<span class={variantBadgeClass} title={`${parsed.sidecar.toUpperCase()} draft model`}>
 						{parsed.sidecar}
@@ -168,10 +172,12 @@
 		{/if}
 	{/snippet}
 
+	<!-- overflow-hidden bounds the whole id: the badges, tags and capability icons do
+	     not shrink, so without it they spill past the row and over its actions -->
 	<span
-		class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''} {iconsOnNewLine
-			? 'flex-col items-start'
-			: ''} {className}"
+		class="flex min-w-0 items-center gap-1.5 overflow-hidden {wrap
+			? 'flex-wrap'
+			: ''} {iconsOnNewLine ? 'flex-col items-start' : ''} {className}"
 		{title}
 		{...rest}
 	>
