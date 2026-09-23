@@ -11,10 +11,12 @@ on:
     paths:
       - .github/workflows/copilot-setup-steps.yml
 
+cache-mode: none
+
 jobs:
   # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
   copilot-setup-steps:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     # Set the permissions to the lowest permissions possible needed for your steps.
     # Copilot will be given its own token for its operations.
@@ -31,8 +33,8 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: copilot-setup-steps
-          evict-old-files: 1d
+          restore: false
+          save: false
 
       - name: Dependencies
         id: depends
