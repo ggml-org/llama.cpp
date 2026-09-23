@@ -418,17 +418,24 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="flex min-w-0 items-center gap-3">
-				<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-9" />
+			{#if collapsibleRows}
+				<!-- with sections as rows, every level reads as a model row -->
+				<span class="flex min-w-0 items-center gap-3">
+					<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-9" />
 
-				<span class="min-w-0">
-					<span class="block truncate text-sm font-medium">{family.label}</span>
+					<span class="min-w-0">
+						<span class="block truncate text-sm font-medium">{family.label}</span>
 
-					<span class="block text-xs text-muted-foreground">
-						{family.entries.length} models
+						<span class="block text-xs text-muted-foreground">
+							{family.entries.length} models
+						</span>
 					</span>
 				</span>
-			</span>
+			{:else}
+				<span class="truncate text-sm font-medium">{family.label}</span>
+
+				<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+			{/if}
 
 			<span></span>
 
