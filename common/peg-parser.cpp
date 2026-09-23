@@ -243,6 +243,22 @@ void common_peg_input::append(const std::string & piece, llama_token token) {
     text += piece;
 }
 
+void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_tokens, const std::vector<size_t> & chunk_pos) {
+    GGML_ASSERT(chunk_tokens.size() == chunk_pos.size());
+    for (size_t i = 0; i < chunk_tokens.size(); i++) {
+        auto it = special_tokens.tokens.find(chunk_tokens[i]);
+        if (it == special_tokens.tokens.end()) {
+            continue;
+        }
+        const size_t pos = chunk_pos[i];
+        const size_t end = std::min(i + 1 < chunk_pos.size() ? chunk_pos[i + 1] : chunk.size(), chunk.size());
+        if (pos < end && end - pos == it->second.text.size()) {
+            tokens.push_back({ text.size() + pos, chunk_tokens[i] });
+        }
+    }
+    text += chunk;
+}
+
 std::vector<common_peg_input_token> common_peg_special_tokens::find(const std::string & text) const {
     struct match {
         size_t      pos;

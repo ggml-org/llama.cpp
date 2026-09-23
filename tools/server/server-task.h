@@ -107,7 +107,7 @@ struct task_result_state {
     std::vector<common_chat_msg_diff> diffs;
     common_chat_parser_params chat_parser_params;
     common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
+    common_peg_input generated_input; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -123,11 +123,14 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    task_result_state(const common_chat_parser_params & chat_parser_params);
+    // input is the empty parse input to append generated text to
+    task_result_state(const common_chat_parser_params & chat_parser_params, const common_peg_input & input);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
         const std::string & text_added,
+        const llama_tokens & tokens_added,
+        const std::vector<size_t> & token_pos_added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -246,8 +249,8 @@ struct server_task {
 
     // the task will be moved into queue, then onto slots
     // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state() const {
-        return task_result_state(params.chat_parser_params);
+    task_result_state create_state(const common_peg_input & input) const {
+        return task_result_state(params.chat_parser_params, input);
     }
 
     bool is_parent() const {
@@ -320,6 +323,7 @@ struct completion_token_output {
 struct server_task_result_cmpl_final : server_task_result {
     std::string content;
     llama_tokens tokens;
+    std::vector<size_t> token_pos; // where the piece of each token starts in content
 
     bool stream;
     bool include_usage;
@@ -364,7 +368,7 @@ struct server_task_result_cmpl_final : server_task_result {
 
     virtual void update(task_result_state & state) override {
         is_updated = true;
-        oaicompat_msg = state.update_chat_msg(content, false, oaicompat_msg_diffs);
+        oaicompat_msg = state.update_chat_msg(content, tokens, token_pos, false, oaicompat_msg_diffs);
 
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
@@ -395,6 +399,7 @@ struct server_task_result_cmpl_final : server_task_result {
 struct server_task_result_cmpl_partial : server_task_result {
     std::string  content;
     llama_tokens tokens;
+    std::vector<size_t> token_pos; // where the piece of each token starts in content
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
