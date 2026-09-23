@@ -333,13 +333,14 @@ static bool ggml_backend_meta_buffer_type_is_host(ggml_backend_buffer_type_t buf
 }
 
 static const struct ggml_backend_buffer_type_i ggml_backend_meta_buffer_type_iface = {
-    /* .get_name       = */ ggml_backend_meta_buffer_type_get_name,
-    /* .alloc_buffer   = */ ggml_backend_meta_buffer_type_alloc_buffer,
-    /* .alloc_buffer_n = */ ggml_backend_meta_buffer_type_alloc_buffer_n,
-    /* .get_alignment  = */ ggml_backend_meta_buffer_type_get_alignment,
-    /* .get_max_size   = */ ggml_backend_meta_buffer_type_get_max_size,
-    /* .get_alloc_size = */ ggml_backend_meta_buffer_type_get_alloc_size,
-    /* .is_host        = */ ggml_backend_meta_buffer_type_is_host,
+    /* .get_name            = */ ggml_backend_meta_buffer_type_get_name,
+    /* .alloc_buffer        = */ ggml_backend_meta_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ ggml_backend_meta_buffer_type_alloc_buffer_n,
+    /* .get_alignment       = */ ggml_backend_meta_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_meta_buffer_type_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_meta_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ ggml_backend_meta_buffer_type_is_host,
 };
 
 bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft) {
