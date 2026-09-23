@@ -1261,6 +1261,896 @@ cl_mem ggml_cl_img_pool_get_or_create(
     return img;
 }
 
+static bool ggml_cl_mm_f32_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
+    GGML_TENSOR_LOCALS(int,      ne1, src1, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb1, src1, nb);
+    GGML_TENSOR_LOCALS(int,      ne,  dst,  ne);
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    // Small-N f32 GEMV for the spec/MTP verify batch: the tiled GEMM
+    // below always computes a full 64x64 tile, so at ne11=3 with a
+    // skinny f32 weight (GDN ssm_alpha/ssm_beta, M=32) it launches one
+    // under-occupied WG at ~2.3% tile utilization. Route to a per-output
+    // (m,n) GEMV (64-thread WG, K-split + __local reduce) instead.
+    // Opt-in GGML_OPENCL_F32_MC=1; 2D contiguous, small N + skinny M only.
+    static const bool f32_mc = (getenv("GGML_OPENCL_F32_MC") != nullptr);
+    if (f32_mc && ne11 >= 2 && ne11 <= 8 && ne01 <= 512 && (ne00 % 4 == 0) &&
+        ne02 == 1 && ne12 == 1 && ne13 == 1 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        cl_kernel kernel = backend_ctx->mul_mat.kernel_gemv_f32_f32_mc;
+
+        int stride_a = ne00;
+        int stride_b = ne00;
+        int stride_d = ne01;
+        CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+        CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+        CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+        CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+        CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+        CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne11));
+        CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &stride_a));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &stride_b));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &stride_d));
+        size_t global_work_size[3] = {64, (size_t) ne01 * (size_t) ne11, 1};
+        size_t local_work_size[3] = {64, 1, 1};
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+        return true;
+    }
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_f32_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    cl_mem mem_src0 = extra0->data_device;
+    cl_mem mem_src1 = extra1->data_device;
+
+    cl_ulong nb00_cont = nb00;
+    cl_ulong nb01_cont = nb01;
+    cl_ulong nb02_cont = nb02;
+    cl_ulong nb03_cont = nb03;
+
+    cl_ulong nb10_cont = nb10;
+    cl_ulong nb11_cont = nb11;
+    cl_ulong nb12_cont = nb12;
+    cl_ulong nb13_cont = nb13;
+
+    cl_ulong offset0_cont = offset0;
+    cl_ulong offset1_cont = offset1;
+
+    if (!ggml_is_contiguous(src0)) {
+        backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
+        ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
+            nb00_cont, nb01_cont, nb02_cont, nb03_cont);
+        mem_src0 = backend_ctx->prealloc_src0.buffer;
+        offset0_cont = 0;
+    }
+
+    if (!ggml_is_contiguous(src1)) {
+        backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
+        ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
+            nb10_cont, nb11_cont, nb12_cont, nb13_cont);
+        mem_src1 = backend_ctx->prealloc_src1.buffer;
+        offset1_cont = 0;
+    }
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_f16_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    if (ggml_cl_can_use_adreno_xmem_gemm_f16_f32(backend_ctx, src0, src1, dst)) {
+        ggml_cl_mul_mat_f16_f32_adreno_xmem(backend, src0, src1, dst);
+        return true;
+    }
+#endif
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *) src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
+    GGML_TENSOR_LOCALS(int,      ne1, src1, ne);
+    GGML_TENSOR_LOCALS(cl_ulong, nb1, src1, nb);
+    GGML_TENSOR_LOCALS(int,      ne,  dst,  ne);
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    static const char * mm_narrow_n_env = getenv("GGML_OPENCL_MM_NARROW_N");
+    const bool use_narrow_n = (mm_narrow_n_env == nullptr || mm_narrow_n_env[0] != '0') && ne11 >= 2 && ne11 <= 8;
+    cl_kernel kernel = use_narrow_n ? backend_ctx->mul_mat.kernel_mul_mm_f16_f32_l4_lm_n8 : backend_ctx->mul_mat.kernel_mul_mm_f16_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    cl_mem mem_src0 = extra0->data_device;
+    cl_mem mem_src1 = extra1->data_device;
+
+    cl_ulong nb00_cont = nb00;
+    cl_ulong nb01_cont = nb01;
+    cl_ulong nb02_cont = nb02;
+    cl_ulong nb03_cont = nb03;
+
+    cl_ulong nb10_cont = nb10;
+    cl_ulong nb11_cont = nb11;
+    cl_ulong nb12_cont = nb12;
+    cl_ulong nb13_cont = nb13;
+
+    cl_ulong offset0_cont = offset0;
+    cl_ulong offset1_cont = offset1;
+
+    if (!ggml_is_contiguous(src0)) {
+        backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
+        ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
+            nb00_cont, nb01_cont, nb02_cont, nb03_cont);
+        mem_src0 = backend_ctx->prealloc_src0.buffer;
+        offset0_cont = 0;
+    }
+
+    if (!ggml_is_contiguous(src1)) {
+        backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
+        ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
+                nb10_cont, nb11_cont, nb12_cont, nb13_cont);
+        mem_src1 = backend_ctx->prealloc_src1.buffer;
+        offset1_cont = 0;
+    }
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // BN=8/TN=1 keeps 128 threads for small batches, including attention KQ/KQV.
+    const int bn = use_narrow_n ? 8 : 64;
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, bn)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q1_0_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    ggml_tensor_extra_cl_q1_0 * extra0 = (ggml_tensor_extra_cl_q1_0 *) src0->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q1_0_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q4_0_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q4_0 * extra0 = (ggml_tensor_extra_cl_q4_0 *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_0_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q4_1_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q4_1 * extra0 = (ggml_tensor_extra_cl_q4_1 *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_1_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->m));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q5_0_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q5_0 * extra0 = (ggml_tensor_extra_cl_q5_0 *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_0_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->qs));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->qh));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q5_1_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q5_1 * extra0 = (ggml_tensor_extra_cl_q5_1 *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_1_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->qs));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->qh));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0->m));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q8_0_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q8_0 * extra0 = (ggml_tensor_extra_cl_q8_0 *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q8_0_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_iq4_nl_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_iq4_nl * extra0 = (ggml_tensor_extra_cl_iq4_nl *) soa0_src->extra;
+    ggml_tensor_extra_cl *        extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *        extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_iq4_nl_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q2_k_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q2_K * extra0 = (ggml_tensor_extra_cl_q2_K *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset0 = src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q2_k_f32_l4_lm;
+    const int nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128;
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->qs));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->sc));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->dm));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
+
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)CEIL_DIV(ne11, 64), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q4_k_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q4_K * extra0 = (ggml_tensor_extra_cl_q4_K *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_k_f32_l4_lm;
+    // (BM*BN)/(TM*TN): Intel uses an 8x8 microtile (WG=64), others 4x8 (WG=128)
+    const int nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128;
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->s));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0->dm));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q5_k_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q5_K * extra0 = (ggml_tensor_extra_cl_q5_K *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_k_f32_l4_lm;
+    const int nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128; // Intel 8x8 microtile
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->q));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->qh));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->s));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra0->dm));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
+static bool ggml_cl_mm_q6_k_f32(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_TENSOR_LOCALS(int, ne0, src0, ne);
+    GGML_TENSOR_LOCALS(int, ne1, src1, ne);
+    GGML_TENSOR_LOCALS(int, ne,  dst,  ne);
+
+    if (ne11 < 32) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+        return false;
+    }
+
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+
+    const ggml_tensor * soa0_src = src0->view_src != nullptr ? src0->view_src : src0;
+    ggml_tensor_extra_cl_q6_K * extra0 = (ggml_tensor_extra_cl_q6_K *) soa0_src->extra;
+    ggml_tensor_extra_cl *      extra1 = (ggml_tensor_extra_cl *) src1->extra;
+    ggml_tensor_extra_cl *      extrad = (ggml_tensor_extra_cl *) dst->extra;
+
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    int r2 = ne12/ne02;
+    int r3 = ne13/ne03;
+
+    cl_kernel kernel = backend_ctx->mul_mat.kernel_mul_mm_q6_k_f32_l4_lm;
+    const int nth0 = 128; // calculated as (BM*BN)/(TM*TN)
+
+    int batch_stride_a = ne00*ne01;
+    int batch_stride_b = ne10*ne11;
+    int batch_stride_d = ne0*ne1;
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->ql));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0->qh));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0->s));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0->d));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
+
+    // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
+    size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
+    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+    return true;
+}
+
 void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -1474,657 +2364,71 @@ void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggm
         !(a7x_f32lm_bypass && src0t == GGML_TYPE_F32 && ne11 > 8 &&
           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X)) {
         switch(src0t) {
-            case GGML_TYPE_F32: {
-                // Small-N f32 GEMV for the spec/MTP verify batch: the tiled GEMM
-                // below always computes a full 64x64 tile, so at ne11=3 with a
-                // skinny f32 weight (GDN ssm_alpha/ssm_beta, M=32) it launches one
-                // under-occupied WG at ~2.3% tile utilization. Route to a per-output
-                // (m,n) GEMV (64-thread WG, K-split + __local reduce) instead.
-                // Opt-in GGML_OPENCL_F32_MC=1; 2D contiguous, small N + skinny M only.
-                static const bool f32_mc = (getenv("GGML_OPENCL_F32_MC") != nullptr);
-                if (f32_mc && ne11 >= 2 && ne11 <= 8 && ne01 <= 512 && (ne00 % 4 == 0) &&
-                    ne02 == 1 && ne12 == 1 && ne13 == 1 &&
-                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-                    cl_kernel kmc = backend_ctx->mul_mat.kernel_gemv_f32_f32_mc;
-
-                    int stride_a = ne00;
-                    int stride_b = ne00;
-                    int stride_d = ne01;
-                    CL_CHECK(clSetKernelArg(kmc,  0, sizeof(cl_mem),   &extra0->data_device));
-                    CL_CHECK(clSetKernelArg(kmc,  1, sizeof(cl_ulong), &offset0));
-                    CL_CHECK(clSetKernelArg(kmc,  2, sizeof(cl_mem),   &extra1->data_device));
-                    CL_CHECK(clSetKernelArg(kmc,  3, sizeof(cl_ulong), &offset1));
-                    CL_CHECK(clSetKernelArg(kmc,  4, sizeof(cl_mem),   &extrad->data_device));
-                    CL_CHECK(clSetKernelArg(kmc,  5, sizeof(cl_ulong), &offsetd));
-                    CL_CHECK(clSetKernelArg(kmc,  6, sizeof(int),      &ne00));
-                    CL_CHECK(clSetKernelArg(kmc,  7, sizeof(int),      &ne01));
-                    CL_CHECK(clSetKernelArg(kmc,  8, sizeof(int),      &ne11));
-                    CL_CHECK(clSetKernelArg(kmc,  9, sizeof(int),      &stride_a));
-                    CL_CHECK(clSetKernelArg(kmc, 10, sizeof(int),      &stride_b));
-                    CL_CHECK(clSetKernelArg(kmc, 11, sizeof(int),      &stride_d));
-                    size_t gws[3] = {64, (size_t)ne01 * (size_t)ne11, 1};
-                    size_t lws[3] = {64, 1, 1};
-                    backend_ctx->enqueue_ndrange_kernel(kmc, 3, gws, lws, dst);
+            case GGML_TYPE_F32:
+                if (ggml_cl_mm_f32_f32(backend, src0, src1, dst)) {
                     return;
                 }
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_f32_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                cl_mem mem_src0 = extra0->data_device;
-                cl_mem mem_src1 = extra1->data_device;
-
-                cl_ulong nb00_cont = nb00;
-                cl_ulong nb01_cont = nb01;
-                cl_ulong nb02_cont = nb02;
-                cl_ulong nb03_cont = nb03;
-
-                cl_ulong nb10_cont = nb10;
-                cl_ulong nb11_cont = nb11;
-                cl_ulong nb12_cont = nb12;
-                cl_ulong nb13_cont = nb13;
-
-                cl_ulong offset0_cont = offset0;
-                cl_ulong offset1_cont = offset1;
-
-                if (!ggml_is_contiguous(src0)) {
-                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
-                    ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
-                        nb00_cont, nb01_cont, nb02_cont, nb03_cont);
-                    mem_src0 = backend_ctx->prealloc_src0.buffer;
-                    offset0_cont = 0;
-                }
-
-                if (!ggml_is_contiguous(src1)) {
-                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
-                    ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
-                        nb10_cont, nb11_cont, nb12_cont, nb13_cont);
-                    mem_src1 = backend_ctx->prealloc_src1.buffer;
-                    offset1_cont = 0;
-                }
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_F16: {
-#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-                if (ggml_cl_can_use_adreno_xmem_gemm_f16_f32(backend_ctx, src0, src1, dst)) {
-                    ggml_cl_mul_mat_f16_f32_adreno_xmem(backend, src0, src1, dst);
+                break;
+            case GGML_TYPE_F16:
+                if (ggml_cl_mm_f16_f32(backend, src0, src1, dst)) {
                     return;
                 }
-#endif
-                static const char * mm_narrow_n_env = getenv("GGML_OPENCL_MM_NARROW_N");
-                const bool use_narrow_n = (mm_narrow_n_env == nullptr || mm_narrow_n_env[0] != '0') && ne11 >= 2 && ne11 <= 8;
-                kernel = use_narrow_n ? backend_ctx->mul_mat.kernel_mul_mm_f16_f32_l4_lm_n8 : backend_ctx->mul_mat.kernel_mul_mm_f16_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                cl_mem mem_src0 = extra0->data_device;
-                cl_mem mem_src1 = extra1->data_device;
-
-                cl_ulong nb00_cont = nb00;
-                cl_ulong nb01_cont = nb01;
-                cl_ulong nb02_cont = nb02;
-                cl_ulong nb03_cont = nb03;
-
-                cl_ulong nb10_cont = nb10;
-                cl_ulong nb11_cont = nb11;
-                cl_ulong nb12_cont = nb12;
-                cl_ulong nb13_cont = nb13;
-
-                cl_ulong offset0_cont = offset0;
-                cl_ulong offset1_cont = offset1;
-
-                if (!ggml_is_contiguous(src0)) {
-                    backend_ctx->prealloc_src0.allocate(backend_ctx->context, ggml_nbytes(src0));
-                    ggml_cl_copy_to_contiguous(backend, src0, backend_ctx->prealloc_src0.buffer,
-                        nb00_cont, nb01_cont, nb02_cont, nb03_cont);
-                    mem_src0 = backend_ctx->prealloc_src0.buffer;
-                    offset0_cont = 0;
+                break;
+            case GGML_TYPE_Q1_0:
+                if (ggml_cl_mm_q1_0_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                if (!ggml_is_contiguous(src1)) {
-                    backend_ctx->prealloc_src1.allocate(backend_ctx->context, ggml_nbytes(src1));
-                    ggml_cl_copy_to_contiguous(backend, src1, backend_ctx->prealloc_src1.buffer,
-                            nb10_cont, nb11_cont, nb12_cont, nb13_cont);
-                    mem_src1 = backend_ctx->prealloc_src1.buffer;
-                    offset1_cont = 0;
+                break;
+            case GGML_TYPE_Q4_0:
+                if (ggml_cl_mm_q4_0_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &mem_src0));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0_cont));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &mem_src1));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1_cont));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // BN=8/TN=1 keeps 128 threads for small batches, including attention KQ/KQV.
-                const int bn = use_narrow_n ? 8 : 64;
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, bn)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q1_0: {
-                if (ne11 < 32) {
-                    break;
+                break;
+            case GGML_TYPE_Q4_1:
+                if (ggml_cl_mm_q4_1_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
+                break;
+            case GGML_TYPE_Q5_0:
+                if (ggml_cl_mm_q5_0_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q1_0_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q1_0->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q1_0->d));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q4_0: {
-                if (ne11 < 32) {
-                    break;
+                break;
+            case GGML_TYPE_Q5_1:
+                if (ggml_cl_mm_q5_1_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
+                break;
+            case GGML_TYPE_Q8_0:
+                if (ggml_cl_mm_q8_0_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_0_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_0->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_0->d));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q4_1: {
-                if (ne11 < 32) {
-                    break;
+                break;
+            case GGML_TYPE_IQ4_NL:
+                if (ggml_cl_mm_iq4_nl_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
+                break;
+            case GGML_TYPE_Q2_K:
+                if (ggml_cl_mm_q2_k_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_1_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_1->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_1->d));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q4_1->m));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q5_0: {
-                if (ne11 < 32) {
-                    break;
+                break;
+            case GGML_TYPE_Q4_K:
+                if (ggml_cl_mm_q4_k_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
+                break;
+            case GGML_TYPE_Q5_K:
+                if (ggml_cl_mm_q5_k_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_0_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q5_0->qs));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q5_0->qh));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q5_0->d));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q5_1: {
-                if (ne11 < 32) {
-                    break;
+                break;
+            case GGML_TYPE_Q6_K:
+                if (ggml_cl_mm_q6_k_f32(backend, src0, src1, dst)) {
+                    return;
                 }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_1_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q5_1->qs));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q5_1->qh));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q5_1->d));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q5_1->m));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q8_0: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q8_0_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q8_0->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q8_0->d));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_IQ4_NL: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_iq4_nl_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_iq4_nl->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_iq4_nl->d));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q2_K: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q2_k_f32_l4_lm;
-                nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128;
-                offset0 = src0->view_offs;
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q2_K->qs));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q2_K->sc));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q2_K->dm));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset0));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10));
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne0));
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
-
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)CEIL_DIV(ne11, 64), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q4_K: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q4_k_f32_l4_lm;
-                // (BM*BN)/(TM*TN): Intel uses an 8x8 microtile (WG=64), others 4x8 (WG=128)
-                nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128;
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q4_K->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q4_K->s));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q4_K->d));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q4_K->dm));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q5_K: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q5_k_f32_l4_lm;
-                nth0 = (backend_ctx->gpu_family == INTEL) ? 64 : 128; // Intel 8x8 microtile
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q5_K->q));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q5_K->qh));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q5_K->s));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q5_K->d));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra0_q5_K->dm));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
-            case GGML_TYPE_Q6_K: {
-                if (ne11 < 32) {
-                    break;
-                }
-                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
-                    break;
-                }
-
-                kernel = backend_ctx->mul_mat.kernel_mul_mm_q6_k_f32_l4_lm;
-                nth0 = 128; // calculated as (BM*BN)/(TM*TN)
-
-                int batch_stride_a = ne00*ne01;
-                int batch_stride_b = ne10*ne11;
-                int batch_stride_d = ne0*ne1;
-
-                CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0_q6_K->ql));
-                CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q6_K->qh));
-                CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra0_q6_K->s));
-                CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_mem),   &extra0_q6_K->d));
-                CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra1->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset1));
-                CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
-                CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
-                CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
-                CL_CHECK(clSetKernelArg(kernel,  9, sizeof(int),      &ne01));
-                CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne02));
-                CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11));
-                CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12));
-                CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne10)); // stride_a
-                CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne10)); // stride_b
-                CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne01)); // stride_d
-                CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &batch_stride_a));
-                CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &batch_stride_b));
-                CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &batch_stride_d));
-                CL_CHECK(clSetKernelArg(kernel, 19, sizeof(int),      &r2));
-                CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &r3));
-
-                // 64 is block tile size BM and BN - change here when BM and BN in the kernel are changed.
-                size_t global_work_size[] = {(size_t)(CEIL_DIV(ne01, 64)*nth0), (size_t)(CEIL_DIV(ne11, 64)), (size_t)ne12*ne13};
-                size_t local_work_size[] = {(size_t)nth0, 1, 1};
-
-                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-                return;
-            }
+                break;
             default:
                 break;
         }
