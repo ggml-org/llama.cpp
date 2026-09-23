@@ -135,7 +135,7 @@
 			}))}
 			item={listItem}
 			keyOf={(row) => `${prefix}-${row.option.id}`}
-			stickyStyle="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem)"
+			stickyStyle="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem - 1px)"
 		/>
 	{:else}
 		<GroupedList item={listItem} {items} keyOf={(row) => `${prefix}-${row.option.id}`} />

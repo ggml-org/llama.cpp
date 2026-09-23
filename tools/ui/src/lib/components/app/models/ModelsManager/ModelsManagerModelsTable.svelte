@@ -515,7 +515,7 @@
 						keyOf={(entry) => entry.key}
 						more={showMore}
 						sectionWindow={MODEL_ROW_WINDOW}
-						stickyStyle="top: 2.25rem"
+						stickyStyle="top: calc(2.25rem - 1px)"
 						weightOf={(entry) => entry.quants.length}
 					/>
 				</ModelsSection>
