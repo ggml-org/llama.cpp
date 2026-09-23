@@ -427,7 +427,12 @@
 			{#if collapsibleRows}
 				<!-- with sections as rows, every level reads as a model row -->
 				<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-					<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-9" />
+					<ModelAvatar
+						option={family.entries[0].base}
+						showBaseModelAvatar
+						showQuantBadge={false}
+						size="size-9"
+					/>
 
 					<span class="min-w-0">
 						<span class="block truncate text-sm font-medium">{family.label}</span>
@@ -439,7 +444,12 @@
 				</span>
 			{:else}
 				<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-					<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-7" />
+					<ModelAvatar
+						option={family.entries[0].base}
+						showBaseModelAvatar
+						showQuantBadge={false}
+						size="size-7"
+					/>
 
 					<span class="truncate text-sm font-medium">{family.label}</span>
 
