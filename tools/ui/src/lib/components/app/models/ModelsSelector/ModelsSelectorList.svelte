@@ -12,7 +12,7 @@
 	} from '$lib/components/app/navigation/utils';
 	import { MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -153,15 +153,21 @@
 {/snippet}
 
 {#snippet familyRows(items: ModelItem[], prefix: string)}
-	{#each groupModelFamilies(items, (item) => item.option.model) as family (familyKey(prefix, family.key))}
-		{@render familyRow(family, prefix)}
+	{#if settingsStore.config.groupModelsByFamily}
+		{#each groupModelFamilies(items, (item) => item.option.model) as family (familyKey(prefix, family.key))}
+			{@render familyRow(family, prefix)}
 
-		{#if !collapsedFamilies.has(familyKey(prefix, family.key))}
-			{#each family.entries as item (`family-${prefix}-${item.option.id}`)}
-				<div class="pl-4">{@render render(item, !showOrgName)}</div>
-			{/each}
-		{/if}
-	{/each}
+			{#if !collapsedFamilies.has(familyKey(prefix, family.key))}
+				{#each family.entries as item (`family-${prefix}-${item.option.id}`)}
+					<div class="pl-4">{@render render(item, !showOrgName)}</div>
+				{/each}
+			{/if}
+		{/each}
+	{:else}
+		{#each items as item (`plain-${prefix}-${item.option.id}`)}
+			{@render render(item, !showOrgName)}
+		{/each}
+	{/if}
 {/snippet}
 
 {#snippet defaultOption(item: ModelItem, hideOrgName: boolean)}

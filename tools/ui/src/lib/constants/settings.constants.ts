@@ -320,6 +320,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
 				label: 'Show full path in mentions',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
+				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
+				label: 'Group models by family',
+				type: SettingsFieldType.CHECKBOX
 			}
 		],
 		slug: SETTINGS_SECTION_SLUGS.DISPLAY,

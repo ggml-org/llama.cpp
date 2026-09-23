@@ -31,6 +31,7 @@ export const SETTINGS_KEYS = {
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
+	GROUP_MODELS_BY_FAMILY: 'groupModelsByFamily',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	LOCAL_BACKEND_ENABLED: 'localBackendEnabled',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',

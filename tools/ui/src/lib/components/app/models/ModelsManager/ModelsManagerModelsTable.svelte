@@ -28,7 +28,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -66,7 +66,8 @@
 	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>(['favorites', 'loaded']);
 	let sections = $derived(
 		groups.map((group) => {
-			const flat = FLAT_SECTIONS.has(group.kind);
+			// a flat section lists its models straight, families or not
+			const flat = FLAT_SECTIONS.has(group.kind) || !settingsStore.config.groupModelsByFamily;
 
 			return {
 				...group,
