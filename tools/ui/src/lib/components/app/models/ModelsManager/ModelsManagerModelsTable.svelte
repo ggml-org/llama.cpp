@@ -418,9 +418,19 @@
 			role="button"
 			tabindex="0"
 		>
-			<span class="truncate text-sm font-medium">{family.label}</span>
+			<span class="flex min-w-0 items-center gap-3">
+				<ModelAvatar option={family.entries[0].base} showBaseModelAvatar size="size-9" />
 
-			<span class="text-sm text-muted-foreground">{family.entries.length} models</span>
+				<span class="min-w-0">
+					<span class="block truncate text-sm font-medium">{family.label}</span>
+
+					<span class="block text-xs text-muted-foreground">
+						{family.entries.length} models
+					</span>
+				</span>
+			</span>
+
+			<span></span>
 
 			<span></span>
 
