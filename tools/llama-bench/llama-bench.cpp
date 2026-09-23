@@ -464,7 +464,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ub, --ubatch-size <n>                            (default: %s)\n", join(cmd_params_defaults.n_ubatch, ",").c_str());
     printf("  -ctk, --cache-type-k <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_k, ggml_type_name), ",").c_str());
     printf("  -ctv, --cache-type-v <t>                          (default: %s)\n", join(transform_to_str(cmd_params_defaults.type_v, ggml_type_name), ",").c_str());
-    printf("  -t, --threads <n>                                 (default: %s)\n", join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  -t, --threads <n>                                 (default: %s)\n", join(std::vector<int>{ common_cpu_get_num_math() }, ",").c_str());
     printf("  -C, --cpu-mask <hex,hex>                          (default: %s)\n", join(cmd_params_defaults.cpu_mask, ",").c_str());
     printf("  --cpu-strict <0|1>                                (default: %s)\n", join(cmd_params_defaults.cpu_strict, ",").c_str());
     printf("  --poll <0...100>                                  (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
@@ -1174,7 +1174,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         params.no_host = cmd_params_defaults.no_host;
     }
     if (params.n_threads.empty()) {
-        params.n_threads = cmd_params_defaults.n_threads;
+        // Call common_cpu_get_num_math() here at runtime rather than using the
+        // statically-initialised default, so that CPU affinity constraints set
+        // by tools like numactl (which take effect before main() but after
+        // static initialisation) are reflected in the thread count.
+        params.n_threads = { common_cpu_get_num_math() };
     }
     if (params.cpu_mask.empty()) {
         params.cpu_mask = cmd_params_defaults.cpu_mask;
