@@ -126,7 +126,6 @@
 			currentModel={selectedModel}
 			favorites={favoriteModels}
 			groups={groupedOptions}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -142,7 +141,6 @@
 				loaded: [loadedModels[0]],
 				providers: []
 			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -159,7 +157,6 @@
 				loaded: [],
 				providers: []
 			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>

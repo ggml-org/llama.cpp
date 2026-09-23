@@ -20,7 +20,6 @@
 		activeId: string | null;
 		sectionHeaderClass?: string;
 		onSelect: (modelId: string) => void;
-		onInfoClick: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
 		/** Favorite models of every backend, listed in their own section. */
 		favorites?: ModelItem[];
@@ -40,7 +39,6 @@
 		favorites = [],
 		groups,
 		loaded = [],
-		onInfoClick,
 		onProviderBack,
 		onProviderOpen,
 		onSelect,
@@ -114,7 +112,6 @@
 		{isFav}
 		isHighlighted={false}
 		{isSelected}
-		{onInfoClick}
 		onKeyDown={() => {}}
 		onMouseEnter={() => {}}
 		{onSelect}

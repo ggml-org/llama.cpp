@@ -10,7 +10,7 @@ import {
 	LOCAL_BACKEND_ID,
 	REMOTE_PROVIDER_MODEL_LIMIT
 } from '$lib/constants';
-import { backendsModelsStore, backendsStore, modelsStore, serverStore } from '$lib/stores';
+import { backendsModelsStore, backendsStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { getBackendCapabilities } from '$lib/utils/backend';
@@ -53,14 +53,10 @@ export interface UseModelsSelectorReturn {
 	readonly groupedFilteredOptions: ReturnType<typeof groupModelOptions>;
 	readonly isLoadingModel: boolean;
 	readonly searchTerm: string;
-	readonly showModelDialog: boolean;
-	readonly infoModelId: string | null;
 	closeProvider(): void;
 	openProvider(backendId: string): void;
 	setSearchTerm(value: string): void;
 	showBackendModels(backendId: string): Promise<void>;
-	setShowModelDialog(value: boolean): void;
-	handleInfoClick(modelName: string): void;
 	handleSelect(modelId: string): Promise<void>;
 	handleOpenChange(open: boolean): void;
 	isFavorite(model: string): boolean;
@@ -124,8 +120,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	let isLoadingModel = $state(false);
 	let searchTerm = $state('');
-	let showModelDialog = $state(false);
-	let infoModelId = $state<string | null>(null);
 
 	const visibleOptions = $derived(allOptions.filter((option) => !modelsStore.isHidden(option.id)));
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
@@ -196,11 +190,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	);
 	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
 
-	function handleInfoClick(modelName: string) {
-		infoModelId = modelName;
-		showModelDialog = true;
-	}
-
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
 			console.error('Unable to load models:', error);
@@ -210,10 +199,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		// a single-model llama.cpp server with no other backend has no list to
-		// show, so the trigger opens the model info dialog instead
+		// a single-model llama.cpp server with no other backend has no list to show,
+		// so the trigger opens the manager, which holds the one model's configuration
 		if (!isMultiModel) {
-			showModelDialog = open;
+			if (open) uiStore.openModelsManager();
 
 			return;
 		}
@@ -362,15 +351,9 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return groupedFilteredOptions;
 		},
 
-		handleInfoClick,
-
 		handleOpenChange,
 
 		handleSelect,
-
-		get infoModelId() {
-			return infoModelId;
-		},
 
 		get isCurrentModelInCache() {
 			return isCurrentModelInCache;
@@ -430,15 +413,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			searchTerm = value;
 		},
 
-		setShowModelDialog(value: boolean) {
-			showModelDialog = value;
-		},
-
 		showBackendModels,
-
-		get showModelDialog() {
-			return showModelDialog;
-		},
 
 		get updating() {
 			return updating;

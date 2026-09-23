@@ -454,7 +454,6 @@ export { default as DialogConversationSelection } from './DialogConversationSele
  * <DialogModelInformation bind:open={showModelInfo} />
  * ```
  */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 
 /**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog

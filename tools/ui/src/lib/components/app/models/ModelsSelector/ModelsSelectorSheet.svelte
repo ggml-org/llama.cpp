@@ -2,7 +2,6 @@
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import { ChevronDown, Lightbulb, Loader2, Package } from '@lucide/svelte';
 	import {
-		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorReasoningPanel,
@@ -196,7 +195,6 @@
 								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
 								loaded={ms.loadedItems}
-								onInfoClick={ms.handleInfoClick}
 								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
 								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
@@ -243,14 +241,6 @@
 		{/if}
 	{/if}
 </div>
-
-{#if ms.showModelDialog}
-	<DialogModelInformation
-		modelId={ms.infoModelId}
-		onOpenChange={(v) => ms.setShowModelDialog(v)}
-		open={ms.showModelDialog}
-	/>
-{/if}
 
 <DialogBackendForm
 	bind:open={showAddBackend}

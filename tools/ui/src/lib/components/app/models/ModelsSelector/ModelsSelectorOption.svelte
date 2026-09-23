@@ -17,7 +17,6 @@
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
-		onInfoClick?: (modelName: string) => void;
 		/** Show the base model's org as the main avatar and the repo (quant) org as the corner badge; resolves the base org lazily via HF. */
 		showBaseModelAvatar?: boolean;
 	}
@@ -27,7 +26,6 @@
 		isFav,
 		isHighlighted,
 		isSelected,
-		onInfoClick,
 		onKeyDown,
 		onMouseEnter,
 		onSelect,
@@ -103,7 +101,7 @@
 	/>
 
 	<div class="flex shrink-0 items-center gap-1">
-		<ModelRowActions {isFav} {isLoaded} onInfo={onInfoClick} {option} />
+		<ModelRowActions {isFav} {isLoaded} {option} />
 
 		<ModelLoadControl
 			{canLoad}

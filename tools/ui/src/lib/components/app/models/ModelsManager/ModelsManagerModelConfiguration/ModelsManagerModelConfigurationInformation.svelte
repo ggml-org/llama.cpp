@@ -1,10 +1,15 @@
 <script lang="ts">
 	import { isLocalOption, modelQuantLabel, modelSizeLabel, resolveModelSize } from '../utils';
-	import { CollapsibleSection } from '$lib/components/app';
+	import {
+		ActionIconCopyToClipboard,
+		BadgesModality,
+		CollapsibleSection
+	} from '$lib/components/app';
 	import { Badge } from '$lib/components/ui/badge';
+	import { modelsStore } from '$lib/stores';
 	import type { ApiLlamaCppServerProps } from '$lib/types/api';
 	import type { ModelOption } from '$lib/types/models';
-	import { formatParameters } from '$lib/utils/formatters';
+	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
 		option: ModelOption;
@@ -36,46 +41,123 @@
 		};
 	});
 
+	let meta = $derived(option.meta);
+	let modalities = $derived(modelsStore.props.getModelModalitiesArray(option.id));
+	let isMissingContext = $derived(!serverProps);
 	let rows = $derived([
-		{ label: 'Model', value: option.model },
-		{ label: 'File Path', value: serverProps?.model_path ?? null },
+		{ isCopyable: true, isMono: true, label: 'File Path', value: serverProps?.model_path ?? null },
 		{
 			label: 'Context Size',
 			value: serverProps
-				? `${formatParameters(serverProps.default_generation_settings.n_ctx)} tokens`
+				? `${formatNumber(serverProps.default_generation_settings.n_ctx)} tokens`
 				: null
 		},
 		{
 			label: 'Training Context',
-			value: option.contextLength ? `${formatParameters(option.contextLength)} tokens` : null
+			value: meta?.n_ctx_train
+				? `${formatNumber(meta.n_ctx_train)} tokens`
+				: option.contextLength
+					? `${formatParameters(option.contextLength)} tokens`
+					: null
 		},
-		{ label: 'Model Size', value: resolvedSize ?? size },
-		{ label: 'Parameters', value: option.parsedId?.params ?? null },
+		{
+			label: 'Model Size',
+			value: meta?.size ? formatFileSize(meta.size) : (resolvedSize ?? size)
+		},
+		{
+			label: 'Parameters',
+			value: meta?.n_params ? formatParameters(meta.n_params) : (option.parsedId?.params ?? null)
+		},
+		{ label: 'Embedding Size', value: meta?.n_embd ? formatNumber(meta.n_embd) : null },
+		{
+			label: 'Vocabulary Size',
+			value: meta?.n_vocab ? `${formatNumber(meta.n_vocab)} tokens` : null
+		},
+		{ isCapitalized: true, label: 'Vocabulary Type', value: (meta?.vocab_type as string) ?? null },
 		{ isBadge: true, label: 'Quantization', value: quant },
 		{ isBadge: true, label: 'Architecture', value: (option.meta?.architecture as string) ?? null },
 		{ label: 'Format', value: isLocalOption(option) ? 'GGUF' : null },
-		{ label: 'Parallel Slots', value: serverProps ? String(serverProps.total_slots) : null }
-	] satisfies Array<{ isBadge?: boolean; label: string; value: string | null }>);
+		{ label: 'Parallel Slots', value: serverProps ? String(serverProps.total_slots) : null },
+		{ isMono: true, label: 'Build Info', value: serverProps?.build_info ?? null }
+	] satisfies Array<{
+		isBadge?: boolean;
+		isCapitalized?: boolean;
+		isCopyable?: boolean;
+		isMono?: boolean;
+		label: string;
+		value: string | null;
+	}>);
 
 	const sectionTrigger = 'flex w-full cursor-pointer items-center gap-2 py-2 text-left';
 </script>
 
 <div class="space-y-0">
+	<div class="flex items-center gap-3 border-b border-border/30 py-2.5">
+		<span class="text-sm text-muted-foreground">Model</span>
+
+		<span class="ml-auto flex min-w-0 items-center gap-2">
+			<span class="min-w-0 truncate font-mono text-xs">{option.model}</span>
+
+			<ActionIconCopyToClipboard
+				ariaLabel="Copy model name to clipboard"
+				canCopy
+				text={option.model}
+			/>
+		</span>
+	</div>
+
 	{#each rows as row (row.label)}
 		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
-			<span class="text-sm text-muted-foreground">{row.label}</span>
+			<span
+				class="text-sm text-muted-foreground {row.label === 'Context Size' && isMissingContext
+					? 'text-destructive'
+					: ''}">{row.label}</span
+			>
 
-			<span class="ml-auto min-w-0 truncate text-sm">
+			<span class="ml-auto flex min-w-0 items-center gap-2">
 				{#if row.value === null}
-					<span class="text-muted-foreground">—</span>
-				{:else if row.isBadge}
-					<Badge class="h-5 px-1.5 text-[10px]" variant="secondary">{row.value}</Badge>
+					<span
+						class={isMissingContext && row.label === 'Context Size'
+							? 'text-destructive'
+							: 'text-muted-foreground'}
+					>
+						{isMissingContext && row.label === 'Context Size' ? 'Not available' : '—'}
+					</span>
 				{:else}
-					{row.value}
+					<span
+						class={[
+							'min-w-0 truncate',
+							row.isBadge ? '' : 'text-sm',
+							row.isCapitalized ? 'capitalize' : '',
+							row.isMono ? 'font-mono text-xs' : ''
+						]}
+					>
+						{#if row.isBadge}
+							<Badge class="h-5 px-1.5 text-[10px]" variant="secondary">{row.value}</Badge>
+						{:else}
+							{row.value}
+						{/if}
+					</span>
+
+					{#if row.isCopyable}
+						<ActionIconCopyToClipboard
+							ariaLabel="Copy value to clipboard"
+							canCopy
+							text={row.value}
+						/>
+					{/if}
 				{/if}
 			</span>
 		</div>
 	{/each}
+
+	{#if modalities.length > 0}
+		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
+			<span class="text-sm text-muted-foreground">Modalities</span>
+
+			<span class="ml-auto flex flex-wrap gap-1"><BadgesModality {modalities} /></span>
+		</div>
+	{/if}
 </div>
 
 <div class="mt-4">
