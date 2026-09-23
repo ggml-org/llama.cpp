@@ -9,12 +9,14 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from queue import Queue
 from typing import Dict, List, Optional, Any, Tuple
+from urllib.parse import urlparse
 import requests
 from tqdm import tqdm
 import random
@@ -30,8 +32,17 @@ class ServerConfig:
     name: str = ""
     api_key: Optional[str] = None
 
-    def headers(self) -> Dict[str, str]:
-        return auth_headers(self.api_key)
+    def is_opencode(self) -> bool:
+        """Whether this endpoint is an opencode gateway rather than a llama-server."""
+        return "opencode" in (urlparse(self.url).hostname or "")
+
+    def headers(self, session_id: Optional[str] = None) -> Dict[str, str]:
+        headers = auth_headers(self.api_key)
+        # opencode groups the turns of one conversation by this header; every
+        # task gets its own id so episodes never share a session.
+        if session_id and self.is_opencode():
+            headers["x-opencode-session"] = session_id
+        return headers
 
 
 def auth_headers(api_key: Optional[str]) -> Dict[str, str]:
@@ -40,6 +51,77 @@ def auth_headers(api_key: Optional[str]) -> Dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+# Status of a case the server failed to answer, as opposed to one it answered
+# wrongly. Kept out of the accuracy denominator and re-run by --resume.
+SERVER_ERROR = "server_error"
+
+# Client-side HTTP statuses that are still worth resending; any other 4xx is a
+# problem with the request itself and would fail the same way every time.
+RETRYABLE_HTTP = {408, 409, 425, 429}
+
+
+class ServerError(Exception):
+    """A request that still failed, or came back empty, after every retry."""
+
+
+def null_reply_reason(result: Any) -> Optional[str]:
+    """Why a chat completion carries no usable reply, or None when it does."""
+    if not isinstance(result, dict):
+        return "reply is not a JSON object"
+    choices = result.get("choices")
+    if not choices:
+        return "reply has no choices"
+    msg = choices[0].get("message")
+    if not msg:
+        return "reply has no message"
+    if not (msg.get("content") or msg.get("tool_calls") or msg.get("reasoning_content")):
+        return "reply is empty"
+    return None
+
+
+def post_with_retry(url: str, headers: Dict[str, str], data: Dict[str, Any],
+                    retries: int, retry_delay: float,
+                    timeout: Optional[float] = None) -> Dict[str, Any]:
+    """POST a chat completion, resending on errors and null replies.
+
+    The wait before each resend doubles, starting at `retry_delay` seconds.
+    Raises ServerError once `retries` resends have all failed.
+    """
+    reason = ""
+    attempts = 0
+    for attempt in range(retries + 1):
+        if attempt:
+            wait = retry_delay * 2 ** (attempt - 1)
+            print(f"  [{url}] {reason}; retry {attempt}/{retries} in {wait:.0f}s",
+                  file=sys.stderr)
+            time.sleep(wait)
+        attempts += 1
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=timeout)
+        except requests.RequestException as e:
+            reason = f"{type(e).__name__}: {e}"
+            continue
+        if response.status_code >= 400:
+            reason = f"HTTP {response.status_code}: {response.text[:300]}"
+            if response.status_code < 500 and response.status_code not in RETRYABLE_HTTP:
+                break
+            continue
+        try:
+            result = response.json()
+        except ValueError:
+            reason = f"invalid JSON: {response.text[:300]}"
+            continue
+        reason = null_reply_reason(result) or ""
+        if not reason:
+            return result
+    raise ServerError(f"{reason} (after {attempts} attempt{'s' if attempts > 1 else ''})")
+
+
+def new_session_id(task_id: str) -> str:
+    """A fresh session id for one task, unique across tasks, runs and resumes."""
+    return f"{task_id}-{uuid.uuid4().hex}"
 
 def wilson_interval(correct: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     """Wilson score confidence interval for a proportion."""
@@ -448,18 +530,20 @@ class EvalState:
             truncated_question += "..."
         else:
             truncated_question = truncated_question.ljust(43) + "..."
-        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {display_expected:<16} {display_answer:<28} {display_tokens:<6} {display_tps:<6} {display_t_gen:<8} {'✓' if task_state.correct else '✗'}  [{n_correct:3}/{self.processed:3}, {success_ratio:.3f}]  {display_server}")
+        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {display_expected:<16} {display_answer:<28} {display_tokens:<6} {display_tps:<6} {display_t_gen:<8} {'✓' if task_state.correct else ('⚠' if task_state.status == SERVER_ERROR else '✗')}  [{n_correct:3}/{self.processed:3}, {success_ratio:.3f}]  {display_server}")
+
+    def n_server_errors(self) -> int:
+        cases = self.task_states.get("cases", {})
+        return sum(1 for c in cases.values() if c.get("status") == SERVER_ERROR)
+
+    def print_server_errors(self):
+        n = self.n_server_errors()
+        if n:
+            print(f"Server errors: {n} (not counted in accuracy; run with --resume to retry them)")
 
     def print_summary(self):
-        if self.total == 0:
-            print(f"\n{'='*60}")
-            print(f"Results: 0/0 correct (0.0%)")
-            print(f"{'='*60}")
-        else:
-            ci_lower, ci_upper = self.accuracy_ci()
-            print(f"\n{'='*60}")
-            print(f"Results: {self.correct}/{self.total} correct ({self.correct/self.total*100:.1f}%) [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]")
-            print(f"{'='*60}")
+        print()
+        self.print_existing_summary()
 
     def dump(self):
         with self._lock:
@@ -519,7 +603,8 @@ class EvalState:
         completed = {tid: c for tid, c in cases.items() if c.get("status") == "ok"}
         n_correct = sum(1 for c in completed.values() if c.get("correct", False))
         n_incorrect = len(completed) - n_correct
-        n_pending = len(tasks_to_save) - len(completed)
+        n_server_errors = sum(1 for c in cases.values() if c.get("status") == SERVER_ERROR)
+        n_pending = len(tasks_to_save) - len(completed) - n_server_errors
         accuracy = n_correct / len(completed) * 100 if completed else 0.0
         ci_lower, ci_upper = wilson_interval(n_correct, len(completed)) if completed else (0.0, 1.0)
 
@@ -546,6 +631,9 @@ class EvalState:
             elif status == "pending":
                 status_class = "pending"
                 status_text = "–"
+            elif status == SERVER_ERROR:
+                status_class = "server-error"
+                status_text = "⚠"
             else:
                 status_class = "error"
                 status_text = "!"
@@ -564,6 +652,11 @@ class EvalState:
             escaped_reasoning = self._escape_html(reasoning_content)
             grader_log_str = self._escape_html(json.dumps(grader_log, indent=2))
             escaped_server = self._escape_html(server_name)
+            transcript = grader_log.get("transcript") if isinstance(grader_log, dict) else None
+            transcript_link = (
+                f'<b>Transcript</b> <a href="{self._escape_html(transcript[:-5])}.html">'
+                f'{self._escape_html(transcript[:-5])}.html</a><br>'
+                if transcript and transcript.endswith(".json") else "")
 
             answer_class = status_class if status == "ok" else ""
             rows.append(f"""<tr class="task-row" onclick="toggleDetails('{task_id}')">
@@ -579,6 +672,7 @@ class EvalState:
             <tr id="details-{task_id}" class="details-row">
                 <td colspan="8">
                     <div class="details-content">
+                        {transcript_link}
                         <b>Prompt</b><pre>{escaped_prompt}</pre>
                         <b>Response</b><pre>{escaped_response}</pre>
                         {f'<b>Reasoning</b><pre>{escaped_reasoning}</pre>' if escaped_reasoning else ''}
@@ -655,6 +749,7 @@ class EvalState:
         .incorrect {{ color: #cf222e; }}
         .pending {{ color: #888; }}
         .error {{ color: #9a6700; }}
+        .server-error {{ color: #8250df; }}
         .details-row {{ display: none; }}
         .details-row.open {{ display: table-row; }}
         .details-content {{ padding: 8px 16px; background: #f6f8fa; font-size: 12px; }}
@@ -683,6 +778,7 @@ class EvalState:
         <div class="label">Accuracy</div><div class="value"><b>{accuracy:.1f}%</b> [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]</div>
         <div class="label">Correct</div><div class="value"><span class="correct">{n_correct}</span> / {len(completed)}</div>
         <div class="label">Pending</div><div class="value">{n_pending}</div>
+        <div class="label">Server errors</div><div class="value"><span class="server-error">{n_server_errors}</span></div>
         <div class="label">Time</div><div class="value">{self.total_time:.1f}s</div>
         <div class="label">Sampling</div><div class="value">{sampling_str}</div>
     </div>
@@ -852,6 +948,7 @@ class EvalState:
             print(f"{'='*60}")
             print(f"Results: {correct}/{total} correct ({correct/total*100:.1f}%) [{ci_lower*100:.1f}%, {ci_upper*100:.1f}%]")
             print(f"{'='*60}")
+        self.print_server_errors()
 
     def accuracy_ci(self) -> Tuple[float, float]:
         """Compute Wilson score confidence interval from completed cases."""
@@ -1594,7 +1691,7 @@ class AgenticDataset(BaseDataset):
 
     def __init__(self, source: Optional[str] = None, lang: Optional[str] = None,
                  max_turns: int = 50, context_limit: Optional[int] = None,
-                 max_tokens: int = 2048):
+                 max_tokens: Optional[int] = None):
         self.source = source or self.HF_REPO
         self.lang_filter = lang
         self.max_turns = max_turns
@@ -1902,12 +1999,18 @@ class Processor:
         server_configs: List[ServerConfig],
         grader: Grader,
         model_name: Optional[str] = None,
-        n_predict: int = -1
+        n_predict: int = -1,
+        retries: int = 5,
+        retry_delay: float = 10.0,
+        transcript_dir: Optional[Path] = None,
     ):
         self.server_configs = server_configs
         self.grader = grader
         self.model_name = model_name
         self.n_predict = n_predict
+        self.retries = retries
+        self.retry_delay = retry_delay
+        self.transcript_dir = transcript_dir
 
     @staticmethod
     def _check_server(server_config: ServerConfig) -> List[str]:
@@ -1922,10 +2025,11 @@ class Processor:
             sys.exit(1)
 
     def _make_request(
-        self, server_config: ServerConfig, eval_state: EvalState, prompt: str
+        self, server_config: ServerConfig, eval_state: EvalState, prompt: str,
+        session_id: Optional[str] = None
     ) -> Tuple[Dict[str, Any], int, Optional[float], Optional[float], str]:
         url = f"{server_config.url}/v1/chat/completions"
-        headers = server_config.headers()
+        headers = server_config.headers(session_id)
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
@@ -1939,10 +2043,10 @@ class Processor:
             data["top_p"] = eval_state.sampling_config["top_p"]
         if eval_state.sampling_config.get("min_p") is not None:
             data["min_p"] = eval_state.sampling_config["min_p"]
+        if eval_state.sampling_config.get("reasoning_effort") is not None:
+            data["reasoning_effort"] = eval_state.sampling_config["reasoning_effort"]
 
-        response = requests.post(url, headers=headers, json=data)
-        response.raise_for_status()
-        result = response.json()
+        result = post_with_retry(url, headers, data, self.retries, self.retry_delay)
         tokens = result.get("usage", {}).get("completion_tokens", 0)
         timings = result.get("timings", {})
         tps_gen = timings.get("predicted_per_second") if timings else None
@@ -1970,12 +2074,16 @@ class Processor:
             problem_idx=problem_idx,
         )
 
+        # One session per task: an agentic episode keeps the same id across all
+        # of its turns, while separate tasks never collide.
+        session_id = new_session_id(task_id)
+
         if eval_state.loaded_dataset.is_agentic:
             return self._process_agentic_case(
-                server_config, eval_state, i, task_id, task_state)
+                server_config, eval_state, i, task_id, task_state, session_id)
 
         try:
-            response, tokens, tps_gen, t_gen_ms, finish_reason = self._make_request(server_config, eval_state, prompt)
+            response, tokens, tps_gen, t_gen_ms, finish_reason = self._make_request(server_config, eval_state, prompt, session_id)
             result = response["choices"][0]["message"]["content"]
             reasoning_content = response["choices"][0].get("message", {}).get("reasoning_content")
             task_state.response = result
@@ -2026,12 +2134,22 @@ class Processor:
 
             eval_state.dump()
 
+        except ServerError as e:
+            task_state.status = SERVER_ERROR
+            task_state.grader_log = {"error": str(e)}
+            eval_state.add_result(
+                task_id, prompt, expected, None, None, task_state.grader_log,
+                False, SERVER_ERROR, None, None, None, None, server_config.name,
+                chunk_idx, problem_idx,
+            )
+            eval_state.dump()
         except Exception as e:
             task_state.status = f"error: {str(e)}"
 
         return task_state
 
-    def _agentic_chat(self, server_config: ServerConfig, eval_state: EvalState):
+    def _agentic_chat(self, server_config: ServerConfig, eval_state: EvalState,
+                      session_id: Optional[str] = None):
         """A chat callable for agentic_eval: messages + tools in, response out."""
         url = f"{server_config.url}/v1/chat/completions"
 
@@ -2042,34 +2160,30 @@ class Processor:
                 "tools": tools,
                 "tool_choice": "auto",
             }
-            # Cap each turn. A model that falls into a repetition loop would
-            # otherwise generate until the context runs out, burning the whole
-            # run's wall clock on one turn; capped, it costs a single turn and
-            # the episode carries on.
-            per_turn = getattr(eval_state.dataset, "max_tokens", 0)
+            # Uncapped unless asked: a cap cuts reasoning models off mid-thought
+            # and the truncated turn then scores as a model failure.
+            per_turn = getattr(eval_state.dataset, "max_tokens", None)
             if self.n_predict and self.n_predict > 0:
                 data["max_tokens"] = self.n_predict
             elif per_turn:
                 data["max_tokens"] = per_turn
-            for key in ("temperature", "top_k", "top_p", "min_p"):
+            for key in ("temperature", "top_k", "top_p", "min_p", "reasoning_effort"):
                 value = eval_state.sampling_config.get(key)
                 if value is not None:
                     data[key] = value
-            response = requests.post(url, headers=server_config.headers(),
-                                     json=data, timeout=1800)
-            response.raise_for_status()
-            return response.json()
+            return post_with_retry(url, server_config.headers(session_id), data,
+                                   self.retries, self.retry_delay, timeout=1800)
 
         return chat
 
     def _process_agentic_case(
         self, server_config: ServerConfig, eval_state: EvalState, i: int,
-        task_id: str, task_state: TaskState
+        task_id: str, task_state: TaskState, session_id: Optional[str] = None
     ) -> TaskState:
         """Run one whole tool-driven episode and grade the tree it leaves behind."""
         try:
             result = eval_state.loaded_dataset.run(
-                i, self._agentic_chat(server_config, eval_state))
+                i, self._agentic_chat(server_config, eval_state, session_id))
         except Exception as e:
             # Record the failure rather than only marking the in-memory state.
             # Without this the case is persisted as "pending" and the summary
@@ -2087,6 +2201,27 @@ class Processor:
             return task_state
 
         episode = result.get("episode", {})
+        # The message history never goes into the state file, which it would
+        # grow by megabytes per task; it is written out on its own if asked.
+        messages = result.pop("messages", None)
+        if messages is not None and self.transcript_dir is not None:
+            self._save_transcript(eval_state, task_id, messages, result)
+
+        # The episode was cut short by the server, not by the model, so the
+        # half-finished tree it left says nothing about the model's ability.
+        if episode.get("stop_reason") in ("request_failed", "no_choices"):
+            task_state.status = SERVER_ERROR
+            task_state.grader_log = result
+            task_state.response = f"server error on turn {episode.get('turns')}: {episode.get('error')}"
+            eval_state.add_result(
+                task_id, task_state.prompt, task_state.expected, task_state.response,
+                None, result, False, SERVER_ERROR,
+                episode.get("completion_tokens", 0), None, None, None,
+                server_config.name, task_state.chunk_idx, i,
+            )
+            eval_state.dump()
+            return task_state
+
         task_state.tokens = episode.get("completion_tokens", 0)
         task_state.correct = bool(result["resolved"])
         task_state.answer = ", ".join(result.get("changed_files", [])) or None
@@ -2095,7 +2230,7 @@ class Processor:
         task_state.response = (
             f"stop={episode.get('stop_reason')} turns={episode.get('turns')} "
             f"calls={episode.get('tool_calls')} edits={episode.get('edits')} "
-            f"errors={episode.get('tool_errors')} nudges={episode.get('nudges')} "
+            f"errors={episode.get('tool_errors')} nudges={episode.get('nudges')} truncated={episode.get('truncated_turns')} "
             f"peak_ctx={episode.get('peak_context')}\n"
             f"changed: {task_state.answer or '(nothing)'}"
         )
@@ -2108,6 +2243,35 @@ class Processor:
         )
         eval_state.dump()
         return task_state
+
+    def _save_transcript(self, eval_state: EvalState, task_id: str,
+                         messages: List[Dict[str, Any]], result: Dict[str, Any]):
+        """Write the episode's messages as <task_id>.json plus a readable .html."""
+        assert self.transcript_dir is not None
+        ep = result.get("episode", {})
+        verdict = "RESOLVED" if result.get("resolved") else "not resolved"
+        meta = (
+            f"{verdict}  f2p {result.get('f2p_passed')}/{result.get('f2p_total')}  "
+            f"p2p {result.get('p2p_passed')}/{result.get('p2p_total')}\n"
+            f"stop={ep.get('stop_reason')} turns={ep.get('turns')} "
+            f"calls={ep.get('tool_calls')} edits={ep.get('edits')} "
+            f"errors={ep.get('tool_errors')} nudges={ep.get('nudges')} truncated={ep.get('truncated_turns')} "
+            f"prompt_tokens={ep.get('prompt_tokens')} "
+            f"completion_tokens={ep.get('completion_tokens')} "
+            f"peak_ctx={ep.get('peak_context')}\n"
+            f"changed: {', '.join(result.get('changed_files') or []) or '(nothing)'}"
+            + (f"\nerror: {ep.get('error')}" if ep.get("error") else "")
+        )
+        title = f"{task_id} ({result.get('task_id')})"
+        try:
+            path = eval_state.loaded_dataset.ae.write_transcript(
+                messages, self.transcript_dir / task_id, title, meta)
+        except OSError as e:
+            print(f"Warning: could not write transcript for {task_id}: {e}")
+            return
+        # Relative to the report, so the HTML link survives moving both together.
+        base = Path(eval_state.output_file).resolve().parent
+        result["transcript"] = os.path.relpath(path.resolve(), base)
 
     @staticmethod
     def _worker(
@@ -2147,7 +2311,7 @@ class Processor:
             print(f"  {i+1}. {sc.name} — {sc.url} ({sc.threads} threads) [{models_str}]")
         print(f"Model: {self.model_name}")
         print(f"Grader: {self.grader.grader_type}")
-        print(f"Sampling: temp={eval_state.sampling_config.get('temperature', 'skip')}, top-k={eval_state.sampling_config.get('top_k', 'skip')}, top-p={eval_state.sampling_config.get('top_p', 'skip')}, min-p={eval_state.sampling_config.get('min_p', 'skip')}")
+        print(f"Sampling: temp={eval_state.sampling_config.get('temperature', 'skip')}, top-k={eval_state.sampling_config.get('top_k', 'skip')}, top-p={eval_state.sampling_config.get('top_p', 'skip')}, min-p={eval_state.sampling_config.get('min_p', 'skip')}, reasoning-effort={eval_state.sampling_config.get('reasoning_effort', 'skip')}")
         print()
 
         # Shared task queue: all workers compete for tasks
@@ -2374,6 +2538,25 @@ def main():
         help="Min P sampling (default: not passed)"
     )
     parser.add_argument(
+        "--retries",
+        type=int,
+        default=5,
+        help="Times to resend a request that errors or comes back empty before "
+             "recording the case as a server error (default: 5)"
+    )
+    parser.add_argument(
+        "--retry-delay",
+        type=float,
+        default=10.0,
+        help="Seconds to wait before the first resend; doubles on each further one (default: 10)"
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        default=None,
+        help="Reasoning effort sent as reasoning_effort with every request, e.g. low/medium/high (default: not passed)"
+    )
+    parser.add_argument(
         "--threads",
         type=str,
         default="32",
@@ -2473,9 +2656,10 @@ def main():
     parser.add_argument(
         "--agentic-max-tokens",
         type=int,
-        default=2048,
-        help="Cap on generated tokens per agentic turn (default: 2048). Bounds "
-             "a model that falls into a repetition loop."
+        default=None,
+        help="Cap on generated tokens per agentic turn (default: no cap). "
+             "Bounds a model that falls into a repetition loop, but also cuts "
+             "off long reasoning; truncated turns are counted in the results."
     )
     parser.add_argument(
         "--agentic-context-limit",
@@ -2483,6 +2667,15 @@ def main():
         default=None,
         help="Abandon an agentic episode once its context exceeds this many "
              "tokens (default: no limit)"
+    )
+    parser.add_argument(
+        "--agentic-transcripts",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Save each agentic episode's full message history to "
+             "DIR/<task_id>.json, with a readable DIR/<task_id>.html showing "
+             "every reasoning block, reply, tool call and tool result"
     )
     parser.add_argument(
         "--resume",
@@ -2635,6 +2828,8 @@ def main():
             sampling_config["top_p"] = args.top_p
         if args.min_p is not None:
             sampling_config["min_p"] = args.min_p
+        if args.reasoning_effort is not None:
+            sampling_config["reasoning_effort"] = args.reasoning_effort
 
         eval_state = EvalState(
             dataset_type=args.dataset,
@@ -2688,7 +2883,10 @@ def main():
         server_configs=server_configs,
         grader=grader,
         model_name=args.model,
-        n_predict=args.n_predict
+        n_predict=args.n_predict,
+        retries=args.retries,
+        retry_delay=args.retry_delay,
+        transcript_dir=args.agentic_transcripts,
     )
 
     processor.evaluate(eval_state, verbose=args.verbose, resume=resume)

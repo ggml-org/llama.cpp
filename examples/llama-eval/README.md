@@ -50,6 +50,11 @@ The LLM grader authenticates too. It reuses the key of the server it runs on,
 so `--grader-type llm` without `--grader-server` needs nothing extra; a grader
 on a separate endpoint takes `--grader-api-key`.
 
+Endpoints on an opencode host additionally get an `x-opencode-session` header,
+generated fresh for every task. An agentic episode sends the same id on all of
+its turns, so opencode sees one session per task instead of one per request;
+other servers never see the header.
+
 ## Agentic suite
 
 `--dataset agentic` is a different shape from the other code suites. It runs
@@ -122,8 +127,9 @@ own test runner. Neither touches the other, and no other suite touches either.
 |---|---|
 | `--agentic-lang` | restrict to one language, and provision only its toolchain |
 | `--agentic-max-turns` | give up after this many assistant turns (default 50) |
-| `--agentic-max-tokens` | cap generation per turn (default 2048); bounds a model that falls into a repetition loop |
+| `--agentic-max-tokens` | cap generation per turn (default: no cap); bounds a model that falls into a repetition loop, but also cuts reasoning off mid-thought. Truncated turns are counted as `truncated_turns` |
 | `--agentic-context-limit` | abandon an episode once its context exceeds this many tokens |
+| `--agentic-transcripts DIR` | save each episode's full message history to `DIR/<task_id>.json`, plus a `DIR/<task_id>.html` showing every reasoning block, reply, tool call and tool result; the main report links to it |
 
 
 ## Code suites (HumanEval, ClassEval)

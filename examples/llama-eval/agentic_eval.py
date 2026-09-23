@@ -25,6 +25,7 @@ needs is scoped to the language actually under test, so none of it is
 installed for anyone running the other suites.
 """
 
+import html
 import json
 import os
 import re
@@ -228,7 +229,8 @@ def tool_schemas() -> List[Dict[str, Any]]:
            "test suite cannot be run.",
            {"path": {"type": "string", "description": "Limit to this file or directory."}}),
         fn("finish",
-           "Declare the task complete. Call this once the change is made.",
+           "Declare the task complete and end the session. This is the only "
+           "way to end it; call this once the change is made.",
            {"summary": {"type": "string", "description": "Brief description of the change made."}}),
     ]
 
@@ -596,6 +598,15 @@ SYSTEM_PROMPT = """You are an expert {lang} engineer working in an existing repo
 
 Resolve the user's request by editing files with the tools provided.
 
+How this session works:
+- You are working autonomously. There is no human watching; nobody will answer
+  questions, approve a plan, or read progress reports.
+- Every reply you send must contain at least one tool call until the task is
+  done. A reply that contains only text does nothing: no work happens and the
+  turn is wasted. Do not stop to describe what you are about to do; do it.
+- The session ends only when you call `finish`. Call it once the change is
+  made, and not before. Only the files as you leave them are evaluated.
+
 Important constraints:
 - You cannot run the code, the tests, or any shell command. The only feedback
   available is the `lint` tool, which reports syntax and type problems.
@@ -605,7 +616,7 @@ Important constraints:
   makes the symptom go away will usually fail the tests.
 - Make the smallest correct change. Do not reformat or refactor unrelated code.
 
-Call `finish` when the change is complete."""
+Keep calling tools until the change is complete, then call `finish`."""
 
 
 @dataclass
@@ -680,6 +691,7 @@ class EpisodeResult:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     peak_context: int = 0
+    truncated_turns: int = 0
     per_tool: Dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
 
@@ -688,8 +700,10 @@ class EpisodeResult:
 # narrate their analysis in prose mid-task; treating that as "done" would end
 # the episode with no edits and score a reasoning failure that never happened.
 # Deliberately neutral: it points at the protocol, never at the defect.
-NUDGE = ("You did not call any tool. If your change is complete, call `finish`. "
-         "Otherwise continue working using the tools.")
+NUDGE = ("Your last reply contained no tool call, so nothing happened. There is "
+         "no human in this session to respond to text. If your change is "
+         "complete, call `finish`. Otherwise continue working by calling the "
+         "tools; do not reply with text alone.")
 
 
 def run_episode(task: AgenticTask, toolbox: ToolBox, chat,
@@ -728,13 +742,19 @@ def run_episode(task: AgenticTask, toolbox: ToolBox, chat,
             res.stop_reason, res.error = "no_choices", json.dumps(reply)[:300]
             break
         msg = choices[0].get("message") or {}
+        if choices[0].get("finish_reason") == "length":
+            res.truncated_turns += 1
         calls = msg.get("tool_calls") or []
 
         # Echo the assistant turn back verbatim; the server needs the exact
-        # tool_call ids to match the results that follow.
+        # tool_call ids to match the results that follow. The reasoning goes
+        # back too: whether past-turn thinking is kept is the chat template's
+        # call, and models trained on interleaved thinking degrade without it.
+        reasoning = msg.get("reasoning_content")
         messages.append({
             "role": "assistant",
             "content": msg.get("content") or "",
+            **({"reasoning_content": reasoning} if reasoning else {}),
             **({"tool_calls": calls} if calls else {}),
         })
 
@@ -873,7 +893,108 @@ def run_task(task: AgenticTask, chat, sandbox, workroot: Optional[Path] = None,
             "category": task.category, "difficulty": task.difficulty,
             "changed_files": changed,
             "episode": {k: v for k, v in vars(episode).items()},
+            "messages": messages,
         })
         return result
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# transcripts
+# --------------------------------------------------------------------------
+
+TRANSCRIPT_CSS = """
+body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #fff; color: #222; max-width: 1100px; }
+h1 { font-size: 16px; margin: 0 0 4px; }
+.meta { font-size: 13px; color: #555; font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; margin-bottom: 12px; white-space: pre-wrap; }
+.msg { border: 1px solid #e1e4e8; border-left-width: 4px; margin: 8px 0; padding: 6px 10px; background: #fafbfc; }
+.msg .role { font-size: 12px; font-weight: 600; color: #555; margin-bottom: 4px; }
+.system { border-left-color: #888; }
+.user { border-left-color: #0969da; }
+.nudge { border-left-color: #9a6700; }
+.assistant { border-left-color: #1a7f37; background: #fff; }
+.tool { border-left-color: #8250df; }
+.tool.err { border-left-color: #cf222e; }
+pre { font-family: 'SF Mono', 'Menlo', 'Consolas', monospace; font-size: 12px; background: #fff; border: 1px solid #e1e4e8; padding: 6px 8px; margin: 4px 0; white-space: pre-wrap; word-wrap: break-word; }
+.reasoning pre { color: #57606a; background: #f6f8fa; }
+.call { font-size: 12px; font-weight: 600; color: #8250df; margin-top: 6px; }
+details > summary { cursor: pointer; font-size: 12px; color: #555; }
+.empty { font-size: 12px; color: #888; font-style: italic; }
+"""
+
+
+def _pre(text: str) -> str:
+    return f"<pre>{html.escape(text)}</pre>"
+
+
+def _render_call(call: Dict[str, Any]) -> str:
+    fn = call.get("function") or {}
+    raw = fn.get("arguments")
+    try:
+        args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+        shown = json.dumps(args, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, TypeError):
+        shown = f"(invalid JSON)\n{raw}"
+    return (f'<div class="call">&rarr; {html.escape(fn.get("name") or "?")} '
+            f'<span style="font-weight:400;color:#888">{html.escape(call.get("id") or "")}</span></div>'
+            + _pre(shown))
+
+
+def render_transcript_html(messages: List[Dict[str, Any]], title: str,
+                           meta: str = "") -> str:
+    """One page per episode: every turn, with reasoning, tool calls and results."""
+    names = {}
+    for m in messages:
+        for c in m.get("tool_calls") or []:
+            names[c.get("id")] = (c.get("function") or {}).get("name") or "?"
+
+    parts = []
+    turn = 0
+    for m in messages:
+        role = m.get("role") or "?"
+        content = m.get("content") or ""
+        if role == "assistant":
+            turn += 1
+            body = ""
+            if m.get("reasoning_content"):
+                body += ('<details class="reasoning" open><summary>reasoning '
+                         f'({len(m["reasoning_content"])} chars)</summary>'
+                         + _pre(m["reasoning_content"]) + "</details>")
+            body += _pre(content) if content.strip() else ""
+            body += "".join(_render_call(c) for c in m.get("tool_calls") or [])
+            if not body:
+                body = '<div class="empty">(empty reply)</div>'
+            parts.append(f'<div class="msg assistant"><div class="role">assistant '
+                         f'&middot; turn {turn}</div>{body}</div>')
+        elif role == "tool":
+            name = names.get(m.get("tool_call_id"), "?")
+            err = " err" if content.startswith("Error") else ""
+            parts.append(f'<div class="msg tool{err}"><div class="role">tool result '
+                         f'&middot; {html.escape(name)}</div>{_pre(content)}</div>')
+        elif role == "system":
+            parts.append('<div class="msg system"><details><summary>system prompt'
+                         f'</summary>{_pre(content)}</details></div>')
+        else:
+            cls = "nudge" if content == NUDGE else role
+            label = "user (nudge)" if content == NUDGE else role
+            parts.append(f'<div class="msg {html.escape(cls)}"><div class="role">'
+                         f'{html.escape(label)}</div>{_pre(content)}</div>')
+
+    return (f'<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n'
+            f'<title>{html.escape(title)}</title>\n<style>{TRANSCRIPT_CSS}</style>\n'
+            f'</head>\n<body>\n<h1>{html.escape(title)}</h1>\n'
+            f'<div class="meta">{html.escape(meta)}</div>\n'
+            + "\n".join(parts) + "\n</body>\n</html>\n")
+
+
+def write_transcript(messages: List[Dict[str, Any]], dest: Path, title: str,
+                     meta: str = "") -> Path:
+    """Write `<dest>.json` (the raw message history) and `<dest>.html`."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    json_path = dest.with_name(dest.name + ".json")
+    with open(json_path, "w") as f:
+        json.dump(messages, f, indent=2, ensure_ascii=False)
+    with open(dest.with_name(dest.name + ".html"), "w") as f:
+        f.write(render_transcript_html(messages, title, meta))
+    return json_path
