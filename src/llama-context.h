@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "llama-lazy-reader.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -281,6 +282,8 @@ private:
     //
 
     const llama_model & model;
+    std::map<const ggml_tensor *, std::unique_ptr<llama_lazy_reader>> lazy_readers;
+    std::map<const ggml_tensor *, const llama_lazy_reader *> lazy_reader_ptrs;
 
     llama_cparams cparams;
 

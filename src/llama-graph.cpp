@@ -1521,6 +1521,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
+    lazy_readers     (params.lazy_readers),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),

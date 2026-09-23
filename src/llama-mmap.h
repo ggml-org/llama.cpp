@@ -24,6 +24,7 @@ struct llama_file {
     size_t size() const;
 
     int file_id() const; // fileno overload
+    bool same_file(const llama_file & other) const;
 
     const std::string & name() const; // path this file was opened from
 

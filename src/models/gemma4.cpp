@@ -439,14 +439,16 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 class llm_graph_input_gemma4_per_layer : public llm_graph_input_i {
 public:
     void set_input(const llama_ubatch * ubatch) override {
-        rows.set_rows(ubatch->token, ubatch->n_tokens);
+        const int32_t row0 = 0;
+        rows.set_rows(padding ? &row0 : ubatch->token, padding ? 1 : ubatch->n_tokens);
     }
 
     bool can_reuse(const llm_graph_params & params) override {
-        return rows.can_reuse(params.ubatch.n_tokens);
+        return rows.can_reuse(padding ? 1 : params.ubatch.n_tokens);
     }
 
     llm_graph_lazy_rows rows;
+    bool padding = false;
 };
 
 // equivalent to get_per_layer_inputs() in python code
@@ -458,7 +460,7 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         auto inp = std::make_unique<llm_graph_input_gemma4_per_layer>();
 
         inp_per_layer = inp->rows.build(ctx0, model.per_layer_tok_embd,
-                model.lazy_reader(model.per_layer_tok_embd), ubatch.n_tokens);
+                lazy_reader(model.per_layer_tok_embd), ubatch.n_tokens);
         res->add_input(std::move(inp));
 
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
@@ -469,9 +471,15 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         // TODO: verify if this is the correct behavior in transformers implementation
         const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
 
-        // Extract and dequantize padding token embedding (row 0)
-        ggml_tensor * padding = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
-        inp_per_layer = ggml_cast (ctx0, padding, GGML_TYPE_F32);
+        if (const auto * reader = lazy_reader(model.per_layer_tok_embd)) {
+            auto inp = std::make_unique<llm_graph_input_gemma4_per_layer>();
+            inp->padding = true;
+            inp_per_layer = inp->rows.build(ctx0, model.per_layer_tok_embd, reader, 1);
+            res->add_input(std::move(inp));
+        } else {
+            ggml_tensor * padding = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
+            inp_per_layer = ggml_cast(ctx0, padding, GGML_TYPE_F32);
+        }
         inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
 
         // Reshape to [n_embd_per_layer, n_layer, 1]

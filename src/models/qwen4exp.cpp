@@ -1191,7 +1191,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
             static_cast<const llama_model_qwen4exp &>(model), mctx_hyb->get_attn());
 
     ggml_tensor * emb = ple_inp->rows.build(ctx0, model.per_layer_tok_embd,
-            model.lazy_reader(model.per_layer_tok_embd), n_heads * n_tokens);
+            lazy_reader(model.per_layer_tok_embd), n_heads * n_tokens);
     res->add_input(std::move(ple_inp));
 
     // flatten the heads: the gather lays the head dimension out slowest, as the reference does

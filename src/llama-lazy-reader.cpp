@@ -8,8 +8,10 @@
 #include <thread>
 #include <utility>
 
-llama_lazy_reader::llama_lazy_reader(const std::string & path, size_t offs, enum ggml_type type,
+llama_lazy_reader::llama_lazy_reader(const llama_file & source, size_t offs, enum ggml_type type,
                                      int64_t row_elems, int64_t n_rows, int n_readers) :
+    path(source.name()),
+    type(type),
     offs(offs),
     rsize(ggml_row_size(type, row_elems)),
     relems(row_elems),
@@ -25,10 +27,17 @@ llama_lazy_reader::llama_lazy_reader(const std::string & path, size_t offs, enum
     files.reserve(n_readers);
     for (int i = 0; i < n_readers; ++i) {
         files.emplace_back(std::make_unique<llama_file>(path.c_str(), "rb", /*use_direct_io =*/ false));
+        if (!source.same_file(*files.back())) {
+            throw std::runtime_error(format("model file changed while opening lazy reader: %s", path.c_str()));
+        }
     }
 }
 
 llama_lazy_reader::~llama_lazy_reader() = default;
+
+std::unique_ptr<llama_lazy_reader> llama_lazy_reader::clone(int n_readers) const {
+    return std::make_unique<llama_lazy_reader>(*files[0], offs, type, relems, nrows, n_readers);
+}
 
 void llama_lazy_reader::read_range(const std::pair<int32_t, int32_t> * pairs, int64_t begin, int64_t end,
                                    size_t fi, float * dst) const {

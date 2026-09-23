@@ -471,6 +471,24 @@ int llama_file::file_id() const {
 #endif
 }
 
+bool llama_file::same_file(const llama_file & other) const {
+#ifdef _WIN32
+    BY_HANDLE_FILE_INFORMATION a, b;
+    if (!GetFileInformationByHandle(pimpl->fp_win32, &a) || !GetFileInformationByHandle(other.pimpl->fp_win32, &b)) {
+        throw std::runtime_error("failed to identify model file");
+    }
+    return a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+           a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow &&
+           a.nFileSizeHigh == b.nFileSizeHigh && a.nFileSizeLow == b.nFileSizeLow;
+#else
+    struct stat a, b;
+    if (fstat(file_id(), &a) != 0 || fstat(other.file_id(), &b) != 0) {
+        throw std::runtime_error(format("failed to identify model file: %s", strerror(errno)));
+    }
+    return a.st_dev == b.st_dev && a.st_ino == b.st_ino && a.st_size == b.st_size;
+#endif
+}
+
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 #ifdef _WIN32

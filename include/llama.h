@@ -217,9 +217,8 @@ extern "C" {
 
     enum llama_lazy_mode {
         LLAMA_LAZY_MODE_OFF  = 0, // always read the whole tensor up front
-        LLAMA_LAZY_MODE_AUTO = 1, // lazy only for marked tensors larger than 4 GiB (requires mmap)
-        LLAMA_LAZY_MODE_ON   = 2, // read the rows of tensors marked by the arch on demand (requires mmap)
-        LLAMA_LAZY_MODE_DIRECT = 3, // like ON, but gather the rows with explicit reads instead of demand paging the mmap
+        LLAMA_LAZY_MODE_AUTO = 1, // ON when using an integrated GPU, otherwise only for marked tensors larger than 4 GiB
+        LLAMA_LAZY_MODE_ON   = 2, // read the rows of tensors marked by the arch on demand
     };
 
     enum llama_context_type {

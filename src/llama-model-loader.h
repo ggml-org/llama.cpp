@@ -69,7 +69,7 @@ struct llama_model_loader {
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
     static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
-    static const int TENSOR_READ_LAZY       = 1 << 5; // read rows on demand instead of loading whole tensor; requires mmap for now
+    static const int TENSOR_READ_LAZY       = 1 << 5; // read rows on demand instead of loading whole tensor
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -93,10 +93,6 @@ struct llama_model_loader {
         // decide whether this tensor is read lazily
         // pass w to also record it, or nullptr to only ask
         bool add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w);
-
-        bool any() const {
-            return !ranges.empty();
-        }
 
         bool has(const ggml_tensor * t) const {
             return tensors.count(ggml_get_name(t)) > 0;
