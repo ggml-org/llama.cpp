@@ -183,7 +183,7 @@
 	/>
 {/snippet}
 
-{#snippet row(option: ModelOption, indent = 0)}
+{#snippet row(option: ModelOption, indent = 0, compact = false)}
 	{@const isLoaded = isLoadedOption(option)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -193,7 +193,8 @@
 	<div
 		class={[
 			rowGrid,
-			'cursor-pointer rounded-md px-2 py-2.5 transition',
+			'cursor-pointer rounded-md px-2 transition',
+			compact ? 'py-2' : 'py-2.5',
 			isHidden && 'opacity-60',
 			selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 		]}
@@ -207,7 +208,7 @@
 				{option}
 				showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
 				showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-				size="size-9"
+				size={compact ? 'size-7' : 'size-9'}
 			/>
 
 			<ModelId
@@ -242,7 +243,7 @@
 	<!-- </div> -->
 {/snippet}
 
-{#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
+{#snippet repoRow(entry: ModelQuantGroup, indent = 0, compact = false)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
 	{@const groupLabel =
 		entry.kind === 'variants'
@@ -252,7 +253,11 @@
 
 	<div class="px-2">
 		<div
-			class={[rowGrid, 'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40']}
+			class={[
+				rowGrid,
+				'cursor-pointer rounded-md px-2 transition hover:bg-muted/40',
+				compact ? 'py-2' : 'py-2.5'
+			]}
 			onclick={() => toggleQuants(entry.key)}
 			onkeydown={(event) => event.key === 'Enter' && toggleQuants(entry.key)}
 			role="button"
@@ -263,7 +268,7 @@
 					option={entry.base}
 					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
 					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-					size="size-9"
+					size={compact ? 'size-7' : 'size-9'}
 				/>
 
 				<span class="min-w-0">
@@ -306,7 +311,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0)}
+{#snippet quantRow(option: ModelOption, indent = 0, compact = false)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isLoaded = isLoadedOption(option)}
@@ -317,7 +322,8 @@
 		<div
 			class={[
 				rowGrid,
-				'cursor-pointer rounded-md px-2 py-2 transition',
+				'cursor-pointer rounded-md px-2 transition',
+				compact ? 'py-1.5' : 'py-2',
 				isHidden && 'opacity-60',
 				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 			]}
@@ -352,17 +358,17 @@
 	</div>
 {/snippet}
 
-{#snippet entryTree(entry: ModelQuantGroup, indent = 0)}
+{#snippet entryTree(entry: ModelQuantGroup, indent = 0, compact = false)}
 	{#if entry.quants.length > 1}
-		{@render repoRow(entry, indent)}
+		{@render repoRow(entry, indent, compact)}
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24)}
+				{@render quantRow(quant, indent + 24, compact)}
 			{/each}
 		{/if}
 	{:else}
-		{@render row(entry.base, indent)}
+		{@render row(entry.base, indent, compact)}
 	{/if}
 {/snippet}
 
@@ -445,8 +451,8 @@
 	</div>
 {/snippet}
 
-{#snippet listItem({ entry }: { entry: ModelQuantGroup })}
-	{@render entryTree(entry, 16)}
+{#snippet listItem({ depth, entry }: { depth: number; entry: ModelQuantGroup })}
+	{@render entryTree(entry, depth > 0 ? 16 : 0, depth > 0)}
 {/snippet}
 
 {#snippet showMore({
