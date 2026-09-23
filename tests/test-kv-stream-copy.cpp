@@ -152,7 +152,9 @@ int main(int argc, char ** argv) {
         t.test("copy_events_are_discoverable", [&](testing & t) { t.assert_true(get && get() && get()->version >= 2 && get()->enqueue_span && get()->stats); });
         if (!get || !get()) return t.summary();
         t.test("copy_feedback_extension_is_available", [&](testing & t) {
-            t.assert_true(get()->version >= 7);
+            t.assert_true(get()->version >= 10);
+            t.assert_true(get()->probe_layer);
+            t.assert_true(get()->release_span);
         });
         t.test("wide_microbatches_share_uploads_and_preserve_final_tile_readers", [&](testing & t) {
             for (bool fallback : {false,true}) for (bool token_major : {false,true}) {
@@ -569,6 +571,47 @@ int main(int argc, char ** argv) {
                 }
             }
         });
+
+        t.test("layer_probe_observes_one_pre_wait_deadline", [&](testing & t) {
+            if (!t.assert_true(ops->version >= 9 && ops->probe_layer)) return;
+            auto * dev=ggml_backend_get_device(backend.get());
+            const ggml_kv_stream_shape shape{GGML_TYPE_F16,GGML_TYPE_F16,256,256,2,65536,128};
+            ggml_kv_stream_layout plane;
+            t.assert_true(ggml_kv_stream_layout_make(shape,131072,plane).status == ggml_kv_stream_status::success);
+            ggml_backend_buffer_ptr device(ggml_backend_buft_alloc_buffer(llama_kv_stream_device_buffer_type(dev),plane.bytes));
+            ggml_backend_buffer_ptr host(ggml_backend_buft_alloc_buffer(llama_kv_stream_host_buffer_type(dev),plane.bytes));
+            if (!t.assert_true(bool(device) && bool(host))) return;
+            ggml_backend_buffer_clear(host.get(),0);
+            auto * base=static_cast<char *>(ggml_backend_buffer_get_base(host.get()));
+            std::unique_ptr<void,void(*)(void*)> queue(
+                ops->create(backend.get(),device.get(),host.get(),shape,2),ops->free);
+            if (!t.assert_true(bool(queue) && ops->measure(queue.get(),true))) return;
+            const ggml_kv_stream_copy_range range{0,2};
+            for (bool force_miss : {true,false}) {
+                delayed_event gate(backend.get());
+                if (force_miss) gate.arm(backend.get());
+                t.assert_true(ops->begin(queue.get()));
+                t.assert_true(ops->enqueue_span(
+                    queue.get(),0,base,base+plane.v_offset,131072,131072));
+                if (!force_miss) {
+                    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+                    while (!ops->ready(queue.get(),1) && std::chrono::steady_clock::now() < deadline)
+                        std::this_thread::yield();
+                    t.assert_true(ops->ready(queue.get(),1));
+                }
+                t.assert_true(ops->probe_layer(queue.get(),&range,1));
+                t.assert_true(ops->acquire_span(queue.get(),0,2));
+                gate.open(); ggml_backend_synchronize(backend.get());
+                t.assert_true(ops->release_completed(queue.get(),0));
+                t.assert_true(ops->release_completed(queue.get(),1));
+                ops->drain(queue.get());
+                const auto measured=ops->feedback(queue.get());
+                t.assert_true(measured.available);
+                t.assert_equal(uint64_t(1),measured.layer_samples);
+                t.assert_equal(uint64_t(force_miss),measured.layer_misses);
+            }
+            t.assert_true(ops->measure(queue.get(),false));
+        });
         t.test("large_transfers_report_actual_gpu_deadlines", [&](testing & t) {
             if (!t.assert_true(ops->version >= 4)) return;
             auto * dev = ggml_backend_get_device(backend.get());
@@ -621,6 +664,32 @@ int main(int argc, char ** argv) {
             pending_consumer.open();
             ops->drain(queue.get());
         });
+        t.test("multi_page_batches_use_one_ready_and_consumed_fence", [&](testing & t) {
+            fixture f(backend.get(),true);
+            auto * device=ggml_backend_memory_lease_buffer(f.lease.get());
+            std::unique_ptr<void,void(*)(void*)> queue(
+                ops->create(backend.get(),device,f.host->buffer(),f.policy.shape,2),ops->free);
+            if (!t.assert_true(bool(queue) && ops->begin(queue.get()))) return;
+            llama_kv_stream_host_layer host; f.host->layer(0,host);
+            for (size_t round=0;round<2;++round) {
+                t.assert_true(ops->enqueue_span(queue.get(),0,host.k,host.v,512,512));
+                auto stats=ops->stats(queue.get());
+                t.assert_equal(round+1,stats.ready_fences);
+                t.assert_equal(round,stats.consumed_waits);
+                t.assert_true(ops->acquire_span(queue.get(),0,2));
+                stats=ops->stats(queue.get());
+                t.assert_equal(round+1,stats.ready_waits);
+                t.assert_true(ops->release_span(queue.get(),0,2));
+                stats=ops->stats(queue.get());
+                t.assert_equal(round+1,stats.consumed_fences);
+            }
+            const auto stats=ops->stats(queue.get());
+            t.assert_equal(size_t(2),stats.ready_fences);
+            t.assert_equal(size_t(2),stats.ready_waits);
+            t.assert_equal(size_t(2),stats.consumed_fences);
+            t.assert_equal(size_t(1),stats.consumed_waits);
+            ops->drain(queue.get());
+        });
         t.test("batched_dma_waits_for_every_consumer_and_counts_actual_transfers", [&](testing & t) {
             fixture f(backend.get(),true);
             ggml_kv_stream_layout page,ring;
@@ -658,6 +727,11 @@ int main(int argc, char ** argv) {
             t.assert_true(ops->acquire(queue.get(),0) && ops->acquire(queue.get(),1));
             ggml_backend_tensor_get_async(backend.get(),raw,out+ring.k_bytes,0,ring.k_bytes);
             t.assert_true(ops->release(queue.get(),0) && ops->release(queue.get(),1));
+            const auto fence_stats=ops->stats(queue.get());
+            t.assert_equal(size_t(2),fence_stats.ready_fences);
+            t.assert_equal(size_t(4),fence_stats.ready_waits);
+            t.assert_equal(size_t(4),fence_stats.consumed_fences);
+            t.assert_equal(size_t(2),fence_stats.consumed_waits);
             ops->drain(queue.get());
             t.assert_true(std::memcmp(out,host.k,ring.k_bytes) == 0);
             t.assert_true(std::memcmp(out+ring.k_bytes,next_k,257*page.k_token_bytes) == 0);

@@ -17,7 +17,8 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool resumable>
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool resumable,
+        bool tail_safe = resumable>
 static __device__ __forceinline__ void flash_attn_ext_vec_impl(
         const char * Q_ptr,
         const char * K_ptr,
@@ -295,7 +296,7 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
 
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                const bool token_valid = !resumable || k_VKQ_0 + i_KQ < k_VKQ_max;
+                const bool token_valid = !tail_safe || k_VKQ_0 + i_KQ < k_VKQ_max;
                 float sum = token_valid ? vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]) : -INFINITY;
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
@@ -357,8 +358,12 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
             }
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
-                half2 tmp[V_rows_per_thread/2] = {};
-                const bool token_valid = !resumable || k_VKQ_0 + k < k_VKQ_max;
+                half2 tmp[V_rows_per_thread/2];
+                const bool token_valid = !tail_safe || k_VKQ_0 + k < k_VKQ_max;
+                if constexpr (tail_safe) {
+#pragma unroll
+                    for (int i = 0; i < V_rows_per_thread/2; ++i) tmp[i] = make_half2(0.0f,0.0f);
+                }
                 if (token_valid) {
                     if constexpr (type_V == GGML_TYPE_BF16) {
                         float2 tmp_f[V_rows_per_thread/2];
@@ -389,8 +394,12 @@ static __device__ __forceinline__ void flash_attn_ext_vec_impl(
             }
 #pragma unroll
             for (int i_VKQ_0 = 0; i_VKQ_0 < D/2; i_VKQ_0 += nthreads_V*V_rows_per_thread/2) {
-                float2 tmp[V_rows_per_thread/2] = {};
-                const bool token_valid = !resumable || k_VKQ_0 + k < k_VKQ_max;
+                float2 tmp[V_rows_per_thread/2];
+                const bool token_valid = !tail_safe || k_VKQ_0 + k < k_VKQ_max;
+                if constexpr (tail_safe) {
+#pragma unroll
+                    for (int i = 0; i < V_rows_per_thread/2; ++i) tmp[i] = make_float2(0.0f,0.0f);
+                }
                 if (token_valid) {
                     dequantize_V(V + k*nb21, tmp,
                         2*i_VKQ_0 + (nthreads_V == WARP_SIZE ? threadIdx.x : threadIdx.x % nthreads_V)*V_rows_per_thread);
@@ -604,7 +613,7 @@ static __global__ void flash_attn_ext_vec(
 }
 
 // Save per-thread accumulators before native reductions; resume the same logical tile ownership.
-template<int D, int ncols, ggml_type type_K, ggml_type type_V>
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool tail_safe = true>
 __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
 static __global__ void flash_attn_ext_vec_resume(
         const char * Q_ptr,
@@ -629,7 +638,7 @@ static __global__ void flash_attn_ext_vec_resume(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33,
         float * state, int first, int end, bool reset, bool finish) {
-    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true>(
+    flash_attn_ext_vec_impl<D,ncols,type_K,type_V,false,true,tail_safe>(
         Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, dst_ptr, dst_meta_ptr, scale, max_bias, m0, m1, n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23, ne31, ne32, ne33, nb31,nb32,nb33,state,first,end,reset,finish,int(blockIdx.y),int(gridDim.y),int(blockIdx.y),int(gridDim.y));
 
 }

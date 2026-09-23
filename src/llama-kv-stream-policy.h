@@ -30,6 +30,8 @@ struct llama_kv_stream_feedback {
     uint64_t epoch = 0, samples = 0, misses = 0;
     double copy_busy_ratio = 0;
     uint32_t peak_slots = 0;
+    // Complete-layer readiness is sampled before any consumer wait; upload counters remain diagnostic.
+    uint64_t layer_samples = 0, layer_misses = 0;
 };
 
 struct llama_kv_stream_policy_state {
@@ -37,9 +39,13 @@ struct llama_kv_stream_policy_state {
     uint32_t resident_pages_per_layer = 0, ring_slots = 0;
     // Zero means uniform placement. Nonzero selects concentrated decode placement.
     uint32_t decode_active_pages = 0;
+    // Deadline pressure spreads the streamed footprint across all layers so additional ring slots
+    // become prefetch headroom instead of being consumed by fewer, larger streamed spans.
+    bool spread_streaming = false;
     uint32_t starved = 0, overprovisioned = 0, evaluations_since_repartition = UINT32_MAX;
     bool feedback_initialized = false;
     uint64_t feedback_epoch = 0, samples = 0, misses = 0;
+    uint64_t layer_samples = 0, layer_misses = 0;
 };
 
 struct llama_kv_stream_policy_observation {
@@ -57,6 +63,7 @@ struct llama_kv_stream_policy_decision {
     bool layout_changed = false;
     // A fresh valid delta was accepted; this does not imply that a partition change was needed.
     bool feedback_used = false, feedback_reset = false;
+    bool layer_feedback_available = false, layer_feedback_used = false;
 };
 
 struct llama_kv_stream_policy_layer {

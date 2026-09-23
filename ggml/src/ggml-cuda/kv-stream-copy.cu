@@ -30,6 +30,7 @@ struct measurement {
     ggml_kv_stream_copy_feedback result;
     std::chrono::steady_clock::time_point begin;
     explicit measurement(size_t slots) : uploads(slots) {}
+    static constexpr size_t counters = 5, readback_counters = 4;
     // The queue drains and selects its device before these diagnostic resources are destroyed.
     ~measurement() {
         if (readback) CUDA_CHECK(cudaStreamSynchronize(readback));
@@ -41,8 +42,10 @@ struct measurement {
         ggml_backend_buffer_free(buffer);
     }
     uint64_t * data() const { return static_cast<uint64_t *>(ggml_backend_buffer_get_base(buffer)); }
-    uint64_t * active_data() const { return data()+slots.current()*(uploads.size()+2); }
-    uint64_t * host_data(size_t bank) const { return static_cast<uint64_t *>(ggml_backend_buffer_get_base(host))+2*bank; }
+    uint64_t * active_data() const { return data()+slots.current()*(uploads.size()+counters); }
+    uint64_t * host_data(size_t bank) const {
+        return static_cast<uint64_t *>(ggml_backend_buffer_get_base(host))+readback_counters*bank;
+    }
     bool active() const { return enabled && slots.current() != slots.none; }
     // The owner has drained both streams. An empty run has no recorded timing events.
     void collect() {
@@ -53,8 +56,9 @@ struct measurement {
 };
 
 // Tickets avoid resetting a reused flag after the next consumer has already checked it.
-static __global__ void publish_ready(uint64_t * flags, size_t first, uint64_t ticket) {
-    atomicExch(reinterpret_cast<unsigned long long *>(flags+first),static_cast<unsigned long long>(ticket));
+static __global__ void publish_ready(uint64_t * flags, size_t first, size_t count, uint64_t ticket) {
+    for (size_t i = 0; i < count; ++i)
+        atomicExch(reinterpret_cast<unsigned long long *>(flags+first+i),static_cast<unsigned long long>(ticket));
 }
 
 // Sample on the consuming stream, not when the host submits the future dependency.
@@ -64,6 +68,21 @@ static __global__ void sample_deadline(uint64_t * flags, size_t counters, size_t
         missing |= atomicAdd(reinterpret_cast<unsigned long long *>(flags+first+i),0ULL) != ticket;
     ++flags[counters]; flags[counters+1] += missing;
 }
+
+// All range probes run before any consumer wait; their OR is one complete-layer deadline.
+static __global__ void sample_layer_range(
+        uint64_t * flags, size_t counters, size_t first, size_t count, uint64_t ticket) {
+    bool missing = false;
+    for (size_t i = 0; i < count; ++i)
+        missing |= atomicAdd(reinterpret_cast<unsigned long long *>(flags+first+i),0ULL) != ticket;
+    if (missing) atomicExch(reinterpret_cast<unsigned long long *>(flags+counters+4),1ULL);
+}
+
+static __global__ void finish_layer_sample(uint64_t * flags, size_t counters) {
+    ++flags[counters+2];
+    flags[counters+3] += atomicExch(reinterpret_cast<unsigned long long *>(flags+counters+4),0ULL) != 0;
+}
+
 
 struct copy_queue {
     ggml_backend_cuda_context * context;
@@ -75,8 +94,12 @@ struct copy_queue {
     cudaEvent_t producer = nullptr;
     std::vector<cudaEvent_t> ready, consumed;
     std::vector<uint8_t> completed;
+    static constexpr size_t no_fence = SIZE_MAX;
+    std::vector<size_t> ready_owner,consumed_owner,ready_refs,consumed_refs;
     std::unique_ptr<measurement> timing;
-    copy_queue(ggml_backend_cuda_context * context, size_t slots) : context(context), state(slots), ready(slots), consumed(slots), completed(slots,false) {}
+    copy_queue(ggml_backend_cuda_context * context, size_t slots) : context(context),state(slots),
+        ready(slots),consumed(slots),completed(slots,false),ready_owner(slots,no_fence),
+        consumed_owner(slots,no_fence),ready_refs(slots),consumed_refs(slots) {}
     // Retire all pointer users before destroying events or releasing pinned/device backing.
     ~copy_queue() {
         ggml_cuda_set_device(context->device);
@@ -102,18 +125,21 @@ static bool measure(void * handle, bool enable) {
     if (enable && !q.timing) {
         try {
             const size_t slots = q.ready.size();
-            if (slots > SIZE_MAX/(sizeof(uint64_t)*ggml_kv_stream_feedback_slots::capacity)-2) return false;
+            if (slots > SIZE_MAX/(sizeof(uint64_t)*ggml_kv_stream_feedback_slots::capacity)-
+                    measurement::counters) return false;
             auto m = std::make_unique<measurement>(slots);
             // Lazy kernel loading can synchronize the context. Resolve kernels before any producer/consumer gate.
             cudaFuncAttributes attributes;
             if (cudaFuncGetAttributes(&attributes,publish_ready) != cudaSuccess ||
-                    cudaFuncGetAttributes(&attributes,sample_deadline) != cudaSuccess) {
+                    cudaFuncGetAttributes(&attributes,sample_deadline) != cudaSuccess ||
+                    cudaFuncGetAttributes(&attributes,sample_layer_range) != cudaSuccess ||
+                    cudaFuncGetAttributes(&attributes,finish_layer_sample) != cudaSuccess) {
                 (void) cudaGetLastError(); return false;
             }
             m->buffer = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_device_buffer_type(q.context->device),
-                (slots+2)*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
+                (slots+measurement::counters)*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
             m->host = ggml_backend_buft_alloc_buffer(ggml_backend_cuda_host_buffer_type(),
-                2*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
+                measurement::readback_counters*ggml_kv_stream_feedback_slots::capacity*sizeof(uint64_t));
             if (!m->buffer || !m->host) return false;
             cudaPointerAttributes host_attributes{};
             if (cudaPointerGetAttributes(&host_attributes,ggml_backend_buffer_get_base(m->host)) != cudaSuccess ||
@@ -210,7 +236,7 @@ static bool begin_with_feedback(void * handle, bool eligible) {
         m.result.instrumentation_bytes = ggml_backend_buffer_get_size(m.buffer);
         if (m.active()) {
             // One clear per window, without touching a previous bank whose readback may still be pending.
-            CUDA_CHECK(cudaMemsetAsync(m.active_data(),0,(q.ready.size()+2)*sizeof(uint64_t),q.context->stream()));
+            CUDA_CHECK(cudaMemsetAsync(m.active_data(),0,(q.ready.size()+measurement::counters)*sizeof(uint64_t),q.context->stream()));
         }
     }
     return fence_producer(handle);
@@ -228,10 +254,32 @@ static bool enqueue_span_with_feedback(void * handle, size_t slot, const void * 
     if (!q.state.can_queue_span(slot,count) ||
             !source_range(q,k,live*q.page.k_token_bytes) || !source_range(q,v,live*q.page.v_token_bytes)) return false;
     auto * m = q.timing && q.timing->active() ? q.timing.get() : nullptr;
+    const auto ready_it=std::find(q.ready_refs.begin(),q.ready_refs.end(),size_t(0));
+    if (ready_it == q.ready_refs.end()) return false;
+    const size_t ready_fence=size_t(ready_it-q.ready_refs.begin());
+    for (size_t i=0;i<count;++i)
+        if (q.ready_owner[slot+i] != copy_queue::no_fence) return false;
     if (m && m->ticket == UINT64_MAX) return false;
     ggml_cuda_set_device(q.context->device);
-    for (size_t i = 0; i < count; ++i)
-        if (q.state.recycled(slot+i) && !q.completed[slot+i]) CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[slot+i],0));
+    for (size_t i=0;i<count;++i) if (q.state.recycled(slot+i) && !q.completed[slot+i]) {
+        const size_t fence=q.consumed_owner[slot+i];
+        if (fence == copy_queue::no_fence || !q.consumed_refs[fence]) return false;
+        bool first=true;
+        for (size_t j=0;j<i;++j) first &= q.consumed_owner[slot+j] != fence;
+        if (first) {
+            CUDA_CHECK(cudaStreamWaitEvent(q.stream,q.consumed[fence],0));
+            ++q.statistics.consumed_waits;
+        }
+    }
+    for (size_t i=0;i<count;++i) if (q.state.recycled(slot+i)) {
+        if (!q.completed[slot+i]) {
+            const size_t fence=q.consumed_owner[slot+i];
+            GGML_ASSERT(fence != copy_queue::no_fence && q.consumed_refs[fence]);
+            --q.consumed_refs[fence];
+            q.consumed_owner[slot+i]=copy_queue::no_fence;
+        }
+        q.completed[slot+i]=false;
+    }
     auto * base = static_cast<char *>(ggml_backend_buffer_get_base(q.device));
     // One first-upload sample per run; keep every deadline probe, but avoid per-upload timing bookkeeping.
     const bool timed = m && eligible && !m->result.timed_bytes;
@@ -250,15 +298,15 @@ static bool enqueue_span_with_feedback(void * handle, size_t slot, const void * 
         }
         const uint64_t ticket = ++m->ticket;
         for (size_t i = 0; i < count; ++i) m->uploads[slot+i] = {ticket,slot,count,eligible,false};
-        if (eligible) {
-            // Both complete planes precede this marker, so one ticket covers the whole DMA batch.
-            publish_ready<<<1,1,0,q.stream>>>(m->active_data(),slot,ticket);
-            CUDA_CHECK(cudaGetLastError());
-        }
+        publish_ready<<<1,1,0,q.stream>>>(m->active_data(),slot,count,ticket);
+        CUDA_CHECK(cudaGetLastError());
         m->occupied += count;
         m->result.peak_slots = std::max(m->result.peak_slots,m->occupied);
     }
-    for (size_t i = 0; i < count; ++i) CUDA_CHECK(cudaEventRecord(q.ready[slot+i],q.stream));
+    CUDA_CHECK(cudaEventRecord(q.ready[ready_fence],q.stream));
+    ++q.statistics.ready_fences;
+    q.ready_refs[ready_fence]=count;
+    for (size_t i=0;i<count;++i) q.ready_owner[slot+i]=ready_fence;
     return q.state.queue_span(slot,count);
 }
 
@@ -282,11 +330,44 @@ static ggml_kv_stream_copy_stats stats(void * handle) {
 static bool ready(void * handle, size_t slot) {
     if (!handle) return false;
     auto & q = *static_cast<copy_queue *>(handle);
-    if (!q.state.waiting(slot) && !q.state.held(slot)) return false;
+    if (q.state.held(slot)) return true;
+    if (!q.state.waiting(slot)) return false;
+    const size_t fence=q.ready_owner[slot];
+    if (fence == copy_queue::no_fence || !q.ready_refs[fence]) return false;
     ggml_cuda_set_device(q.context->device);
-    const auto result = cudaEventQuery(q.ready[slot]);
+    const auto result = cudaEventQuery(q.ready[fence]);
     if (result == cudaErrorNotReady) return false;
     CUDA_CHECK(result); return true;
+}
+
+// Snapshot one layer before any ready-event waits can hide its original deadline.
+static bool probe_layer(void * handle, const ggml_kv_stream_copy_range * ranges, size_t count) {
+    if (!handle || !ranges || !count) return false;
+    auto & q = *static_cast<copy_queue *>(handle);
+    if (!q.state.running()) return false;
+    auto * m = q.timing && q.timing->active() ? q.timing.get() : nullptr;
+    for (size_t r = 0; r < count; ++r) {
+        const auto range = ranges[r];
+        if (!range.count || range.first >= q.ready.size() || range.count > q.ready.size()-range.first) return false;
+        for (size_t i = 0; i < range.count; ++i) if (!q.state.waiting(range.first+i)) return false;
+        if (!m) continue;
+        const auto & upload = m->uploads[range.first];
+        if (!upload.ticket || upload.first != range.first || upload.pages != range.count) return false;
+        for (size_t i = 1; i < range.count; ++i) {
+            if (m->uploads[range.first+i].ticket != upload.ticket) return false;
+        }
+    }
+    if (!m) return true;
+    ggml_cuda_set_device(q.context->device);
+    for (size_t r = 0; r < count; ++r) {
+        const auto & upload = m->uploads[ranges[r].first];
+        sample_layer_range<<<1,1,0,q.context->stream()>>>(
+            m->active_data(),q.ready.size(),ranges[r].first,ranges[r].count,upload.ticket);
+        CUDA_CHECK(cudaGetLastError());
+    }
+    finish_layer_sample<<<1,1,0,q.context->stream()>>>(m->active_data(),q.ready.size());
+    CUDA_CHECK(cudaGetLastError());
+    return true;
 }
 
 // Queue the consumer dependency without blocking the host on transfer completion.
@@ -295,6 +376,10 @@ static bool acquire_span(void * handle, size_t slot, size_t count) {
     auto & q = *static_cast<copy_queue *>(handle);
     if (!count || slot >= q.ready.size() || count > q.ready.size()-slot) return false;
     for (size_t i = 0; i < count; ++i) if (!q.state.waiting(slot+i)) return false;
+    const size_t fence=q.ready_owner[slot];
+    if (fence == copy_queue::no_fence || !q.ready_refs[fence]) return false;
+    for (size_t i=1;i<count;++i)
+        if (q.ready_owner[slot+i] != fence) return false;
     auto * m = q.timing && q.timing->active() ? q.timing.get() : nullptr;
     // One consumed span must come from a single enqueue_span call.
     if (m) for (size_t i = 1; i < count; ++i) if (m->uploads[slot+i].ticket != m->uploads[slot].ticket) return false;
@@ -310,9 +395,13 @@ static bool acquire_span(void * handle, size_t slot, size_t count) {
             for (size_t i = 0; i < upload.pages; ++i) m->uploads[upload.first+i].sampled = true;
         }
     }
-    for (size_t i = 0; i < count; ++i) {
-        CUDA_CHECK(cudaStreamWaitEvent(q.context->stream(),q.ready[slot+i],0));
+    CUDA_CHECK(cudaStreamWaitEvent(q.context->stream(),q.ready[fence],0));
+    ++q.statistics.ready_waits;
+    for (size_t i=0;i<count;++i) {
         GGML_ASSERT(q.state.acquire(slot+i));
+        GGML_ASSERT(q.ready_owner[slot+i] == fence && q.ready_refs[fence]);
+        q.ready_owner[slot+i]=copy_queue::no_fence;
+        --q.ready_refs[fence];
     }
     return true;
 }
@@ -321,22 +410,36 @@ static bool acquire_span(void * handle, size_t slot, size_t count) {
 static bool acquire(void * handle, size_t slot) { return acquire_span(handle,slot,1); }
 
 // Every encoded-slot read must be submitted before recording this final-consumer event.
-static bool release(void * handle, size_t slot) {
+static bool release_span(void * handle, size_t slot, size_t count) {
     if (!handle) return false;
     auto & q = *static_cast<copy_queue *>(handle);
-    if (!q.state.held(slot)) return false;
+    if (!count || slot >= q.consumed.size() || count > q.consumed.size()-slot) return false;
+    for (size_t i=0;i<count;++i)
+        if (!q.state.held(slot+i) || q.consumed_owner[slot+i] != copy_queue::no_fence) return false;
+    const auto found=std::find(q.consumed_refs.begin(),q.consumed_refs.end(),size_t(0));
+    if (found == q.consumed_refs.end()) return false;
+    const size_t fence=size_t(found-q.consumed_refs.begin());
     ggml_cuda_set_device(q.context->device);
-    CUDA_CHECK(cudaEventRecord(q.consumed[slot],q.context->stream()));
-    q.completed[slot] = false;
-    if (q.timing && q.timing->active()) --q.timing->occupied;
-    return q.state.release(slot);
+    ++q.statistics.consumed_fences;
+    CUDA_CHECK(cudaEventRecord(q.consumed[fence],q.context->stream()));
+    q.consumed_refs[fence]=count;
+    for (size_t i=0;i<count;++i) {
+        q.consumed_owner[slot+i]=fence;
+        q.completed[slot+i]=false;
+        if (q.timing && q.timing->active()) --q.timing->occupied;
+        GGML_ASSERT(q.state.release(slot+i));
+    }
+    return true;
 }
+
+static bool release(void * handle, size_t slot) { return release_span(handle,slot,1); }
 
 // The caller already completed every reader; retain the queued-fence path for asynchronous consumers.
 static bool release_completed(void * handle, size_t slot) {
     if (!handle) return false;
     auto & q = *static_cast<copy_queue *>(handle);
     if (!q.state.held(slot)) return false;
+    if (q.consumed_owner[slot] != copy_queue::no_fence) return false;
     q.completed[slot] = true;
     if (q.timing && q.timing->active()) --q.timing->occupied;
     return q.state.release(slot);
@@ -359,13 +462,19 @@ static void drain(void * handle) {
             snapshot.value.elapsed_ms = std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-m.begin).count();
             snapshot.immediate = !q.statistics.bytes;
             if (!snapshot.immediate) {
-                CUDA_CHECK(cudaMemcpyAsync(m.host_data(bank),m.data()+bank*(q.ready.size()+2)+q.ready.size(),
-                    2*sizeof(uint64_t),cudaMemcpyDeviceToHost,m.readback));
+                CUDA_CHECK(cudaMemcpyAsync(m.host_data(bank),
+                    m.data()+bank*(q.ready.size()+measurement::counters)+q.ready.size(),
+                    measurement::readback_counters*sizeof(uint64_t),cudaMemcpyDeviceToHost,m.readback));
                 CUDA_CHECK(cudaEventRecord(snapshot.ready,m.readback));
             }
         }
         m.slots.seal();
     }
+    std::fill(q.ready_owner.begin(),q.ready_owner.end(),copy_queue::no_fence);
+    std::fill(q.consumed_owner.begin(),q.consumed_owner.end(),copy_queue::no_fence);
+    std::fill(q.ready_refs.begin(),q.ready_refs.end(),size_t(0));
+    std::fill(q.consumed_refs.begin(),q.consumed_refs.end(),size_t(0));
+    std::fill(q.completed.begin(),q.completed.end(),false);
     q.state.drained();
 }
 
@@ -384,6 +493,8 @@ static bool poll_feedback(void * handle, ggml_kv_stream_copy_snapshot * output) 
         if (status == cudaErrorNotReady) return false;
         CUDA_CHECK(status);
         result.samples = m.host_data(bank)[0]; result.misses = m.host_data(bank)[1];
+        result.layer_samples = m.host_data(bank)[2];
+        result.layer_misses = m.host_data(bank)[3];
     }
     result.available = true;
     m.last = {m.slots.id(bank),result};
@@ -420,7 +531,7 @@ static void destroy(void * handle) { delete static_cast<copy_queue *>(handle); }
 
 // Expose the CUDA adapter through an opaque, backend-neutral ownership contract.
 const ggml_kv_stream_copy_ops * ggml_cuda_kv_stream_copy_ops() {
-    static const ggml_kv_stream_copy_ops ops{8,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback,fence_producer};
+    static const ggml_kv_stream_copy_ops ops{10,create,begin,enqueue,ready,acquire,release,drain,destroy,enqueue_span,stats,release_completed,measure,acquire_span,feedback,feedback_id,poll_feedback,begin_with_feedback,enqueue_span_with_feedback,fence_producer,probe_layer,release_span};
     return &ops;
 }
 #endif

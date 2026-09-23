@@ -118,6 +118,7 @@ int main(int argc, char ** argv) {
         if (!t.assert_true(b.bind(f.lease.get(), config(), factory(seen)))) return;
         t.assert_equal(uint64_t(31), b.view()->cache_id);
         t.assert_equal(uint64_t(1), b.view()->revision);
+        t.assert_true(b.view()->lease == f.lease.get());
         t.assert_true(b.view()->base == base);
         t.assert_equal(size_t(4096), b.view()->capacity);
         t.assert_equal(uint32_t(16), b.view()->initial_policy.budget.pages);

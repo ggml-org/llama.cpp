@@ -87,6 +87,8 @@ public:
     // Poll completed snapshots without waiting; the latest successful run may still be pending.
     llama_kv_stream_feedback feedback() const noexcept;
     ggml_kv_stream_copy_feedback copy_feedback() const noexcept;
+    // A successful owner-session commit may advance authoritative content identity without discarding timing history.
+    bool advance_feedback_identity();
     // Read-only proposal. Decode feedback requires explicit intent; accept device layout before publishing decision.next.
     bool recommend_policy(const llama_kv_stream_policy_state & previous, size_t active_tokens,
             uint32_t query_tokens, llama_kv_stream_policy_decision & decision, bool decode_feedback = false, bool uniform_prefill = false) const;
@@ -100,6 +102,9 @@ public:
     bool prepare_write_pair(uint32_t layer, size_t first_row, const ggml_tensor * k, const ggml_tensor * v,
             llama_kv_stream_publication_ticket & ticket, uint32_t pair,
             std::unique_ptr<llama_kv_stream_publication_pair> & output);
+    // After all host completions are ready, atomically publish every layer and close the sequence.
+    bool commit_sequence_writes();
+
 
     // Source is a completed, dense F32 [head_dim * heads, rows] device tensor. Rows are consecutive.
     // Hold a binding pin and the source owner until return; call synchronize() before attention.

@@ -45,8 +45,10 @@ struct fixture {
     std::unique_ptr<llama_kv_stream_binding> binding;
     llama_kv_stream_resident * resident = nullptr;
     // The unused ring remains at the front; active resident planes must use policy offsets, not a flat host copy.
-    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16, size_t context = 769, bool fallback = false, uint32_t layers = 2) : backend(backend), cuda(cuda) {
-        llama_kv_stream_host_config c{37, {k, v, 256, 256, 2, 256, 128},
+    fixture(ggml_backend_t backend, bool cuda, ggml_type k = GGML_TYPE_F16, ggml_type v = GGML_TYPE_F16,
+            size_t context = 769, bool fallback = false, uint32_t layers = 2, uint32_t heads = 2,
+            size_t pool_pages = 0) : backend(backend), cuda(cuda) {
+        llama_kv_stream_host_config c{37, {k, v, 256, 256, int32_t(heads), 256, 128},
             {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, context, layers};
         auto * dev = ggml_backend_get_device(backend);
         if (cuda) {
@@ -65,7 +67,8 @@ struct fixture {
         ggml_kv_stream_layout page; GGML_ASSERT(ggml_kv_stream_layout_make(c.shape, 256, page).status == ggml_kv_stream_status::success);
         ggml_kv_stream_execution execution;
         GGML_ASSERT(ggml_kv_stream_resolve(c.shape,c.capabilities,256,execution).status == ggml_kv_stream_status::success);
-        policy.shape = c.shape; policy.capabilities = c.capabilities; policy.layers = c.layers; policy.pool_bytes = page.bytes*std::max(size_t(16),size_t(layers)+8)+execution.conversion.bytes;
+        policy.shape = c.shape; policy.capabilities = c.capabilities; policy.layers = c.layers;
+        policy.pool_bytes = page.bytes*(pool_pages ? pool_pages : std::max(size_t(16),size_t(layers)+8)) + execution.conversion.bytes;
         arena.reset(ggml_backend_memory_arena_new(device_type, policy.pool_bytes + 256));
         GGML_ASSERT(arena && ggml_backend_memory_arena_begin(arena.get(), 0));
         auto base = reinterpret_cast<uintptr_t>(ggml_backend_buffer_get_base(ggml_backend_memory_arena_parent(arena.get())));

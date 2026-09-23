@@ -68,6 +68,8 @@ public:
 
     // Snapshot all sources before mutation; overlapping writes commit in input order.
     // Failure preserves output. Large restores should use bounded batches rather than duplicate the full cache.
+    // Validate every write first, then publish all direct/non-direct parts under one generation advance.
+    bool commit(std::vector<llama_kv_stream_write *> writes);
     bool prepare(const std::vector<llama_kv_stream_write_span> & spans, llama_kv_stream_write & output) const;
     // Reject cancelled, foreign, or stale snapshots; successful nonempty commit advances content generation once.
     bool commit(llama_kv_stream_write & write);

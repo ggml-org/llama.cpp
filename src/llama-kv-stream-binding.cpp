@@ -60,6 +60,7 @@ bool llama_kv_stream_binding::bind(ggml_backend_memory_lease_t lease,
 
         // This temporary retention also protects callbacks and cleanup if construction or capture fails.
         lease_ptr retained(ggml_backend_memory_lease_retain(lease), ggml_backend_memory_lease_free);
+        next.lease = retained.get();
         std::vector<ggml_backend_memory_lease_t> candidate{retained.get()};
         auto native = factory(next);
         if (!native || !executor.capture(native, candidate, next.revision)) return false;

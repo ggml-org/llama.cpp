@@ -8,9 +8,8 @@
 using status = llama_kv_stream_policy_status;
 
 constexpr uint32_t DECODE_QUERY_LIMIT = 32;
-constexpr uint32_t FEEDBACK_GROWTH_ROUNDS = 1;
 constexpr double MISS_THRESHOLD = .01;
-constexpr double COPY_SATURATED = .80;
+constexpr double COPY_SATURATED = .90;
 constexpr double COPY_LIGHT = .50;
 constexpr double RING_LIGHT = .50;
 
@@ -23,7 +22,9 @@ static uint32_t increment(uint32_t n) { return n == UINT32_MAX ? n : n + 1; }
 static llama_kv_stream_policy_result budget_make(
         const llama_kv_stream_policy_config & c, llama_kv_stream_policy_budget & b) {
     if (!c.layers || !std::isfinite(c.overlap_ratio) || c.overlap_ratio <= 0 ||
-            !c.grow_evaluations || !c.shrink_evaluations || !c.cooldown_evaluations) return {status::invalid_config, {}};
+            !c.grow_evaluations || !c.shrink_evaluations || !c.cooldown_evaluations) {
+        return {status::invalid_config, {}};
+    }
     if (c.shape.page_tokens <= 0 || uint64_t(c.shape.page_tokens) > SIZE_MAX) return {status::geometry_error, {ggml_kv_stream_status::invalid_shape}};
     const auto result = ggml_kv_stream_resolve(c.shape, c.capabilities, size_t(c.shape.page_tokens), b.page);
     if (result.status != ggml_kv_stream_status::success) return {status::geometry_error, result};
@@ -95,7 +96,8 @@ static bool state_valid(const llama_kv_stream_policy_budget & b, const llama_kv_
         b.unused_bytes == old.unused_bytes && s.ring_slots >= b.minimum_ring_slots &&
         uint64_t(s.resident_pages_per_layer)*b.layers + s.ring_slots == b.pages &&
         (!s.decode_active_pages || s.decode_active_pages > s.resident_pages_per_layer) &&
-        (!s.feedback_initialized || s.misses <= s.samples);
+        (!s.feedback_initialized || (s.misses <= s.samples &&
+            s.layer_misses <= s.layer_samples));
 }
 
 struct capacity_profile {
@@ -111,8 +113,10 @@ static capacity_profile profile(const llama_kv_stream_policy_state & s) {
     p.layers = s.budget.layers;
     if (p.active <= p.mean) return p;
     const uint64_t deficit = uint64_t(p.active - p.mean)*p.layers;
-    p.splits = uint32_t(std::max(std::min(uint64_t(p.layers), ceil_div(deficit, s.ring_slots)),
-        ceil_div(deficit, p.active)));
+    const uint64_t minimum = ceil_div(deficit, p.active);
+    p.splits = s.spread_streaming ? p.layers : uint32_t(std::max(
+        std::min(uint64_t(p.layers), ceil_div(deficit, s.ring_slots)),
+        minimum));
     p.streamed_base = uint32_t(deficit/p.splits);
     p.remainder = uint32_t(deficit % p.splits);
     return p;
@@ -159,22 +163,29 @@ static void ingest_feedback(const llama_kv_stream_feedback & f, llama_kv_stream_
         double & miss_ratio) {
     if (!f.available) return;
     auto & s = d.next;
-    const bool totals_valid = f.misses <= f.samples;
+    const bool totals_valid = f.misses <= f.samples && f.layer_misses <= f.layer_samples;
     const bool metrics_valid = std::isfinite(f.copy_busy_ratio) && f.copy_busy_ratio >= 0 && f.copy_busy_ratio <= 1;
+    const bool layer_available = f.layer_samples || s.layer_samples;
     bool reset = !s.feedback_initialized || f.epoch != s.feedback_epoch || !totals_valid || !metrics_valid ||
-        f.samples < s.samples || f.misses < s.misses;
+        f.samples < s.samples || f.misses < s.misses ||
+        f.layer_samples < s.layer_samples || f.layer_misses < s.layer_misses;
     if (!reset) {
-        const uint64_t samples = f.samples - s.samples, misses = f.misses - s.misses;
+        const uint64_t samples = layer_available ? f.layer_samples-s.layer_samples : f.samples-s.samples;
+        const uint64_t misses = layer_available ? f.layer_misses-s.layer_misses : f.misses-s.misses;
         reset = misses > samples;
         if (!reset && samples) {
             d.feedback_used = true;
             miss_ratio = double(misses)/double(samples);
+            d.layer_feedback_used = layer_available;
         }
     }
     s.feedback_initialized = totals_valid;
+    d.layer_feedback_available = layer_available;
     s.feedback_epoch = f.epoch;
     s.samples = totals_valid ? f.samples : 0;
     s.misses = totals_valid ? f.misses : 0;
+    s.layer_samples = totals_valid ? f.layer_samples : 0;
+    s.layer_misses = totals_valid ? f.layer_misses : 0;
     if (reset) {
         s.starved = s.overprovisioned = 0;
         d.feedback_reset = true;
@@ -209,20 +220,19 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     d.next = previous;
     auto & s = d.next;
     double miss_ratio = 0;
-    ingest_feedback(observation.feedback, d, miss_ratio);
+    ingest_feedback(observation.feedback,d,miss_ratio);
     const bool pressure = active > s.resident_pages_per_layer;
     const uint32_t requested_decode = !observation.uniform_prefill && observation.query_tokens <= DECODE_QUERY_LIMIT && pressure ? active : 0;
     const bool entering = requested_decode && requested_decode != previous.decode_active_pages;
     d.target_resident_pages = overlap_target(b, active, c.overlap_ratio);
     if (!pressure) {
-        s.starved = s.overprovisioned = 0;
+        s.starved = s.overprovisioned = 0; s.spread_streaming = false;
     } else if (!c.fixed_ring && (entering || d.feedback_used)) {
         if (d.feedback_used) s.evaluations_since_repartition = increment(s.evaluations_since_repartition);
-        const uint32_t target = d.target_resident_pages;
-        const uint32_t floor = target > FEEDBACK_GROWTH_ROUNDS ? target - FEEDBACK_GROWTH_ROUNDS : 0;
+        const uint32_t target = std::max(1u, d.target_resident_pages);
         const bool below = s.resident_pages_per_layer > target;
-        const bool feedback_starved = d.feedback_used && s.resident_pages_per_layer > floor &&
-            miss_ratio > MISS_THRESHOLD && observation.feedback.copy_busy_ratio < COPY_SATURATED;
+        const bool feedback_starved = d.feedback_used && miss_ratio > MISS_THRESHOLD &&
+            observation.feedback.copy_busy_ratio < COPY_SATURATED;
         const bool light = d.feedback_used && miss_ratio <= MISS_THRESHOLD && observation.feedback.copy_busy_ratio < COPY_LIGHT &&
             double(observation.feedback.peak_slots)/s.ring_slots < RING_LIGHT;
         if (d.feedback_used) {
@@ -230,13 +240,15 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
             s.overprovisioned = light ? increment(s.overprovisioned) : 0;
         }
         const bool cooldown = s.evaluations_since_repartition >= c.cooldown_evaluations;
+        const bool hard_deadline = d.layer_feedback_used && feedback_starved;
         if (entering && below) {
             s.resident_pages_per_layer = target;
-        } else if (cooldown && s.resident_pages_per_layer < floor) {
-            s.resident_pages_per_layer = floor;
-        } else if (cooldown && d.feedback_used && (below || feedback_starved) &&
-                s.starved >= c.grow_evaluations && s.resident_pages_per_layer) {
+        } else if ((cooldown || hard_deadline) && d.feedback_used && (below || feedback_starved) &&
+                s.starved >= c.grow_evaluations && s.resident_pages_per_layer > 1) {
             s.resident_pages_per_layer = below ? target : s.resident_pages_per_layer - 1;
+            // Extra slots are useful only if placement does not enlarge the streamed spans to consume
+            // them. Keep pressure placement distributed until the next uniform/no-pressure phase.
+            if (feedback_starved) s.spread_streaming = true;
         } else if (cooldown && light && s.overprovisioned >= c.shrink_evaluations &&
                 s.resident_pages_per_layer < target &&
                 uint64_t(s.ring_slots) >= uint64_t(b.minimum_ring_slots) + b.layers) {
@@ -249,6 +261,7 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
         s.starved = s.overprovisioned = s.evaluations_since_repartition = 0;
     }
     s.decode_active_pages = !observation.uniform_prefill && observation.query_tokens <= DECODE_QUERY_LIMIT && active > s.resident_pages_per_layer ? active : 0;
+    if (!s.decode_active_pages) s.spread_streaming = false;
     d.layout_changed = d.partition_changed || !same_capacity(profile(previous), profile(s));
     output = d;
     return {};

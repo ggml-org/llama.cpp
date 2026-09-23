@@ -10,6 +10,8 @@ ggml_backend_buffer_type_t llama_kv_stream_device_buffer_type(ggml_backend_dev_t
 
 struct llama_kv_stream_binding_view {
     uint64_t cache_id = 0, revision = 0;
+    // Borrowed by the native factory; the binding's captured execution pin owns the retained reference.
+    ggml_backend_memory_lease_t lease = nullptr;
     ggml_backend_buffer_t buffer = nullptr;
     void * base = nullptr;
     size_t capacity = 0;

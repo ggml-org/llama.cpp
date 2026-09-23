@@ -45,11 +45,18 @@ private:
     bool active = false;
 };
 
-struct ggml_kv_stream_copy_stats { size_t bytes = 0, calls = 0; };
+struct ggml_kv_stream_copy_stats {
+    size_t bytes = 0, calls = 0;
+    size_t ready_fences = 0, ready_waits = 0, consumed_fences = 0, consumed_waits = 0;
+};
+struct ggml_kv_stream_copy_range { size_t first = 0, count = 0; };
+
 
 struct ggml_kv_stream_copy_feedback {
     bool available = false;
     uint64_t samples = 0, misses = 0;
+    // Version 9: one sample per streamed layer, missed when any immutable page was late at layer entry.
+    uint64_t layer_samples = 0, layer_misses = 0;
     size_t bytes = 0, timed_bytes = 0, peak_slots = 0, instrumentation_bytes = 0;
     // The first eligible upload's copy interval excludes dependency waits; timed_bytes counts live payload, not padding.
     // elapsed_ms is the whole host run window. Version 7 samples each eligible upload batch at its first consumption.
@@ -142,5 +149,10 @@ struct ggml_kv_stream_copy_ops {
                                       size_t live_tokens, size_t padded_tokens, bool eligible);
     // Version 8: make later copy-stream submissions wait for current producer-stream work.
     bool (*fence_producer)(void *);
+    // Version 9: snapshot all immutable requests for one layer before acquire_span inserts any waits.
+    // Each range must exactly name one queued upload batch; an empty list is not a sample.
+    bool (*probe_layer)(void *, const ggml_kv_stream_copy_range * ranges, size_t count);
+    // Version 10: one final-consumer fence covers a complete transfer span.
+    bool (*release_span)(void *, size_t first_slot, size_t count);
 };
 using ggml_kv_stream_copy_ops_get = const ggml_kv_stream_copy_ops * (*)();

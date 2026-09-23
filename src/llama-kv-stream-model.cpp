@@ -291,8 +291,15 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         ggml_kv_stream_resume_plan plan;
         s->config.resume_decode = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") && get && get() &&
             get()->version >= 5 && get()->resume_plan && get()->resume && get()->resume_plan(config.backend,
-                config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,1,s->host->layout().tokens,plan);
+                config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,std::min(2u,config.max_batch_rows),s->host->layout().tokens,plan);
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
+        if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
+            size_t mma_bytes=0;
+            if (get()->mma_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
+                    config.query_heads,config.host.shape.heads,s->host->layout().tokens,3,mma_bytes)) {
+                s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
+            }
+        }
         if (!s->allocate_private()) return {};
         const ggml_backend_execution_ops ops{
             [](void * p,const ggml_tensor * t) { return (*static_cast<std::shared_ptr<implementation> *>(p))->supports(t); },
@@ -319,7 +326,7 @@ ggml_backend_buffer_t llama_kv_stream_model::buffer() const noexcept { return pr
 std::shared_ptr<llama_kv_stream_host> llama_kv_stream_model::host() const noexcept { return impl->host; }
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     if (!impl->session || impl->external_mutation || impl->session->active() || impl->session->failed() || !queries || queries > impl->config.max_batch_rows ||
-            (decode && queries != 1) || active < impl->session->tokens() || active-impl->session->tokens() != queries ||
+            (decode && queries > 4) || active < impl->session->tokens() || active-impl->session->tokens() != queries ||
             active > impl->host->config().context_tokens) return false;
     if (!impl->resize_attention(decode ? impl->decode_bytes : impl->host->layout().bytes,decode) ||
             !impl->session->begin(active,queries,decode)) return false;

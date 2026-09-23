@@ -282,11 +282,12 @@ int main(int argc, char ** argv) {
                 ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
         const auto * ops = get ? get() : nullptr;
         if (!t.assert_true(ops && ops->version >= 7 && ops->spans && ops->spans_workspace)) return;
-        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 1025);
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 1280);
+        f.policy.initial_ring_slots = 4;
         if (!t.assert_true(f.attach())) return;
         auto pin = f.binding->acquire();
         if (!t.assert_true(bool(pin))) return;
-        for (size_t active : {size_t(257), size_t(513), size_t(1017)}) {
+        for (size_t active : {size_t(257), size_t(513), size_t(1017), size_t(1280)}) {
             for (uint32_t queries : {1u, 2u}) {
                 std::vector<size_t> cuts{0, 1, 127, 128, 255, 256, 257, active - 1, active};
                 cuts.erase(std::remove_if(cuts.begin(), cuts.end(),
@@ -311,6 +312,13 @@ int main(int argc, char ** argv) {
                         if (!t.assert_true(accepted)) continue;
                         close_values(t,a,value,1e-7f);
                         close_values(t,expected,value,1e-5f);
+                    }
+                }
+                if (active == 1280 && queries == 2) {
+                    auto production = span_storage::create(f,0,active,queries,{0,256,active});
+                    if (t.assert_true(production && production->plan)) {
+                        const auto value=evaluate(f,ops,*production,input,0,accepted);
+                        if (t.assert_true(accepted)) close_values(t,expected,value,1e-5f);
                     }
                 }
                 const auto b = evaluate(f, ops, *segmented, input, 0, accepted);

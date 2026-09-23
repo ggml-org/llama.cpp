@@ -13,7 +13,7 @@ int main(int argc, char ** argv) {
     t.test("resident_attention_matches_decode_and_prefill", [&](testing & t) {
         fixture f(backend.get(), cuda);
         if (!t.assert_true(f.attach())) return;
-        for (size_t q : {size_t(1), size_t(8), size_t(33)}) evaluate(t, f, true, 1, 257, q);
+        for (size_t q : {size_t(1), size_t(2), size_t(3), size_t(4), size_t(8), size_t(33)}) evaluate(t, f, true, 1, 257, q);
         evaluate(t, f, true, 0, 769, 1); // padded keys exactly fill the four-page resident capacity
         t.assert_true(f.resident->synchronize(257));
         t.assert_equal(size_t(0), f.resident->last_upload_bytes());

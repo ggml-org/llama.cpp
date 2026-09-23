@@ -5,12 +5,12 @@ struct session_inputs {
     ggml_context_ptr ctx;
     ggml_backend_buffer_ptr buffer;
     ggml_tensor * k, * v;
-    session_inputs(ggml_backend_t backend, size_t rows) {
+    session_inputs(ggml_backend_t backend, size_t rows, size_t width = 512) {
         ctx.reset(ggml_init({4096,nullptr,true}));
-        k = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,int64_t(rows));
-        v = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,int64_t(rows));
+        k = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,int64_t(width),int64_t(rows));
+        v = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,int64_t(width),int64_t(rows));
         buffer.reset(ggml_backend_alloc_ctx_tensors(ctx.get(),backend)); GGML_ASSERT(buffer);
-        std::vector<float> data(rows*512);
+        std::vector<float> data(rows*width);
         for (size_t i = 0; i < data.size(); ++i) data[i] = .25f*std::cos(float(i%541)*.07f);
         ggml_backend_tensor_set(k,data.data(),0,data.size()*sizeof(float));
         ggml_backend_tensor_set(v,data.data(),0,data.size()*sizeof(float));
@@ -136,6 +136,101 @@ int main(int argc, char ** argv) {
         session->abort();
         t.assert_true(!session->restore(513));
     });
+    if (cuda) t.test("two_token_decode_uses_bounded_resume_workspace", [&](testing & t) {
+        constexpr size_t active=25601;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,2,112);
+        f.policy.initial_ring_slots=96;
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        ggml_kv_stream_resume_plan plan;
+        if (!t.assert_true(get && get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                4,2,2,f.host->layout().tokens,plan))) return;
+        block_workspace writer(f,32768,19), attention(f,plan.bytes,29);
+        llama_kv_stream_session_config config{f.policy,2,4,false,true,true};
+        config.initial_decode=true;
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+            f.lease.get(),writer.lease.get(),attention.lease.get());
+        if (!t.assert_true(bool(session) && session->restore(active-2))) return;
+        session_inputs kv(backend.get(),2);
+        block_inputs input(f,active,2);
+        if (!t.assert_true(session->begin(active,2,true))) return;
+        std::array<std::vector<float>,2> outputs;
+        for (uint32_t layer=0;layer<2;++layer) {
+            if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                    session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+            ggml_backend_synchronize(backend.get());
+            outputs[layer]=input.read();
+        }
+        t.assert_equal(active,session->tokens());
+        t.assert_true(!session->active() && !session->failed());
+        t.assert_true(session->sequence_stats().copy_calls > 0 && session->sequence_stats().copy_calls <= 14);
+        for (uint32_t layer=0;layer<2;++layer) close_values(t,oracle(f,layer,active,2,input.qdata),outputs[layer],1e-3f);
+        for (uint32_t layer=0;layer<2;++layer) t.assert_true(same_float_bits(stock_attention(f,input,layer),outputs[layer]));
+        t.assert_true(session->attention_workspace_bytes() == plan.bytes);
+    });
+
+    if (cuda) t.test("qwen_tg3_tg4_decode_uses_stock_mma_and_bounded_ring", [&](testing & t) {
+        constexpr size_t active=25601;
+        for (uint32_t queries : {3u,4u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,8,112);
+            f.policy.initial_ring_slots=96;
+            auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+            ggml_kv_stream_resume_plan vector_plan;
+            size_t mma_bytes=0;
+            if (!t.assert_true(get && get()->version >= 9 && get()->mma_workspace &&
+                    get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,64,8,2,f.host->layout().tokens,vector_plan) &&
+                    get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,64,8,f.host->layout().tokens,3,mma_bytes))) return;
+            const size_t scratch=std::max(vector_plan.bytes,mma_bytes);
+            block_workspace writer(f,1024*1024,19), attention(f,scratch,29);
+            llama_kv_stream_session_config config{f.policy,4,64,false,true,true};
+            config.initial_decode=true;
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+                f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active-queries))) return;
+            session_inputs kv(backend.get(),queries,2048);
+            block_inputs input(f,active,queries,false,64);
+            if (!t.assert_true(session->begin(active,queries,true))) return;
+            std::array<std::vector<float>,2> outputs;
+            for (uint32_t layer=0;layer<2;++layer) {
+                if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                        session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+                ggml_backend_synchronize(backend.get());
+                outputs[layer]=input.read();
+            }
+            for (uint32_t layer=0;layer<2;++layer)
+                t.assert_true(same_float_bits(stock_attention(f,input,layer),outputs[layer]));
+            t.assert_equal(active,session->tokens());
+            t.assert_true(!session->active() && !session->failed());
+            t.assert_true(session->sequence_stats().copy_calls > 0 && session->sequence_stats().copy_calls <= 14);
+            t.assert_equal(scratch,session->attention_workspace_bytes());
+        }
+    });
+
+    if (cuda) t.test("tg4_decode_rejects_incomplete_ring_without_mutation", [&](testing & t) {
+        constexpr size_t active=25601;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,active,false,2,8,112);
+        f.policy.initial_ring_slots=4; f.policy.fixed_ring=true;
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(ggml_backend_get_device(backend.get())),"ggml_backend_kv_stream_partial_ops"));
+        ggml_kv_stream_resume_plan vector_plan;
+        size_t mma_bytes=0;
+        if (!t.assert_true(get && get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                64,8,2,f.host->layout().tokens,vector_plan) && get()->mma_workspace(backend.get(),
+                GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,64,8,f.host->layout().tokens,3,mma_bytes))) return;
+        block_workspace writer(f,1024*1024,19), attention(f,std::max(vector_plan.bytes,mma_bytes),29);
+        llama_kv_stream_session_config config{f.policy,4,64,false,true,true};
+        config.initial_decode=true;
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+            f.lease.get(),writer.lease.get(),attention.lease.get());
+        if (!t.assert_true(bool(session) && session->restore(active-4))) return;
+        const auto revision=session->layout_revision();
+        t.assert_true(!session->begin(active,4,true));
+        t.assert_true(!session->failed() && !session->active());
+        t.assert_equal(active-4,session->tokens());
+        t.assert_equal(revision,session->layout_revision());
+    });
+
     if (cuda) t.test("failure_after_production_never_commits_the_token_frontier", [&](testing & t) {
         fixture f(backend.get(),true); block_workspace writer(f,32768,19), partial(f,65536,29);
         auto session = llama_kv_stream_session::create(backend.get(),f.content,{f.policy,1,4,false},f.lease.get(),writer.lease.get(),partial.lease.get());
@@ -199,6 +294,34 @@ int main(int argc, char ** argv) {
         const auto control=run(false),carried=run(true);
         if (!t.assert_equal(control.size(),carried.size()) || !t.assert_equal(size_t(4),control.size())) return;
         for (size_t layer=0;layer<control.size();++layer) close_values(t,control[layer],carried[layer],1e-6f);
+    });
+
+    if (cuda) t.test("cross_token_feedback_preserves_continuity_without_false_growth", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,1281,false,4);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        f.policy.pool_bytes=16*page.bytes; f.policy.initial_ring_slots=4;
+        f.policy.grow_evaluations=100; f.policy.cooldown_evaluations=1;
+        block_workspace writer(f,32768,19),partial(f,f.host->layout().bytes,29);
+        llama_kv_stream_session_config config{f.policy,256,4,true,true,true};
+        config.cross_token_prefetch=true;
+        auto session=llama_kv_stream_session::create(backend.get(),f.content,config,
+            f.lease.get(),writer.lease.get(),partial.lease.get());
+        if (!t.assert_true(bool(session)) || !t.assert_true(session->restore(1024))) return;
+        const auto initial=session->policy();
+        t.assert_equal(uint32_t(3),initial.resident_pages_per_layer);
+        t.assert_equal(uint32_t(4),initial.ring_slots);
+        for (size_t active=1025;active<=1032;++active) {
+            session_inputs kv(backend.get(),1); block_inputs attn(f,active,1);
+            if (!t.assert_true(session->begin(active,1,true))) return;
+            for (uint32_t layer=0;layer<4;++layer) {
+                if (!t.assert_true(session->produce(layer,kv.k,kv.v)) ||
+                        !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
+            }
+            ggml_backend_synchronize(backend.get());
+        }
+        t.assert_true(session->policy().samples > 0);
+        t.assert_equal(initial.resident_pages_per_layer,session->policy().resident_pages_per_layer);
+        t.assert_equal(initial.ring_slots,session->policy().ring_slots);
     });
 
     if (cuda) t.test("external_growth_rebinds_and_lazily_restores_host", [&](testing & t) {
@@ -297,7 +420,7 @@ int main(int argc, char ** argv) {
         t.assert_true(old_view.base!=new_view.base);
         t.assert_equal(minimum,new_view.capacity);
         t.assert_equal(uint32_t(5),session->policy().budget.pages);
-        t.assert_equal(uint32_t(0),session->policy().resident_pages_per_layer);
+        t.assert_equal(uint32_t(1),session->policy().resident_pages_per_layer);
         t.assert_equal(content_generation,f.content->generation());
         t.assert_equal(mirror_epoch,f.content->mirror_epoch());
         const auto publication=session->publication_frontiers();

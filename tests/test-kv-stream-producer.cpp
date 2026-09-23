@@ -160,6 +160,7 @@ int main(int argc, char ** argv) {
         auto publications=llama_kv_stream_publications::create({first,active,f.content->generation(),1});
         llama_kv_stream_publication_ticket ticket;
         if (!t.assert_true(publications && publications->reserve(first,rows,4,{f.content},{},ticket))) return;
+        const auto token_generation=f.content->generation();
         for (uint32_t layer=0; layer < 4; ++layer) {
             const auto generation=f.content->generation();
             std::unique_ptr<llama_kv_stream_publication_pair> pair;
@@ -174,13 +175,15 @@ int main(int argc, char ** argv) {
             if (!t.assert_true(f.resident->compute_streamed(layer,attention.q,attention.mask,attention.output,
                     active,1.0f/16,partial.lease.get(),true,2))) return;
             if (!t.assert_true(pair->publish_host())) return;
-            t.assert_equal(generation+1,f.content->generation());
+            t.assert_equal(generation,f.content->generation());
             t.assert_true(ticket.ready(layer,llama_kv_stream_publication_domain::host));
             check_host(t,f,layer,first,input);
             close_values(t,oracle(f,layer,active,rows,attention.qdata),attention.read(),1e-3f);
             ggml_backend_synchronize(backend.get());
             t.assert_true(pair->release_device(backend.get()));
         }
+        t.assert_true(f.resident->commit_sequence_writes());
+        t.assert_equal(token_generation+1,f.content->generation());
         t.assert_true(ticket.committed());
         t.assert_equal(active,publications->frontiers().committed);
         t.assert_true(ticket.retire());

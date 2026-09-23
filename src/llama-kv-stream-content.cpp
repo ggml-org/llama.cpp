@@ -188,23 +188,34 @@ bool llama_kv_stream_content::prepare_internal(const std::vector<llama_kv_stream
 
 // Byte patches can intersect only part of a quant block; the entire touched token row becomes dirty.
 bool llama_kv_stream_content::commit(llama_kv_stream_write & write) {
-    if (state->busy || write.owner != state || write.generation != state->generation ||
-            (write.direct && write.backing != state->host)) return false;
+    return commit({&write});
+}
+
+bool llama_kv_stream_content::commit(std::vector<llama_kv_stream_write *> writes) {
+    if (state->busy || writes.empty()) return false;
+    bool changed=false;
+    for (size_t i=0;i<writes.size();++i) {
+        const auto * write=writes[i];
+        if (!write || write->owner != state || write->generation != state->generation ||
+                (write->direct && write->backing != state->host) ||
+                std::find(writes.begin(),writes.begin()+i,write) != writes.begin()+i) return false;
+        changed |= !write->parts.empty();
+    }
+    if (changed && state->generation == UINT64_MAX) return false;
     state->busy = true;
     content_operation operation{state->busy};
-    if (!write.parts.empty()) {
-        if (state->generation == UINT64_MAX) return false;
-        for (const auto & part : write.parts) {
-            if (!write.direct) std::memcpy(plane_data(*state,part.layer,part.operand)+part.offset,
-                write.bytes.data()+part.begin,part.bytes);
+    for (auto * write : writes) {
+        for (const auto & part : write->parts) {
+            if (!write->direct) std::memcpy(plane_data(*state,part.layer,part.operand)+part.offset,
+                write->bytes.data()+part.begin,part.bytes);
             const size_t stride = token_bytes(*state, part.operand);
             const size_t first = part.offset / stride;
             const size_t last = (part.offset + part.bytes - 1) / stride;
             mark(*state, {part.layer, part.operand, first, last - first + 1}, true);
         }
-        ++state->generation;
+        write->cancel();
     }
-    write.cancel();
+    if (changed) ++state->generation;
     return true;
 }
 

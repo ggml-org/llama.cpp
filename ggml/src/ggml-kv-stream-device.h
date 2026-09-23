@@ -57,6 +57,9 @@ struct ggml_kv_stream_partial_ops {
     // Version 8: invoke the exact tile-local MMA dequantizer for qualification and reusable staging.
     bool (*convert_mma_rows)(ggml_backend_t backend, const ggml_tensor * source,
             ggml_tensor * destination) = nullptr;
+    // Version 9: reserve the largest TG3/TG4 MMA span workspace for a given layout.
+    bool (*mma_workspace)(ggml_backend_t backend, int32_t key, int32_t value, uint32_t heads,
+            uint32_t kv_heads, size_t tokens, size_t spans, size_t & bytes) = nullptr;
 };
 using ggml_kv_stream_partial_ops_get = const ggml_kv_stream_partial_ops * (*)();
 

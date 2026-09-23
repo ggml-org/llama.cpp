@@ -36,13 +36,17 @@ public:
     // The runtime supplies cross-instance identity; pure tests can use local monotonic epochs.
     void reset(uint64_t epoch) { value = {}; value.epoch = epoch; }
     bool add(const ggml_kv_stream_copy_feedback & sample) {
-        if (!sample.available || !sample.samples || sample.misses > sample.samples || !sample.bytes ||
+        if (!sample.available || !sample.samples || sample.misses > sample.samples ||
+                sample.layer_misses > sample.layer_samples || !sample.bytes ||
                 !sample.timed_bytes || sample.timed_bytes > sample.bytes || sample.peak_slots > UINT32_MAX ||
                 !std::isfinite(sample.copy_ms) || sample.copy_ms < 0 || !std::isfinite(sample.elapsed_ms) || sample.elapsed_ms <= 0 ||
-                sample.samples > UINT64_MAX-value.samples || sample.misses > UINT64_MAX-value.misses) return false;
+                sample.samples > UINT64_MAX-value.samples || sample.misses > UINT64_MAX-value.misses ||
+                sample.layer_samples > UINT64_MAX-value.layer_samples ||
+                sample.layer_misses > UINT64_MAX-value.layer_misses) return false;
         const double busy = (sample.copy_ms/sample.elapsed_ms)*(double(sample.bytes)/sample.timed_bytes);
         if (!std::isfinite(busy)) return false;
         value.available = true; value.samples += sample.samples; value.misses += sample.misses;
+        value.layer_samples += sample.layer_samples; value.layer_misses += sample.layer_misses;
         value.copy_busy_ratio = std::min(1.0,busy); value.peak_slots = uint32_t(sample.peak_slots);
         return true;
     }
