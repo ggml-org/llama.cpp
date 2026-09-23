@@ -88,8 +88,8 @@ jobs:
           hf_bucket: ggml-org/cache
           save: true
 
-  gpu-rocm:
-    runs-on: [self-hosted, Linux, AMD]
+  gpu-rocm-gfx1151:
+    runs-on: [self-hosted, Linux, gfx1151]
 
     steps:
       - name: Clone
@@ -108,17 +108,47 @@ jobs:
           rocminfo
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  # TODO: provision AMD GPU machine
-  # amd-rocm:
-  #   runs-on: [self-hosted, Linux, AMD]
+  gpu-rocm-1201:
+    runs-on: [self-hosted, Linux, gfx1201]
+    container: "rocm/dev-ubuntu-24.04:7.2.4-complete"
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         amd-smi static
-  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential git git-lfs jq cmake libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-gpu-rocm-1201
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          rocminfo
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1201 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-gpu-rocm-1201
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
