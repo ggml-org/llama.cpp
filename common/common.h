@@ -764,9 +764,12 @@ struct common_params {
     std::string so_labels         = "";  // ... and the labels its answers are read at
     float       so_temperature    = 0.0f; // rescale every answer; 0 = use the request's value
     bool        so_json           = false;  // --json
-    std::vector<std::string> so_noul;    // KEY:INSTRUCTIONS
-    std::vector<std::string> so_choice;  // KEY:INSTRUCTIONS:opt[=desc][,opt[=desc]...]
-    std::vector<std::string> so_score;   // KEY:INSTRUCTIONS:level[,level...]
+    // --noul / --choice / --score as {kind, spec}, in the order they were given: question
+    // order is part of the prompt, so it cannot be recovered from three separate lists
+    //   noul    KEY:INSTRUCTIONS
+    //   choice  KEY:INSTRUCTIONS:opt[=desc][,opt[=desc]...]
+    //   score   KEY:INSTRUCTIONS:level[,level...]
+    std::vector<std::pair<std::string, std::string>> so_questions;
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
 };

@@ -4457,21 +4457,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--noul"}, "KEY:INSTRUCTIONS",
         "a true/false question; repeatable",
         [](common_params & params, const std::string & value) {
-            params.so_noul.push_back(value);
+            params.so_questions.push_back({"noul", value});
         }
     ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
     add_opt(common_arg(
         {"--choice"}, "KEY:INSTRUCTIONS:opt[=desc][,...]",
         "pick one of the declared options; repeatable",
         [](common_params & params, const std::string & value) {
-            params.so_choice.push_back(value);
+            params.so_questions.push_back({"choice", value});
         }
     ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
     add_opt(common_arg(
         {"--score"}, "KEY:INSTRUCTIONS:level[,...]",
         "a distribution over ordered levels, and its expectation; repeatable",
         [](common_params & params, const std::string & value) {
-            params.so_score.push_back(value);
+            params.so_questions.push_back({"score", value});
         }
     ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
     add_opt(common_arg(

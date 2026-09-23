@@ -160,38 +160,30 @@ static bool collect_questions(const common_params & params,
         return true;
     }
 
-    for (const auto & spec : params.so_noul) {
+    for (const auto & [kind, spec] : params.so_questions) {
+        const std::string form =
+            kind == "noul"   ? "--noul wants KEY:INSTRUCTIONS"
+          : kind == "choice" ? "--choice wants KEY:INSTRUCTIONS:opt[=desc][,opt[=desc]...]"
+                             : "--score wants KEY:INSTRUCTIONS:level[,level...]";
+
         std::string key, instr, rest;
-        if (!split_spec(spec, key, instr, rest)) { err = "--noul wants KEY:INSTRUCTIONS"; return false; }
-        system_one_question q;
-        q.kind = SYSTEM_ONE_KIND_NOUL;
-        q.text = instr;
-        keys.push_back(key);
-        qs.push_back(std::move(q));
-    }
-    for (const auto & spec : params.so_choice) {
-        std::string key, instr, rest;
-        if (!split_spec(spec, key, instr, rest) || rest.empty()) {
-            err = "--choice wants KEY:INSTRUCTIONS:opt[=desc][,opt[=desc]...]";
+        if (!split_spec(spec, key, instr, rest) || (rest.empty() && kind != "noul")) {
+            err = form;
             return false;
         }
+
         system_one_question q;
-        q.kind = SYSTEM_ONE_KIND_CHOICE;
         q.text = instr;
-        parse_options(rest, true, q.options, q.descs);
-        keys.push_back(key);
-        qs.push_back(std::move(q));
-    }
-    for (const auto & spec : params.so_score) {
-        std::string key, instr, rest;
-        if (!split_spec(spec, key, instr, rest) || rest.empty()) {
-            err = "--score wants KEY:INSTRUCTIONS:level[,level...]";
-            return false;
+        if (kind == "noul") {
+            q.kind = SYSTEM_ONE_KIND_NOUL;
+        } else if (kind == "choice") {
+            q.kind = SYSTEM_ONE_KIND_CHOICE;
+            parse_options(rest, true, q.options, q.descs);
+        } else {
+            q.kind = SYSTEM_ONE_KIND_SCORE;
+            parse_options(rest, false, q.options, q.descs);
         }
-        system_one_question q;
-        q.kind = SYSTEM_ONE_KIND_SCORE;
-        q.text = instr;
-        parse_options(rest, false, q.options, q.descs);
+
         keys.push_back(key);
         qs.push_back(std::move(q));
     }
