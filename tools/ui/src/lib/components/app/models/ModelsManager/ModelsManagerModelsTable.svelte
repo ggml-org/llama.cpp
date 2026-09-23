@@ -30,7 +30,9 @@
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
+	import { Label } from '$lib/components/ui/label';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -40,6 +42,7 @@
 
 	interface Props {
 		filter?: string;
+		groupProviders?: boolean;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
@@ -50,6 +53,7 @@
 
 	let {
 		filter = $bindable(''),
+		groupProviders = $bindable(false),
 		groups,
 		isFavorite,
 		onSelect,
@@ -229,6 +233,12 @@
 
 {#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
+	{@const groupLabel =
+		entry.kind === 'providers'
+			? `${entry.quants.length} providers`
+			: entry.kind === 'variants'
+				? `${entry.quants.length} variants`
+				: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
 
 	<div class="px-2">
@@ -255,9 +265,7 @@
 						title={entry.base.model}
 					/>
 
-					<span class="block text-xs text-muted-foreground">
-						{entry.quants.length} quants available
-					</span>
+					<span class="block text-xs text-muted-foreground">{groupLabel}</span>
 				</span>
 			</span>
 
@@ -284,7 +292,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0)}
+{#snippet quantRow(option: ModelOption, indent = 0, showProvider = false)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isLoaded = isLoadedOption(option)}
@@ -305,7 +313,9 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
+					{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
+				</Badge>
 
 				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 			</span>
@@ -336,7 +346,7 @@
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24)}
+				{@render quantRow(quant, indent + 24, entry.kind === 'providers')}
 			{/each}
 		{/if}
 	{:else}
@@ -433,6 +443,14 @@
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex shrink-0 items-center gap-2 py-4">
 		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
+
+		<span class="flex items-center gap-2">
+			<Checkbox bind:checked={groupProviders} id="group-providers" />
+
+			<Label class="cursor-pointer text-xs text-muted-foreground" for="group-providers">
+				Group models from different providers
+			</Label>
+		</span>
 
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
 	</div>

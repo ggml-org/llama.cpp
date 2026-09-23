@@ -40,11 +40,14 @@ export type ModelOverrideMap = Record<string, ModelOverride>;
 
 export type { ModelLoadProgress };
 
-/** One repo of the table, with the quants it ships as its rows. */
+/** What a group folds, which decides its label. */
+export type ModelGroupKind = 'providers' | 'quants' | 'variants';
+
+/** One repo of the table, with the rows it ships as. */
 export interface ModelQuantGroup {
-	/** The quant that carries the identity of the repo. */
 	base: ModelOption;
 	key: string;
+	kind: ModelGroupKind;
 	quants: ModelOption[];
 }
 
@@ -178,11 +181,14 @@ export function modelRepoKey(model: string): string {
 }
 
 /** Fold the quants of one repo into a single entry, so the table shows one row per model. */
-export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
+export function groupModelQuants(models: ModelOption[], mergeProviders = false): ModelQuantGroup[] {
 	const groups = new SvelteMap<string, ModelQuantGroup>();
 
 	for (const option of models) {
-		const key = modelRepoKey(option.model);
+		const repo = modelRepoKey(option.model);
+		// groups stay within one backend, so the same repo served by two providers
+		// is not read as two quants of one model
+		const key = mergeProviders ? repo : `${option.backendId ?? ''}::${repo}`;
 		const group = groups.get(key);
 
 		if (group) {
@@ -191,10 +197,44 @@ export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 			continue;
 		}
 
-		groups.set(key, { base: option, key, quants: [option] });
+		groups.set(key, { base: option, key, kind: 'quants', quants: [option] });
 	}
 
-	return Array.from(groups.values());
+	return Array.from(groups.values()).flatMap((group) => {
+		const kind = groupKind(group.quants);
+		const modelIds = group.quants.map((option) => option.model);
+
+		// the very same id twice is not a quant set; keep those rows apart, unless
+		// the group is there to show the providers that serve it
+		if (
+			kind !== 'providers' &&
+			modelIds.length > 1 &&
+			modelIds.every((model) => model === modelIds[0])
+		) {
+			return group.quants.map((option) => ({
+				...group,
+				base: option,
+				key: `${group.key}::${option.id}`,
+				kind: 'variants' as const,
+				quants: [option]
+			}));
+		}
+
+		return [{ ...group, kind }];
+	});
+}
+
+/** What a group folds, which decides its label: quants, variants or providers. */
+function groupKind(quants: ModelOption[]): ModelGroupKind {
+	const backends = new Set(quants.map((option) => option.backendId ?? ''));
+
+	if (backends.size > 1) return 'providers';
+
+	const isQuant = quants.every(
+		(option) => (option.parsedId ?? ModelsService.parseModelId(option.model)).quantization
+	);
+
+	return isQuant ? 'quants' : 'variants';
 }
 
 /**

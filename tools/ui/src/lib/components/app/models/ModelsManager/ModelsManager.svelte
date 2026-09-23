@@ -50,7 +50,9 @@
 	// one entry per repo, so a model with several quants is a single table row;
 	// loaded models lead the table, then favorites, then one block per provider,
 	// and an entry lands in the first group that claims it
-	let entries = $derived(groupModelQuants(visible));
+	/** Off keeps the same repo from two providers apart; on merges them. */
+	let groupProviders = $state(false);
+	let entries = $derived(groupModelQuants(visible, groupProviders));
 	let groups = $derived.by(() => {
 		// only llama-compat servers report a load state
 		const isLlamaCompat = (entry: ModelQuantGroup) =>
@@ -215,6 +217,7 @@
 	<div class="min-h-0">
 		<ModelsManagerModelsTable
 			bind:filter
+			bind:groupProviders
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
