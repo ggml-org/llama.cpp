@@ -913,7 +913,7 @@ int main(int argc, char ** argv) {
     size_t seed = rd();
     float stdev = 0.1f;
     std::string out;
-    const char* target_backend = nullptr;
+    const char * target_backend = nullptr;
 
     int verbosity = LOG_LEVEL_ERROR;
 
