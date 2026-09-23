@@ -38,7 +38,7 @@
 		onBack,
 		open = true,
 		revealChevronOnHover = false,
-		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none',
+		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none',
 		sticky = false
 	}: Props = $props();
 
