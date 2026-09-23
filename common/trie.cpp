@@ -4,26 +4,46 @@
 
 #include <deque>
 
+common_trie::step common_trie::next_symbol(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const {
+    if (!tokens.empty() && pos < token_map.size()) {
+        const int32_t id = token_map[pos];
+        if (id >= 0 && tokens.find(id) != tokens.end()) {
+            size_t end = pos + 1;
+            while (end < token_map.size() && token_map[end] < 0) {
+                ++end;
+            }
+            return { utf8_parse_result::SUCCESS, symbol::token(id), end - pos };
+        }
+    }
+
+    auto result = common_parse_utf8_codepoint(sv, pos);
+    return { result.status, symbol::codepoint(result.codepoint), result.bytes_consumed };
+}
+
 common_trie::match_result common_trie::check_at(std::string_view sv, size_t start_pos) const {
+    return check_at(sv, {}, start_pos);
+}
+
+common_trie::match_result common_trie::check_at(std::string_view sv, const std::vector<int32_t> & token_map, size_t start_pos) const {
     size_t current = 0; // Start at root
     size_t pos = start_pos;
 
     // LOG_DBG("%s: checking at pos %zu, sv='%s'\n", __func__, start_pos, std::string(sv).c_str());
 
     while (pos < sv.size()) {
-        auto result = common_parse_utf8_codepoint(sv, pos);
-        if (result.status != utf8_parse_result::SUCCESS) {
+        auto next = next_symbol(sv, token_map, pos);
+        if (next.status != utf8_parse_result::SUCCESS) {
             break;
         }
 
-        auto it = nodes[current].children.find(result.codepoint);
+        auto it = nodes[current].children.find(next.symbol);
         if (it == nodes[current].children.end()) {
             // Can't continue matching
             return match_result{match_result::NO_MATCH};
         }
 
         current = it->second;
-        pos += result.bytes_consumed;
+        pos += next.bytes_consumed;
 
         // Check if we've matched a complete word
         if (nodes[current].pattern >= 0) {
@@ -42,7 +62,7 @@ common_trie::match_result common_trie::check_at(std::string_view sv, size_t star
 }
 
 int32_t common_trie::insert(const std::string & word) {
-    std::vector<uint32_t> symbols;
+    std::vector<symbol> symbols;
     size_t pos = 0;
     while (pos < word.length()) {
         auto result = common_parse_utf8_codepoint(word, pos);
@@ -50,15 +70,18 @@ int32_t common_trie::insert(const std::string & word) {
             break;
         }
 
-        symbols.push_back(result.codepoint);
+        symbols.push_back(symbol::codepoint(result.codepoint));
         pos += result.bytes_consumed;
     }
     return insert(symbols);
 }
 
-int32_t common_trie::insert(const std::vector<uint32_t> & symbols) {
+int32_t common_trie::insert(const std::vector<symbol> & symbols) {
     size_t current = 0;
-    for (uint32_t ch : symbols) {
+    for (symbol ch : symbols) {
+        if (ch.is_token()) {
+            tokens.insert((int32_t) ch.value);
+        }
         auto it = nodes[current].children.find(ch);
         if (it == nodes[current].children.end()) {
             size_t child = create_node();
@@ -113,7 +136,7 @@ common_aho_corasick::common_aho_corasick(common_trie trie) : t(std::move(trie)) 
     }
 }
 
-size_t common_aho_corasick::next(size_t state, uint32_t ch) const {
+size_t common_aho_corasick::next(size_t state, common_trie::symbol ch) const {
     const auto & nodes = t.nodes;
     while (state && nodes[state].children.find(ch) == nodes[state].children.end()) {
         state = fail[state];
