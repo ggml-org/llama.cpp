@@ -10,8 +10,7 @@
 		HeartOff,
 		MoreHorizontal,
 		Power,
-		Trash2,
-		Upload
+		Trash2
 	} from '@lucide/svelte';
 	import {
 		ActionIcon,
@@ -42,7 +41,6 @@
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
-		onToggleLoad: (option: ModelOption) => void;
 		selectedId: string | null;
 		summary: string;
 	}
@@ -52,7 +50,6 @@
 		groups,
 		isFavorite,
 		onSelect,
-		onToggleLoad,
 		selectedId,
 		summary
 	}: Props = $props();
@@ -107,13 +104,7 @@
 	}
 
 	/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
-	function rowActions(
-		option: ModelOption,
-		canLoad: boolean,
-		isLoaded: boolean,
-		favorite: boolean,
-		isHidden: boolean
-	) {
+	function rowActions(option: ModelOption, canLoad: boolean, favorite: boolean, isHidden: boolean) {
 		return [
 			{
 				icon: favorite ? HeartOff : Heart,
@@ -122,11 +113,6 @@
 			},
 			...(canLoad
 				? [
-						{
-							icon: isLoaded ? Upload : Power,
-							label: isLoaded ? 'Unload model' : 'Load model',
-							onclick: () => onToggleLoad(option)
-						},
 						{
 							icon: Trash2,
 							label: 'Delete from disk',
@@ -166,7 +152,6 @@
 	{@const status = stateOf(option)}
 	{@const isOperationInProgress = modelsStore.status.isOperationInProgress(option.model)}
 	{@const isLoading = status === ServerModelStatus.LOADING || isOperationInProgress}
-	{@const isLoaded = isLoadedOption(option)}
 	{@const isFailed = status === ServerModelStatus.FAILED}
 	{@const isSleeping = status === ServerModelStatus.SLEEPING}
 
@@ -174,17 +159,15 @@
 		canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 		class="justify-self-center"
 		{isFailed}
-		{isLoaded}
+		isLoaded={isLoadedOption(option)}
 		{isLoading}
 		{isSleeping}
 		{option}
-		showAction={false}
 		showRemoteMark
 	/>
 {/snippet}
 
 {#snippet row(option: ModelOption, indent = 0, compact = false)}
-	{@const isLoaded = isLoadedOption(option)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
@@ -193,7 +176,7 @@
 	<div
 		class={[
 			rowGrid,
-			'cursor-pointer rounded-md px-2 transition',
+			'group cursor-pointer rounded-md px-2 transition',
 			compact ? 'py-2' : 'py-2.5',
 			isHidden && 'opacity-60',
 			selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
@@ -233,7 +216,7 @@
 
 		<div class="flex items-center justify-center justify-self-center">
 			<DropdownMenuActions
-				actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
+				actions={rowActions(option, canLoad, favorite, isHidden)}
 				align="end"
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="Model actions"
@@ -314,7 +297,6 @@
 {#snippet quantRow(option: ModelOption, indent = 0, compact = false)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
-	{@const isLoaded = isLoadedOption(option)}
 	{@const isHidden = modelsStore.isHidden(option.id)}
 	{@const quant = option.parsedId?.quantization ?? option.model}
 
@@ -322,7 +304,7 @@
 		<div
 			class={[
 				rowGrid,
-				'cursor-pointer rounded-md px-2 transition',
+				'group cursor-pointer rounded-md px-2 transition',
 				compact ? 'py-1.5' : 'py-2',
 				isHidden && 'opacity-60',
 				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
@@ -348,7 +330,7 @@
 
 			<div class="flex items-center justify-center justify-self-center">
 				<DropdownMenuActions
-					actions={rowActions(option, canLoad, isLoaded, favorite, isHidden)}
+					actions={rowActions(option, canLoad, favorite, isHidden)}
 					align="end"
 					triggerIcon={MoreHorizontal}
 					triggerTooltip="Model actions"
