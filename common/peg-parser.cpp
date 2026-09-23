@@ -329,6 +329,27 @@ struct parser_executor {
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
 
+    common_peg_parse_result operator()(const common_peg_token_parser & p) {
+        if (start_pos >= ctx.input.size()) {
+            if (!ctx.is_lenient()) {
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
+            }
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
+        }
+
+        if (start_pos >= ctx.tokens.size() || ctx.tokens[start_pos] != p.token) {
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
+        }
+
+        // Skip the rest of the piece, up to the next token or the end of the input
+        auto pos = start_pos + 1;
+        while (pos < ctx.input.size() && ctx.tokens[pos] == LLAMA_TOKEN_NULL) {
+            ++pos;
+        }
+
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
     common_peg_parse_result operator()(const common_peg_sequence_parser & p) {
         if (ctx.is_debug()) {
             LOG_DBG("%sSEQ start at %zu '%s' (%zu children)\n", debug_indent().c_str(), start_pos,
@@ -943,6 +964,7 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_ref_parser> ||
                                  std::is_same_v<T, common_peg_until_parser> ||
                                  std::is_same_v<T, common_peg_literal_parser> ||
+                                 std::is_same_v<T, common_peg_token_parser> ||
                                  std::is_same_v<T, common_peg_string_parser> ||
                                  std::is_same_v<T, common_peg_chars_parser> ||
                                  std::is_same_v<T, common_peg_any_parser> ||
@@ -986,6 +1008,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
             return "End";
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return "Literal(" + p.literal + ")";
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return "Token(" + p.piece + ", " + std::to_string(p.token) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             std::vector<std::string> parts;
             for (const auto & child : p.children) {
@@ -1119,6 +1143,19 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
 }
 
 common_peg_parser_builder::common_peg_parser_builder() {}
+
+common_peg_parser_builder::common_peg_parser_builder(common_peg_special_tokens tokens) {
+    arena_.tokens_ = std::move(tokens);
+}
+
+common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
+    auto token = arena_.tokens_.token_id(piece);
+    if (token == LLAMA_TOKEN_NULL) {
+        // Return a literal if the token is not registered with the builder
+        return literal(piece);
+    }
+    return add(common_peg_token_parser{token, piece});
+}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested sequences
@@ -1604,6 +1641,7 @@ static std::set<std::string> collect_reachable_rules(
                           std::is_same_v<T, common_peg_end_parser> ||
                           std::is_same_v<T, common_peg_until_parser> ||
                           std::is_same_v<T, common_peg_literal_parser> ||
+                          std::is_same_v<T, common_peg_token_parser> ||
                           std::is_same_v<T, common_peg_chars_parser> ||
                           std::is_same_v<T, common_peg_space_parser> ||
                           std::is_same_v<T, common_peg_any_parser> ||
@@ -1686,6 +1724,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return "";
             } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
                 return gbnf_format_literal(p.literal);
+            } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+                return "<[" + std::to_string(p.token) + "]>";
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
