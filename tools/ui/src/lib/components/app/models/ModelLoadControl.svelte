@@ -95,11 +95,14 @@
 			{/if}
 		{/if}
 
+		<!-- the wrapper has to pick one display value: flex and hidden together
+		     leave the winner to stylesheet order -->
 		<div
-			class={[
-				showAction ? 'flex' : 'hidden',
-				revealOnHover ? 'hidden group-hover:flex [@media(pointer:coarse)]:flex' : ''
-			]}
+			class={!showAction
+				? 'hidden'
+				: revealOnHover
+					? 'hidden group-hover:flex [@media(pointer:coarse)]:flex'
+					: 'flex'}
 		>
 			{#if isFailed}
 				<ActionIcon
