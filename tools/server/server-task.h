@@ -123,8 +123,7 @@ struct task_result_state {
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
 
-    // input is the empty parse input to append generated text to
-    task_result_state(const common_chat_parser_params & chat_parser_params, const common_peg_input & input);
+    task_result_state(const common_chat_parser_params & chat_parser_params);
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
@@ -249,8 +248,8 @@ struct server_task {
 
     // the task will be moved into queue, then onto slots
     // however, the state must be kept by caller (e.g., HTTP thread)
-    task_result_state create_state(const common_peg_input & input) const {
-        return task_result_state(params.chat_parser_params, input);
+    task_result_state create_state() const {
+        return task_result_state(params.chat_parser_params);
     }
 
     bool is_parent() const {

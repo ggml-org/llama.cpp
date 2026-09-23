@@ -4051,7 +4051,7 @@ private:
     }
 
     server_response_reader get_response_reader() {
-        return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS, common_chat_templates_make_input(chat_params.tmpls.get()));
+        return server_response_reader(queue_tasks, queue_results, HTTP_POLLING_SECONDS);
     }
 
     //
@@ -4539,12 +4539,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 }
 
 std::unique_ptr<server_res_generator> server_routes::create_response(bool bypass_sleep) {
-    auto res = std::make_unique<server_res_generator>(queue_tasks, queue_results, params.sleep_idle_seconds, bypass_sleep);
-    // the templates only exist once the server is awake
-    if (!bypass_sleep && meta) {
-        res->rd.input = common_chat_templates_make_input(meta->chat_params.tmpls.get());
-    }
-    return res;
+    return std::make_unique<server_res_generator>(queue_tasks, queue_results, params.sleep_idle_seconds, bypass_sleep);
 }
 
 server_routes::server_routes(const common_params & params, server_context & ctx_server)

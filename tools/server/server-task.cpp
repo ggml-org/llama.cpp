@@ -148,9 +148,8 @@ json task_params::to_json(bool only_metrics) const {
 //
 // task_result_state
 //
-task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params, const common_peg_input & input)
+task_result_state::task_result_state(const common_chat_parser_params & chat_parser_params)
     : chat_parser_params(chat_parser_params)
-    , generated_input(input)
     , oai_resp_id("resp_" + random_string())
     , oai_resp_reasoning_id("rs_" + random_string())
     , oai_resp_message_id("msg_" + random_string()) {

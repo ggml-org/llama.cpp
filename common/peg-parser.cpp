@@ -234,80 +234,25 @@ bool common_peg_special_tokens::is_user_defined(llama_token id) const {
 }
 
 void common_peg_input::append(const std::string & piece, llama_token token) {
-    if (piece.empty()) {
-        return;
-    }
-    if (special_tokens.is_special(token)) {
-        tokens.push_back({ text.size(), token });
-    }
+    tokens.push_back(token);
+    token_pos.push_back(text.size());
     text += piece;
 }
 
 void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_tokens, const std::vector<size_t> & chunk_pos) {
     GGML_ASSERT(chunk_tokens.size() == chunk_pos.size());
-    for (size_t i = 0; i < chunk_tokens.size(); i++) {
-        auto it = special_tokens.tokens.find(chunk_tokens[i]);
-        if (it == special_tokens.tokens.end()) {
-            continue;
-        }
-        const size_t pos = chunk_pos[i];
-        const size_t end = std::min(i + 1 < chunk_pos.size() ? chunk_pos[i + 1] : chunk.size(), chunk.size());
-        if (pos < end && end - pos == it->second.text.size()) {
-            tokens.push_back({ text.size() + pos, chunk_tokens[i] });
-        }
+    tokens.insert(tokens.end(), chunk_tokens.begin(), chunk_tokens.end());
+    for (size_t pos : chunk_pos) {
+        token_pos.push_back(text.size() + pos);
     }
     text += chunk;
 }
 
-std::vector<common_peg_input_token> common_peg_special_tokens::find(const std::string & text) const {
-    struct match {
-        size_t      pos;
-        size_t      len;
-        llama_token id;
-    };
-
-    std::vector<match> matches;
-    for (const auto & [str, id] : ids) {
-        if (str.empty()) {
-            continue;
-        }
-        for (size_t pos = text.find(str); pos != std::string::npos; pos = text.find(str, pos + 1)) {
-            matches.push_back({ pos, str.size(), id });
-        }
-    }
-
-    std::sort(matches.begin(), matches.end(), [](const match & a, const match & b) {
-        return a.pos != b.pos ? a.pos < b.pos : a.len > b.len;
-    });
-
-    std::vector<common_peg_input_token> result;
-    size_t end = 0;
-    for (const auto & m : matches) {
-        if (m.pos >= end) {
-            result.push_back({ m.pos, m.id });
-            end = m.pos + m.len;
-        }
-    }
-    return result;
-}
-
 void common_peg_input::prepend(const std::string & prefix) {
-    if (prefix.empty()) {
-        return;
+    for (auto & pos : token_pos) {
+        pos += prefix.size();
     }
-    auto found = special_tokens.find(prefix);
-    for (auto & t : tokens) {
-        t.pos += prefix.size();
-    }
-    tokens.insert(tokens.begin(), found.begin(), found.end());
     text = prefix + text;
-}
-
-common_peg_input_token common_peg_input::next_token(size_t pos) const {
-    auto it = std::lower_bound(tokens.begin(), tokens.end(), pos, [](const common_peg_input_token & t, size_t p) {
-        return t.pos < p;
-    });
-    return it != tokens.end() ? *it : common_peg_input_token{};
 }
 
 struct parser_executor;
