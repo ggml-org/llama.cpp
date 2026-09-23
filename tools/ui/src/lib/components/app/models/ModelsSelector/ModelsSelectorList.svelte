@@ -81,8 +81,6 @@
 
 		return () => document.removeEventListener('scroll', onScroll, { capture: true });
 	});
-	// a local-only install is one list: favorites first, then the rest, no headings
-	let localOnly = $derived(groups.providers.length === 0);
 	// section headers stick right below the search/tabs block of the dropdown
 	// scrollport; `--dropdown-sticky-height` is set by DropdownMenuSearchable
 	// and falls back to 0 in surfaces without one (the mobile sheet)
@@ -201,22 +199,16 @@
 {/if}
 
 {#if favorites.length > 0}
-	{#if localOnly}
+	<!-- Favorites come first; the sections below skip them -->
+	<ModelsSection label="Favorites" revealChevronOnHover sticky>
+		{#snippet icon()}
+			<Heart class="h-3.5 w-3.5 shrink-0" />
+		{/snippet}
+
 		{#each favorites as item (`fav-${item.option.id}`)}
 			{@render render(item, !showOrgName)}
 		{/each}
-	{:else}
-		<!-- Favorites come first; the sections below skip them -->
-		<ModelsSection label="Favorites" revealChevronOnHover sticky>
-			{#snippet icon()}
-				<Heart class="h-3.5 w-3.5 shrink-0" />
-			{/snippet}
-
-			{#each favorites as item (`fav-${item.option.id}`)}
-				{@render render(item, !showOrgName)}
-			{/each}
-		</ModelsSection>
-	{/if}
+	</ModelsSection>
 {/if}
 
 {#if getDownloadEntries.length > 0}
@@ -244,17 +236,13 @@
 {/snippet}
 
 {#if groups.loaded.length > 0 || groups.available.length > 0}
-	{#if localOnly}
-		{@render localRows()}
-	{:else}
-		<ModelsSection label="Local models" revealChevronOnHover sticky>
-			{#snippet icon()}
-				<Logo class="shrink-0" style="--size: 0.875rem" />
-			{/snippet}
+	<ModelsSection label="Local models" revealChevronOnHover sticky>
+		{#snippet icon()}
+			<Logo class="shrink-0" style="--size: 0.875rem" />
+		{/snippet}
 
-			{@render localRows()}
-		</ModelsSection>
-	{/if}
+		{@render localRows()}
+	</ModelsSection>
 {/if}
 
 <!-- One section per remote provider. -->
