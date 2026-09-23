@@ -255,6 +255,12 @@ void common_peg_input::prepend(const std::string & prefix) {
     text = prefix + text;
 }
 
+void common_peg_input::prepend(const common_peg_input & prefix) {
+    prepend(prefix.text);
+    tokens.insert(tokens.begin(), prefix.tokens.begin(), prefix.tokens.end());
+    token_pos.insert(token_pos.begin(), prefix.token_pos.begin(), prefix.token_pos.end());
+}
+
 struct parser_executor;
 
 common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
@@ -341,6 +347,35 @@ struct parser_executor {
             }
             ++pos;
         }
+
+        return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
+    }
+
+    common_peg_parse_result operator()(const common_peg_token_parser & p) {
+        auto pos = start_pos;
+        const auto & positions = ctx.input.token_pos;
+
+        if (pos >= ctx.input.text.size()) {
+            if (!ctx.is_lenient()) {
+                return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
+            }
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
+        }
+
+        // Search for the first token at >= pos
+        auto it = std::lower_bound(positions.begin(), positions.end(), pos);
+        if (it == positions.end() || *it != pos) {
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, pos);
+        }
+
+        // Check if token at position matches
+        auto token = ctx.input.tokens[it - positions.begin()];
+        if (token != p.token) {
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, pos);
+        }
+
+        // Move to the next token or end of the input
+        pos = ++it != positions.end() ? *it : ctx.input.text.size();
 
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
     }
@@ -947,6 +982,7 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_ref_parser> ||
                                  std::is_same_v<T, common_peg_until_parser> ||
                                  std::is_same_v<T, common_peg_literal_parser> ||
+                                 std::is_same_v<T, common_peg_token_parser> ||
                                  std::is_same_v<T, common_peg_string_parser> ||
                                  std::is_same_v<T, common_peg_chars_parser> ||
                                  std::is_same_v<T, common_peg_any_parser> ||
@@ -990,6 +1026,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
             return "End";
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return "Literal(" + p.literal + ")";
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return "Token(" + p.piece + ", " + std::to_string(p.token) + ")";
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             std::vector<std::string> parts;
             for (const auto & child : p.children) {
@@ -1128,6 +1166,19 @@ static std::string rule_name(const std::string & name) {
 }
 
 common_peg_parser_builder::common_peg_parser_builder() {}
+
+common_peg_parser_builder::common_peg_parser_builder(common_peg_special_tokens tokens) {
+    arena_.tokens_ = std::move(tokens);
+}
+
+common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
+    auto token = arena_.tokens_.token_id(piece);
+    if (token == LLAMA_TOKEN_NULL) {
+        // Return a literal if the token is not registered with the builder
+        return literal(piece);
+    }
+    return add(common_peg_token_parser{token, piece});
+}
 
 common_peg_parser common_peg_parser_builder::sequence(const std::vector<common_peg_parser_id> & parsers) {
     // Flatten nested sequences
@@ -1613,6 +1664,7 @@ static std::set<std::string> collect_reachable_rules(
                           std::is_same_v<T, common_peg_end_parser> ||
                           std::is_same_v<T, common_peg_until_parser> ||
                           std::is_same_v<T, common_peg_literal_parser> ||
+                          std::is_same_v<T, common_peg_token_parser> ||
                           std::is_same_v<T, common_peg_chars_parser> ||
                           std::is_same_v<T, common_peg_space_parser> ||
                           std::is_same_v<T, common_peg_any_parser> ||
@@ -1695,6 +1747,8 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return "";
             } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
                 return gbnf_format_literal(p.literal);
+            } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+                return "<[" + std::to_string(p.token) + "]>";
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 std::string s;
                 for (const auto & child : p.children) {
@@ -1881,6 +1935,8 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
             return json{{"type", "end"}};
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             return json{{"type", "literal"}, {"literal", p.literal}};
+        } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+            return json{{"type", "token"}, {"token", p.token}, {"piece", p.piece}};
         } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
             return json{{"type", "sequence"}, {"children", p.children}};
         } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
@@ -1954,10 +2010,15 @@ common_json common_peg_arena::to_json() const {
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
+    auto special_tokens = common_json::array();
+    for (const auto & [id, token] : tokens_.tokens) {
+        special_tokens.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
+    }
     return common_json{
         {"parsers", parsers},
         {"rules", rules_},
-        {"root", root_}
+        {"root", root_},
+        {"special_tokens", special_tokens}
     };
 }
 
@@ -1982,6 +2043,15 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             throw std::runtime_error("literal parser missing or invalid 'literal' field");
         }
         return common_peg_literal_parser{j["literal"]};
+    }
+    if (type == "token") {
+        if (!j.contains("token") || !j.contains("piece") || !j["piece"].is_string()) {
+            throw std::runtime_error("token parser missing required fields");
+        }
+        return common_peg_token_parser{
+            j["token"].get<llama_token>(),
+            j["piece"].get<std::string>(),
+        };
     }
     if (type == "sequence") {
         if (!j.contains("children") || !j["children"].is_array()) {
@@ -2157,6 +2227,21 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
     arena.root_ = j["root"].get<common_peg_parser_id>();
     if (arena.root_ != COMMON_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
         throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
+    }
+
+    if (j.contains("special_tokens")) {
+        for (const auto & token_json : j["special_tokens"]) {
+            if (!token_json.contains("id") || !token_json.contains("text") || !token_json.contains("attr")) {
+                throw std::runtime_error("special token missing required fields");
+            }
+            auto id   = token_json["id"].get<llama_token>();
+            auto text = token_json["text"].get<std::string>();
+            arena.tokens_.ids.emplace(text, id);
+            arena.tokens_.tokens.emplace(id, common_peg_special_token{
+                std::move(text),
+                static_cast<llama_token_attr>(token_json["attr"].get<int>()),
+            });
+        }
     }
 
     return arena;

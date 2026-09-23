@@ -313,6 +313,17 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             std::string s = data.at("generation_prompt").get<std::string>();
             ctx.params.chat_parser_params.generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
+
+            if (ctx.vocab != nullptr) {
+                common_peg_input input;
+                for (auto tok : common_tokenize(ctx.vocab, s, false, true)) {
+                    input.append(common_token_to_piece(ctx.vocab, tok, true), tok);
+                }
+                // only use the tokens if they render back to the same text
+                if (input.text == s) {
+                    ctx.params.chat_parser_params.generation_prompt_input = std::move(input);
+                }
+            }
         }));
 
     add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))

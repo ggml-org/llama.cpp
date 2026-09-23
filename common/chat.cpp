@@ -1475,7 +1475,11 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     }
 
     common_peg_input effective_input = input;
-    effective_input.prepend(params.generation_prompt);
+    if (!params.generation_prompt_input.tokens.empty()) {
+        effective_input.prepend(params.generation_prompt_input);
+    } else {
+        effective_input.prepend(params.generation_prompt);
+    }
 
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.text.c_str());
 
