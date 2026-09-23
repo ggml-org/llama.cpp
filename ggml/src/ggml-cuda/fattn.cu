@@ -7,10 +7,11 @@
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
+template <int ncols1>
 __launch_bounds__(256, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
         const half * mask_ptr, int32_t * indices_ptr, int32_t * counts_ptr, const int ne30, const int n_queries,
-        const int ncols1, const int n_kv_max, const int64_t s31, const int64_t s33) {
+        const int n_kv_max, const int64_t s31, const int64_t s33) {
     ggml_cuda_pdl_sync();
 
     constexpr int values_per_lane = 8;
@@ -42,7 +43,8 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         for (int item = 0; item < values_per_lane; ++item) {
             const int i = i0 + (warp*values_per_lane + item)*WARP_SIZE + lane;
             bool selected = false;
-            for (int q = 0; q < q1 - q0 && !selected; ++q) {
+#pragma unroll
+            for (int q = 0; q < ncols1 && q < q1 - q0 && !selected; ++q) {
                 selected = i < ne30 && isfinite(__half2float(mask[q*s31 + i]));
             }
             selected_warp[item] = __ballot_sync(0xFFFFFFFF, selected);
@@ -110,8 +112,10 @@ void ggml_cuda_flash_attn_ext_compact_mask(
     const dim3 blocks_num((n_queries + ncols1 - 1)/ncols1, mask->ne[3], 1);
     const dim3 block_dim(256, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params(blocks_num, block_dim, 0, stream);
-    ggml_cuda_kernel_launch(flash_attn_mask_to_sparse_indices, launch_params,
-        (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, ncols1, n_kv_max, s31, s33);
+    GGML_ASSERT(ncols1 == 1 || ncols1 == 8);
+    const auto kernel = ncols1 == 1 ? flash_attn_mask_to_sparse_indices<1> : flash_attn_mask_to_sparse_indices<8>;
+    ggml_cuda_kernel_launch(kernel, launch_params,
+        (const half *) mask->data, indices, counts, int(mask->ne[0]), n_queries, n_kv_max, s31, s33);
     CUDA_CHECK(cudaGetLastError());
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
