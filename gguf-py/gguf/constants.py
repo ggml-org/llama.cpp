@@ -251,6 +251,7 @@ class Keys:
         DIMENSION_COUNT           = "{arch}.rope.dimension_count"
         DIMENSION_COUNT_SWA       = "{arch}.rope.dimension_count_swa"
         DIMENSION_SECTIONS        = "{arch}.rope.dimension_sections"
+        MROPE_TIME_SLOT           = "{arch}.rope.mrope_time_slot"
         FREQ_BASE                 = "{arch}.rope.freq_base"
         FREQ_BASE_SWA             = "{arch}.rope.freq_base_swa"
         SCALING_TYPE              = "{arch}.rope.scaling.type"

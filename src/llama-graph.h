@@ -158,7 +158,8 @@ public:
 
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
-    llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+    llm_graph_input_pos(uint32_t n_pos_per_embd, int32_t mrope_time_slot = -1)
+        : n_pos_per_embd(n_pos_per_embd), mrope_time_slot(mrope_time_slot) {}
     virtual ~llm_graph_input_pos() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -168,6 +169,7 @@ public:
     ggml_tensor * pos = nullptr; // I32 [n_batch]
 
     const uint32_t n_pos_per_embd = 1;
+    const int32_t mrope_time_slot = -1; // see llama_hparams::rope_mrope_time_slot
 };
 
 // temperature tuning, used by llama4

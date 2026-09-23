@@ -141,7 +141,23 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
             }
             ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
         } else {
-            ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+            if (mrope_time_slot >= 0 && n_pos_per_embd == 4) {
+                // the caller fills 4 slots per token as [key, height, width, time]; the time
+                // component is the one that feeds RoPE section 0 here, so the first slot stays
+                // a strictly increasing cache / attention key. Load-time checks keep the slot
+                // inside the section that RoPE does not use.
+                const int64_t t = mrope_time_slot;
+                std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
+                for (int i = 0; i < n_tokens; ++i) {
+                    pos_data[                i] = ubatch->pos[    t*n_tokens + i]; // time
+                    pos_data[    n_tokens + i] = ubatch->pos[    n_tokens + i]; // height
+                    pos_data[2 * n_tokens + i] = ubatch->pos[2 * n_tokens + i]; // width
+                    pos_data[3 * n_tokens + i] = 0; // unused by RoPE (section 3 has 0 dims)
+                }
+                ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
+            } else {
+                ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
+            }
         }
     }
 }
@@ -2445,7 +2461,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos() const {
-    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
+    auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd(), hparams.rope_mrope_time_slot);
 
     auto & cur = inp->pos;
 
