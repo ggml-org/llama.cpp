@@ -203,3 +203,31 @@ def test_multi_requests_parallel(n_slots: int, n_requests: int):
     for res in results:
         assert res.status_code == 200
         assert match_regex("(wise|kind|owl|answer)+", res.body["content"])
+
+
+def test_no_draft_tokens_cached_after_eog():
+    global server
+    # ngram-simple drafts what follows the answer in the prompt: EOG tokens
+    server.model_draft = None
+    server.spec_type = "ngram-simple"
+    server.start()
+    res = server.make_request("POST", "/tokenize", data={"content": "Once upon a time, there was a little girl named Lily. She loved to play in the park with her friends."})
+    assert res.status_code == 200
+    context = res.body["tokens"]
+    res = server.make_request("POST", "/tokenize", data={"content": " The end."})
+    assert res.status_code == 200
+    answer = res.body["tokens"]
+    res = server.make_request("POST", "/tokenize", data={"content": "</s>", "parse_special": True})
+    assert res.status_code == 200
+    eog = res.body["tokens"]
+    # the grammar forces the answer, then only EOG tokens can be sampled
+    res = server.make_request("POST", "/completion", data={
+        "prompt": context + answer + eog * 16 + context,
+        "grammar": "root ::= " + " ".join(f"<[{t}]>" for t in answer),
+        "n_predict": 64,
+    })
+    assert res.status_code == 200
+    assert res.body["stop_type"] == "eos"
+    assert res.body["timings"]["draft_n_accepted"] > 0
+    # neither the EOG token nor the draft tokens after it may stay in the context
+    assert res.body["tokens_cached"] == res.body["tokens_evaluated"] + res.body["tokens_predicted"] - 1
