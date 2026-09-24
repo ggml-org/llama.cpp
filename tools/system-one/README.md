@@ -120,12 +120,20 @@ its attention mask from too.
 |---|---|---|
 | `letter_slot` | the next-token distribution at the end of each question's segment | one pass |
 | `masked_slot` | the distribution at a mask token inside it (bidirectional models) | one pass |
+| `scored_slot` | one number per position from the model's own head, read at the positions it marks | one pass **per question** |
 | `rank_head` | the model's classification head scoring one sequence per option | K passes |
 
 Only `letter_slot` can reuse a prefix across calls: bidirectional attention makes every
 position depend on what follows it, so changing the tail of a state changes its head.
 
+`scored_slot` needs a server started with `--embeddings --pooling none`, because its answer
+arrives as embeddings rather than logits.
+
 ## Asking several questions at once
+
+This section is about `letter_slot` and `masked_slot`, the two readouts that put every question
+in one prompt. `scored_slot` renders one sequence per question and `rank_head` one per option, so
+for those the question below does not arise -- and neither does the speed argument.
 
 All of a request's questions are slots in one prompt, so they are answered by one forward pass:
 five questions about a 214-token ticket cost one decode, and asking them separately re-encodes
@@ -142,13 +150,19 @@ they are now the logits of a model that has decided not to answer. Measured over
 | | all in one prompt | one question per request |
 |---|---|---|
 | a checkpoint trained for this format | .973 | .965 |
-| stock Qwen3.5-0.8B, template supplied by the request | .544 | .699 |
-| stock gemma-4 E2B, template supplied by the request | .541 | .765 |
+| stock Qwen3.5-0.8B, template supplied by the request (`letter_slot`) | .544 | .699 |
+| stock gemma-4 E2B, template supplied by the request (`letter_slot`) | .541 | .765 |
+| stock Qwen3-0.6B-mdlm (`masked_slot`, bidirectional) | .494 | .525 |
 
 So: point this at a stock model and ask **one question per request**; the one-pass form is for a
 checkpoint trained on it, where it is both the faster mode (629 ms against 1049 ms for five
-questions) and the more accurate one. `rank_head` is unaffected either way, since it already
-puts every option in a sequence of its own.
+questions) and the more accurate one.
+
+The last row is the same effect at a fifth the size, and it says where the effect comes from: the
+15-to-22-point version is a *causal* model inducing from its own unanswered slots, which needs a
+privileged left context. A bidirectional model cannot induce that, and keeps only the residual
+from sharing a prompt at all. `scored_slot` and `rank_head` have neither, by construction -- they
+never put two questions in one sequence -- and reproduce their one-pass accuracy exactly.
 
 Distance is not the variable, for either kind of model -- moving a slot from 35 to 716 tokens
 away from the state changes a trained checkpoint's answers by a mean |ΔP| of .039 to .043, which
