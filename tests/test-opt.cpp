@@ -1059,7 +1059,7 @@ int main(void) {
                 ggml_tensor * t = nullptr;
                 switch (optim) {
                     case GGML_OPT_OPTIMIZER_TYPE_ADAMW: {
-                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 7);
+                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
                         t = ggml_opt_step_adamw(ctx, a, b, c, d, p);
                     } break;
                     case GGML_OPT_OPTIMIZER_TYPE_SGD: {
