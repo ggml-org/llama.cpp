@@ -556,12 +556,14 @@
 					defaultOpen={group.kind !== 'hidden'}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					persistKey={group.key}
 					revealChevronOnHover
 					sticky
 					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
 				>
 					<GroupedList
 						group={familyRow}
+						groupStateKey={group.key}
 						groupWindow={FAMILY_ROW_WINDOW}
 						groups={group.flat ? null : familyGroups(group)}
 						item={listItem}

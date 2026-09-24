@@ -31,6 +31,9 @@ export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabled
 export const DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolCategories`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 
+/** Open state the user set for a model list section or one of its families, by id. */
+export const MODEL_GROUP_OPEN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelGroupOpen`;
+
 /** Model families pinned to the top of their provider section. */
 export const FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModelFamilies`;
 

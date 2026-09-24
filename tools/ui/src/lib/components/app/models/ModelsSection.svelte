@@ -2,6 +2,7 @@
 	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
 	import { CollapsibleSection } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
+	import { modelsStore } from '$lib/stores';
 	import { getBackend } from '$lib/utils/api-base';
 	import type { Snippet } from 'svelte';
 
@@ -21,6 +22,8 @@
 		loading?: boolean;
 		/** Renders the back control, for a drilled-in provider. */
 		onBack?: () => void;
+		/** Persists the open state under this id, e.g. a section key. */
+		persistKey?: string;
 		/** Start expanded; the manager collapses its hidden block. */
 		defaultOpen?: boolean;
 		revealChevronOnHover?: boolean;
@@ -42,6 +45,7 @@
 		label,
 		loading = false,
 		onBack,
+		persistKey,
 		revealChevronOnHover = false,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none',
 		sticky = false,
@@ -57,7 +61,8 @@
 
 <CollapsibleSection
 	{chevronClass}
-	{defaultOpen}
+	defaultOpen={persistKey ? modelsStore.isGroupOpen(persistKey, defaultOpen) : defaultOpen}
+	ontoggle={persistKey ? (open: boolean) => modelsStore.setGroupOpen(persistKey, open) : null}
 	{revealChevronOnHover}
 	{triggerClass}
 	{triggerStyle}

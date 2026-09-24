@@ -12,6 +12,7 @@ import {
 	FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
@@ -33,7 +34,7 @@ import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getBackendCapabilities, readModelContextLength } from '$lib/utils/backend';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/model-option-id';
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 /** Selection kept from the last session, so a reload does not drop the picked model. */
@@ -100,6 +101,24 @@ function loadFavoriteFamilies(): Set<string> {
 	}
 }
 
+/** Open state the user set for a section or family of the model lists. */
+function loadGroupOpenState(): SvelteMap<string, boolean> {
+	if (!browser) return new SvelteMap<string, boolean>();
+
+	try {
+		const raw = localStorage.getItem(MODEL_GROUP_OPEN_LOCALSTORAGE_KEY);
+		const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+		const entries =
+			parsed && typeof parsed === 'object' ? Object.entries(parsed as Record<string, unknown>) : [];
+
+		return new SvelteMap(
+			entries.filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+		);
+	} catch {
+		return new SvelteMap<string, boolean>();
+	}
+}
+
 /** Recently used backend-qualified ids, most recent first. */
 function loadRecentModels(): string[] {
 	if (!browser) return [];
@@ -124,6 +143,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	error = $state<string | null>(null);
 	favoriteFamilyIds = $state<Set<string>>(loadFavoriteFamilies());
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+	groupOpenState = $state<SvelteMap<string, boolean>>(loadGroupOpenState());
 	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
 	/**
@@ -278,6 +298,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.selectedModelId = null;
 		this.selectedModelName = null;
 		this.persistSelection();
+	}
+
+	/** Family keys folded away under one section, for a list that restores them. */
+	collapsedGroupsUnder(prefix: string): string[] {
+		const head = `${prefix}-`;
+
+		return [...this.groupOpenState]
+			.filter(([id, open]) => !open && id.startsWith(head))
+			.map(([id]) => id.slice(head.length));
 	}
 
 	/**
@@ -448,6 +477,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.favoriteFamilyIds.has(key);
 	}
 
+	isGroupOpen(id: string, fallbackOpen: boolean): boolean {
+		return this.groupOpenState.get(id) ?? fallbackOpen;
+	}
+
 	isHidden(modelId: string): boolean {
 		return this.hiddenModelIds.has(modelId);
 	}
@@ -560,6 +593,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save favorite models to local storage');
+		}
+	}
+
+	setGroupOpen(id: string, open: boolean): void {
+		const next = new SvelteMap(this.groupOpenState);
+
+		next.set(id, open);
+		this.groupOpenState = next;
+
+		try {
+			localStorage.setItem(
+				MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+				JSON.stringify(Object.fromEntries(next))
+			);
+		} catch {
+			toast.error('Failed to save the model list state to local storage');
 		}
 	}
 

@@ -17,6 +17,8 @@
 		defaultOpen?: boolean;
 		/** Controlled open state, for a caller that binds it. */
 		open?: boolean;
+		/** Called on every toggle, for a caller that persists the state. */
+		ontoggle?: ((open: boolean) => void) | null;
 		/** Extra classes for the chevron, to line it up with a row's own control. */
 		chevronClass?: string;
 		/** Hide the chevron while expanded, until the trigger is hovered. */
@@ -32,6 +34,7 @@
 		children,
 		defaultOpen = true,
 		inMenu = false,
+		ontoggle = null,
 		open = $bindable(defaultOpen),
 		revealChevronOnHover = false,
 		trigger,
@@ -39,6 +42,11 @@
 		triggerPosition = 'top',
 		triggerStyle = ''
 	}: Props = $props();
+
+	function toggle(): void {
+		open = !open;
+		ontoggle?.(open);
+	}
 </script>
 
 {#snippet chevron()}
@@ -65,13 +73,7 @@
 		>
 			{#snippet child({ props })}
 				<!-- No `class` here: a static attribute would override the spread props.class. -->
-				<button
-					{...props}
-					aria-expanded={open}
-					onclick={() => (open = !open)}
-					style={triggerStyle}
-					type="button"
-				>
+				<button {...props} aria-expanded={open} onclick={toggle} style={triggerStyle} type="button">
 					{@render trigger()}
 
 					{@render chevron()}
@@ -82,7 +84,7 @@
 		<button
 			aria-expanded={open}
 			class="group {triggerClass}"
-			onclick={() => (open = !open)}
+			onclick={toggle}
 			style={triggerStyle}
 			type="button"
 		>

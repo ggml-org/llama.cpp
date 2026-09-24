@@ -10,7 +10,7 @@
 		type ModelItem,
 		windowLocalGroups
 	} from '$lib/components/app/navigation/utils';
-	import { MODEL_ROW_WINDOW } from '$lib/constants';
+	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { ModelGroupingMode } from '$lib/enums/settings.enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
@@ -154,6 +154,7 @@
 	{#if settingsStore.config.groupModelsByFamily}
 		<GroupedList
 			group={familyHeading}
+			groupStateKey={prefix}
 			groups={groupModelFamilies(items, (row) => row.option.model).map((family) => ({
 				entries: family.entries,
 				group: family,
@@ -188,7 +189,13 @@
 {/snippet}
 
 {#if loaded.length > 0}
-	<ModelsSection count={loaded.length} label="Loaded models" revealChevronOnHover sticky>
+	<ModelsSection
+		count={loaded.length}
+		label="Loaded models"
+		persistKey="loaded"
+		revealChevronOnHover
+		sticky
+	>
 		{#snippet icon()}
 			<Power class="h-3.5 w-3.5 shrink-0" />
 		{/snippet}
@@ -201,7 +208,7 @@
 
 {#if favorites.length > 0}
 	<!-- Favorites come first; the sections below skip them -->
-	<ModelsSection label="Favorites" revealChevronOnHover sticky>
+	<ModelsSection label="Favorites" persistKey="favorites" revealChevronOnHover sticky>
 		{#snippet icon()}
 			<Heart class="h-3.5 w-3.5 shrink-0" />
 		{/snippet}
@@ -243,7 +250,7 @@
 		iconKind: 'boxes' | 'logo',
 		key: string
 	)}
-		<ModelsSection {label} revealChevronOnHover sticky>
+		<ModelsSection {label} persistKey={key} revealChevronOnHover sticky>
 			{#snippet icon()}
 				{#if iconKind === 'logo'}
 					<Logo class="shrink-0" style="--size: 0.875rem" />
@@ -261,7 +268,7 @@
 	{/each}
 {:else}
 	{#if groups.loaded.length > 0 || groups.available.length > 0}
-		<ModelsSection label="Local models" revealChevronOnHover sticky>
+		<ModelsSection label="Local models" persistKey={LOCAL_BACKEND_ID} revealChevronOnHover sticky>
 			{#snippet icon()}
 				<Logo class="shrink-0" style="--size: 0.875rem" />
 			{/snippet}
@@ -278,6 +285,7 @@
 			label={provider.name}
 			loading={provider.loading}
 			onBack={onProviderBack}
+			persistKey={provider.backendId}
 			revealChevronOnHover
 			sticky
 		>

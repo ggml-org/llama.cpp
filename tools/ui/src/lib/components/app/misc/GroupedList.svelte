@@ -9,6 +9,7 @@
 
 <script generics="G, E" lang="ts">
 	import CollapsibleRegion from './CollapsibleRegion.svelte';
+	import { modelsStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -21,6 +22,8 @@
 		groups?: GroupedListGroup<G, E>[] | null;
 		/** Entries of one group shown before its show more row. 0 shows every entry. */
 		groupWindow?: number;
+		/** Namespace of the persisted open state, e.g. a section key. Omit to keep it in memory. */
+		groupStateKey?: string;
 		/** One row. Depth is 1 under a group, 0 in a flat list. */
 		item: Snippet<[{ depth: number; entry: E }]>;
 		/** Identity of a row, used for the keyed each. */
@@ -42,6 +45,7 @@
 	let {
 		group,
 		groups = null,
+		groupStateKey,
 		groupWindow = 0,
 		item,
 		items = [],
@@ -53,8 +57,13 @@
 		weightOf
 	}: Props = $props();
 
-	// groups start open; this tracks the ones the user folded away
-	const collapsed = new SvelteSet<string>();
+	// groups start open; this tracks the ones the user folded away, and a list with
+	// a state key opens with the ones the user had folded away before the reload
+	// the initial namespace only
+	// svelte-ignore state_referenced_locally
+	const collapsed = new SvelteSet<string>(
+		groupStateKey ? modelsStore.collapsedGroupsUnder(groupStateKey) : []
+	);
 	// windows grow one step at a time, per group and per list
 	const groupSteps = new SvelteMap<string, number>();
 	let sectionSteps = $state(0);
@@ -62,11 +71,11 @@
 	function toggleGroup(key: string): void {
 		if (collapsed.has(key)) {
 			collapsed.delete(key);
-
-			return;
+		} else {
+			collapsed.add(key);
 		}
 
-		collapsed.add(key);
+		if (groupStateKey) modelsStore.setGroupOpen(`${groupStateKey}-${key}`, !collapsed.has(key));
 	}
 
 	function growGroup(key: string): void {
