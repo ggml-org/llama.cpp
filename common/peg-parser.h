@@ -322,6 +322,8 @@ struct common_peg_rule_parser {
     std::string name;
     common_peg_parser_id child;
     bool trigger;
+    common_peg_parser_id trigger_parser = COMMON_PEG_INVALID_PARSER_ID;
+    common_peg_parser_id trigger_rest   = COMMON_PEG_INVALID_PARSER_ID;
 };
 
 struct common_peg_ref_parser {
@@ -592,6 +594,11 @@ class common_peg_parser_builder {
     // only trigger rules and descendents are emitted.
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
+
+    // Creates a trigger rule that matches trigger followed by rest, for a gated grammar. The grammar lets
+    // anything through until the first trigger completes, and from there only rest may follow. The trigger
+    // may only contain sequences, choices, literals, tokens, tags, and atomics.
+    common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & trigger, const common_peg_parser & rest);
 
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
