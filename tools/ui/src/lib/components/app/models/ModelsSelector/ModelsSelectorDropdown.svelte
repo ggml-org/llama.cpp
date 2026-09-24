@@ -56,19 +56,6 @@
 		onOpenChange: (open) => {
 			isOpen = open;
 			highlightedId = null;
-
-			if (open) {
-				// Defer focus so the content is mounted; bits-ui auto-focuses the
-				// opened content by default which can yank the page scroll, so we
-				// prevent that on the Content and refocus the search here.
-				requestAnimationFrame(() => {
-					if (!isOpen) return;
-
-					document
-						.querySelector<HTMLElement>(DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR)
-						?.focus({ preventScroll: true });
-				});
-			}
 		},
 		useGlobalSelection: () => useGlobalSelection
 	});
@@ -84,6 +71,28 @@
 	$effect(() => {
 		void ms.searchTerm;
 		highlightedId = null;
+	});
+
+	// The search input takes focus as soon as it is mounted. bits-ui auto-focuses
+	// the opened content by default, which can yank the page scroll, so the content
+	// prevents that and this waits for the input instead.
+	$effect(() => {
+		if (!isOpen) return;
+
+		let frames = 0;
+		let handle = requestAnimationFrame(function focusSearch() {
+			const input = document.querySelector<HTMLElement>(DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR);
+
+			if (input) {
+				input.focus({ preventScroll: true });
+
+				return;
+			}
+
+			if (frames++ < 20) handle = requestAnimationFrame(focusSearch);
+		});
+
+		return () => cancelAnimationFrame(handle);
 	});
 
 	// Keyboard navigation follows the on-screen row order, not the flat option list order.
