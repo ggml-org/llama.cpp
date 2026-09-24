@@ -1,5 +1,7 @@
 #pragma once
 #include "llama-kv-stream-session.h"
+class llama_kv_stream_logical_cache;
+
 
 // Exact device-local grants contributed to the common text compute/KV parent.
 struct llama_kv_stream_memory_requirements {
@@ -36,6 +38,8 @@ struct llama_kv_stream_model_config {
     bool resume_decode = true;
     bool cross_token_prefetch = true;
     size_t shared_device_memory_bytes = 0;
+    // Opt-in one-layer MTP host cache in the same physical KV policy.
+    uint32_t auxiliary_cache_layers = 0;
 };
 
 // Own the host-KV execution buffer and a serial session; proxy-buffer references retain the runtime state.
@@ -45,6 +49,9 @@ public:
     ~llama_kv_stream_model();
     ggml_backend_buffer_t buffer() const noexcept;
     std::shared_ptr<llama_kv_stream_host> host() const noexcept;
+    std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache() const noexcept;
+    // Metadata snapshot only; it does not retain the binding lease.
+    llama_kv_stream_binding_view binding_view() const noexcept;
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
     bool complete() const noexcept;
     void abort();

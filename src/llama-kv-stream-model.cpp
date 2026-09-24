@@ -1,4 +1,5 @@
 #include "llama-kv-stream-model.h"
+#include "llama-kv-stream-logical-cache.h"
 #include "../ggml/src/ggml-backend-execution.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 #include "ggml-cpp.h"
@@ -16,6 +17,8 @@ struct llama_kv_stream_model::implementation {
     llama_kv_stream_model_config config;
     std::shared_ptr<llama_kv_stream_host> host;
     std::shared_ptr<llama_kv_stream_content> content;
+    llama_kv_stream_policy_config physical_policy;
+    std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache;
     model_arena_ptr arena{nullptr,ggml_backend_memory_arena_free};
     model_arena_ptr attention_arena{nullptr,ggml_backend_memory_arena_free};
     size_t decode_bytes = 0;
@@ -42,9 +45,7 @@ struct llama_kv_stream_model::implementation {
             llama_memory_resource_id attention_id,
             llama_memory_stage_id prefill_id,
             llama_memory_stage_id decode_id) {
-        llama_kv_stream_policy_config policy;
-        policy.shape = config.host.shape; policy.capabilities = config.host.capabilities;
-        policy.layers = config.host.layers;
+        llama_kv_stream_policy_config policy = physical_policy;
         auto * pool_buffer = ggml_backend_memory_lease_buffer(grants[0].get());
         auto * attention_buffer = ggml_backend_memory_lease_buffer(grants[2].get());
         if (!pool_buffer || !attention_buffer) return {};
@@ -267,12 +268,9 @@ struct llama_kv_stream_model::implementation {
 std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama_kv_stream_model_config & config) {
     if (!config.backend || !config.pool_bytes || !config.max_batch_rows || !config.query_heads ||
             !config.host.context_tokens || config.host.context_tokens > size_t(INT32_MAX)-255 ||
-            config.query_heads > SIZE_MAX/config.max_batch_rows) return {};
-    llama_kv_stream_policy_config policy;
-    policy.shape = config.host.shape; policy.capabilities = config.host.capabilities;
-    policy.layers = config.host.layers; policy.pool_bytes = config.pool_bytes;
-    llama_kv_stream_policy_state initial;
-    if (llama_kv_stream_policy_initialize(policy,initial).status != llama_kv_stream_policy_status::success) return {};
+            config.query_heads > SIZE_MAX/config.max_batch_rows ||
+            config.auxiliary_cache_layers > 1 ||
+            config.host.layers > UINT32_MAX - config.auxiliary_cache_layers) return {};
     auto * dev = ggml_backend_get_device(config.backend);
     auto * type = llama_kv_stream_device_buffer_type(dev);
     auto * host_type = llama_kv_stream_host_buffer_type(dev);
@@ -281,11 +279,34 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
     if (ggml_kv_stream_block_layout_make(size_t(config.max_batch_rows)*config.query_heads,256,partial).status != ggml_kv_stream_partial_status::success) return {};
     try {
         auto s = std::make_shared<implementation>(); s->config = config;
-        s->config.host.cache_id = model_cache_id.fetch_add(1,std::memory_order_relaxed);
-        if (!s->config.host.cache_id || s->config.host.cache_id > (UINT64_MAX-3)/4) return {};
+        s->config.host.cache_id = model_cache_id.fetch_add(config.auxiliary_cache_layers ? 2 : 1, std::memory_order_relaxed);
+        if (!s->config.host.cache_id ||
+                s->config.host.cache_id > (UINT64_MAX-3)/4 - config.auxiliary_cache_layers) return {};
+        const uint64_t auxiliary_id = s->config.host.cache_id + config.auxiliary_cache_layers;
+        s->physical_policy.shape = s->config.host.shape;
+        s->physical_policy.capabilities = s->config.host.capabilities;
+        s->physical_policy.layers = s->config.host.layers + config.auxiliary_cache_layers;
+        s->physical_policy.pool_bytes = config.pool_bytes;
+        if (config.auxiliary_cache_layers) s->physical_policy.caches = {
+            {s->config.host.cache_id, s->config.host.layers},
+            {auxiliary_id, config.auxiliary_cache_layers},
+        };
+        llama_kv_stream_policy_state initial;
+        if (llama_kv_stream_policy_initialize(s->physical_policy, initial).status !=
+                llama_kv_stream_policy_status::success) return {};
         s->host = llama_kv_stream_host::create(s->config.host,host_type);
         if (!s->host) return {};
         s->content = std::make_shared<llama_kv_stream_content>(s->host);
+        if (config.auxiliary_cache_layers) {
+            auto auxiliary_host_config = s->config.host;
+            auxiliary_host_config.cache_id = auxiliary_id;
+            auxiliary_host_config.layers = config.auxiliary_cache_layers;
+            auto auxiliary_host = llama_kv_stream_host::create(auxiliary_host_config, host_type);
+            if (!auxiliary_host) return {};
+            auto auxiliary = llama_kv_stream_logical_cache::create(std::move(auxiliary_host));
+            if (!auxiliary) return {};
+            s->auxiliary_cache = std::shared_ptr<llama_kv_stream_logical_cache>(std::move(auxiliary));
+        }
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         ggml_kv_stream_resume_plan plan;
@@ -324,6 +345,12 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
 llama_kv_stream_model::~llama_kv_stream_model() { ggml_backend_buffer_free(proxy); }
 ggml_backend_buffer_t llama_kv_stream_model::buffer() const noexcept { return proxy; }
 std::shared_ptr<llama_kv_stream_host> llama_kv_stream_model::host() const noexcept { return impl->host; }
+std::shared_ptr<llama_kv_stream_logical_cache> llama_kv_stream_model::auxiliary_cache() const noexcept {
+    return impl->auxiliary_cache;
+}
+llama_kv_stream_binding_view llama_kv_stream_model::binding_view() const noexcept {
+    return impl->session ? impl->session->binding_view() : llama_kv_stream_binding_view{};
+}
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
     if (!impl->session || impl->external_mutation || impl->session->active() || impl->session->failed() || !queries || queries > impl->config.max_batch_rows ||
             (decode && queries > 4) || active < impl->session->tokens() || active-impl->session->tokens() != queries ||

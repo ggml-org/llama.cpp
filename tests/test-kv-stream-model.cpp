@@ -1,5 +1,6 @@
 #include "kv-stream-block-test.h"
 #include "../src/llama-kv-stream-model.h"
+#include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-context-memory.h"
 
 // Quantization error is not adapter error: compare the exact bytes from an ordinary CUDA producer graph.
@@ -51,8 +52,10 @@ struct parent_view_fault {
 };
 
 int main(int argc,char ** argv) {
+    const bool auxiliary_only = argc > 1 && std::strcmp(argv[1], "--cuda-auxiliary-cache") == 0;
     testing t;
-    if (argc < 2 || std::strcmp(argv[1],"--cuda")) {
+    if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
+    if (argc < 2 || (!auxiliary_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
@@ -463,6 +466,56 @@ int main(int argc,char ** argv) {
         t.assert_true(!truncated && !model->complete());
         t.assert_true(model->restore(256));
         t.assert_equal(size_t(256),model->tokens());
+    });
+    t.test("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape, 256, page).status ==
+                ggml_kv_stream_status::success)) return;
+        llama_kv_stream_model_config config;
+        config.backend = backend.get();
+        config.host = f.host->config();
+        config.pool_bytes = 7*page.bytes;
+        config.max_batch_rows = 1;
+        config.query_heads = 4;
+        config.auxiliary_cache_layers = 1;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto mtp = model->auxiliary_cache();
+        if (!t.assert_true(bool(mtp))) return;
+        t.assert_true(model->host() != mtp->host());
+        t.assert_true(model->host()->cache_id() != mtp->host()->cache_id());
+        t.assert_equal(uint32_t(2), model->host()->config().layers);
+        t.assert_equal(uint32_t(1), mtp->host()->config().layers);
+        t.assert_equal(model->host()->config().context_tokens, mtp->host()->config().context_tokens);
+        t.assert_equal(size_t(0), mtp->tokens());
+        t.assert_equal(size_t(0), mtp->frontiers().device);
+        t.assert_true(ggml_backend_buffer_get_type(mtp->host()->buffer()) ==
+            llama_kv_stream_host_buffer_type(dev));
+        const auto view = model->binding_view();
+        t.assert_equal(uint32_t(3), view.config.layers);
+        if (!t.assert_equal(size_t(2), view.config.caches.size())) return;
+        t.assert_equal(model->host()->cache_id(), view.config.caches[0].id);
+        t.assert_equal(uint32_t(2), view.config.caches[0].layers);
+        t.assert_equal(mtp->host()->cache_id(), view.config.caches[1].id);
+        t.assert_equal(uint32_t(1), view.config.caches[1].layers);
+        llama_kv_stream_policy_state state;
+        if (!t.assert_true(llama_kv_stream_policy_initialize(view.config, state).status ==
+                llama_kv_stream_policy_status::success)) return;
+        llama_kv_stream_policy_layout layout;
+        t.assert_true(llama_kv_stream_policy_layout_make(view.config, state, 0, layout).status ==
+            llama_kv_stream_policy_status::success);
+        t.assert_true(model->begin(1, 1, false));
+        model->abort();
+        const auto retained_host = mtp->host();
+        model.reset();
+        t.assert_true(mtp->host() == retained_host && mtp->host()->cache_id() != 0);
+
+        config.auxiliary_cache_layers = 2;
+        t.assert_true(!llama_kv_stream_model::create(config));
+        config.auxiliary_cache_layers = 1;
+        config.pool_bytes = 3*page.bytes;
+        t.assert_true(!llama_kv_stream_model::create(config));
     });
     return t.summary();
 }

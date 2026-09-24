@@ -156,7 +156,18 @@ Stage 10.5 infrastructure checkpoint: phase-scoped ring guards mask MTP-owned sl
 
 Target resident and session now map cache-local target layers onto validated physical entries; only target layers receive roots, graphs, and publication pairs. CUDA tests cover resident attention, session append, and streamed target prefetch around MTP-held slots.
 
-Still required for live catch-up: construct the combined policy and MTP cache through the model/context facade, pass the guard from the phase owner into live target sessions, publish the new MTP tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
+
+Stage 10.5 model/context checkpoint: an explicit, default-off target-context parameter
+reserves one separate MTP logical host cache and includes it in the combined physical
+KV policy and host-memory accounting. The target continues to use its cache-local
+layers, while the physical policy has 17 slots. A real Qwen3.8 context test confirms
+one target token executes without advancing MTP. Live MTP context attachment, tail
+publication, retained-lease handoff, and guard/repartition coordination remain pending;
+adaptive target repartition is not disabled by this checkpoint.
+
+Still required for live catch-up: attach the MTP context to the separate cache,
+pass the guard from the phase owner into live target sessions, publish the new MTP
+tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
 
 ## Milestone 11: end-to-end speculative server integration
 

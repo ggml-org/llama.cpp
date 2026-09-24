@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 
@@ -190,6 +191,7 @@ llama_kv_cache::llama_kv_cache(
         config.backend = stream->kv_stream_backend;
         config.pool_bytes = stream->kv_stream_pool_bytes;
         config.shared_device_memory_bytes = stream->shared_device_memory_bytes;
+        config.auxiliary_cache_layers = stream->kv_stream_auxiliary_layers;
         config.max_batch_rows = stream->kv_stream_max_rows; config.query_heads = hparams.n_head(first);
         config.measure = true;
         config.host = {0,{type_k,type_v,256,256,hparams.n_head_kv(first),256,128},
@@ -198,7 +200,7 @@ llama_kv_cache::llama_kv_cache(
             llama_kv_stream_policy_config bootstrap;
             bootstrap.shape = config.host.shape;
             bootstrap.capabilities = config.host.capabilities;
-            bootstrap.layers = config.host.layers;
+            bootstrap.layers = config.host.layers + config.auxiliary_cache_layers;
             if (llama_kv_stream_policy_minimum_pool_bytes(
                     bootstrap,config.pool_bytes).status !=
                     llama_kv_stream_policy_status::success) {
@@ -207,9 +209,11 @@ llama_kv_cache::llama_kv_cache(
         }
         kv_stream = llama_kv_stream_model::create(config);
         if (!kv_stream) throw std::runtime_error("failed to allocate or bind the CUDA KV streaming grants");
+        const auto auxiliary = kv_stream->auxiliary_cache();
+        const size_t host_bytes = kv_stream->host()->bytes() + (auxiliary ? auxiliary->host()->bytes() : 0);
         LLAMA_LOG_INFO("%s: KV stream bootstrap pool %.2f MiB, shared budget %.2f MiB, temporary device grants %.2f MiB, authoritative host %.2f MiB\n",__func__,
             config.pool_bytes/1048576.0,config.shared_device_memory_bytes/1048576.0,
-            kv_stream->granted_bytes()/1048576.0,kv_stream->host()->bytes()/1048576.0);
+            kv_stream->granted_bytes()/1048576.0,host_bytes/1048576.0);
     }
 
     for (uint32_t il = 0; il < n_layer; il++) {
@@ -794,6 +798,10 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
     std::map<ggml_backend_buffer_type_t, size_t> ret;
     if (kv_stream) {
         ret[ggml_backend_buffer_get_type(kv_stream->host()->buffer())] = kv_stream->host()->bytes();
+        if (const auto auxiliary = kv_stream->auxiliary_cache()) {
+            const auto auxiliary_host = auxiliary->host();
+            ret[ggml_backend_buffer_get_type(auxiliary_host->buffer())] += auxiliary_host->bytes();
+        }
         ret[llama_kv_stream_device_buffer_type(ggml_backend_buft_get_device(ggml_backend_buffer_get_type(kv_stream->buffer())))] = kv_stream->granted_bytes();
         return ret;
     }

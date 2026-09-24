@@ -266,6 +266,11 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
+    cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
+    if (cparams.kv_stream_auxiliary_layers > 1 ||
+            (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming())) {
+        throw std::runtime_error("experimental auxiliary KV cache requires one layer and an enabled KV streaming pool");
+    }
     if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");
     }
@@ -431,6 +436,7 @@ llama_context::llama_context(
         if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
             params_mem.shared_device_memory_bytes = params.shared_device_memory_bytes;
+            params_mem.kv_stream_auxiliary_layers = cparams.kv_stream_auxiliary_layers;
             params_mem.kv_stream_max_rows = cparams.n_ubatch;
             for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 params_mem.kv_stream_backend = backend.get(); break;
@@ -4178,6 +4184,7 @@ llama_context_params llama_context_default_params() {
         /*.ctx_other                   =*/ nullptr,
         /*.kv_stream_pool_bytes        =*/ 0,
         /*.shared_device_memory_bytes   =*/ 0,
+        /*.kv_stream_auxiliary_layers   =*/ 0,
     };
 
     return result;

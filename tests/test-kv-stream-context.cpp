@@ -1,6 +1,7 @@
 #include "llama.h"
 #include "../src/llama-memory-hybrid.h"
 #include "../src/llama-kv-stream-model.h"
+#include "../src/llama-kv-stream-logical-cache.h"
 #include "../src/llama-io.h"
 #include "testing.h"
 #include <algorithm>
@@ -10,6 +11,7 @@
 
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
+static bool auxiliary_control = false;
 static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
 
@@ -311,6 +313,7 @@ int main(int argc,char ** argv) {
         const auto defaults = llama_context_default_params();
         t.assert_equal(size_t(0),defaults.kv_stream_pool_bytes);
         t.assert_equal(size_t(0),defaults.shared_device_memory_bytes);
+        t.assert_equal(uint32_t(0), defaults.kv_stream_auxiliary_layers);
     });
     if (argc < 3 || std::strcmp(argv[1],"--model")) return t.summary();
     for (int i = 3; i < argc; ++i) {
@@ -318,11 +321,13 @@ int main(int argc,char ** argv) {
         resident_control = resident_control || !std::strcmp(argv[i],"--resident");
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
         trace_control = trace_control || !std::strcmp(argv[i],"--trace");
+        auxiliary_control = auxiliary_control || !std::strcmp(argv[i],"--auxiliary-only");
     }
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
     if (!t.assert_true(bool(model))) return t.summary();
+    if (auxiliary_control) t.set_filter("target_context_owns_distinct_auxiliary_mtp_host_cache");
     const auto * vocab = llama_model_get_vocab(model.get());
     std::string text;
     for (int i = 0; i < 200; ++i) text += "The capital of France is Paris. We are testing a serial language model with a bounded key and value cache. ";
@@ -342,6 +347,38 @@ int main(int argc,char ** argv) {
             if (mode == 5) p.shared_device_memory_bytes = 640*1048576;
             context_ptr context(llama_init_from_model(model.get(),p),llama_free); t.assert_true(!context);
         }
+    });
+    if (auxiliary_control) t.test("target_context_owns_distinct_auxiliary_mtp_host_cache", [&](testing & t) {
+        auto p = llama_context_default_params();
+        p.n_ctx = 1024; p.n_batch = p.n_ubatch = 256;
+        p.n_threads = p.n_threads_batch = 8;
+        p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
+        p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        p.kv_stream_pool_bytes = 16*1048576;
+        p.kv_stream_auxiliary_layers = 1;
+        context_ptr context(llama_init_from_model(model.get(), p), llama_free);
+        if (!t.assert_true(bool(context))) return;
+        auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(context.get()));
+        auto * target = hybrid->get_mem_attn()->get_kv_stream();
+        if (!t.assert_true(target != nullptr)) return;
+        auto mtp = target->auxiliary_cache();
+        if (!t.assert_true(bool(mtp))) return;
+        t.assert_true(target->host()->cache_id() != mtp->host()->cache_id());
+        t.assert_equal(uint32_t(1), mtp->host()->config().layers);
+        t.assert_equal(size_t(0), mtp->tokens());
+        const auto view = target->binding_view();
+        t.assert_equal(target->host()->config().layers + 1, view.config.layers);
+        if (!t.assert_equal(size_t(2), view.config.caches.size())) return;
+        t.assert_equal(target->host()->cache_id(), view.config.caches[0].id);
+        t.assert_equal(mtp->host()->cache_id(), view.config.caches[1].id);
+        const auto breakdown = hybrid->get_mem_attn()->memory_breakdown();
+        const auto host_type = ggml_backend_buffer_get_type(target->host()->buffer());
+        t.assert_equal(target->host()->bytes() + mtp->host()->bytes(), breakdown.at(host_type));
+        llama_token token = prompt.front();
+        llama_set_kv_stream_decode(context.get(), false);
+        t.assert_equal(0, llama_decode(context.get(), llama_batch_get_one(&token, 1)));
+        t.assert_equal(size_t(1), target->tokens());
+        t.assert_equal(size_t(0), mtp->tokens());
     });
     t.test("serial_phase_alternation_and_boundary_cancellation_match_stock", [&](testing & t) {
         const auto baseline = evaluate_serial_phases(t,model.get(),prompt,0);

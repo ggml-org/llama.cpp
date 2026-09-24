@@ -430,6 +430,8 @@ extern "C" {
         // Exact device-local parent shared by phase compute and participating memory consumers.
         // Mutually exclusive with kv_stream_pool_bytes; zero disables the shared-budget path.
         size_t shared_device_memory_bytes;
+        // Experimental: reserve one separate MTP logical host cache in the target's physical KV policy.
+        uint32_t kv_stream_auxiliary_layers;
     };
 
     struct llama_model_tensor_override {
