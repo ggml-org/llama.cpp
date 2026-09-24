@@ -7089,18 +7089,21 @@ static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    // for now we can do f32 -> f16 and f16 -> f32 (without reshaping)
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
-    if ( dst->type != GGML_TYPE_F32 &&  dst->type != GGML_TYPE_F16) return false;
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 &&
+        src0->type != GGML_TYPE_I32) return false;
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 &&
+        dst->type != GGML_TYPE_I32) return false;
 
     const bool sametype   = (src0->type == dst->type);
     const bool transposed = ggml_is_transposed(src0) || ggml_is_transposed(dst);
     const bool sameshape  = !transposed && ggml_are_same_shape(src0, dst);
 
-    // can handle any shape and any same-type (pretty slow if reshaping is required)
+    // Same-type copies also support I32.
     if (sametype) return true;
 
-    // cannot handle re-shaping and type conversion at the same time
+    // Type conversion is only supported between F32 and F16.
+    if (src0->type == GGML_TYPE_I32 || dst->type == GGML_TYPE_I32) return false;
+
     if (!sameshape) return false;
 
     return true;
@@ -7110,8 +7113,9 @@ static bool ggml_hexagon_supported_cont(const struct ggml_hexagon_session * sess
     GGML_UNUSED(sess);
     const struct ggml_tensor * src0 = op->src[0];
 
-    // CONT is same-type only, supports f32 and f16
-    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+    // CONT is same-type only and supports F32, F16, and I32.
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 &&
+        src0->type != GGML_TYPE_I32) return false;
 
     return true;
 }
