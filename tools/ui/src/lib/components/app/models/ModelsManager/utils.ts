@@ -1,9 +1,17 @@
-import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
+import {
+	LOCAL_BACKEND_ID,
+	MODEL_ID,
+	MODEL_OVERRIDES_LOCALSTORAGE_KEY,
+	type ModelSidecar,
+	SETTINGS_KEYS,
+	SPEC_TYPE
+} from '$lib/constants';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { settingsStore } from '$lib/stores';
 import type { ModelLoadProgress, ModelModalities, ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
+import { rawModelId } from '$lib/utils/model-option-id';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Load parameters a model can override before it is loaded. */
@@ -113,6 +121,100 @@ export function saveOverrides(overrides: ModelOverrideMap): void {
 }
 
 /** Backend a model is served by, the local server reads as "This server". */
+/** A draft a model can speculate with, and whether the load settings point at it. */
+export interface ModelDraft {
+	/** The draft the settings name, which is the one a load would use. */
+	active: boolean;
+	kind: ModelSidecar | null;
+	/** Qualified id of a draft from another repo; null when the file sits in this repo. */
+	model: string | null;
+}
+
+/** Repo an id belongs to: the id without its quant tag. */
+function repoOf(modelId: string): string | null {
+	const raw = rawModelId(modelId).split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? '';
+
+	return raw || null;
+}
+
+/** Sidecar a `--spec-type` value names, e.g. `draft-mtp` -> mtp. */
+function sidecarFromSpecType(specType: string | null | undefined): ModelSidecar | null {
+	if (!specType) return null;
+
+	const entry = Object.entries(SPEC_TYPE).find(([, value]) => value === specType);
+
+	return (entry?.[0] as ModelSidecar | undefined) ?? null;
+}
+
+/**
+ * Repo a draft path names. A Hub cache path carries it (`models--org--name`), a plain
+ * file next to the model does not, so that falls back to the file name.
+ */
+function repoFromDraftPath(path: string): string {
+	const cached = /models--([^/]+)[/]/.exec(path);
+
+	if (cached) {
+		const [org, ...rest] = cached[1].split('--');
+
+		if (rest.length > 0) return `${org}/${rest.join('--')}`;
+	}
+
+	return path.split(/[/]/).pop() ?? path;
+}
+
+/**
+ * Draft the server's own launch arguments point at. The router reports the arguments a
+ * model loads with, so this is what a load would really speculate with.
+ */
+export function draftFromArgs(args: string[] | undefined): ModelDraft | null {
+	const flag = args?.indexOf('--model-draft') ?? -1;
+	const path = flag === -1 ? null : (args?.[flag + 1] ?? null);
+
+	if (!path) return null;
+
+	return {
+		active: true,
+		kind: sidecarFromSpecType(args?.[(args?.indexOf('--spec-type') ?? -1) + 1]),
+		model: repoFromDraftPath(path)
+	};
+}
+
+/**
+ * Drafts to show for a model: the one the load settings name, plus any draft sidecar
+ * the model's own repo ships. The configured one is the active draft; a sidecar that
+ * is merely on disk stays visible but idle.
+ */
+export function modelDrafts(
+	option: ModelOption,
+	available: ModelSidecar[] = [],
+	configured?: string | null,
+	configuredKind?: ModelSidecar | null
+): ModelDraft[] {
+	const value = configured?.trim() ?? '';
+	const drafts: ModelDraft[] = [];
+
+	if (value && value !== 'off') {
+		const parsed = ModelsService.parseModelId(value);
+		const sameRepo = repoOf(value) === repoOf(option.model);
+
+		drafts.push({
+			active: true,
+			kind: parsed.sidecar ?? configuredKind ?? null,
+			model: sameRepo ? null : value
+		});
+	}
+
+	for (const kind of available) {
+		const alreadyActive = drafts.some((draft) => draft.active && draft.kind === kind);
+
+		if (alreadyActive) continue;
+
+		drafts.push({ active: false, kind, model: null });
+	}
+
+	return drafts;
+}
+
 export function servedByLabel(option: ModelOption): string {
 	const backend = getBackend(option.backendId);
 

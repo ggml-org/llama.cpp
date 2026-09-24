@@ -27,6 +27,18 @@ import {
 	splitSseRecords
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+import { isAuxSidecar } from '$lib/utils/sidecars';
+
+/** Sidecar token a file name carries, for the forms parsing an id as a model misses. */
+function sidecarTokenInFilename(modelId: string): ModelSidecar | null {
+	// the token can sit after a colon (`org/model:mtp`), a dash or an underscore
+	const name = modelId.toLowerCase();
+	const match = SIDECAR_TOKENS.find((token) =>
+		new RegExp(`(^|[-_:])${token}([-_.:]|$)`).test(name)
+	);
+
+	return (match as ModelSidecar | undefined) ?? null;
+}
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
@@ -96,6 +108,42 @@ export class ModelsService {
 	}
 
 	/**
+	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
+	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
+	 * loadable model, so the selector skips them.
+	 */
+	/**
+	 * Draft sidecars a listing carries as their own entries, keyed by the repo they
+	 * belong to. The router lists a downloaded sidecar as a model of its own, so this
+	 * keeps the pairing that the model list itself is filtered to drop.
+	 */
+	static draftSidecarsByRepo(response: ApiModelsListResponse): Record<string, ModelSidecar[]> {
+		const byRepo: Record<string, ModelSidecar[]> = {};
+
+		for (const entry of response.data ?? []) {
+			const sidecar =
+				ModelsService.parseModelId(entry.id).sidecar ?? sidecarTokenInFilename(entry.id);
+
+			if (!sidecar || isAuxSidecar(sidecar)) continue;
+
+			// the repo is the id with its quant tag and sidecar token taken off; naming
+			// parts of the id are not touched, a model name may carry `-4b` for instance
+			const repo = entry.id
+				.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0]
+				.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '')
+				.replace(new RegExp(`[-_ ]?${sidecar}([-_ ]?draft)?$`, 'i'), '');
+
+			if (!repo) continue;
+
+			const kinds = (byRepo[repo] ??= []);
+
+			if (!kinds.includes(sidecar)) kinds.push(sidecar);
+		}
+
+		return byRepo;
+	}
+
+	/**
 	 * Check if a model is loaded based on its metadata.
 	 *
 	 * @param model - Model data entry from the API response
@@ -103,16 +151,6 @@ export class ModelsService {
 	 */
 	static isModelLoaded(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADED;
-	}
-
-	/**
-	 * Check if a model is currently loading.
-	 *
-	 * @param model - Model data entry from the API response
-	 * @returns True if the model status is LOADING
-	 */
-	static isModelLoading(model: ApiModelDataEntry): boolean {
-		return model.status.value === ServerModelStatus.LOADING;
 	}
 
 	/**
@@ -124,10 +162,15 @@ export class ModelsService {
 	 */
 
 	/**
-	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
-	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
-	 * loadable model, so the selector skips them.
+	 * Check if a model is currently loading.
+	 *
+	 * @param model - Model data entry from the API response
+	 * @returns True if the model status is LOADING
 	 */
+	static isModelLoading(model: ApiModelDataEntry): boolean {
+		return model.status.value === ServerModelStatus.LOADING;
+	}
+
 	static isSidecarEntry(modelId: string): boolean {
 		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 

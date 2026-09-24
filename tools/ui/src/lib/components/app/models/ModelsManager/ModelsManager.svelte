@@ -281,6 +281,18 @@
 		onClose?.();
 	}
 
+	/** Point the selected model's load settings at another model as its draft. */
+	function useAsDraft(draft: ModelOption, targetId: string): void {
+		const target = modelsStore.models.find((option) => option.id === targetId);
+
+		if (!target) return;
+
+		saveOverride(target, {
+			...overrides[target.id],
+			load: { ...overrides[target.id]?.load, speculativeDecoding: draft.id }
+		});
+	}
+
 	function saveOverride(option: ModelOption, override: ModelOverride): void {
 		overrides = { ...overrides, [option.id]: override };
 		saveOverrides(overrides);
@@ -301,6 +313,7 @@
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
+			onUseAsDraft={useAsDraft}
 			{overrides}
 			{selectedId}
 			{summary}

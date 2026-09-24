@@ -1,9 +1,13 @@
 <script lang="ts">
+	import ModelDraftChip from '../ModelDraftChip.svelte';
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import {
+		draftFromArgs,
 		isLocalOption,
 		type ModalityKey,
 		modelContextLength,
+		type ModelDraft,
+		modelDrafts,
 		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup
@@ -22,7 +26,8 @@
 		MoreHorizontal,
 		Power,
 		Trash2,
-		X
+		X,
+		Zap
 	} from '@lucide/svelte';
 	import {
 		DropdownMenuActions,
@@ -41,13 +46,20 @@
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
+	import { FAMILY_ROW_WINDOW, LOCAL_BACKEND_ID, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { backendsStore, modelsStore, settingsStore, uiStore } from '$lib/stores';
+	import {
+		backendsModelsStore,
+		backendsStore,
+		modelsStore,
+		settingsStore,
+		uiStore
+	} from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
+	import { rawModelId } from '$lib/utils/model-option-id';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -63,6 +75,8 @@
 		overrides: Record<string, ModelOverride>;
 		/** Backend ids to keep; empty keeps every provider. */
 		providers?: string[];
+		/** Called when a row is set as the draft of the selected model. */
+		onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
 		selectedId: string | null;
 		summary: string;
 	}
@@ -74,6 +88,7 @@
 		isFavorite,
 		modalities = $bindable<ModalityKey[]>([]),
 		onSelect,
+		onUseAsDraft,
 		overrides,
 		providers = $bindable<string[]>([]),
 		selectedId,
@@ -160,7 +175,21 @@
 
 	/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
 	function rowActions(option: ModelOption, canLoad: boolean, favorite: boolean, isHidden: boolean) {
+		// a draft only makes sense for the model the configuration pane has open, and
+		// only when both ends can load and unload at all
+		const canBeDraft = canLoad && selectedId !== null && selectedId !== option.id && selectedName;
+
 		return [
+			...(canBeDraft
+				? [
+						{
+							icon: Zap,
+							label: `Use as draft for ${selectedName}`,
+							onclick: () => onUseAsDraft?.(option, selectedId as string),
+							separator: true
+						}
+					]
+				: []),
 			{
 				icon: favorite ? HeartOff : Heart,
 				label: favorite ? 'Remove from favorites' : 'Add to favorites',
@@ -192,6 +221,44 @@
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
+
+	/** Drafts to show on a row: the configured one first, then this repo's own sidecars. */
+	function draftsFor(option: ModelOption): ModelDraft[] {
+		// speculative decoding is a llama.cpp feature
+		if (!getBackendCapabilities(getBackend(option.backendId)).loadUnload) return [];
+
+		const repo = option.model.split(':')[0] ?? '';
+		const state = backendsModelsStore.get(option.backendId ?? LOCAL_BACKEND_ID);
+		// the router reports the arguments a model loads with, draft included
+		const serverDraft = draftFromArgs(
+			modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args
+		);
+		const configured =
+			serverDraft?.model ?? overrides[option.id]?.load?.speculativeDecoding ?? null;
+
+		return modelDrafts(option, state.drafts?.[repo] ?? [], configured, serverDraft?.kind ?? null);
+	}
+
+	/** The draft model's own option, when the manager lists it, for its avatar. */
+	function draftOptionFor(draft: ModelDraft): ModelOption | null {
+		const id = draft.model;
+
+		if (!id) return null;
+
+		const raw = rawModelId(id);
+
+		// a draft may be named as a repo, in which case any of its quants will do
+		return (
+			modelsStore.models.find((option) => option.id === id) ??
+			modelsStore.models.find((option) => rawModelId(option.id).startsWith(`${raw}:`)) ??
+			null
+		);
+	}
+
+	/** Name of the model the configuration pane has open, for the draft action label. */
+	let selectedName = $derived(
+		modelsStore.models.find((option) => option.id === selectedId)?.name ?? null
+	);
 
 	/** Context the model runs with: the stored override, else what a loaded model reports. */
 	function configuredContext(option: ModelOption): number | null {
@@ -346,6 +413,10 @@
 				/>
 
 				<ModelCapabilities {option} />
+
+				{#each draftsFor(option) as draft (draft.model ?? draft.kind)}
+					<ModelDraftChip {draft} option={draftOptionFor(draft)} />
+				{/each}
 			</span>
 		</span>
 
@@ -409,6 +480,10 @@
 					/>
 
 					<ModelCapabilities option={entry.base} />
+
+					{#each draftsFor(entry.base) as draft (draft.model ?? draft.kind)}
+						<ModelDraftChip {draft} option={draftOptionFor(draft)} />
+					{/each}
 				</span>
 
 				<span class="block text-xs text-muted-foreground">{groupLabel}</span>
