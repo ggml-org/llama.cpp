@@ -62,6 +62,15 @@ static fs::path get_cache_directory() {
     return cache;
 }
 
+std::string get_cache_path() {
+#if defined(__cpp_lib_char8_t)
+    const std::u8string u8str = get_cache_directory().u8string();
+    return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
+#else
+    return get_cache_directory().u8string();
+#endif
+}
+
 static std::string folder_name_to_repo(const std::string & folder) {
     constexpr std::string_view prefix = "models--";
     if (folder.rfind(prefix, 0)) {
@@ -393,8 +402,8 @@ static std::string get_cached_ref(const fs::path & repo_path) {
 }
 
 hf_files get_cached_files(const std::string & repo_id) {
-    fs::path cache_dir = get_cache_directory();
-    if (!fs::exists(cache_dir)) {
+    const fs::path cache_path = get_cache_directory();
+    if (!fs::exists(cache_path)) {
         return {};
     }
 
@@ -405,7 +414,7 @@ hf_files get_cached_files(const std::string & repo_id) {
 
     hf_files files;
 
-    for (const auto & repo : fs::directory_iterator(cache_dir)) {
+    for (const auto & repo : fs::directory_iterator(cache_path)) {
         if (!repo.is_directory()) {
             continue;
         }

@@ -14,7 +14,11 @@
 #include "htp/matmul-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/unary-ops.h"
+#include "htp/binary-ops.h"
 #include "htp/allreduce-ops.h"
+#include "htp/ssm-conv.h"
+#include "htp/gated-delta-net-ops.h"
+#include "htp/softmax-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node   { nullptr };
@@ -325,10 +329,6 @@ struct htp_opformat {
             } else if (type == HTP_MM_KERNEL_HVX_F16_F16_VTCM || type == HTP_MM_KERNEL_HVX_F32_F32_VTCM ||
                        type == HTP_MM_KERNEL_HVX_QUANT_ROW    || type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
                 path = "hvx-tiled";
-            } else if (type == HTP_MM_KERNEL_HVX_F16_F16_DDR  || type == HTP_MM_KERNEL_HVX_F16_F32_DDR ||
-                       type == HTP_MM_KERNEL_HVX_F32_F32_DDR  || type == HTP_MM_KERNEL_HVX_F32_F16_DDR ||
-                       type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
-                path = "hvx-flat";
             }
             snprintf(str, max_size, "%s vtcm %d", path, (int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_FLASH_ATTN_EXT) {
@@ -344,6 +344,29 @@ struct htp_opformat {
         } else if (htp_op_is_unary(node.opcode)) {
             const auto * kparams = (const struct htp_unary_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "%s vtcm %d", kparams->col_tile ? "wide-row" : "row-block", (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_MDEV_GROUP && node.node) {
+            snprintf(str, max_size, "idx %d count %d", (int) node.node->op_params[0], (int) node.dst()->ne[1]);
+        } else if ((node.opcode == HTP_OP_FENCE || node.opcode == HTP_OP_CPY_FENCE) && node.node) {
+            snprintf(str, max_size, "seq 0x%x", (uint32_t) node.node->op_params[0]);
+        } else if (node.opcode == HTP_OP_ALLREDUCE && node.node) {
+            snprintf(str, max_size, "seq 0x%x -> 0x%x", (uint32_t) node.node->op_params[0], (uint32_t) node.node->op_params[1]);
+        } else if (node.opcode == HTP_OP_SSM_CONV) {
+            const auto * kparams = (const struct htp_ssm_conv_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "%s vtcm %d", kparams->n_t == 1 ? "decode" : "prefill", (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_SOFTMAX) {
+            const auto * kparams = (const struct htp_softmax_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "k%d nth %d vtcm %d", (int) kparams->kernel_id, (int) kparams->n_threads, (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_GATED_DELTA_NET) {
+            const auto * kparams = (const struct htp_gdn_kernel_params *) node.kernel_params;
+            const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
+            snprintf(str, max_size, "%s-%s vtcm %u",
+                     path,
+                     kparams->kda ? "kda" : "scalar",
+                     (unsigned int) (kparams->vtcm_size ? kparams->vtcm_size : kparams->vtcm_per_thread * kparams->n_threads));
+        } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
+                   node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
+            const auto * kparams = (const struct htp_binary_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "vtcm %u", (unsigned int) kparams->vtcm_size);
         } else {
             snprintf(str, max_size, "----");
         }
