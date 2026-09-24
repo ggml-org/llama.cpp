@@ -1397,7 +1397,9 @@ kernel void kernel_flash_attn_ext_vec(
 
             // load the sparse KV indices for the current block into shared memory
             if (FC_flash_attn_ext_vec_has_sparse) {
-                for (short i = tiisg; i < C; i += NW) {
+                FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
+                    const short i = ii*NW + tiisg;
+
                     spidx[i] = pidx[ic + i];
                 }
                 simdgroup_barrier(mem_flags::mem_threadgroup);
