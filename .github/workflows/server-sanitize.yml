@@ -45,7 +45,7 @@ concurrency:
 
 jobs:
   server:
-    runs-on: hf-jobs-cpu-xl
+    runs-on: hf-jobs-cpu-performance
 
     strategy:
       matrix:
