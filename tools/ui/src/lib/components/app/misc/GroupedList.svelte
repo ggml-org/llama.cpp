@@ -8,6 +8,7 @@
 </script>
 
 <script generics="G, E" lang="ts">
+	import CollapsibleRegion from './CollapsibleRegion.svelte';
 	import type { Snippet } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -120,7 +121,7 @@
 			</div>
 		{/if}
 
-		{#if expanded}
+		<CollapsibleRegion open={expanded}>
 			{#each entry.rows as row (keyOf(row))}
 				{@render item({ depth: 1, entry: row })}
 			{/each}
@@ -132,7 +133,7 @@
 					unit: 'entries'
 				})}
 			{/if}
-		{/if}
+		</CollapsibleRegion>
 	{/each}
 
 	{#if windowed.length < (groups?.length ?? 0) && more}

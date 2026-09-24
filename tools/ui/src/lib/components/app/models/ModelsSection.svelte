@@ -20,7 +20,7 @@
 		/** Renders the back control, for a drilled-in provider. */
 		onBack?: () => void;
 		/** Start expanded; the manager collapses its hidden block. */
-		open?: boolean;
+		defaultOpen?: boolean;
 		revealChevronOnHover?: boolean;
 		sectionHeaderClass?: string;
 		/** Sticky class of the header, so a surface can shade it differently. */
@@ -33,12 +33,12 @@
 		backendId,
 		children,
 		count,
+		defaultOpen = true,
 		error = false,
 		icon,
 		label,
 		loading = false,
 		onBack,
-		open = true,
 		revealChevronOnHover = false,
 		sectionHeaderClass = 'm-0 px-2 py-2 text-[13px] font-semibold text-muted-foreground select-none',
 		sticky = false,
@@ -52,7 +52,7 @@
 	let triggerStyle = $derived(sticky ? 'top: var(--dropdown-sticky-height, 0px)' : '');
 </script>
 
-<CollapsibleSection {open} {revealChevronOnHover} {triggerClass} {triggerStyle}>
+<CollapsibleSection {defaultOpen} {revealChevronOnHover} {triggerClass} {triggerStyle}>
 	{#snippet trigger()}
 		{#if onBack}
 			<button

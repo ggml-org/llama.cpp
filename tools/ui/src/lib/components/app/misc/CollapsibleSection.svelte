@@ -1,4 +1,5 @@
 <script lang="ts">
+	import CollapsibleRegion from './CollapsibleRegion.svelte';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -11,7 +12,10 @@
 		trigger: Snippet;
 		/** Render the trigger as a dropdown menu item, so menu keyboard navigation reaches it. */
 		inMenu?: boolean;
-		/** Start expanded. */
+		/** Start expanded. The section owns the state, so a parent rebuild cannot
+		 *  snap it back open. Bind `open` instead to control it from outside. */
+		defaultOpen?: boolean;
+		/** Controlled open state, for a caller that binds it. */
 		open?: boolean;
 		/** Hide the chevron while expanded, until the trigger is hovered. */
 		revealChevronOnHover?: boolean;
@@ -23,33 +27,15 @@
 
 	let {
 		children,
+		defaultOpen = true,
 		inMenu = false,
-		open = $bindable(true),
+		open = $bindable(defaultOpen),
 		revealChevronOnHover = false,
 		trigger,
 		triggerClass = '',
 		triggerPosition = 'top',
 		triggerStyle = ''
 	}: Props = $props();
-
-	// rows stay mounted through the collapse transition so it can play; after it
-	// they unmount - mounted rows are menu items and would pollute the arrow-key
-	// navigation
-	// the region animates between height 0 and auto; see the component styles
-	const EXPAND_TRANSITION_MS = 200;
-	let contentMounted = $state(open);
-
-	$effect(() => {
-		if (open) {
-			contentMounted = true;
-
-			return;
-		}
-
-		const timer = setTimeout(() => (contentMounted = false), EXPAND_TRANSITION_MS);
-
-		return () => clearTimeout(timer);
-	});
 </script>
 
 {#snippet chevron()}
@@ -107,13 +93,11 @@
 {#snippet region()}
 	<!-- Custom expand region instead of bits-ui Collapsible (whose conditional
 	     rendering kills the transition). -->
-	<div class="collapsible-region" data-expanded={open}>
-		{#if contentMounted}
-			<div class="collapsible-region-content">
-				{@render children()}
-			</div>
-		{/if}
-	</div>
+	{#snippet body()}
+		{@render children()}
+	{/snippet}
+
+	<CollapsibleRegion {open}>{@render body()}</CollapsibleRegion>
 {/snippet}
 
 {#if triggerPosition === 'top'}
@@ -125,54 +109,3 @@
 
 	{@render triggerButton()}
 {/if}
-
-<style>
-	/*
-	 * The region animates between height 0 and height auto. `interpolate-size`
-	 * lets the auto keyword take part in the interpolation, so the content needs
-	 * no measured height to stay in sync with. Browsers without it fall back to
-	 * an interpolating grid row, which snaps only in the oldest engines.
-	 */
-	.collapsible-region {
-		height: 0;
-		/* clip, not hidden: hidden would make the region a scrollport, and the
-		   sticky rows inside it would then never leave their opening position */
-		overflow: clip;
-		visibility: hidden;
-		interpolate-size: allow-keywords;
-		transition:
-			height 200ms cubic-bezier(0.23, 1, 0.32, 1),
-			visibility 200ms;
-	}
-
-	.collapsible-region[data-expanded='true'] {
-		height: auto;
-		visibility: visible;
-	}
-
-	@supports not (interpolate-size: allow-keywords) {
-		.collapsible-region {
-			display: grid;
-			/* minmax(0, 1fr) pins the column to the region width: a plain auto
-			   column would size to the content and push wide rows out of the list */
-			grid-template-columns: minmax(0, 1fr);
-			grid-template-rows: 0fr;
-			/* the row owns the height here: leaving height: 0 in place would snap
-			   the region shut before the row could interpolate */
-			height: auto;
-			transition:
-				grid-template-rows 200ms cubic-bezier(0.23, 1, 0.32, 1),
-				visibility 200ms;
-		}
-
-		.collapsible-region[data-expanded='true'] {
-			grid-template-rows: 1fr;
-		}
-
-		.collapsible-region-content {
-			min-height: 0;
-			min-width: 0;
-			overflow: clip;
-		}
-	}
-</style>

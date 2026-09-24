@@ -548,9 +548,9 @@
 				<ModelsSection
 					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					count={group.items.length}
+					defaultOpen={group.kind !== 'hidden'}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
-					open={group.kind !== 'hidden'}
 					sticky
 					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
 				>
