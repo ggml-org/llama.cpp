@@ -8,7 +8,7 @@
 	import {
 		Boxes,
 		ChevronDown,
-		ChevronRight,
+		ChevronUp,
 		Download,
 		Eye,
 		EyeOff,
@@ -355,9 +355,9 @@
 
 			<span class="flex justify-center">
 				{#if isExpanded}
-					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+					<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
 				{:else}
-					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
 				{/if}
 			</span>
 		</div>
@@ -471,9 +471,9 @@
 				: ''}"
 		>
 			{#if expanded}
-				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
 			{:else}
-				<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
 			{/if}
 		</span>
 	</div>
