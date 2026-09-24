@@ -517,7 +517,13 @@ export class HuggingFaceService {
 
 				if (!response.ok) throw new Error(`Failed to fetch model details: ${response.status}`);
 
-				const data = (await response.json()) as HfModelDetailInfo;
+				// the hub answers with a list of provider entries for one repo, and the
+				// gguf and card data sit on the entry that carries them
+				const payload = (await response.json()) as HfModelDetailInfo | HfModelDetailInfo[];
+				const entries = Array.isArray(payload) ? payload : [payload];
+				const data = entries.find((entry) => entry?.gguf ?? entry?.cardData) ?? entries[0];
+
+				if (!data) return null;
 
 				HuggingFaceService.detailsCache.set(modelId, data);
 

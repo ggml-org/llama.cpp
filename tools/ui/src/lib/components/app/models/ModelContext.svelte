@@ -68,6 +68,6 @@
 	let context = $derived(reported ?? fetched);
 </script>
 
-<span class={['text-sm text-muted-foreground', className]}>
+<span bind:this={el} class={['text-sm text-muted-foreground', className]}>
 	{context ? `${formatParameters(context)} tokens` : '—'}
 </span>
