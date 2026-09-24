@@ -900,7 +900,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
 
 
 #ifdef _WIN32
-static std::wstring utf8_to_wstring(const std::string & str) {
+std::wstring utf8_to_wstring(const std::string & str) {
     if (str.empty()) {
         return std::wstring();
     }
@@ -916,7 +916,30 @@ static std::wstring utf8_to_wstring(const std::string & str) {
 
     return wstr;
 }
+
+std::string wstring_to_utf8(const std::wstring & str) {
+    if (str.empty()) {
+        return std::string();
+    }
+
+    int size = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0, NULL, NULL);
+
+    if (size <= 0) {
+        return std::string();
+    }
+
+    std::string utf8(size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.size(), &utf8[0], size, NULL, NULL);
+
+    return utf8;
+}
 #endif
+
+// returns the path as a UTF-8 string, preserving its separators
+std::string fs_path_to_utf8(const std::filesystem::path & path) {
+    const auto value = path.u8string();
+    return std::string(value.begin(), value.end());
+}
 
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
