@@ -6,10 +6,12 @@
 
 	interface Props {
 		class?: string;
+		/** Context the model is set to run with; paired with the supported one. */
+		configured?: number | null;
 		option: ModelOption;
 	}
 
-	let { class: className = '', option }: Props = $props();
+	let { class: className = '', configured = null, option }: Props = $props();
 
 	// a listing that reports a context window (OpenRouter, Groq, HF) needs no lookup
 	let reported = $derived(option.contextLength ?? null);
@@ -66,8 +68,12 @@
 	});
 
 	let context = $derived(reported ?? fetched);
+	// `configured / supported`, or whichever of the two is known
+	let values = $derived(
+		[configured, context].filter((value): value is number => typeof value === 'number')
+	);
 </script>
 
 <span bind:this={el} class={['text-sm text-muted-foreground', className]}>
-	{context ? `${formatParameters(context)} tokens` : '—'}
+	{values.length ? `${values.map((value) => formatParameters(value)).join(' / ')} tokens` : '—'}
 </span>

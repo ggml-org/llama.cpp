@@ -40,7 +40,6 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
-	import { formatParameters } from '$lib/utils/formatters';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -167,7 +166,7 @@
 			}
 		];
 	}
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_9rem_9rem_6rem_3rem_4.5rem] items-center gap-4';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_11rem_6rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -221,14 +220,6 @@
 	</span>
 {/snippet}
 
-{#snippet contextCell(option: ModelOption)}
-	{@const configured = configuredContext(option)}
-
-	<span class="justify-self-end text-sm text-muted-foreground">
-		{configured ? `${formatParameters(configured)} tokens` : '—'}
-	</span>
-{/snippet}
-
 {#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -267,9 +258,7 @@
 			/>
 		</span>
 
-		<ModelContext class="justify-self-end" {option} />
-
-		{@render contextCell(option)}
+		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
 		{@render capabilities(option)}
 
@@ -333,8 +322,6 @@
 
 			<span></span>
 
-			<span></span>
-
 			{@render capabilities(entry.base)}
 
 			<span class="justify-self-center">
@@ -383,9 +370,7 @@
 				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 			</span>
 
-			<ModelContext class="justify-self-end" {option} />
-
-			{@render contextCell(option)}
+			<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
 			{@render capabilities(option)}
 
@@ -448,8 +433,6 @@
 
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
-
-		<span></span>
 
 		<span></span>
 
@@ -527,9 +510,7 @@
 	>
 		<span>Model</span>
 
-		<span class="text-right whitespace-nowrap">Available context</span>
-
-		<span class="text-right whitespace-nowrap">Configured context</span>
+		<span class="text-right whitespace-nowrap">Context</span>
 
 		<span class="text-center">Capabilities</span>
 
