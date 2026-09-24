@@ -325,6 +325,105 @@ static std::pair<int, int> test_grad(
     return std::make_pair(npass, ntest);
 }
 
+// The same check as test_grad, on the dynamic-graph path that llama-finetune uses: no ctx_compute is
+// given to ggml_opt_init, and the forward graph is rebuilt every step and handed over with
+// ggml_opt_prepare_alloc. d(loss)/d(weights) is exactly 1 here, so with opt_period == 1 the gradient
+// accumulator must read exactly 1 after every step. If the accumulators are not cleared between
+// steps it reads 1, 2, 3, ... instead.
+static std::pair<int, int> test_grad_dynamic(
+    enum ggml_opt_optimizer_type optim,
+    ggml_backend_sched_t backend_sched, ggml_backend_t backend) {
+    int ntest = 0;
+    int npass = 0;
+
+    struct ggml_context * ctx_static;
+    {
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ 2*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_static = ggml_init(params);
+    }
+    struct ggml_context * ctx_compute;
+    {
+        struct ggml_init_params params = {
+            /*.mem_size   =*/ GGML_DEFAULT_GRAPH_SIZE*ggml_tensor_overhead() + 3*ggml_graph_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_compute = ggml_init(params);
+    }
+
+    struct ggml_tensor * inputs = ggml_new_tensor_1d(ctx_static, GGML_TYPE_F32, 1);
+    ggml_set_name(inputs, "inputs");
+
+    struct ggml_tensor * weights = ggml_new_tensor_1d(ctx_static, GGML_TYPE_F32, 1);
+    ggml_set_name(weights, "weights");
+    ggml_set_param(weights);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx_static, backend);
+    const float w0 = float(ndata)/2;
+    ggml_backend_tensor_set(weights, &w0, 0, sizeof(float));
+
+    // no ctx_compute, inputs or outputs: that is what makes the graphs dynamic
+    struct ggml_opt_params opt_params = ggml_opt_default_params(backend_sched, GGML_OPT_LOSS_TYPE_SUM);
+    opt_params.opt_period   = 1;
+    opt_params.optimizer    = optim;
+    opt_params.get_opt_pars = helper_get_test_opt_pars;
+    ggml_opt_context_t opt_ctx = ggml_opt_init(opt_params);
+    ggml_opt_result_t  result  = ggml_opt_result_init();
+
+    std::vector<float> grad_history(ndata, NAN);
+    for (int idata = 0; idata < ndata; ++idata) {
+        ggml_reset(ctx_compute);
+        struct ggml_tensor * intermediary = ggml_add(ctx_compute, inputs, weights);
+        struct ggml_tensor * outputs      = ggml_scale(ctx_compute, intermediary, 1.0f);
+        ggml_set_name(outputs, "outputs");
+        struct ggml_cgraph * gf = ggml_new_graph(ctx_compute);
+        ggml_build_forward_expand(gf, outputs);
+
+        ggml_opt_prepare_alloc(opt_ctx, ctx_compute, gf, inputs, outputs);
+        ggml_opt_alloc(opt_ctx, /*backward =*/ true);
+        // the accumulator lives in the static context, so it can be read after eval clears the graphs
+        struct ggml_tensor * grad_acc = ggml_opt_grad_acc(opt_ctx, weights);
+
+        const float idataf = idata;
+        ggml_backend_tensor_set(inputs, &idataf, 0, ggml_nbytes(inputs));
+        ggml_opt_eval(opt_ctx, result);
+        ggml_backend_tensor_get(grad_acc, grad_history.data() + idata, 0, sizeof(float));
+    }
+
+    {
+        bool subtest_ok = true;
+        for (int idata = 0; idata < ndata; ++idata) {
+            if (grad_history[idata] != 1.0f) {
+                subtest_ok = false;
+            }
+        }
+        printf("  %s(optimizer=%s): ", __func__, ggml_opt_optimizer_name(optim));
+        if (subtest_ok) {
+            printf("\033[1;32mOK\033[0m\n");
+            npass++;
+        } else {
+            printf("\033[1;31mFAIL\033[0m (grad after each step:");
+            for (int idata = 0; idata < ndata; ++idata) {
+                printf(" %g", grad_history[idata]);
+            }
+            printf(")\n");
+        }
+        ntest++;
+    }
+
+    ggml_opt_result_free(result);
+    ggml_opt_free(opt_ctx);
+    ggml_backend_buffer_free(buf);
+    ggml_free(ctx_static);
+    ggml_free(ctx_compute);
+
+    return std::make_pair(npass, ntest);
+}
+
 static void helper_after_test_forward_backward(
         enum ggml_opt_optimizer_type optim,
         const char * func, const bool high_level, const bool shuffle,
@@ -851,6 +950,11 @@ static std::pair<int, int> test_backend(
     }
     {
         std::pair<int, int> partial = test_grad(optim, backend_sched, backend);
+        npass += partial.first;
+        ntest += partial.second;
+    }
+    {
+        std::pair<int, int> partial = test_grad_dynamic(optim, backend_sched, backend);
         npass += partial.first;
         ntest += partial.second;
     }
