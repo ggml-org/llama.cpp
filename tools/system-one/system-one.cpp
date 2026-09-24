@@ -55,12 +55,11 @@ const char * system_one_readout_name(enum system_one_readout readout) {
 
 system_one_params system_one_params_from_model(const llama_model * model) {
     system_one_params out;
+    // A missing template is not an error here: the precedence is request > checkpoint, so a
+    // caller that is about to supply one must still get everything else this derives. It becomes
+    // an error at render time, when nothing has filled it in.
     const char * tmpl = llama_model_chat_template(model, "system_one");
-    if (tmpl == nullptr || tmpl[0] == '\0') {
-        throw std::runtime_error("model has no System One template (tokenizer.chat_template.system_one); "
-              "convert it with its template, or pass one in the request");
-    }
-    out.template_src = tmpl;
+    if (tmpl != nullptr) out.template_src = tmpl;
 
     std::string s;
     // The readout follows from what the checkpoint *is*, so it does not have to be declared:
@@ -173,8 +172,12 @@ std::vector<std::string> system_one_render_segments(const system_one_params & cf
                                                     const std::string & state,
                                                     const std::vector<system_one_question> & qs) {
     std::vector<std::string> segments;
+    if (cfg.template_src.empty()) {
+        throw std::runtime_error("model has no System One template (tokenizer.chat_template.system_one); "
+              "convert it with its template, or pass one in the request");
+    }
     if (cfg.segment_separator.empty()) {
-        throw std::runtime_error("system_one.template.segment_separator is empty");
+        throw std::runtime_error("system_one.segment_separator is empty");
     }
 
     json questions = json::array();
