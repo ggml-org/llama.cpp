@@ -59,6 +59,7 @@ struct llama_grammar_candidate {
     const uint32_t     * code_points;
     llama_partial_utf8   partial_utf8;
     llama_token          id;
+    size_t               n_consumed;
 };
 
 using llama_grammar_rule  = std::vector<      llama_grammar_element>;

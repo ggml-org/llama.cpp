@@ -1080,13 +1080,11 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     // if the top of the stack is a token rule, then we only need to check the token id
     if (stack_pos->type == LLAMA_GRETYPE_TOKEN || stack_pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
         for (const auto & tok : candidates) {
-            if (*tok.code_points == 0) {
-                // reached the end of a token consumed by char rules, reject iff it ended
-                // in a partial response
-                if (tok.partial_utf8.n_remain != 0) {
+            if (tok.n_consumed > 0) {
+                if (*tok.code_points != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(tok);
                 }
-            } else if (!llama_grammar_match_token(stack_pos, tok.id)) {
+            } else if (tok.partial_utf8.n_remain < 0 || !llama_grammar_match_token(stack_pos, tok.id)) {
                 rejects.push_back(tok);
             }
         }
@@ -1105,7 +1103,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
                 rejects.push_back(tok);
             }
         } else if (llama_grammar_match_char(stack_pos, *tok.code_points).first) {
-            next_candidates.push_back({ tok.index, tok.code_points + 1, tok.partial_utf8, tok.id });
+            next_candidates.push_back({ tok.index, tok.code_points + 1, tok.partial_utf8, tok.id, tok.n_consumed + 1 });
         } else {
             rejects.push_back(tok);
         }
@@ -1123,7 +1121,7 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
 
     auto next_rejects = llama_grammar_reject_candidates(rules, next_stacks, next_candidates);
     for (const auto & tok : next_rejects) {
-        rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id });
+        rejects.push_back({ tok.index, tok.code_points - 1, tok.partial_utf8, tok.id, tok.n_consumed - 1 });
     }
 
     return rejects;
