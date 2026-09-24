@@ -707,9 +707,7 @@ def test_anthropic_id_slot():
     server.server_slots = True
     server.start()
 
-    # on an idle server automatic selection picks the LAST slot (the LRU scan
-    # compares with <= and every slot starts with the same t_last_used), so
-    # pinning slot 0 is what shows whether id_slot survived the conversion
+    # idle server picks the last slot by default, so slot 0 shows that id_slot is used
     res = server.make_request("POST", "/v1/messages", data={
         "model": "test",
         "max_tokens": 8,
