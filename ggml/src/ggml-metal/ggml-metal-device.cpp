@@ -2115,6 +2115,30 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_norm_scale(ggml_
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rms_norm_back(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_RMS_NORM_BACK);
+
+    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]));
+
+    char base[256];
+    char name[256];
+
+    const bool is_c4 = op->ne[0] % 4 == 0;
+
+    snprintf(base, 256, "kernel_rms_norm_back_f32%s", is_c4 ? "_4" : "");
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    res.c4   = is_c4;
+    res.smem = 2*32*sizeof(float); // sum(x*x) and sum(x*dy) per simdgroup
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rope(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_ROPE || op->op == GGML_OP_ROPE_BACK);
 
