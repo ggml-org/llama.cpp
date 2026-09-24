@@ -5,6 +5,7 @@
 		Boxes,
 		ChevronDown,
 		ChevronRight,
+		Download,
 		Eye,
 		EyeOff,
 		Heart,
@@ -26,6 +27,7 @@
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
@@ -56,6 +58,10 @@
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
+	/** In-flight and paused downloads, tracked by the status feed. */
+	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
+	let pendingCancel = $state('');
+	let cancelOpen = $state(false);
 	let pendingDelete = $state('');
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
@@ -89,6 +95,13 @@
 				(a, b) =>
 					Number(modelsStore.isFavoriteFamily(b.key)) - Number(modelsStore.isFavoriteFamily(a.key))
 			);
+	}
+
+	// Cancel is confirmed once for the whole list, so a single dialog instance
+	// serves however many downloads are in flight.
+	function requestCancel(repoWithTag: string): void {
+		pendingCancel = repoWithTag;
+		cancelOpen = true;
 	}
 
 	function requestDelete(option: ModelOption): void {
@@ -458,6 +471,13 @@
 {/snippet}
 
 <DialogConfirmDownload
+	action={ModelDownloadConfirmAction.CANCEL}
+	onClose={() => (cancelOpen = false)}
+	open={cancelOpen}
+	repoWithTag={pendingCancel}
+/>
+
+<DialogConfirmDownload
 	action={ModelDownloadConfirmAction.DELETE}
 	onClose={() => (deleteOpen = false)}
 	open={deleteOpen}
@@ -486,6 +506,18 @@
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
+		{#if downloadEntries.length > 0}
+			<ModelsSection count={downloadEntries.length} label="Download in progress" sticky>
+				{#snippet icon()}
+					<Download class="h-3.5 w-3.5 shrink-0" />
+				{/snippet}
+
+				{#each downloadEntries as entry (entry.repoWithTag)}
+					<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
+				{/each}
+			</ModelsSection>
+		{/if}
+
 		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
