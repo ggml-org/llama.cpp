@@ -2,6 +2,8 @@
 
 #include "llama-kv-stream-policy.h"
 
+class llama_kv_stream_logical_cache;
+
 #include <memory>
 
 struct llama_kv_stream_layer_lease_layout {
@@ -17,12 +19,18 @@ struct llama_kv_stream_complete_layer_request {
     uint32_t query_tokens = 0;
     uint64_t layout_revision = 0;
     uint64_t content_generation = 0;
+    uint64_t cache_id = 0;
+};
+
+struct llama_kv_stream_population_stats {
+    size_t bytes = 0;
+    size_t calls = 0;
 };
 
 struct llama_kv_stream_complete_layer_lease;
 using llama_kv_stream_complete_layer_lease_t = llama_kv_stream_complete_layer_lease *;
 
-// Owns ring-slot admission for one immutable physical layout. It does not copy or publish KV contents.
+// Owns ring slots and optional one-time population for one immutable physical layout.
 class llama_kv_stream_layer_lease_owner {
 public:
     ~llama_kv_stream_layer_lease_owner();
@@ -34,6 +42,10 @@ public:
     // Same-layer requests can share one physical reservation with different query widths.
     llama_kv_stream_complete_layer_lease_t acquire(
         const llama_kv_stream_complete_layer_request & request);
+
+    // Synchronize one upload before returning; query widths share the ready reservation.
+    llama_kv_stream_complete_layer_lease_t acquire_populated(ggml_backend_t backend,
+        const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache);
 
     // Replace layout identity only after every retained reservation has retired.
     bool rebind(const llama_kv_stream_layer_lease_layout & layout);
@@ -73,4 +85,6 @@ size_t llama_kv_stream_complete_layer_lease_ring_slots(
 uint64_t llama_kv_stream_complete_layer_lease_layout_revision(
     llama_kv_stream_complete_layer_lease_t lease);
 uint64_t llama_kv_stream_complete_layer_lease_content_generation(
+    llama_kv_stream_complete_layer_lease_t lease);
+llama_kv_stream_population_stats llama_kv_stream_complete_layer_lease_population(
     llama_kv_stream_complete_layer_lease_t lease);

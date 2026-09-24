@@ -145,10 +145,13 @@ Outcome: the MTP logical cache participates in the same bounded physical KV budg
 | 10.2 | Add separate authoritative host cache, revision, publication frontiers, and truncate/commit operations for MTP. | Accepted/rejected suffixes, cache reuse, cancellation, save/restore, and cross-context identity rejection. |
 | 10.3 | Populate authoritative MTP prompt KV through the common writer/publication path without claiming device residency. | Prompt chunking, wide ubatch, exact host contents, delayed completion, an unadvanced device frontier, and restart from host state. |
 | 10.4 | Acquire and populate a retained complete-MTP-layer lease from resident plus ring spans. | One H2D load per lease, exact resident/ring device bytes, full logical coverage, ring exclusion, failure rollback, and release/reuse rules. |
-| 10.5 | Run MTP catch-up over the retained spans with TG1-TG4. | All catch-up widths, exact logical frontier advancement, span-aware attention qualification, and no repeated suffix transfer. |
+| 10.5 | Reconcile target/MTP frontier lag, coordinate target ring admission, and run catch-up over retained spans with TG1-TG4. | All catch-up widths, no overwrite of retained MTP spans, exact frontier advancement, span-aware attention qualification, and no repeated suffix transfer. |
 | 10.6 | Run sequential MTP draft tokens while retaining the same complete-layer lease. | Multiple draft tokens, append publication, mutable tail handling, and one-transfer invariant. |
 | 10.7 | Integrate acceptance, MTP truncate/commit, and retained-lease invalidation. | Every accepted length, full rejection, target/MTP frontier agreement, cache generation changes, and retry behavior. |
 | 10.8 | Add optional target-L1 prefetch only from spare capacity, with deadline feedback. | No eviction of retained MTP spans, miss recovery, disabled-equivalence control, and measured benefit. |
+
+Stage 10.4 checkpoint: lease population is backend-neutral and synchronous at the return boundary. It currently requires the MTP committed frontier to equal the physical layout's active-token extent. Stage 10.5 must handle the target/MTP frontier gap during catch-up and append new MTP KV to a retained lease without loading its old suffix again.
+The lease owner currently excludes other leases, but the target resident copy queue does not yet consult it. Before live use, target prefetch must share this ring admission so it cannot overwrite a retained MTP suffix.
 
 ## Milestone 11: end-to-end speculative server integration
 
