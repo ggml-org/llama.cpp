@@ -44,15 +44,18 @@
 	let loadProgress = $derived(
 		isOperationInProgress ? modelsStore.status.getLoadProgress(option.model) : null
 	);
-	let contextMax = $derived(
-		option.contextLength ??
-			serverProps?.default_generation_settings?.n_ctx ??
-			LOAD_DEFAULTS.contextLength
-	);
 
 	// The server only reports the full metadata once a model is loaded, which loads
 	// it. When discovery is on, the Hub fills those gaps instead.
 	let hubDetails = $state<HfModelDetailInfo | null>(null);
+	// the window the model can take, from the listing or the Hub; a loaded model's runtime
+	// context only bounds it when nothing else says otherwise
+	let contextMax = $derived(
+		option.contextLength ??
+			hubDetails?.gguf?.context_length ??
+			serverProps?.default_generation_settings?.n_ctx ??
+			LOAD_DEFAULTS.contextLength
+	);
 
 	$effect(() => {
 		const repo = option.model.split(':')[0] ?? option.model;

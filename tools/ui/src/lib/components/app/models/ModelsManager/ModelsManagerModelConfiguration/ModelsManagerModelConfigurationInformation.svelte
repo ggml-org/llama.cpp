@@ -47,29 +47,29 @@
 		};
 	});
 
+	// the window a model can take, from the listing or from the Hub
+	let contextLabel = $derived(
+		option.contextLength
+			? `${formatParameters(option.contextLength)} tokens`
+			: hub?.gguf?.context_length
+				? `${formatNumber(hub.gguf.context_length)} tokens`
+				: null
+	);
 	let meta = $derived(option.meta);
 	// the server reports these once the model is loaded; the Hub knows them anyway
 	let gguf = $derived(hub?.gguf ?? null);
 	let modalities = $derived(modelsStore.props.getModelModalitiesArray(option.id));
-	let isMissingContext = $derived(!serverProps);
 	let rows = $derived([
 		{ isCopyable: true, isMono: true, label: 'File Path', value: serverProps?.model_path ?? null },
 		{
 			label: 'Context Size',
+			// the server reports the context it runs with once the model is loaded; until then
+			// the listing, or the Hub, still says what the model can take
 			value: serverProps
 				? `${formatNumber(serverProps.default_generation_settings.n_ctx)} tokens`
-				: null
+				: (contextLabel ?? null)
 		},
-		{
-			label: 'Training Context',
-			value: meta?.n_ctx_train
-				? `${formatNumber(meta.n_ctx_train)} tokens`
-				: option.contextLength
-					? `${formatParameters(option.contextLength)} tokens`
-					: gguf?.context_length
-						? `${formatNumber(gguf.context_length)} tokens`
-						: null
-		},
+		{ label: 'Training Context', value: contextLabel },
 		{
 			label: 'Model Size',
 			value: meta?.size ? formatFileSize(meta.size) : (resolvedSize ?? size)
@@ -124,21 +124,11 @@
 
 	{#each rows as row (row.label)}
 		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
-			<span
-				class="text-sm text-muted-foreground {row.label === 'Context Size' && isMissingContext
-					? 'text-destructive'
-					: ''}">{row.label}</span
-			>
+			<span class="text-sm text-muted-foreground">{row.label}</span>
 
 			<span class="ml-auto flex min-w-0 items-center gap-2">
 				{#if row.value === null}
-					<span
-						class={isMissingContext && row.label === 'Context Size'
-							? 'text-destructive'
-							: 'text-muted-foreground'}
-					>
-						{isMissingContext && row.label === 'Context Size' ? 'Not available' : '—'}
-					</span>
+					<span class="text-muted-foreground">—</span>
 				{:else}
 					<span
 						class={[
