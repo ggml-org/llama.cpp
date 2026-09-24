@@ -17,6 +17,8 @@
 		defaultOpen?: boolean;
 		/** Controlled open state, for a caller that binds it. */
 		open?: boolean;
+		/** Extra classes for the chevron, to line it up with a row's own control. */
+		chevronClass?: string;
 		/** Hide the chevron while expanded, until the trigger is hovered. */
 		revealChevronOnHover?: boolean;
 		/** Where the trigger sits relative to the content. */
@@ -26,6 +28,7 @@
 	}
 
 	let {
+		chevronClass = '',
 		children,
 		defaultOpen = true,
 		inMenu = false,
@@ -40,7 +43,7 @@
 
 {#snippet chevron()}
 	<span
-		class="ml-auto shrink-0 text-muted-foreground {open && revealChevronOnHover
+		class="ml-auto shrink-0 text-muted-foreground {chevronClass} {open && revealChevronOnHover
 			? 'opacity-0 group-hover:opacity-100'
 			: ''}"
 	>

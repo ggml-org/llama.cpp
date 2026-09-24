@@ -10,6 +10,8 @@
 		children: Snippet;
 		/** Renders the backend's logo in the header. */
 		backendId?: string;
+		/** Extra classes for the chevron, to line it up with a row's own control. */
+		chevronClass?: string;
 		/** Number shown next to the label, omitted when undefined. */
 		count?: number;
 		error?: boolean;
@@ -31,6 +33,7 @@
 
 	let {
 		backendId,
+		chevronClass = '',
 		children,
 		count,
 		defaultOpen = true,
@@ -52,7 +55,13 @@
 	let triggerStyle = $derived(sticky ? 'top: var(--dropdown-sticky-height, 0px)' : '');
 </script>
 
-<CollapsibleSection {defaultOpen} {revealChevronOnHover} {triggerClass} {triggerStyle}>
+<CollapsibleSection
+	{chevronClass}
+	{defaultOpen}
+	{revealChevronOnHover}
+	{triggerClass}
+	{triggerStyle}
+>
 	{#snippet trigger()}
 		{#if onBack}
 			<button

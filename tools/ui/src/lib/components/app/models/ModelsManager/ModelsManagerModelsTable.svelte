@@ -547,6 +547,7 @@
 
 				<ModelsSection
 					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
+					chevronClass="mr-7"
 					count={group.items.length}
 					defaultOpen={group.kind !== 'hidden'}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
