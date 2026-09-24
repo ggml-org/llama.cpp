@@ -18,6 +18,14 @@ export enum SyncableParameterType {
 /**
  * Settings field type - defines the input type for settings fields
  */
+/** How the models manager builds its sections below Loaded and Favorites. */
+export enum ModelGroupingMode {
+	/** One llama-compat block and one OAI-compat block, families inside each. */
+	COMPAT = 'compat',
+	/** One section per provider, families inside each. */
+	PROVIDER = 'provider'
+}
+
 export enum SettingsFieldType {
 	CHECKBOX = 'checkbox',
 	INPUT = 'input',
