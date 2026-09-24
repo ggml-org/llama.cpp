@@ -204,6 +204,7 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_NORMAL,    // number of positions equals to number of tokens
     MTMD_POS_TYPE_MROPE,     // qwen-vl mrope style, each image takes max(t,h,w) position indexes
     MTMD_POS_TYPE_HUNYUANVL, // HunyuanVL mrope + BOI/EOI/newline layout with XD-RoPE dim-3
+    MTMD_POS_TYPE_SENSENOVA_U1, // U1 uses zero-based H/W and one temporal position per image
     MTMD_POS_TYPE_COUNT,     // for validation
 };
 
@@ -706,6 +707,12 @@ struct mtmd_context {
                     // ]<]start of image[>[ ... (image embeddings) ... ]<]end of image[>[
                     img_beg = "]<]start of image[>[";
                     img_end = "]<]end of image[>[";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_SENSENOVA_U1:
+                {
+                    img_beg = "<img>";
+                    img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
@@ -1514,10 +1521,15 @@ struct mtmd_tokenizer {
                     image_tokens->ny = 1;
                 }
                 image_tokens->pos = ctx->pos_type;
+                // U1 uses M-RoPE, but unlike Qwen its image H/W coordinates are
+                // zero-based and the whole image occupies one temporal position.
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_SENSENOVA_U1) {
+                    image_tokens->pos = MTMD_POS_TYPE_SENSENOVA_U1;
+                }
                 // HunyuanVL wraps the image grid with BOI/EOI and adds one newline per row,
                 // and uses XD-RoPE (dim-3 = image index). Override the position type so that
                 // n_tokens() and mtmd_image_tokens_get_decoder_pos pick the HunyuanVL layout.
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_HUNYUANVL) {
+                else if (ctx->proj_type_v() == PROJECTOR_TYPE_HUNYUANVL) {
                     image_tokens->pos       = MTMD_POS_TYPE_HUNYUANVL;
                     image_tokens->image_idx = n_images_added;
                     GGML_ASSERT(n_tokens == (size_t)image_tokens->n_tokens());
@@ -2178,6 +2190,7 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
             return ctx->n_embd_text != 1536 && ctx->n_embd_text != 2560;
         case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_SENSENOVA_U1:
         case PROJECTOR_TYPE_DEEPSEEK4V:
             return true;
         default:
@@ -2480,6 +2493,13 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                 pos.y = pos_0 + i;
                 pos.z = pos_0 + i;
             } break;
+        case MTMD_POS_TYPE_SENSENOVA_U1:
+            {
+                pos.t = pos_0;
+                pos.x = i % image_tokens->nx;
+                pos.y = i / image_tokens->nx;
+                pos.z = 0;
+            } break;
         case MTMD_POS_TYPE_HUNYUANVL:
             {
                 // HunyuanVL layout: [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
@@ -2528,6 +2548,8 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
             return std::max(image_tokens->nx, image_tokens->ny);
         case MTMD_POS_TYPE_NORMAL:
             return image_tokens->n_tokens();
+        case MTMD_POS_TYPE_SENSENOVA_U1:
+            return 1;
         case MTMD_POS_TYPE_HUNYUANVL:
             // HunyuanVL: the sequential (dim-0) position advances by the full token count
             // (includes BOI/EOI and row newline tokens), not by max(nx, ny)

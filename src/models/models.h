@@ -570,6 +570,21 @@ struct llama_model_qwen2moe : public llama_model_base {
 };
 
 
+struct llama_model_sensenova_u1 : public llama_model_base {
+    llama_model_sensenova_u1(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    float rope_freq_base_spatial = 10000.0f;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model_sensenova_u1 & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_qwen3 : public llama_model_base {
     llama_model_qwen3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
