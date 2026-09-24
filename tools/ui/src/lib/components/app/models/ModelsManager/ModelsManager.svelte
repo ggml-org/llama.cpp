@@ -270,6 +270,7 @@
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
+			{overrides}
 			{selectedId}
 			{summary}
 		/>

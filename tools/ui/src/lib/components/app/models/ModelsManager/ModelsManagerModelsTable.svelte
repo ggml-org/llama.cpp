@@ -1,6 +1,10 @@
 <script lang="ts">
-	import type { ModelsTableGroup } from './utils';
-	import type { ModelQuantGroup } from './utils';
+	import {
+		isLocalOption,
+		type ModelOverride,
+		type ModelQuantGroup,
+		type ModelsTableGroup
+	} from './utils';
 	import {
 		Boxes,
 		ChevronDown,
@@ -21,6 +25,7 @@
 		type GroupedListGroup,
 		Logo,
 		ModelAvatar,
+		ModelCapabilityIcons,
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
@@ -36,6 +41,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
+	import { formatParameters } from '$lib/utils/formatters';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -44,6 +50,8 @@
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
+		/** Per-model load and inference overrides, keyed by backend-qualified id. */
+		overrides: Record<string, ModelOverride>;
 		selectedId: string | null;
 		summary: string;
 	}
@@ -53,6 +61,7 @@
 		groups,
 		isFavorite,
 		onSelect,
+		overrides,
 		selectedId,
 		summary
 	}: Props = $props();
@@ -164,12 +173,23 @@
 			}
 		];
 	}
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_7rem_3rem_4.5rem] items-center gap-6';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_9rem_9rem_6rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
+	}
+
+	/** Context the model runs with: the stored override, else what a loaded model reports. */
+	function configuredContext(option: ModelOption): number | null {
+		const override = overrides[option.id]?.load?.contextLength;
+
+		if (override) return override;
+
+		return isLocalOption(option) && isLoadedOption(option)
+			? modelsStore.props.getModelContextSize(option.model)
+			: null;
 	}
 
 	function isLoadedOption(option: ModelOption): boolean {
@@ -201,6 +221,24 @@
 	/>
 {/snippet}
 
+{#snippet capabilities(option: ModelOption)}
+	<span class="flex justify-center justify-self-center">
+		<ModelCapabilityIcons
+			modalities={option.modalities}
+			supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
+			supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
+		/>
+	</span>
+{/snippet}
+
+{#snippet contextCell(option: ModelOption)}
+	{@const configured = configuredContext(option)}
+
+	<span class="justify-self-end text-sm text-muted-foreground">
+		{configured ? `${formatParameters(configured)} tokens` : '—'}
+	</span>
+{/snippet}
+
 {#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -230,6 +268,8 @@
 			<ModelId
 				aliases={option.aliases}
 				class="min-w-0 flex-1"
+				hideCapabilities
+				hideModalities
 				modalities={option.modalities}
 				modelId={option.model}
 				supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
@@ -240,6 +280,10 @@
 		</span>
 
 		<ModelContext class="justify-self-end" {option} />
+
+		{@render contextCell(option)}
+
+		{@render capabilities(option)}
 
 		{@render statusDot(option)}
 
@@ -286,6 +330,8 @@
 					<ModelId
 						aliases={entry.base.aliases}
 						class="min-w-0"
+						hideCapabilities
+						hideModalities
 						hideQuantization
 						modalities={entry.base.modalities}
 						modelId={entry.base.model}
@@ -300,6 +346,10 @@
 			</span>
 
 			<span></span>
+
+			<span></span>
+
+			{@render capabilities(entry.base)}
 
 			<span class="justify-self-center">
 				<span
@@ -348,6 +398,10 @@
 			</span>
 
 			<ModelContext class="justify-self-end" {option} />
+
+			{@render contextCell(option)}
+
+			{@render capabilities(option)}
 
 			{@render statusDot(option)}
 
@@ -443,6 +497,10 @@
 
 		<span></span>
 
+		<span></span>
+
+		<span></span>
+
 		<span
 			class="flex justify-center {expanded
 				? 'opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100'
@@ -513,7 +571,11 @@
 	>
 		<span>Model</span>
 
-		<span class="text-right">Context</span>
+		<span class="text-right whitespace-nowrap">Available context</span>
+
+		<span class="text-right whitespace-nowrap">Configured context</span>
+
+		<span class="text-center">Capabilities</span>
 
 		<span class="text-center">Status</span>
 
