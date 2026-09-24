@@ -6261,8 +6261,7 @@ struct test_conv_2d : public test_case {
     const int                    kernel_offset;
 
     std::string vars() override {
-        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn) +
-               "," + VARS_TO_STR1(kernel_offset);
+        return VARS_TO_STR11(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn, kernel_offset);
     }
 
     double max_nmse_err() override {
