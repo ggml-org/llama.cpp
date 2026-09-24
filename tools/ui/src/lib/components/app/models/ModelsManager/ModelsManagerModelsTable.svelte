@@ -329,17 +329,19 @@
 				size="size-9"
 			/>
 
-			<ModelId
-				aliases={option.aliases}
-				class="min-w-0 flex-1"
-				hideCapabilities
-				modalities={option.modalities}
-				modelId={option.model}
-				tags={option.tags}
-				title={option.model}
-			/>
+			<span class="flex min-w-0 items-center gap-1.25">
+				<ModelId
+					aliases={option.aliases}
+					class="min-w-0 flex-1"
+					hideCapabilities
+					modalities={option.modalities}
+					modelId={option.model}
+					tags={option.tags}
+					title={option.model}
+				/>
 
-			<ModelCapabilities {option} />
+				<ModelCapabilities {option} />
+			</span>
 		</span>
 
 		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
@@ -389,18 +391,20 @@
 			/>
 
 			<span class="min-w-0">
-				<ModelId
-					aliases={entry.base.aliases}
-					class="min-w-0"
-					hideCapabilities
-					hideQuantization
-					modalities={mediaSource.modalities}
-					modelId={entry.base.model}
-					tags={entry.base.tags}
-					title={entry.base.model}
-				/>
+				<span class="flex min-w-0 items-center gap-1.25">
+					<ModelId
+						aliases={entry.base.aliases}
+						class="min-w-0"
+						hideCapabilities
+						hideQuantization
+						modalities={mediaSource.modalities}
+						modelId={entry.base.model}
+						tags={entry.base.tags}
+						title={entry.base.model}
+					/>
 
-				<ModelCapabilities option={entry.base} />
+					<ModelCapabilities option={entry.base} />
+				</span>
 
 				<span class="block text-xs text-muted-foreground">{groupLabel}</span>
 			</span>
