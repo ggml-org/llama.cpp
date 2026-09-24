@@ -501,6 +501,14 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         base_dict["DOT2_F16"] = "1";
     }
 
+    // [TAG_GGML_PREC] compile the src1 power-of-two rescale into the f32-B unified-quant MUL_MAT_ID
+    // shader (scalar/subgroup + coopmat1; coopmat2 is a separate shader). Toggled per-pipeline by the
+    // MMID_RESCALE_ON spec constant.
+    std::map<std::string, std::string> mmid_rescale_dict;
+    if (matmul_id_type != MatMulIdType::NONE && !coopmat2) {
+        mmid_rescale_dict["MMID_RESCALE"] = "1";
+    }
+
     const std::string source_name = coopmat2 ? "mul_mm_cm2.comp" : "mul_mm.comp";
 
     auto const &FLOAT_TYPE = [&](int vec, const std::string &t) -> std::string {
@@ -674,7 +682,7 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         string_to_spv(shader_name + "_quant_f16" + dot2_sfx, source_name, merge_maps(merge_maps(base_dict, quant_float_type_dict), {{"MULMAT_QUANT", "1"}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f16}, {"B_TYPE_SCALAR", "float16_t"}, {"B_TYPEV4", "f16vec4"}, {"D_TYPE", "float"}}), fp16, coopmat, coopmat2, f16acc);
 
         if (!coopmat2) {
-            string_to_spv(shader_name + "_quant_f32" + dot2_sfx, source_name, merge_maps(merge_maps(base_dict, quant_float_type_dict), {{"MULMAT_QUANT", "1"}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f32}, {"B_TYPE_SCALAR", "float"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}), fp16, coopmat, coopmat2, f16acc);
+            string_to_spv(shader_name + "_quant_f32" + dot2_sfx, source_name, merge_maps(merge_maps(merge_maps(base_dict, quant_float_type_dict), mmid_rescale_dict), {{"MULMAT_QUANT", "1"}, {"LOAD_VEC_B", load_vec}, {"B_TYPE", aligned_b_type_f32}, {"B_TYPE_SCALAR", "float"}, {"B_TYPEV4", "vec4"}, {"D_TYPE", "float"}}), fp16, coopmat, coopmat2, f16acc);
         }
     }
 }
@@ -945,6 +953,9 @@ void process_shaders() {
 
     string_to_spv("quantize_q8_1_x4", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}});
     string_to_spv("quantize_q8_1_x4_subgroup", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"USE_SUBGROUPS", "1"}});
+
+    string_to_spv("mul_mm_id_amax_reduce", "mul_mm_id_amax.comp", {{"AMAX_REDUCE", "1"}});
+    string_to_spv("mul_mm_id_amax",        "mul_mm_id_amax.comp", {});
 
     string_to_spv("mul_f32", "mul.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 

@@ -1,0 +1,74 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {float data_a[];};
+layout (binding = 1)          buffer D {float data_d[];};
+
+layout (push_constant) uniform parameter {
+    uint ne;
+    uint nparts;
+} p;
+
+shared float sh[256];
+
+// [TAG_GGML_PREC] power-of-two rescale factors for src1 of MUL_MAT_ID.
+// dst layout: [0]=s1_inv, [1]=s1_scale, [2 .. 2+nparts)=per-workgroup partials.
+
+#ifdef AMAX_REDUCE
+void main() {
+    const uint tid       = gl_LocalInvocationID.x;
+    const uint wg        = gl_WorkGroupID.x;
+    const uint nthreads  = gl_WorkGroupSize.x;
+
+    float lmax = 0.0f;
+    for (uint i = wg * nthreads + tid; i < p.ne; i += p.nparts * nthreads) {
+        lmax = max(lmax, abs(data_a[i]));
+    }
+
+    sh[tid] = lmax;
+    barrier();
+    [[unroll]] for (uint s = nthreads / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] = max(sh[tid], sh[tid + s]);
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        data_d[2 + wg] = sh[0];
+    }
+}
+#else
+void main() {
+    const uint tid      = gl_LocalInvocationID.x;
+    const uint nthreads = gl_WorkGroupSize.x;
+
+    float lmax = 0.0f;
+    for (uint i = tid; i < p.nparts; i += nthreads) {
+        lmax = max(lmax, data_d[2 + i]);
+    }
+
+    sh[tid] = lmax;
+    barrier();
+    [[unroll]] for (uint s = nthreads / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sh[tid] = max(sh[tid], sh[tid + s]);
+        }
+        barrier();
+    }
+
+    if (tid == 0) {
+        const float amax = sh[0];
+        float scale = 1.0f;
+        // src1 already inf/nan is not ours to fix - keep the scale at 1.0
+        if (!isinf(amax) && !isnan(amax) && amax > 32768.0f) {
+            scale = exp2(ceil(log2(amax)) - 15.0f);
+        }
+        data_d[0] = 1.0f / scale; // s1_inv, exact: scale is a power of two
+        data_d[1] = scale;        // s1_scale
+    }
+}
+#endif

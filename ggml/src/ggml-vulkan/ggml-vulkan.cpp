@@ -2150,23 +2150,28 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
 #endif
 
+    // [TAG_GGML_PREC] constantID layout: ...=11 ALIGNED, 12 MmTypeA (quant), 13 MMID_RESCALE_ON,
+    // 14 SHMEM_STRIDE_PAD, 15 APPLY_SLM_A_RESHAPE (coopmat, shifted up so 13 is uniform).
     auto const &ggml_vk_mul_mm_spec = [&device](std::vector<uint32_t> spec, bool aligned) {
         spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
         if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
             device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            spec.push_back(0u);  // constantID=12: SHMEM_STRIDE_PAD = 0
-            spec.push_back(1u);  // constantID=13: APPLY_SLM_A_RESHAPE = true
+            spec.push_back(0u);  // constantID=12: MmTypeA (unused for non-quant)
+            spec.push_back(0u);  // constantID=13: MMID_RESCALE_ON (unused for non-quant)
+            spec.push_back(0u);  // constantID=14: SHMEM_STRIDE_PAD = 0
+            spec.push_back(1u);  // constantID=15: APPLY_SLM_A_RESHAPE = true
         }
         return spec;
     };
 
-    auto const &ggml_vk_mul_mm_spec_quant = [&device](std::vector<uint32_t> spec, bool aligned, uint32_t type) {
-        spec.push_back(aligned ? 1u : 0u);  // constantID=11: ALIGNED
-        spec.push_back(type);               // constantID=12: MmTypeA
+    auto const &ggml_vk_mul_mm_spec_quant = [&device](std::vector<uint32_t> spec, bool aligned, uint32_t type, bool amax) {
+        spec.push_back(aligned ? 1u : 0u);      // constantID=11: ALIGNED
+        spec.push_back(type);                   // constantID=12: MmTypeA
+        spec.push_back(amax ? 1u : 0u);         // constantID=13: MMID_RESCALE_ON
         if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
             device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            spec.push_back(0u);  // constantID=13: SHMEM_STRIDE_PAD = 0
-            spec.push_back(1u);  // constantID=14: APPLY_SLM_A_RESHAPE = true
+            spec.push_back(0u);  // constantID=14: SHMEM_STRIDE_PAD = 0
+            spec.push_back(1u);  // constantID=15: APPLY_SLM_A_RESHAPE = true
         }
         return spec;
     };
@@ -2194,6 +2199,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     FOR_EACH_LUT_FP4_TYPE(X)
 
     const int mul_mat_id_param_count = 5;
+    const uint32_t mul_mat_id_amax_param_count = 6;
 
     using spec_fn_t = std::function<std::vector<uint32_t>(const std::vector<uint32_t>&, bool)>;
     auto const &create_mm_pipelines = [&](
@@ -2391,7 +2397,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         };
         auto cm1_create_quant = [&](vk_matmul_pipeline_key key, const std::vector<vk_tile_config>& tc_base,
                                     const std::string& name, size_t len, const void* data, uint32_t pc_size, uint32_t pc) {
-            spec_fn_t qs = [&, type_a=key.type_a](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec_quant(wt, a, (uint32_t)type_a); };
+            spec_fn_t qs = [&, type_a=key.type_a, amax=key.amax](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec_quant(wt, a, (uint32_t)type_a, amax); };
             auto tc = filter_tc(tc_base, key.type_a, key.mul_mat_id);
             if (!tc.empty()) create_mm_pipelines(key, tc, name, len, data, pc_size, pc, qs, false, true, 0, true, cm1_pin);
         };
@@ -2509,12 +2515,15 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #endif
         for (const auto type : non_lut_quant_types) {
             if (device->coopmat_acc_f16_support) {
-                cm1_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmq_id, "matmul_id_subgroup_quant_f32_f16acc", matmul_id_subgroup_quant_f32_f16acc_cm1_len, matmul_id_subgroup_quant_f32_f16acc_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+                // [TAG_GGML_PREC] quant f32-B id carries the rescale binding => 6 params
+                cm1_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmq_id, "matmul_id_subgroup_quant_f32_f16acc", matmul_id_subgroup_quant_f32_f16acc_cm1_len, matmul_id_subgroup_quant_f32_f16acc_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
                 cm1_create_quant({type, GGML_TYPE_F16, true, true},  tc_mmq_id, "matmul_id_subgroup_quant_f16_f16acc", matmul_id_subgroup_quant_f16_f16acc_cm1_len, matmul_id_subgroup_quant_f16_f16acc_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
             }
             if (device->coopmat_acc_f32_support) {
-                cm1_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmq_id, "matmul_id_subgroup_quant_f32",        matmul_id_subgroup_quant_f32_cm1_len,        matmul_id_subgroup_quant_f32_cm1_data,        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+                cm1_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmq_id, "matmul_id_subgroup_quant_f32",        matmul_id_subgroup_quant_f32_cm1_len,        matmul_id_subgroup_quant_f32_cm1_data,        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
                 cm1_create_quant({type, GGML_TYPE_F16, true, false}, tc_mmq_id, "matmul_id_subgroup_quant_f16",        matmul_id_subgroup_quant_f16_cm1_len,        matmul_id_subgroup_quant_f16_cm1_data,        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+                // [TAG_GGML_PREC] src1 power-of-two rescale variant (spec MMID_RESCALE_ON=1), same SPV
+                cm1_create_quant({type, GGML_TYPE_F32, true, false, true}, tc_mmq_id, "matmul_id_subgroup_quant_f32_amax", matmul_id_subgroup_quant_f32_cm1_len, matmul_id_subgroup_quant_f32_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
             }
         }
         // The _f16 variants provide the f16 B-type pipeline used when y_non_contig converts f32->f16.
@@ -2580,7 +2589,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                                    uint32_t rsgs = 0) {
             auto tc = filter_tc(tc_base, key.type_a, key.mul_mat_id);
             if (!tc.empty()) {
-                spec_fn_t qs = [&, type_a=key.type_a](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec_quant(wt, a, (uint32_t)type_a); };
+                spec_fn_t qs = [&, type_a=key.type_a, amax=key.amax](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec_quant(wt, a, (uint32_t)type_a, amax); };
                 create_mm_pipelines(key, tc, name, len, data, pc_size, pc, qs, false, rsgs > 0, rsgs);
             }
         };
@@ -2653,8 +2662,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 // BF16 id - no dot2
                 sg_create({GGML_TYPE_BF16, GGML_TYPE_BF16, true, false}, tc_id, "matmul_id_subgroup_bf16", matmul_id_subgroup_bf16_len, matmul_id_subgroup_bf16_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size_16);
                 for (const auto type : non_lut_quant_types) {
-                    sg_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_subgroup_quant_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_subgroup_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size);
-                    sg_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmqid, "matmul_id_subgroup_quant_f32",        SPV_DOT2(matmul_id_subgroup_quant_f32),        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size);
+                    // [TAG_GGML_PREC] the unified quant f32-B id shader carries the rescale binding => 6 params
+                    sg_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_subgroup_quant_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_subgroup_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count, mul_mat_subgroup_size);
+                    sg_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmqid, "matmul_id_subgroup_quant_f32",        SPV_DOT2(matmul_id_subgroup_quant_f32),        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count, mul_mat_subgroup_size);
+                    sg_create_quant({type, GGML_TYPE_F32, true, false, true}, tc_mmqid, "matmul_id_subgroup_quant_f32_amax", SPV_DOT2(matmul_id_subgroup_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count, mul_mat_subgroup_size);
                 }
         #define X_SG_ID_SUB(TYPE, tstr) \
                 sg_create({TYPE, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_subgroup_" #tstr "_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_subgroup_##tstr##_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count, mul_mat_subgroup_size); \
@@ -2690,8 +2701,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 // BF16 id - no dot2
                 sg_create({GGML_TYPE_BF16, GGML_TYPE_BF16, true, false}, tc_mm, "matmul_id_bf16", matmul_id_bf16_len, matmul_id_bf16_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
                 for (const auto type : non_lut_quant_types) {
-                    sg_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_quant_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
-                    sg_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmqid, "matmul_id_quant_f32",        SPV_DOT2(matmul_id_quant_f32),        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+                    // [TAG_GGML_PREC] the unified quant f32-B id shader carries the rescale binding => 6 params
+                    sg_create_quant({type, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_quant_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
+                    sg_create_quant({type, GGML_TYPE_F32, true, false}, tc_mmqid, "matmul_id_quant_f32",        SPV_DOT2(matmul_id_quant_f32),        sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
+                    sg_create_quant({type, GGML_TYPE_F32, true, false, true}, tc_mmqid, "matmul_id_quant_f32_amax", SPV_DOT2(matmul_id_quant_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_amax_param_count);
                 }
         #define X_SG_ID(TYPE, tstr) \
                 sg_create({TYPE, GGML_TYPE_F32, true, true},  tc_mmqid, "matmul_id_" #tstr "_f32_f16acc", SPV_DOT2_F16ACC(matmul_id_##tstr##_f32), sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count); \
@@ -3241,6 +3254,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     } else {
         ggml_vk_create_pipeline(device, device->pipeline_quantize_q8_1_x4, "quantize_q8_1_x4", quantize_q8_1_x4_len, quantize_q8_1_x4_data, "main", 2, sizeof(vk_quantize_q8_1_push_constants), {32 * device->subgroup_size / 8, 1, 1}, { device->subgroup_size }, 1);
     }
+
+    // [TAG_GGML_PREC] src1 power-of-two rescale factors for MUL_MAT_ID (one workgroup per part / one to finalize)
+    ggml_vk_create_pipeline(device, device->pipeline_mul_mm_id_amax_reduce, "mul_mm_id_amax_reduce", mul_mm_id_amax_reduce_len, mul_mm_id_amax_reduce_data, "main", 2, sizeof(vk_mm_id_amax_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_mul_mm_id_amax,        "mul_mm_id_amax",        mul_mm_id_amax_len,        mul_mm_id_amax_data,        "main", 2, sizeof(vk_mm_id_amax_push_constants), {1, 1, 1}, {}, 1);
 
     for (uint32_t i = 0; i < p021_max_gqa_ratio; ++i) {
         if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
@@ -5483,6 +5500,8 @@ void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
     ctx->prealloc_size_split_k = 0;
+    // [TAG_GGML_PREC] 2 rescale factors + one partial per amax workgroup
+    ctx->prealloc_size_mm_id_amax = (2 + GGML_VK_MM_ID_AMAX_NPARTS) * sizeof(float);
     // Fixed size of 1KB, for deterministic behavior
     ctx->prealloc_size_add_rms_partials = 1024;
 
@@ -6023,10 +6042,23 @@ static bool ggml_vk_get_mul_mat_mat_f16acc(ggml_backend_vk_context * ctx, ggml_t
     return ctx->device->fp16 && prec_allows_f16;
 }
 
+// [TAG_GGML_PREC] src0 types with a src1-rescale MUL_MAT_ID variant (the unified quant shader set)
+static bool ggml_vk_mm_id_amax_src0_supported(ggml_type t) {
+    switch (t) {
+        case GGML_TYPE_Q1_0: case GGML_TYPE_Q2_0: case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1: case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K: case GGML_TYPE_Q3_K: case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K: case GGML_TYPE_TQ1_0: case GGML_TYPE_TQ2_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static const std::vector<vk_matmul_pipeline_pair>* ggml_vk_get_mul_mat_mat_pipeline_map(
-        ggml_backend_vk_context * ctx, ggml_type src0_type, ggml_type src1_type, ggml_prec prec, bool mul_mat_id = false) {
+        ggml_backend_vk_context * ctx, ggml_type src0_type, ggml_type src1_type, ggml_prec prec, bool mul_mat_id = false, bool amax = false) {
     bool f16acc = ggml_vk_get_mul_mat_mat_f16acc(ctx, src0_type, src1_type, prec);
-    vk_matmul_pipeline_key key{src0_type, src1_type, mul_mat_id, f16acc};
+    vk_matmul_pipeline_key key{src0_type, src1_type, mul_mat_id, f16acc, amax};
     auto it = ctx->device->pipeline_matmul.find(key);
     if (it == ctx->device->pipeline_matmul.end() || it->second.empty()) {
         // Try without f16acc
@@ -6069,7 +6101,7 @@ static void ggml_vk_matmul_id(
         uint32_t m, uint32_t n, uint32_t k, uint32_t stride_a, uint32_t stride_b, uint32_t stride_d,
         uint32_t batch_stride_a, uint32_t batch_stride_b, uint32_t batch_stride_d,
         uint32_t n_as, uint32_t nei0, uint32_t nei1, uint32_t nbi1, uint32_t ne11,
-        uint32_t row_ids_offset, uint32_t max_tiles) {
+        uint32_t row_ids_offset, uint32_t max_tiles, const vk_subbuffer & amax) {
     VK_LOG_DEBUG("ggml_vk_matmul_id(a: (" << a.buffer->buffer << ", " << a.offset << ", " << a.size << "), b: (" << b.buffer->buffer << ", " << b.offset << ", " << b.size << "), d: (" << d.buffer->buffer << ", " << d.offset << ", " << d.size << "), ids: (" << ids.buffer->buffer << ", " << ids.offset << ", " << ids.size << "), expert_count: (" << expert_count_buf.buffer->buffer << ", " << expert_count_buf.offset << ", " << expert_count_buf.size << "), " <<
         "m: " << m << ", n: " << n << ", k: " << k << ", stride_a: " << stride_a << ", stride_b: " << stride_b << ", stride_d: " << stride_d << ", " <<
         "batch_stride_a: " << batch_stride_a << ", batch_stride_b: " << batch_stride_b << ", batch_stride_d: " << batch_stride_d << ", " <<
@@ -6078,7 +6110,12 @@ static void ggml_vk_matmul_id(
                                               nei0, nei1, nbi1, ne11, n_as, row_ids_offset };
     const uint32_t tiles_y = std::min(max_tiles, ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
     const std::array<uint32_t, 3> elements = { m, tiles_y * pipeline->wg_denoms[1], uint32_t(CEIL_DIV(max_tiles, tiles_y)) };
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d, ids, expert_count_buf }, pc, elements);
+    // [TAG_GGML_PREC] the src1-rescale MUL_MAT_ID pipeline carries the extra amax binding
+    if (pipeline->parameter_count == 6) {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d, ids, expert_count_buf, amax }, pc, elements);
+    } else {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d, ids, expert_count_buf }, pc, elements);
+    }
 }
 
 bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor) {
@@ -6306,6 +6343,15 @@ void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& subctx, co
     };
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, pc, { elements, 1, 1 });
+    ggml_vk_sync_buffers(ctx, subctx);
+}
+
+// [TAG_GGML_PREC] compute src1 power-of-two rescale factors for a MUL_MAT_ID (out = [s1_inv, s1_scale, partials...])
+static void ggml_vk_mul_mm_id_amax(ggml_backend_vk_context * ctx, vk_context& subctx, const vk_subbuffer & in, const vk_subbuffer & out, uint32_t ne) {
+    const vk_mm_id_amax_push_constants pc = { ne, (uint32_t)GGML_VK_MM_ID_AMAX_NPARTS };
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mm_id_amax_reduce, { in, out }, pc, { (uint32_t)GGML_VK_MM_ID_AMAX_NPARTS, 1, 1 });
+    ggml_vk_sync_buffers(ctx, subctx);
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mm_id_amax,        { in, out }, pc, { 1, 1, 1 });
     ggml_vk_sync_buffers(ctx, subctx);
 }
 
@@ -7436,8 +7482,11 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 #else
     const bool y_decode_vector_staging = false;
 #endif
+    // [TAG_GGML_PREC] src1 requires F32 rank: q8_1 is lossier than f16, so keep the f32 B path and
+    // rescale the src1 tiles by a power of two to avoid f16 overflow (see supports_op for the gate).
+    const bool src1_prec_f32 = dst->op_params[3] == GGML_PREC_F32;
     const bool can_quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 &&
-                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0;
+                                ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && !src1_prec_f32;
     // Intel coopmat1 matrix cores prefer f16 activations for quantized weights
     const bool prefer_f16_b = ctx->device->coopmat_support && !ctx->device->coopmat2 &&
                               ctx->device->vendor_id == VK_VENDOR_ID_INTEL &&
@@ -7449,14 +7498,19 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     const bool quantize_y   = y_kernel_type == GGML_TYPE_Q8_1;
     const bool y_f32_kernel = y_kernel_type == GGML_TYPE_F32;
 
+    const bool use_amax = src1_prec_f32 && ctx->device->fp16 && !ctx->device->coopmat2 &&
+                          src1->type == GGML_TYPE_F32 && y_f32_kernel &&
+                          ggml_vk_mm_id_amax_src0_supported(src0->type);
+    const ggml_prec mm_prec = use_amax ? GGML_PREC_F32 : (ggml_prec)dst->op_params[0];
+
     const std::vector<vk_matmul_pipeline_pair>* mmp_map =
-        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, (ggml_prec)dst->op_params[0], true);
+        ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_kernel_type, mm_prec, true, use_amax);
 
     const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;
 
     if (qx_needs_dequant) {
         // dequant src0 to f16
-        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, f16_type, y_kernel_type, (ggml_prec)dst->op_params[0], true);
+        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, f16_type, y_kernel_type, mm_prec, true);
     }
 
     GGML_ASSERT(mmp_map != nullptr);
@@ -7562,6 +7616,10 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         }
         if (quantize_y) {
             ggml_pipeline_request_descriptor_sets(ctx, to_q8_1, 1);
+        }
+        if (use_amax) {
+            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mm_id_amax_reduce, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mm_id_amax, 1);
         }
         ggml_pipeline_request_descriptor_sets(ctx, count_experts, 1);
     }
@@ -7683,6 +7741,12 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
     const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
 
+    // [TAG_GGML_PREC] compute the src1 power-of-two rescale factors consumed by the matmul
+    vk_subbuffer amax_buf = { ctx->prealloc_mm_id_amax, 0, ctx->prealloc_size_mm_id_amax };
+    if (use_amax) {
+        ggml_vk_mul_mm_id_amax(ctx, subctx, { d_Y, y_buf_offset, y_sz }, amax_buf, (uint32_t)ggml_nelements(src1));
+    }
+
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
     uint32_t stride_b_y = y_needs_k_padding ? y_staged_row_stride : ne10;
     uint32_t stride_batch_y = y_needs_k_padding ? y_staged_row_stride * ne11 : ((qy_needs_dequant || quantize_y) ? ne10*ne11 : ggml_vk_batch_stride(src1));
@@ -7702,7 +7766,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         { d_D, d_buf_offset, d_sz }, std::move(d_ids), expert_count_buf,
         ne01, ne21, ne10, ne10, stride_b_y, ne01,
         stride_batch_x, stride_batch_y, ne20*ne21,
-        n_as, nei0, nei1, nbi1 / ggml_type_size(ids->type), ne11, row_ids_offset, max_tiles
+        n_as, nei0, nei1, nbi1 / ggml_type_size(ids->type), ne11, row_ids_offset, max_tiles, amax_buf
     );  // NOLINT
 
     if (x_non_contig || qx_needs_dequant) {
@@ -12281,6 +12345,13 @@ void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subct
         }
         ctx->prealloc_add_rms_partials = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_add_rms_partials);
     }
+    if (ctx->prealloc_mm_id_amax == nullptr || (ctx->prealloc_size_mm_id_amax > 0 && ctx->prealloc_mm_id_amax->size < ctx->prealloc_size_mm_id_amax)) {
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(mm_id_amax_size: " << ctx->prealloc_size_mm_id_amax << ")");
+        if (ctx->prealloc_mm_id_amax != nullptr) {
+            ggml_vk_destroy_buffer(ctx->prealloc_mm_id_amax);
+        }
+        ctx->prealloc_mm_id_amax = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_mm_id_amax);
+    }
 }
 
 bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool last_node, bool almost_ready, bool submit){
@@ -15518,8 +15589,21 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                         // If there's not enough shared memory for row_ids and the result tile, fallback to CPU
                         return false;
                     }
-                    if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
-                        return false;
+                    // [TAG_GGML_PREC] src1 requires F32 rank. On fp16 devices the f32 B tiles overflow,
+                    // so we rescale src1 by a power of two (mul_mm.comp f32-B path). Not yet wired for
+                    // coopmat2 or the Intel coopmat1 forced-f16 quant path, or non-contiguous src1.
+                    // On fp16 devices the f32 B tiles overflow; the src1 power-of-two rescale is wired for the
+                    // scalar/subgroup and coopmat1 unified-quant path. coopmat2 (separate shader), the Intel
+                    // coopmat1 forced-f16 quant path, coopmat1 without f32 accumulation, non-contiguous src1,
+                    // and other src0 fall back to CPU.
+                    if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32 && op->src[1]->type == GGML_TYPE_F32 && device->fp16) {
+                        const bool intel_cm1_quant = device->coopmat_support && !device->coopmat2 &&
+                                                     device->vendor_id == VK_VENDOR_ID_INTEL && ggml_is_quantized(src0_type);
+                        const bool cm1_no_f32acc = device->coopmat_support && !device->coopmat2 && !device->coopmat_acc_f32_support;
+                        if (device->coopmat2 || intel_cm1_quant || cm1_no_f32acc ||
+                            !ggml_is_contiguous(op->src[1]) || !ggml_vk_mm_id_amax_src0_supported(src0_type)) {
+                            return false;
+                        }
                     }
                 }
                 switch (src0_type) {

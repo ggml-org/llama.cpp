@@ -66,6 +66,11 @@ struct vk_mat_mat_id_push_constants {
     uint32_t row_ids_offset;
 };
 
+struct vk_mm_id_amax_push_constants {
+    uint32_t ne;
+    uint32_t nparts;
+};
+
 struct vk_mat_vec_id_push_constants {
     uint32_t ncols;
     uint32_t stride_a;

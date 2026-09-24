@@ -683,7 +683,11 @@ void load_b_to_shmem(const uint pos_b, const uint row, const uint col, const uin
         const u16vec2 row_idx = row_ids[col];
         const uint idx = pos_b + row_idx.y * p.batch_stride_b / LOAD_VEC_B + (row_idx.x % p.ne11) * p.stride_b / LOAD_VEC_B + row;
         const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_B / 2;
+#ifdef MMID_RESCALE
+        FLOAT_TYPEV8 bb = FLOAT_TYPEV8(data_b[idx] * mmid_s1_inv);
+#else
         FLOAT_TYPEV8 bb = FLOAT_TYPEV8(data_b[idx]);
+#endif
         buf_b[buf_idx + 0] = bb[0].xy;
         buf_b[buf_idx + 1] = bb[0].zw;
         buf_b[buf_idx + 2] = bb[1].xy;
@@ -697,6 +701,8 @@ void load_b_to_shmem(const uint pos_b, const uint row, const uint col, const uin
         const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_B / 2;
 #if defined(DATA_B_BF16)
         FLOAT_TYPEV4 bb = FLOAT_TYPEV4(TO_FLOAT_TYPE(data_b[idx]));
+#elif defined(MMID_RESCALE)
+        FLOAT_TYPEV4 bb = FLOAT_TYPEV4(data_b[idx] * mmid_s1_inv);
 #else
         FLOAT_TYPEV4 bb = FLOAT_TYPEV4(data_b[idx]);
 #endif
@@ -710,12 +716,21 @@ void load_b_to_shmem(const uint pos_b, const uint row, const uint col, const uin
     if (row_i < _ne1 && block + row * 2 + 1 < end_k) {
         const u16vec2 row_idx = row_ids[col];
         const uint idx = pos_b + row_idx.y * p.batch_stride_b + (row_idx.x % p.ne11) * p.stride_b + row * 2;
+#ifdef MMID_RESCALE
+        buf_b[buf_idx] = FLOAT_TYPEV2(TO_FLOAT_TYPE(data_b_scalar[idx]     * mmid_s1_inv),
+                                        TO_FLOAT_TYPE(data_b_scalar[idx + 1] * mmid_s1_inv));
+#else
         buf_b[buf_idx] = FLOAT_TYPEV2(TO_FLOAT_TYPE(data_b_scalar[idx]),
                                         TO_FLOAT_TYPE(data_b_scalar[idx + 1]));
+#endif
     } else if (row_i < _ne1 && block + row * 2 < end_k) {
         const u16vec2 row_idx = row_ids[col];
         const uint idx = pos_b + row_idx.y * p.batch_stride_b + (row_idx.x % p.ne11) * p.stride_b + row * 2;
+#ifdef MMID_RESCALE
+        buf_b[buf_idx] = FLOAT_TYPEV2(TO_FLOAT_TYPE(data_b_scalar[idx] * mmid_s1_inv), 0.0f);
+#else
         buf_b[buf_idx] = FLOAT_TYPEV2(TO_FLOAT_TYPE(data_b_scalar[idx]), 0.0f);
+#endif
     } else {
         buf_b[buf_idx] = FLOAT_TYPEV2(0.0f);
     }
