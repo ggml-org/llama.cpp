@@ -97,7 +97,7 @@ static std::vector<token_and_piece> parse_tokens(const std::string & input) {
 static bool mask_allows(llama_grammar * grammar, const token_and_piece & in) {
     const auto decoded = llama_grammar_decode_utf8(in.piece, grammar->partial_utf8);
 
-    llama_grammar_candidates rejects = { { 0, decoded.first.data(), decoded.second, in.token } };
+    llama_grammar_candidates rejects = { { 0, decoded.first.data(), decoded.second, in.token, 0, llama_grammar_is_opaque(*grammar, in.token) } };
     for (const auto & stack : llama_grammar_get_stacks(grammar)) {
         rejects = llama_grammar_reject_candidates_for_stack(llama_grammar_get_rules(grammar), stack, rejects);
     }
@@ -632,6 +632,42 @@ static void test_token_sets() {
             token(10) + token(20) + token(11),
             token(10) + token(29) + token(11),
             token(10) + token(11) + token(11),
+        }
+    );
+}
+
+static void test_opaque_tokens() {
+    // Char rules do not match a token that a token rule names, other tokens still match as text
+    test_grammar(
+        "tokens named by token rules are opaque to char rules",
+        R"""(
+            root ::= [^x]* <[11]> "done")""",
+        // Passing strings
+        {
+            "abc" + token(11) + "done",
+            token(11) + "done",
+            token(12) + token(11) + "done",
+        },
+        // Failing strings
+        {
+            "abc" + token(11) + "more" + token(11) + "done",
+            token(11) + token(11) + "done",
+        }
+    );
+
+    test_grammar(
+        "tokens named by a negated set are opaque to char rules",
+        R"""(
+            root ::= [^x]* !<[11,20-29]>)""",
+        // Passing strings
+        {
+            "abc" + token(30),
+            token(12) + token(30),
+        },
+        // Failing strings
+        {
+            token(25) + token(30),
+            token(11) + token(30),
         }
     );
 }
@@ -1611,6 +1647,7 @@ int main() {
     test_complex_grammar();
     test_token_rule_utf8();
     test_token_sets();
+    test_opaque_tokens();
     test_special_chars();
     test_quantifiers();
     test_failure_missing_root();
