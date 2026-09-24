@@ -467,7 +467,6 @@ static std::filesystem::path get_server_exec_path() {
 }
 
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
-    preset.unset_option("LLAMA_ARG_LOG_FILE");
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
     preset.unset_option("LLAMA_API_KEY");
@@ -585,8 +584,12 @@ server_models::server_models(
               base_preset(ctx_preset.load_from_args(argc, argv)),
               sched(std::make_unique<server_lru_sched>(*this)),
               monitor(std::make_unique<server_monitor>(*this)) {
-    // clean up base preset
+    // propagate base params to child
     unset_reserved_args(base_preset, true);
+
+    // do not propagate these options, but allow preset to explicitly set them
+    base_preset.unset_option("LLAMA_ARG_LOG_FILE");
+
     // set binary path
     try {
         bin_path = get_server_exec_path().string();

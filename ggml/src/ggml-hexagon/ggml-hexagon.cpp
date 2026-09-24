@@ -5476,6 +5476,10 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
         return false;
     }
 
+    if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
+        return false;
+    }
+
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
