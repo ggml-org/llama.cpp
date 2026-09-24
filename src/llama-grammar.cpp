@@ -1079,13 +1079,13 @@ static bool llama_grammar_reject_step(
     if (stack_pos->type == LLAMA_GRETYPE_TOKEN || stack_pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
         for (const uint32_t i : cur) {
             const auto & tok = candidates[i];
-            if (tok.code_points[depth] == 0) {
-                // reached the end of a token consumed by char rules, reject iff it ended
-                // in a partial response
-                if (tok.partial_utf8.n_remain != 0) {
+            if (depth > 0) {
+                // char rules consumed part of the token, so a token rule can only
+                // follow if the token ended cleanly
+                if (tok.code_points[depth] != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(i);
                 }
-            } else if (!llama_grammar_match_token(stack_pos, tok.id)) {
+            } else if (tok.partial_utf8.n_remain < 0 || !llama_grammar_match_token(stack_pos, tok.id)) {
                 rejects.push_back(i);
             }
         }
