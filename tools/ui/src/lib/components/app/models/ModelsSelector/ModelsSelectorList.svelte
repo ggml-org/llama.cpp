@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { Heart, Power } from '@lucide/svelte';
+	import { Boxes, Heart, Power } from '@lucide/svelte';
 	import { GroupedList, ModelAvatar, ModelsSelectorOption } from '$lib/components/app';
 	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
@@ -12,7 +12,10 @@
 	} from '$lib/components/app/navigation/utils';
 	import { MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
+	import { ModelGroupingMode } from '$lib/enums/settings.enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 
 	interface Props {
@@ -85,6 +88,29 @@
 	// and falls back to 0 in surfaces without one (the mobile sheet)
 	let headerClass = $derived(`${sectionHeaderClass} sticky z-10 bg-popover`);
 	const headerStyle = 'top: var(--dropdown-sticky-height, 0px)';
+
+	/** By capability: one block whose models can load and unload, one that is chat only. */
+	let compatSections = $derived.by(() => {
+		const localItems = localGroups.available.flatMap((group) => group.items);
+		const canLoad = (backendId: string) => getBackendCapabilities(getBackend(backendId)).loadUnload;
+		const loadable = groups.providers.filter((provider) => canLoad(provider.backendId));
+		const chatOnly = groups.providers.filter((provider) => !canLoad(provider.backendId));
+
+		return [
+			{
+				icon: 'logo' as const,
+				items: [...localItems, ...loadable.flatMap((provider) => provider.items)],
+				key: 'llama-compat',
+				label: 'Llama-compat'
+			},
+			{
+				icon: 'boxes' as const,
+				items: chatOnly.flatMap((provider) => provider.items),
+				key: 'oai-compat',
+				label: 'OAI-compat'
+			}
+		].filter((section) => section.items.length > 0);
+	});
 
 	/** In-flight / paused downloads, tracked by the status feed. */
 	let getDownloadEntries = $derived(modelsStore.status.getDownloadEntries());
@@ -210,47 +236,72 @@
 	{/if}
 {/snippet}
 
-{#if groups.loaded.length > 0 || groups.available.length > 0}
-	<ModelsSection label="Local models" revealChevronOnHover sticky>
-		{#snippet icon()}
-			<Logo class="shrink-0" style="--size: 0.875rem" />
-		{/snippet}
+{#if settingsStore.config.modelGrouping === ModelGroupingMode.COMPAT}
+	{#snippet compatSection(
+		label: string,
+		items: ModelItem[],
+		iconKind: 'boxes' | 'logo',
+		key: string
+	)}
+		<ModelsSection {label} revealChevronOnHover sticky>
+			{#snippet icon()}
+				{#if iconKind === 'logo'}
+					<Logo class="shrink-0" style="--size: 0.875rem" />
+				{:else}
+					<Boxes class="h-3.5 w-3.5 shrink-0" />
+				{/if}
+			{/snippet}
 
-		{@render localRows()}
-	</ModelsSection>
-{/if}
+			{@render listRows(items, key)}
+		</ModelsSection>
+	{/snippet}
 
-<!-- One section per remote provider. -->
-{#each groups.providers as provider (provider.backendId)}
-	<ModelsSection
-		backendId={provider.backendId}
-		error={Boolean(provider.error)}
-		label={provider.name}
-		loading={provider.loading}
-		onBack={onProviderBack}
-		revealChevronOnHover
-		sticky
-	>
-		{#if provider.items.length > 0}
-			{@render listRows(provider.items, provider.backendId)}
+	{#each compatSections as section (section.key)}
+		{@render compatSection(section.label, section.items, section.icon, section.key)}
+	{/each}
+{:else}
+	{#if groups.loaded.length > 0 || groups.available.length > 0}
+		<ModelsSection label="Local models" revealChevronOnHover sticky>
+			{#snippet icon()}
+				<Logo class="shrink-0" style="--size: 0.875rem" />
+			{/snippet}
 
-			{#if onProviderOpen && provider.matched > provider.items.length}
-				<!-- same box as a model row, it opens the provider's full list -->
-				<button
-					class="flex w-full cursor-pointer items-center gap-2 rounded-sm p-2 text-left text-sm text-muted-foreground transition hover:bg-accent hover:text-foreground focus:outline-none"
-					onclick={() => onProviderOpen(provider.backendId)}
-					type="button"
-				>
-					+ {provider.matched - provider.items.length} more
-				</button>
+			{@render localRows()}
+		</ModelsSection>
+	{/if}
+
+	<!-- One section per remote provider. -->
+	{#each groups.providers as provider (provider.backendId)}
+		<ModelsSection
+			backendId={provider.backendId}
+			error={Boolean(provider.error)}
+			label={provider.name}
+			loading={provider.loading}
+			onBack={onProviderBack}
+			revealChevronOnHover
+			sticky
+		>
+			{#if provider.items.length > 0}
+				{@render listRows(provider.items, provider.backendId)}
+
+				{#if onProviderOpen && provider.matched > provider.items.length}
+					<!-- same box as a model row, it opens the provider's full list -->
+					<button
+						class="flex w-full cursor-pointer items-center gap-2 rounded-sm p-2 text-left text-sm text-muted-foreground transition hover:bg-accent hover:text-foreground focus:outline-none"
+						onclick={() => onProviderOpen(provider.backendId)}
+						type="button"
+					>
+						+ {provider.matched - provider.items.length} more
+					</button>
+				{/if}
+			{:else if provider.catalog === 0}
+				<p class="px-4 pb-2 text-xs text-muted-foreground">
+					{provider.error ?? (provider.loading ? 'Loading models...' : 'No models')}
+				</p>
 			{/if}
-		{:else if provider.catalog === 0}
-			<p class="px-4 pb-2 text-xs text-muted-foreground">
-				{provider.error ?? (provider.loading ? 'Loading models...' : 'No models')}
-			</p>
-		{/if}
-	</ModelsSection>
-{/each}
+		</ModelsSection>
+	{/each}
+{/if}
 
 <DialogConfirmDownload
 	action={ModelDownloadConfirmAction.CANCEL}
