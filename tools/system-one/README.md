@@ -125,6 +125,35 @@ its attention mask from too.
 Only `letter_slot` can reuse a prefix across calls: bidirectional attention makes every
 position depend on what follows it, so changing the tail of a state changes its head.
 
+## Asking several questions at once
+
+All of a request's questions are slots in one prompt, so they are answered by one forward pass:
+five questions about a 214-token ticket cost one decode, and asking them separately re-encodes
+the state each time. Later questions can see the text of earlier ones but never their answers --
+each block ends at the answer slot with nothing written into it.
+
+**This depends on the checkpoint having been trained for it.** A model that was not will answer
+the first slot and then stop answering: having seen one or more `Answer k: (` lines that were
+never followed by a letter, it concludes that answers stay empty in this document and continues
+to the next question instead. The readout still reads the label logits at that position, and
+they are now the logits of a model that has decided not to answer. Measured over 120 states,
+5 questions each:
+
+| | all in one prompt | one question per request |
+|---|---|---|
+| a checkpoint trained for this format | .973 | .965 |
+| stock Qwen3.5-0.8B, template supplied by the request | .544 | .699 |
+| stock gemma-4 E2B, template supplied by the request | .541 | .765 |
+
+So: point this at a stock model and ask **one question per request**; the one-pass form is for a
+checkpoint trained on it, where it is both the faster mode (629 ms against 1049 ms for five
+questions) and the more accurate one. `rank_head` is unaffected either way, since it already
+puts every option in a sequence of its own.
+
+Distance is not the variable, for either kind of model -- moving a slot from 35 to 716 tokens
+away from the state changes a trained checkpoint's answers by a mean |ΔP| of .039 to .043, which
+is no change at all. What matters is whether another question sits in front of it.
+
 ## Temperature
 
 `temperature` rescales every answer's logits before the probabilities are taken; it is one
