@@ -96,13 +96,15 @@
 	/>
 
 	<Tabs.Root class="mt-3 min-h-0 flex-1 gap-0" onValueChange={(value) => (tab = value)} value={tab}>
-		<Tabs.List class="px-4">
-			<Tabs.Trigger value="information">Information</Tabs.Trigger>
+		<div class="px-4">
+			<Tabs.List class="w-full">
+				<Tabs.Trigger value="information">Information</Tabs.Trigger>
 
-			<Tabs.Trigger value="load">Load</Tabs.Trigger>
+				<Tabs.Trigger value="load">Load</Tabs.Trigger>
 
-			<Tabs.Trigger value="inference">Inference</Tabs.Trigger>
-		</Tabs.List>
+				<Tabs.Trigger value="inference">Inference</Tabs.Trigger>
+			</Tabs.List>
+		</div>
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
 			<Tabs.Content value="information">
