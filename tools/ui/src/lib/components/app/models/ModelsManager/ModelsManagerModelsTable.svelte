@@ -1,11 +1,8 @@
 <script lang="ts">
 	import {
-		formatLastUsed,
 		isLocalOption,
 		type ModelOverride,
-		modelParamCount,
 		type ModelQuantGroup,
-		modelSizeLabel,
 		type ModelsTableGroup
 	} from './utils';
 	import {
@@ -30,11 +27,9 @@
 		Logo,
 		ModelAvatar,
 		ModelCapabilities,
-		ModelCapabilityIcons,
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
-		ModelParameters,
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
@@ -176,8 +171,7 @@
 			}
 		];
 	}
-	const rowGrid =
-		'grid grid-cols-[minmax(0,1fr)_11rem_6rem_7rem_5rem_6rem_5.5rem_3rem_4.5rem] items-center gap-4';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -196,18 +190,11 @@
 			: null;
 	}
 
-	type SortKey = 'context' | 'lastUsed' | 'name' | 'parameters' | 'size' | 'status';
+	type SortKey = 'context' | 'name' | 'status';
 
 	/** Column the table is ordered by; unset keeps the manager's own order. */
 	let sortKey = $state<SortKey | null>(null);
 	let sortAsc = $state(true);
-
-	/** The router's `meta` is untyped, so read its numbers defensively, as the labels do. */
-	function metaNumber(option: ModelOption, key: string): number {
-		const value = option.meta?.[key];
-
-		return typeof value === 'number' ? value : 0;
-	}
 
 	/** The context column's own value: what the listing reports, else what the Hub does. */
 	function contextOf(option: ModelOption): number {
@@ -225,16 +212,8 @@
 		switch (sortKey) {
 			case 'context':
 				return contextOf(a) - contextOf(b);
-			case 'lastUsed':
-				return (
-					(modelsStore.recentModelUsage[a.id] ?? 0) - (modelsStore.recentModelUsage[b.id] ?? 0)
-				);
 			case 'name':
 				return a.model.localeCompare(b.model);
-			case 'parameters':
-				return modelParamCount(a) - modelParamCount(b);
-			case 'size':
-				return metaNumber(a, 'size') - metaNumber(b, 'size');
 			case 'status':
 				return Number(isLoadedOption(b)) - Number(isLoadedOption(a));
 			default:
@@ -324,34 +303,6 @@
 	</button>
 {/snippet}
 
-{#snippet capabilities(option: ModelOption)}
-	<span class="flex justify-center justify-self-center">
-		<ModelCapabilities {option} />
-	</span>
-{/snippet}
-
-{#snippet modalities(option: ModelOption)}
-	<span class="flex justify-center justify-self-center">
-		<ModelCapabilityIcons hideCapabilities modalities={option.modalities} />
-	</span>
-{/snippet}
-
-{#snippet size(option: ModelOption)}
-	{@const label = modelSizeLabel(option)}
-
-	<span class="justify-self-end text-sm text-muted-foreground">{label ?? '—'}</span>
-{/snippet}
-
-{#snippet parameters(option: ModelOption)}
-	<ModelParameters class="justify-self-end" {option} />
-{/snippet}
-
-{#snippet lastUsed(option: ModelOption)}
-	<span class="justify-self-end text-sm text-muted-foreground">
-		{formatLastUsed(modelsStore.recentModelUsage[option.id])}
-	</span>
-{/snippet}
-
 {#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -382,26 +333,16 @@
 				aliases={option.aliases}
 				class="min-w-0 flex-1"
 				hideCapabilities
-				hideModalities
-				hideParameters
 				modalities={option.modalities}
 				modelId={option.model}
 				tags={option.tags}
 				title={option.model}
 			/>
+
+			<ModelCapabilities {option} />
 		</span>
 
 		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
-
-		{@render modalities(option)}
-
-		{@render capabilities(option)}
-
-		{@render size(option)}
-
-		{@render parameters(option)}
-
-		{@render lastUsed(option)}
 
 		{@render statusDot(option)}
 
@@ -451,14 +392,14 @@
 					aliases={entry.base.aliases}
 					class="min-w-0"
 					hideCapabilities
-					hideModalities
-					hideParameters
 					hideQuantization
-					modalities={entry.base.modalities}
+					modalities={mediaSource.modalities}
 					modelId={entry.base.model}
 					tags={entry.base.tags}
 					title={entry.base.model}
 				/>
+
+				<ModelCapabilities option={entry.base} />
 
 				<span class="block text-xs text-muted-foreground">{groupLabel}</span>
 			</span>
@@ -469,16 +410,6 @@
 			configured={configuredContext(contextSource)}
 			option={contextSource}
 		/>
-
-		{@render modalities(mediaSource)}
-
-		{@render capabilities(entry.base)}
-
-		<span></span>
-
-		{@render parameters(entry.base)}
-
-		<span></span>
 
 		<span class="justify-self-center">
 			<span
@@ -525,16 +456,6 @@
 		</span>
 
 		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
-
-		{@render modalities(option)}
-
-		{@render capabilities(option)}
-
-		{@render size(option)}
-
-		{@render parameters(option)}
-
-		{@render lastUsed(option)}
 
 		{@render statusDot(option)}
 
@@ -594,16 +515,6 @@
 
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
-
-		<span></span>
-
-		<span></span>
-
-		<span></span>
-
-		<span></span>
-
-		<span></span>
 
 		<span></span>
 
@@ -680,18 +591,6 @@
 		<span>{@render sortHeader('name', 'Model')}</span>
 
 		<span class="text-right whitespace-nowrap">{@render sortHeader('context', 'Context')}</span>
-
-		<span class="text-center">Modalities</span>
-
-		<span class="text-center">Capabilities</span>
-
-		<span class="justify-self-end">{@render sortHeader('size', 'Size')}</span>
-
-		<span class="justify-self-end">{@render sortHeader('parameters', 'Parameters')}</span>
-
-		<span class="justify-self-end whitespace-nowrap">
-			{@render sortHeader('lastUsed', 'Last used')}
-		</span>
 
 		<span class="justify-self-center">{@render sortHeader('status', 'Status')}</span>
 
