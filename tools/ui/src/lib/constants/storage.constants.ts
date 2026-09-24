@@ -34,9 +34,6 @@ export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteMod
 /** Open state the user set for a model list section or one of its families, by id. */
 export const MODEL_GROUP_OPEN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelGroupOpen`;
 
-/** Model families pinned to the top of their provider section. */
-export const FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModelFamilies`;
-
 /** Per-model load and inference overrides, keyed by backend-qualified model id. */
 export const MODEL_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelOverrides`;
 

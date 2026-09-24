@@ -19,7 +19,6 @@
 		Trash2
 	} from '@lucide/svelte';
 	import {
-		ActionIcon,
 		DropdownMenuActions,
 		GroupedList,
 		type GroupedListGroup,
@@ -110,20 +109,15 @@
 		})
 	);
 
-	/** Families of one section, the ones the user pinned leading it. */
+	/** Families of one section. */
 	function familyGroups(
 		group: (typeof sections)[number]
 	): GroupedListGroup<ModelFamilyGroup<ModelQuantGroup>, ModelQuantGroup>[] {
-		return group.families
-			.map((family) => ({
-				entries: family.entries,
-				group: family,
-				key: `${group.key}::${family.key}`
-			}))
-			.sort(
-				(a, b) =>
-					Number(modelsStore.isFavoriteFamily(b.key)) - Number(modelsStore.isFavoriteFamily(a.key))
-			);
+		return group.families.map((family) => ({
+			entries: family.entries,
+			group: family,
+			key: `${group.key}::${family.key}`
+		}));
 	}
 
 	// Cancel is confirmed once for the whole list, so a single dialog instance
@@ -434,16 +428,13 @@
 {#snippet familyRow({
 	expanded,
 	group: family,
-	key,
 	toggle
 }: {
 	expanded: boolean;
 	group: ModelFamilyGroup<ModelQuantGroup>;
-	key: string;
 	toggle: () => void;
 })}
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
-	{@const favorite = modelsStore.isFavoriteFamily(key)}
 
 	<!-- <div class="px-2"> -->
 	<div
@@ -464,33 +455,6 @@
 			<span class="truncate text-sm font-medium">{family.label}</span>
 
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
-
-			<span
-				class="flex shrink-0"
-				onclick={(event) => event.stopPropagation()}
-				onkeydown={(event) => event.stopPropagation()}
-				role="presentation"
-			>
-				{#if favorite}
-					<ActionIcon
-						class="h-5 w-5 text-rose-500 hover:text-rose-400"
-						icon={Heart}
-						iconSize="h-4 w-4"
-						onclick={() => modelsStore.toggleFamilyFavorite(key)}
-						tooltip="Remove family from favorites"
-						tooltipAsTitle
-					/>
-				{:else}
-					<ActionIcon
-						class="h-5 w-5 opacity-0 transition group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
-						icon={Heart}
-						iconSize="h-4 w-4"
-						onclick={() => modelsStore.toggleFamilyFavorite(key)}
-						tooltip="Add family to favorites"
-						tooltipAsTitle
-					/>
-				{/if}
-			</span>
 		</span>
 
 		<span></span>
