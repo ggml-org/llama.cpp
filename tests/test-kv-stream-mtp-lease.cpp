@@ -20,8 +20,10 @@ struct mtp_fixture {
     ggml_backend_memory_arena_t arena = nullptr;
     ggml_backend_memory_lease_t pool = nullptr;
     size_t active_tokens = 3*256 - 7;
+    size_t committed_tokens = 3*256 - 7;
 
-    explicit mtp_fixture(bool cuda = false, size_t tokens = 3*256 - 7) : active_tokens(tokens) {
+    explicit mtp_fixture(bool cuda = false, size_t tokens = 3*256 - 7, size_t committed = 0) :
+        active_tokens(tokens), committed_tokens(committed ? committed : tokens) {
         if (cuda) {
             ggml_backend_load_all();
             auto * device = ggml_backend_dev_by_name("CUDA0");
@@ -52,7 +54,8 @@ struct mtp_fixture {
         GGML_ASSERT(llama_kv_stream_policy_initialize(policy, state).status == llama_kv_stream_policy_status::success);
         GGML_ASSERT(state.resident_pages_per_layer == 1 && state.ring_slots == 3);
 
-        llama_kv_stream_host_config config{202, policy.shape, policy.capabilities, 768, 1};
+        llama_kv_stream_host_config config{202, policy.shape, policy.capabilities,
+            (active_tokens + 255)/256*256, 1};
         auto host = llama_kv_stream_host::create(config, host_type);
         GGML_ASSERT(host);
         cache = llama_kv_stream_logical_cache::create(host);
@@ -61,11 +64,11 @@ struct mtp_fixture {
         GGML_ASSERT(host->layer(0, planes));
         auto * k = static_cast<uint8_t *>(planes.k);
         auto * v = static_cast<uint8_t *>(planes.v);
-        for (size_t token = 0; token < active_tokens; ++token) {
+        for (size_t token = 0; token < committed_tokens; ++token) {
             std::memset(k + token*host->layout().k_token_bytes, int(token % 251), host->layout().k_token_bytes);
             std::memset(v + token*host->layout().v_token_bytes, int((token + 7) % 251), host->layout().v_token_bytes);
         }
-        GGML_ASSERT(cache->restore({202, 1, active_tokens}));
+        GGML_ASSERT(cache->restore({202, 1, committed_tokens}));
 
         arena = ggml_backend_memory_arena_new(device_type, policy.pool_bytes);
         GGML_ASSERT(arena && ggml_backend_memory_arena_begin(arena, GGML_BACKEND_MEMORY_PLAN_NONE));
@@ -262,6 +265,40 @@ int main(int argc, char ** argv) {
             size_t(128)*f.cache->host()->layout().v_token_bytes));
         llama_kv_stream_complete_layer_lease_free(lease);
         t.assert_true(owner->can_repartition());
+    });
+    t.test("lagging_mtp_populates_committed_prefix_but_reserves_future_ring_capacity", [&](testing & t) {
+        mtp_fixture f(cuda, 3*256 + 2, 3*256 - 2);
+        auto * pool = ggml_backend_memory_lease_buffer(f.pool);
+        ggml_backend_buffer_clear(pool, 0xa5);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto request = f.request(4);
+        request.active_tokens = f.cache->tokens();
+        auto * lease = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(lease != nullptr)) return;
+        ggml_kv_stream_span_plan_view view;
+        if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                llama_kv_stream_complete_layer_lease_plan(lease), view))) return;
+        t.assert_equal(f.cache->tokens(), view.active_tokens);
+        t.assert_equal(size_t(3), owner->ring_slots_used());
+        const auto stats = llama_kv_stream_complete_layer_lease_population(lease);
+        t.assert_equal(f.cache->tokens()*(f.cache->host()->layout().k_token_bytes +
+            f.cache->host()->layout().v_token_bytes), stats.bytes);
+        llama_kv_stream_policy_layout physical;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, f.state, f.active_tokens, physical).status == llama_kv_stream_policy_status::success)) return;
+        const size_t ring_token = llama_kv_stream_complete_layer_lease_ring_first(lease)*256 +
+            f.cache->tokens() - llama_kv_stream_complete_layer_lease_resident_tokens(lease);
+        const size_t future = f.active_tokens - f.cache->tokens();
+        const size_t k_bytes = future*f.cache->host()->layout().k_token_bytes;
+        const size_t v_bytes = future*f.cache->host()->layout().v_token_bytes;
+        std::vector<uint8_t> k_sentinel(k_bytes, 0xa5), v_sentinel(v_bytes, 0xa5);
+        t.assert_true(matches(pool, ring_token*f.cache->host()->layout().k_token_bytes,
+            k_sentinel.data(), k_bytes));
+        t.assert_true(matches(pool, physical.ring.v_offset + ring_token*f.cache->host()->layout().v_token_bytes,
+            v_sentinel.data(), v_bytes));
+        llama_kv_stream_complete_layer_lease_free(lease);
+        t.assert_equal(size_t(0), owner->ring_slots_used());
     });
     return t.summary();
 }

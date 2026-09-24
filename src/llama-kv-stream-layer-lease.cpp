@@ -38,6 +38,7 @@ struct layer_reservation {
     uint64_t content_generation = 0;
     bool published = false;
     bool populating = false, populated = false;
+    size_t populated_tokens = 0;
     llama_kv_stream_population_stats population;
 
     ~layer_reservation();
@@ -52,8 +53,29 @@ struct layer_lease_state {
     std::vector<std::weak_ptr<layer_reservation>> layers;
     size_t reservations = 0;
     size_t leases = 0;
+    size_t guards = 0;
     bool closed = false;
 };
+
+llama_kv_stream_ring_guard::llama_kv_stream_ring_guard(
+        std::shared_ptr<layer_lease_state> state, std::vector<uint8_t> blocked) :
+    state(std::move(state)), blocked(std::move(blocked)) {}
+
+llama_kv_stream_ring_guard::~llama_kv_stream_ring_guard() {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    GGML_ASSERT(state->guards > 0);
+    --state->guards;
+}
+
+const std::vector<uint8_t> & llama_kv_stream_ring_guard::blocked_slots() const noexcept { return blocked; }
+const ggml_kv_stream_layout & llama_kv_stream_ring_guard::ring_layout() const noexcept {
+    return state->layout.ring;
+}
+
+ggml_backend_buffer_t llama_kv_stream_ring_guard::pool_buffer() const noexcept {
+    return ggml_backend_memory_lease_buffer(state->pool.get());
+}
+
 
 layer_reservation::~layer_reservation() {
     if (!published || !owner) return;
@@ -70,6 +92,7 @@ struct llama_kv_stream_complete_layer_lease {
     std::atomic<uint32_t> references{1};
     std::shared_ptr<layer_reservation> reservation;
     ggml_kv_stream_span_plan_t plan = nullptr;
+    size_t active_tokens = 0;
 
     ~llama_kv_stream_complete_layer_lease() {
         ggml_kv_stream_span_plan_free(plan);
@@ -157,18 +180,19 @@ static bool find_run(const std::vector<uint8_t> & occupied, size_t count, size_t
 static ggml_kv_stream_span_plan_t build_plan(
         const layer_lease_state & state,
         const layer_reservation & reservation,
-        uint32_t query_tokens) {
+        uint32_t query_tokens, size_t active_tokens) {
     const auto & layer = state.layout.layers[reservation.layer];
     const size_t page_tokens = size_t(state.identity.policy.shape.page_tokens);
     std::vector<ggml_kv_stream_span_source> sources;
     try {
         sources.reserve(2);
-        if (reservation.resident_tokens) {
+        const size_t resident_tokens = std::min(active_tokens, reservation.resident_tokens);
+        if (resident_tokens) {
             sources.push_back({
-                state.pool.get(), state.pool.get(), 0, reservation.resident_tokens,
+                state.pool.get(), state.pool.get(), 0, resident_tokens,
                 layer.offset, layer.offset + layer.planes.v_offset});
         }
-        const size_t streamed = reservation.active_tokens - reservation.resident_tokens;
+        const size_t streamed = active_tokens - resident_tokens;
         if (streamed) {
             size_t ring_token, k_offset, v_offset;
             if (!multiply(reservation.ring_first, page_tokens, ring_token) ||
@@ -177,26 +201,44 @@ static ggml_kv_stream_span_plan_t build_plan(
                     v_offset > SIZE_MAX - state.layout.ring.v_offset) return nullptr;
             v_offset += state.layout.ring.v_offset;
             sources.push_back({
-                state.pool.get(), state.pool.get(), reservation.resident_tokens, streamed,
+                state.pool.get(), state.pool.get(), resident_tokens, streamed,
                 k_offset, v_offset});
         }
         ggml_kv_stream_span_plan_t plan = nullptr;
         return ggml_kv_stream_span_plan_make(
             state.identity.policy.shape, sources.data(), sources.size(),
-            reservation.active_tokens, query_tokens, plan).status ==
+            active_tokens, query_tokens, plan).status ==
             ggml_kv_stream_status::success ? plan : nullptr;
     } catch (const std::bad_alloc &) {
         return nullptr;
     }
 }
 
+std::shared_ptr<llama_kv_stream_ring_guard> llama_kv_stream_layer_lease_owner::hold_ring() {
+    if (!impl || !impl->state) return {};
+    auto state = impl->state;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->closed || state->guards == SIZE_MAX) return {};
+    try {
+        auto result = std::shared_ptr<llama_kv_stream_ring_guard>(
+            new llama_kv_stream_ring_guard(state, state->occupied));
+        ++state->guards;
+        return result;
+    } catch (const std::bad_alloc &) {
+        return {};
+    }
+}
+
+
 llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquire(
         const llama_kv_stream_complete_layer_request & request) {
     if (!impl || !impl->state) return nullptr;
     auto state = impl->state;
     std::lock_guard<std::mutex> lock(state->mutex);
+    const size_t active = request.active_tokens ? request.active_tokens : state->identity.active_tokens;
     if (state->closed || request.layer >= state->layout.layers.size() ||
-            !request.query_tokens || request.query_tokens > state->identity.active_tokens ||
+            !request.query_tokens || !active || active > state->identity.active_tokens ||
+            request.query_tokens > active ||
             request.layout_revision != state->identity.layout_revision ||
             request.content_generation != state->identity.content_generation ||
             request.cache_id != state->layout.layers[request.layer].cache_id) return nullptr;
@@ -204,6 +246,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
     std::shared_ptr<layer_reservation> reservation = state->layers[request.layer].lock();
     bool created = false;
     if (!reservation) {
+        if (state->guards) return nullptr;
         const auto & layer = state->layout.layers[request.layer];
         const size_t page_tokens = size_t(state->identity.policy.shape.page_tokens);
         size_t capacity;
@@ -228,7 +271,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         created = true;
     }
 
-    ggml_kv_stream_span_plan_t plan = build_plan(*state, *reservation, request.query_tokens);
+    ggml_kv_stream_span_plan_t plan = build_plan(*state, *reservation, request.query_tokens, active);
     if (!plan) return nullptr;
     auto * lease = new (std::nothrow) llama_kv_stream_complete_layer_lease;
     if (!lease) {
@@ -237,6 +280,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
     }
     lease->reservation = reservation;
     lease->plan = plan;
+    lease->active_tokens = active;
     if (created) {
         for (size_t i = 0; i < reservation->ring_slots; ++i) {
             GGML_ASSERT(reservation->ring_first + i < state->occupied.size() &&
@@ -270,14 +314,14 @@ static bool populate_layer(ggml_backend_t backend, llama_kv_stream_complete_laye
             !same_population_shape(host->config().shape, state.identity.policy.shape) ||
             cache.identity().generation != reservation.content_generation ||
             cache.content()->generation() != reservation.content_generation ||
-            cache.tokens() != reservation.active_tokens ||
+            cache.tokens() != lease->active_tokens ||
             frontiers.reserved != cache.tokens() || frontiers.host != cache.tokens() ||
             frontiers.committed != cache.tokens()) return false;
     llama_kv_stream_host_layer source;
     if (!host->layer(physical.cache_layer, source)) return false;
     ggml_kv_stream_span_plan_view view;
     if (!ggml_kv_stream_span_plan_get_view(lease->plan, view) || !view.count || view.count > 2 ||
-            view.active_tokens != reservation.active_tokens) return false;
+            view.active_tokens != lease->active_tokens) return false;
 
     ggml_context_ptr context(ggml_init({16384, nullptr, true}));
     if (!context) return false;
@@ -360,7 +404,8 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         if (cache.identity().id == state->layout.layers[request.layer].cache_id &&
                 cache.identity().generation == reservation->content_generation &&
                 cache.content()->generation() == reservation->content_generation &&
-                cache.tokens() == reservation->active_tokens &&
+                cache.tokens() == lease->active_tokens &&
+                reservation->populated_tokens == lease->active_tokens &&
                 frontiers.reserved == cache.tokens() && frontiers.host == cache.tokens() &&
                 frontiers.committed == cache.tokens()) return lease;
         llama_kv_stream_complete_layer_lease_free(lease);
@@ -375,7 +420,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
     const auto frontiers = cache.frontiers();
     const bool current = copied && cache.identity().generation == reservation->content_generation &&
         cache.content()->generation() == reservation->content_generation &&
-        cache.tokens() == reservation->active_tokens &&
+        cache.tokens() == lease->active_tokens &&
         frontiers.reserved == cache.tokens() && frontiers.host == cache.tokens() &&
         frontiers.committed == cache.tokens();
     {
@@ -384,6 +429,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         if (current && !state->closed) {
             reservation->population = stats;
             reservation->populated = true;
+            reservation->populated_tokens = lease->active_tokens;
             ready = true;
         }
     }
@@ -404,7 +450,7 @@ bool llama_kv_stream_layer_lease_owner::rebind(
         std::vector<uint8_t> occupied(identity.state.ring_slots, 0);
         std::vector<std::weak_ptr<layer_reservation>> layers(identity.policy.layers);
         std::lock_guard<std::mutex> lock(state->mutex);
-        if (state->closed || state->reservations || state->leases ||
+        if (state->closed || state->reservations || state->leases || state->guards ||
                 identity.layout_revision <= state->identity.layout_revision) return false;
         state->identity = identity;
         state->layout = std::move(layout);
@@ -419,7 +465,7 @@ bool llama_kv_stream_layer_lease_owner::rebind(
 bool llama_kv_stream_layer_lease_owner::can_repartition() const {
     if (!impl || !impl->state) return false;
     std::lock_guard<std::mutex> lock(impl->state->mutex);
-    return !impl->state->closed && !impl->state->reservations && !impl->state->leases;
+    return !impl->state->closed && !impl->state->reservations && !impl->state->leases && !impl->state->guards;
 }
 
 void llama_kv_stream_layer_lease_owner::close() {
@@ -495,7 +541,7 @@ uint32_t llama_kv_stream_complete_layer_lease_layer(
 
 size_t llama_kv_stream_complete_layer_lease_resident_tokens(
         llama_kv_stream_complete_layer_lease_t lease) {
-    return lease && lease->reservation ? lease->reservation->resident_tokens : 0;
+    return lease && lease->reservation ? std::min(lease->active_tokens, lease->reservation->resident_tokens) : 0;
 }
 
 size_t llama_kv_stream_complete_layer_lease_ring_first(

@@ -1,4 +1,5 @@
 #include "llama-kv-stream-resident.h"
+#include "llama-kv-stream-layer-lease.h"
 #include "ggml-cpp.h"
 #include "llama-kv-stream-writer.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
@@ -53,6 +54,7 @@ struct llama_kv_stream_resident::implementation {
     ggml_backend_buffer_t copy_host = nullptr;
     struct prefetch_sequence {
         llama_kv_stream_prefetch_plan plan;
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard;
         std::vector<uint32_t> layers;
         std::vector<resident_span_plan_ptr> span_plans;
         std::vector<uint8_t> resident_dirty, feedback_layer_sampled;
@@ -380,7 +382,9 @@ bool llama_kv_stream_resident::recommend_policy(const llama_kv_stream_policy_sta
 llama_kv_stream_resident::~llama_kv_stream_resident() = default;
 
 // Establish a serial execution order and the host prefix that is already immutable for every layer.
-bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & layers, size_t active, size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context) {
+bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & layers, size_t active,
+        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
     auto & s = *impl;
     if (s.busy || s.sequence || s.capturing() || s.poisoned || !s.compatible() || layers.empty() || layers.size() > s.layout.layers.size() || !active || !span ||
             active > size_t(INT32_MAX)-255 || active > s.content->host()->config().context_tokens) return false;
@@ -390,10 +394,20 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
     auto partial_ops = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_partial_ops"));
     auto copy_ops = reinterpret_cast<ggml_kv_stream_copy_ops_get>(ggml_backend_reg_get_proc_address(reg,"ggml_backend_kv_stream_copy_ops"));
     if (!partial_ops || !partial_ops() || !copy_ops || !copy_ops() || copy_ops()->version < 2) return false;
+    if (ring_guard) {
+        const auto & held = ring_guard->ring_layout();
+        const auto & ring = s.layout.ring;
+        if (ring_guard->pool_buffer() != s.binding.buffer ||
+                ring_guard->blocked_slots().size() != s.binding.initial_policy.ring_slots ||
+                held.bytes != ring.bytes || held.tokens != ring.tokens ||
+                held.k_token_bytes != ring.k_token_bytes || held.v_token_bytes != ring.v_token_bytes ||
+                held.v_offset != ring.v_offset) return false;
+    }
     if (stable == SIZE_MAX) stable = active;
     if (stable > active) return false;
     try {
         auto seq = std::make_unique<implementation::prefetch_sequence>();
+        seq->ring_guard = std::move(ring_guard);
         seq->layers = layers; seq->resident_dirty.resize(layers.size(),false); seq->feedback_layer_sampled.resize(layers.size(),false);
         seq->span_plans.reserve(layers.size());
         seq->active = active; seq->padded = (active+255)/256*256; seq->span = span; seq->stable = stable;
@@ -406,10 +420,16 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
             const size_t immutable = stable == active ? seq->padded : stable/s.page.tokens*s.page.tokens;
             seq->profile |= feedback_context.decode && seq->queries == 1 && prefixes.back() < immutable;
         }
-        if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,s.binding.initial_policy.ring_slots,span,stable)) return false;
+        const std::vector<uint8_t> empty;
+        const auto & blocked = seq->ring_guard ? seq->ring_guard->blocked_slots() : empty;
+        const bool streamed = std::any_of(prefixes.begin(), prefixes.end(),
+            [&](size_t prefix) { return prefix < seq->padded; });
+        if (streamed && !blocked.empty() && std::none_of(blocked.begin(), blocked.end(),
+                [](uint8_t value) { return value == 0; })) return false;
+        if (!seq->plan.start(prefixes,active,seq->padded,s.page.tokens,s.binding.initial_policy.ring_slots,span,stable,blocked)) return false;
         seq->stats.feedback_stride=s.sampler.stride();
         if (seq->profile) s.sampler.begin_run();
-        if (std::any_of(prefixes.begin(),prefixes.end(),[&](size_t prefix) { return prefix < seq->padded; }) && !s.enter_streamed()) return false;
+        if (streamed && !s.enter_streamed()) return false;
         if (!s.writer_lease) release_write_workspace();
         const bool feedback_tracked=s.feedback_generation == s.content->generation() &&
             s.feedback_epoch == s.content->mirror_epoch();
@@ -428,22 +448,25 @@ bool llama_kv_stream_resident::begin_sequence(const std::vector<uint32_t> & laye
 }
 
 bool llama_kv_stream_resident::prime_sequence(const std::vector<uint32_t> & layers, size_t active,
-        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context) {
-    if (!begin_sequence(layers,active,span,stable,feedback_context)) return false;
+        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
+    if (!begin_sequence(layers,active,span,stable,feedback_context,std::move(ring_guard))) return false;
     impl->sequence->primed = true;
     impl->sequence->stats.primed = true;
     return true;
 }
 
 bool llama_kv_stream_resident::adopt_sequence(const std::vector<uint32_t> & layers, size_t active,
-        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context) {
+        size_t span, size_t stable, llama_kv_stream_feedback_context feedback_context,
+        std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard) {
     auto & s=*impl;
     if (stable == SIZE_MAX) stable=active;
     if (s.busy || s.capturing() || s.poisoned || !s.sequence || !s.sequence->primed) return false;
     if (!s.sequence_valid()) { s.stop_sequence(); return false; }
     auto & seq=*s.sequence;
     if (seq.next || seq.layers != layers || seq.active != active || seq.span != span || seq.stable != stable ||
-            seq.queries != feedback_context.query_tokens || seq.decode != feedback_context.decode) return false;
+            seq.queries != feedback_context.query_tokens || seq.decode != feedback_context.decode ||
+            seq.ring_guard != ring_guard) return false;
     seq.primed = false;
     seq.stats.primed = false;
     seq.stats.adopted = true;

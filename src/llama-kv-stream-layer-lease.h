@@ -5,6 +5,7 @@
 class llama_kv_stream_logical_cache;
 
 #include <memory>
+#include <vector>
 
 struct llama_kv_stream_layer_lease_layout {
     llama_kv_stream_policy_config policy;
@@ -20,6 +21,8 @@ struct llama_kv_stream_complete_layer_request {
     uint64_t layout_revision = 0;
     uint64_t content_generation = 0;
     uint64_t cache_id = 0;
+    // Zero uses the full physical reservation.
+    size_t active_tokens = 0;
 };
 
 struct llama_kv_stream_population_stats {
@@ -29,6 +32,23 @@ struct llama_kv_stream_population_stats {
 
 struct llama_kv_stream_complete_layer_lease;
 using llama_kv_stream_complete_layer_lease_t = llama_kv_stream_complete_layer_lease *;
+
+struct layer_lease_state;
+
+class llama_kv_stream_ring_guard {
+public:
+    ~llama_kv_stream_ring_guard();
+    const std::vector<uint8_t> & blocked_slots() const noexcept;
+    const ggml_kv_stream_layout & ring_layout() const noexcept;
+    ggml_backend_buffer_t pool_buffer() const noexcept;
+
+private:
+    friend class llama_kv_stream_layer_lease_owner;
+    llama_kv_stream_ring_guard(std::shared_ptr<layer_lease_state> state, std::vector<uint8_t> blocked);
+    std::shared_ptr<layer_lease_state> state;
+    std::vector<uint8_t> blocked;
+};
+
 
 // Owns ring slots and optional one-time population for one immutable physical layout.
 class llama_kv_stream_layer_lease_owner {
@@ -46,6 +66,9 @@ public:
     // Synchronize one upload before returning; query widths share the ready reservation.
     llama_kv_stream_complete_layer_lease_t acquire_populated(ggml_backend_t backend,
         const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache);
+
+    // Freeze occupied slots while a target prefetch sequence may submit copies.
+    std::shared_ptr<llama_kv_stream_ring_guard> hold_ring();
 
     // Replace layout identity only after every retained reservation has retired.
     bool rebind(const llama_kv_stream_layer_lease_layout & layout);

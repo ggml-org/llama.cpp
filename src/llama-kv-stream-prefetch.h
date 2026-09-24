@@ -16,14 +16,17 @@ class llama_kv_stream_prefetch_plan {
 public:
     // Allocate metadata by layer/slot count, never by context length. Failure preserves the old plan.
     bool start(const std::vector<size_t> & prefixes, size_t active, size_t padded, size_t page,
-            size_t slots, size_t ceiling, size_t stable) {
-        if (prefixes.empty() || !active || padded < active || !page || padded-active >= page || !slots || !ceiling || stable > active) return false;
+            size_t slots, size_t ceiling, size_t stable, const std::vector<uint8_t> & blocked = {}) {
+        if (prefixes.empty() || !active || padded < active || !page || padded-active >= page || !slots || !ceiling ||
+                stable > active || (!blocked.empty() && blocked.size() != slots)) return false;
         if ((active-1)/page != (padded-1)/page) return false;
         for (auto prefix : prefixes) if (prefix > padded || (prefix != padded && prefix%page)) return false;
         try {
             llama_kv_stream_prefetch_plan next;
             next.prefixes = prefixes; next.ready.resize(prefixes.size(),false);
-            next.records.resize(slots); next.occupied.resize(slots,false);
+            next.records.resize(slots);
+            next.occupied = blocked.empty() ? std::vector<uint8_t>(slots, 0) : blocked;
+            next.has_blocked_slots = std::any_of(blocked.begin(), blocked.end(), [](uint8_t value) { return value != 0; });
             next.active = active; next.padded = padded; next.page = page; next.ceiling = ceiling; next.stable = stable;
             next.token = prefixes[0]; *this = std::move(next); return true;
         } catch (const std::bad_alloc &) { return false; }
@@ -35,7 +38,14 @@ public:
         while (layer < prefixes.size() && token == padded) {
             if (++layer < prefixes.size()) token = prefixes[layer];
         }
-        if (layer == prefixes.size() || occupied[write]) return false;
+        if (layer == prefixes.size()) return false;
+        if (!has_blocked_slots && occupied[write]) return false;
+        size_t skipped = 0;
+        while (occupied[write] && skipped < records.size()) {
+            write = (write + 1) % records.size();
+            ++skipped;
+        }
+        if (skipped == records.size()) return false;
         size_t available = 0;
         while (available < records.size()-write && !occupied[write+available]) ++available;
         size_t pages = std::min({ceiling,available,(padded-token)/page+((padded-token)%page != 0)});
@@ -78,4 +88,5 @@ private:
     std::vector<llama_kv_stream_prefetch_request> records;
     size_t active = 0, padded = 0, page = 0, ceiling = 0, stable = 0;
     size_t layer = 0, token = 0, write = 0, head = 0, count = 0, used_pages = 0;
+    bool has_blocked_slots = false;
 };

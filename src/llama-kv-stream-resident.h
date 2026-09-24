@@ -3,6 +3,9 @@
 #include "llama-kv-stream-binding.h"
 #include "llama-kv-stream-content.h"
 #include "llama-kv-stream-publication.h"
+#include <memory>
+
+class llama_kv_stream_ring_guard;
 
 struct llama_kv_stream_write_stats {
     size_t graph_submissions = 0, d2h_bytes = 0, d2h_calls = 0, d2d_bytes = 0, d2d_calls = 0;
@@ -63,13 +66,16 @@ public:
     // Default stable_tokens declares a fully ready snapshot; online producers must pass the immutable prefix explicitly.
     // Declare both decode intent and query count before prefetch starts. Unknown phase and single-token prompts stay unprofiled.
     bool begin_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages = 1,
-            size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {});
+            size_t stable_tokens = SIZE_MAX, llama_kv_stream_feedback_context feedback = {},
+            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {});
     // Speculatively start the next append while idle; adoption validates the complete logical identity.
     // Both operations are backend-neutral and retain the existing opaque copy queue until adoption or cancellation.
     bool prime_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,
-            size_t stable_tokens, llama_kv_stream_feedback_context feedback);
+            size_t stable_tokens, llama_kv_stream_feedback_context feedback,
+            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {});
     bool adopt_sequence(const std::vector<uint32_t> & layers, size_t active_tokens, size_t span_pages,
-            size_t stable_tokens, llama_kv_stream_feedback_context feedback);
+            size_t stable_tokens, llama_kv_stream_feedback_context feedback,
+            std::shared_ptr<const llama_kv_stream_ring_guard> ring_guard = {});
     bool publish_sequence_tail(const std::vector<llama_kv_stream_write_span> & spans);
     // An invalid or failed layer call cancels outstanding prefetch; the final valid layer ends the sequence.
     void cancel_sequence();

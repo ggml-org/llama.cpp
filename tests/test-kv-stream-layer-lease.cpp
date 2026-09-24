@@ -239,5 +239,29 @@ int main() {
         llama_kv_stream_complete_layer_lease_free(delayed);
     });
 
+    t.test("ring_guard_freezes_mtp_slots_until_target_sequence_retires", [](testing & t) {
+        fixture f;
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto * mtp = owner->acquire(request(0, 1));
+        if (!t.assert_true(mtp != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_true(guard->pool_buffer() == ggml_backend_memory_lease_buffer(f.pool));
+        t.assert_equal(size_t(4), guard->blocked_slots().size());
+        for (size_t i = 0; i < 3; ++i) t.assert_equal(uint8_t(1), guard->blocked_slots()[i]);
+        t.assert_equal(uint8_t(0), guard->blocked_slots()[3]);
+        llama_kv_stream_complete_layer_lease_free(mtp);
+        t.assert_equal(size_t(0), owner->ring_slots_used());
+        t.assert_true(!owner->can_repartition());
+        t.assert_true(owner->acquire(request(1, 1)) == nullptr);
+        t.assert_true(!owner->rebind(f.layout(12, 29)));
+        guard.reset();
+        t.assert_true(owner->can_repartition());
+        t.assert_true(owner->rebind(f.layout(12, 29)));
+        auto * next = owner->acquire(request(1, 1, 12, 29));
+        t.assert_true(next != nullptr);
+        llama_kv_stream_complete_layer_lease_free(next);
+    });
     return t.summary();
 }

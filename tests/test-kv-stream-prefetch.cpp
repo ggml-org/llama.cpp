@@ -1,4 +1,5 @@
 #include "kv-stream-block-test.h"
+#include "../src/llama-kv-stream-layer-lease.h"
 #include "../src/llama-kv-stream-prefetch.h"
 #include "../src/llama-kv-stream-feedback.h"
 #include <chrono>
@@ -88,12 +89,14 @@ int main(int argc, char ** argv) {
     const bool measured = fallback || (argc > 1 && std::strcmp(argv[1],"--bench-feedback") == 0);
     const bool sequence = measured || (argc > 1 && std::strcmp(argv[1],"--bench-sequence") == 0);
     const bool bench = sequence || (argc > 1 && std::strcmp(argv[1],"--bench") == 0);
-    const bool cuda = bench || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
+    const bool ring_guard_only = argc > 1 && std::strcmp(argv[1], "--cuda-ring-guard") == 0;
+    const bool cuda = bench || ring_guard_only || (argc > 1 && std::strcmp(argv[1],"--cuda") == 0);
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     if (bench) return benchmark(backend.get(),sequence,measured,fallback);
     testing t;
+    if (ring_guard_only) t.set_filter("(retained_mtp_slots_are_not_overwritten_by_target_prefetch|full_mtp_ring_rejects_target_sequence_without_submission)");
     if (cuda) t.test("completed_runtime_feedback_is_consumable_without_publishing_a_layout", [&](testing & t) {
         uint64_t previous_instance_epoch = 0;
         for (bool fallback : {false,true}) {
@@ -601,6 +604,132 @@ int main(int argc, char ** argv) {
             if (previous.available) { t.assert_equal(previous.epoch,current.epoch); t.assert_true(current.samples > previous.samples); }
             previous = current;
         }
+    });
+    t.test("external_ring_slots_are_skipped_without_losing_fifo_progress", [](testing & t) {
+        const std::vector<uint8_t> blocked{0, 0, 1, 1, 1, 0, 0, 0};
+        llama_kv_stream_prefetch_plan plan;
+        if (!t.assert_true(plan.start({0, 0}, 1025, 1280, 256, 8, 2, 1025, blocked))) return;
+        llama_kv_stream_prefetch_request request;
+        for (const auto & expected : {std::pair{size_t(0), size_t(2)},
+                std::pair{size_t(5), size_t(2)}, std::pair{size_t(7), size_t(1)}}) {
+            if (!t.assert_true(plan.reserve(request))) return;
+            t.assert_equal(expected.first, request.slot);
+            t.assert_equal(expected.second, request.pages);
+            for (size_t i = request.slot; i < request.slot + request.pages; ++i) t.assert_equal(uint8_t(0), blocked[i]);
+            t.assert_true(plan.mark_submitted(plan.pending() - 1));
+        }
+        t.assert_equal(size_t(5), plan.used());
+        t.assert_true(!plan.reserve(request));
+        t.assert_true(plan.consume(2));
+        t.assert_true(plan.reserve(request));
+        t.assert_equal(size_t(0), request.slot);
+        t.assert_equal(size_t(1), request.layer);
+        const size_t pending = plan.pending();
+        t.assert_true(!plan.start({0}, 1025, 1280, 256, 8, 2, 1025, {1}));
+        t.assert_equal(pending, plan.pending());
+
+        llama_kv_stream_prefetch_plan full;
+        t.assert_true(full.start({0}, 257, 512, 256, 4, 2, 257, {1, 1, 1, 1}));
+        t.assert_true(!full.reserve(request));
+    });
+    if (cuda) t.test("retained_mtp_slots_are_not_overwritten_by_target_prefetch", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 257, false, 4, 2, 7);
+        f.policy.initial_ring_slots = 3;
+        f.policy.fixed_ring = true;
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        llama_kv_stream_policy_state placement;
+        if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy, placement).status ==
+                llama_kv_stream_policy_status::success)) return;
+        fixture foreign(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 257, false, 4, 2, 7);
+        foreign.policy.initial_ring_slots = 3;
+        foreign.policy.fixed_ring = true;
+        llama_kv_stream_policy_state foreign_placement;
+        t.assert_true(llama_kv_stream_policy_initialize(foreign.policy, foreign_placement).status ==
+            llama_kv_stream_policy_status::success);
+        auto foreign_owner = llama_kv_stream_layer_lease_owner::create(foreign.lease.get(),
+            {foreign.policy, foreign_placement, 257, 11, foreign.content->generation()});
+        if (!t.assert_true(bool(foreign_owner))) return;
+        auto foreign_guard = foreign_owner->hold_ring();
+        if (!t.assert_true(bool(foreign_guard))) return;
+        t.assert_true(!f.resident->begin_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}, foreign_guard));
+        t.assert_true(!f.resident->sequence_active());
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.lease.get(),
+            {f.policy, placement, 257, 11, f.content->generation()});
+        if (!t.assert_true(bool(owner))) return;
+        auto * mtp = owner->acquire({0, 1, 11, f.content->generation()});
+        if (!t.assert_true(mtp != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_equal(uint8_t(1), guard->blocked_slots()[0]);
+        auto * pool = ggml_backend_memory_lease_buffer(f.lease.get());
+        ggml_backend_buffer_clear(pool, 0xa5);
+        block_inputs input(f, 257, 1);
+        ggml_kv_stream_block_layout work_layout;
+        ggml_kv_stream_block_layout_make(4, 256, work_layout);
+        block_workspace workspace(f, work_layout.bytes);
+        if (!t.assert_true(f.resident->begin_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}, guard))) return;
+        guard.reset();
+        t.assert_equal(size_t(2), f.resident->sequence_stats().pending_pages);
+        for (uint32_t layer : {1u, 2u, 3u}) {
+            if (!t.assert_true(f.resident->compute_streamed(layer, input.q, input.mask, input.output,
+                    257, 1.0f/16, workspace.lease.get(), true, 1))) return;
+            close_values(t, oracle(f, layer, 257, 1, input.qdata), input.read(), 1e-3f);
+        }
+        t.assert_true(!f.resident->sequence_active());
+        auto primed_guard = owner->hold_ring();
+        if (!t.assert_true(bool(primed_guard))) return;
+        t.assert_true(f.resident->prime_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}, primed_guard));
+        t.assert_true(!f.resident->adopt_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}));
+        t.assert_true(f.resident->sequence_active());
+        t.assert_true(f.resident->adopt_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}, primed_guard));
+        primed_guard.reset();
+        for (uint32_t layer : {1u, 2u, 3u}) {
+            if (!t.assert_true(f.resident->compute_streamed(layer, input.q, input.mask, input.output,
+                    257, 1.0f/16, workspace.lease.get(), true, 1))) return;
+            close_values(t, oracle(f, layer, 257, 1, input.qdata), input.read(), 1e-3f);
+        }
+        t.assert_true(!f.resident->sequence_active());
+        llama_kv_stream_policy_layout physical;
+        t.assert_true(llama_kv_stream_policy_layout_make(f.policy, placement, 257, physical).status ==
+            llama_kv_stream_policy_status::success);
+        ggml_context_ptr context(ggml_init({16384, nullptr, true}));
+        for (size_t offset : {size_t(0), physical.ring.v_offset}) {
+            auto * marker = ggml_new_tensor_1d(context.get(), GGML_TYPE_I8, 128);
+            if (!t.assert_true(ggml_backend_tensor_alloc(pool, marker,
+                    static_cast<char *>(ggml_backend_buffer_get_base(pool)) + offset) == GGML_STATUS_SUCCESS)) return;
+            std::vector<uint8_t> bytes(128);
+            ggml_backend_tensor_get(marker, bytes.data(), 0, bytes.size());
+            t.assert_true(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0xa5; }));
+        }
+        llama_kv_stream_complete_layer_lease_free(mtp);
+        t.assert_true(owner->can_repartition());
+    });
+    if (cuda) t.test("full_mtp_ring_rejects_target_sequence_without_submission", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 257, false, 4, 2, 5);
+        f.policy.initial_ring_slots = 1;
+        f.policy.fixed_ring = true;
+        if (!t.assert_true(f.attach())) return;
+        llama_kv_stream_policy_state placement;
+        if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy, placement).status ==
+                llama_kv_stream_policy_status::success)) return;
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.lease.get(),
+            {f.policy, placement, 257, 11, f.content->generation()});
+        if (!t.assert_true(bool(owner))) return;
+        auto * mtp = owner->acquire({0, 1, 11, f.content->generation()});
+        if (!t.assert_true(mtp != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_equal(size_t(1), guard->blocked_slots().size());
+        t.assert_equal(uint8_t(1), guard->blocked_slots()[0]);
+        const bool started = f.resident->begin_sequence({1}, 257, 1, SIZE_MAX, {1, true}, guard);
+        t.assert_true(!started);
+        if (started) f.resident->cancel_sequence();
+        t.assert_true(!f.resident->sequence_active());
+        t.assert_equal(size_t(1), owner->ring_slots_used());
+        guard.reset();
+        llama_kv_stream_complete_layer_lease_free(mtp);
+        t.assert_true(owner->can_repartition());
     });
     return t.summary();
 }

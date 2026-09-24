@@ -150,8 +150,11 @@ Outcome: the MTP logical cache participates in the same bounded physical KV budg
 | 10.7 | Integrate acceptance, MTP truncate/commit, and retained-lease invalidation. | Every accepted length, full rejection, target/MTP frontier agreement, cache generation changes, and retry behavior. |
 | 10.8 | Add optional target-L1 prefetch only from spare capacity, with deadline feedback. | No eviction of retained MTP spans, miss recovery, disabled-equivalence control, and measured benefit. |
 
-Stage 10.4 checkpoint: lease population is backend-neutral and synchronous at the return boundary. It currently requires the MTP committed frontier to equal the physical layout's active-token extent. Stage 10.5 must handle the target/MTP frontier gap during catch-up and append new MTP KV to a retained lease without loading its old suffix again.
-The lease owner currently excludes other leases, but the target resident copy queue does not yet consult it. Before live use, target prefetch must share this ring admission so it cannot overwrite a retained MTP suffix.
+Stage 10.4 checkpoint: lease population is backend-neutral and synchronized before return.
+
+Stage 10.5 infrastructure checkpoint: phase-scoped ring guards mask MTP-owned slots from target prefetch and survive prime/adopt. A populated MTP lease can expose a committed prefix while reserving physical slots up to the target frontier; future bytes remain untouched.
+
+Still required for catch-up: map the target's 16 cache-local layers into the shared 17-layer physical layout, pass the guard through the live target session, publish the new MTP tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
 
 ## Milestone 11: end-to-end speculative server integration
 
