@@ -679,7 +679,7 @@ class GraniteSpeech5FrontendMmprojModel(MmprojModel):
         a["num_attention_heads"] = 0
 
         super().set_gguf_parameters()
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH_5_FE)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GRANITE_SPEECH_5)
 
         # unused by this front-end's trivial graph, but required by the generic
         # clip.cpp hparam loader - same as gemma4ua's "transformer-less" audio
@@ -772,7 +772,7 @@ class GraniteSpeech5Model(TextModel):
         self.gguf_writer.add_ctc_conv_kernel(h["conv_kernel_size"])
         self.gguf_writer.add_ctc_conv_expansion_factor(h["conv_expansion_factor"])
 
-        # subsample values per-layer. granite-speech-5 always uses a factor of 2
+        # subsample values per-layer. granite_speech_5 always uses a factor of 2
         subsample_layers = list(h["subsample_layers"])
         self.gguf_writer.add_ctc_subsample_layer_mapping([
             2 if i in subsample_layers else 1
