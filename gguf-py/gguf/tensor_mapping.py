@@ -1436,6 +1436,26 @@ class TensorNameMap:
         MODEL_TENSOR.CLS_NORM: (
             "head.norm", # modern-bert
         ),
+
+        # laya decision head
+        MODEL_TENSOR.TYPE_EMB: (
+            "type_emb",
+        ),
+        MODEL_TENSOR.SCORER_0: (
+            "scorer.0",
+        ),
+        MODEL_TENSOR.SCORER_1: (
+            "scorer.1",
+        ),
+        MODEL_TENSOR.SCORER_3: (
+            "scorer.3",
+        ),
+        MODEL_TENSOR.ACT_HEAD_0: (
+            "act_head.0",
+        ),
+        MODEL_TENSOR.ACT_HEAD_2: (
+            "act_head.2",
+        ),
         #############################################################################
 
         MODEL_TENSOR.CONVNEXT_DW: (
@@ -2761,6 +2781,26 @@ class TensorNameMap:
 
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
+        MODEL_ARCH.LAYA: {
+            MODEL_TENSOR.HEAD_ATTN_QKV: (
+                "head.layers.{bid}.self_attn.in_proj",
+            ),
+            MODEL_TENSOR.HEAD_ATTN_OUT: (
+                "head.layers.{bid}.self_attn.out_proj",
+            ),
+            MODEL_TENSOR.HEAD_ATTN_NORM: (
+                "head.layers.{bid}.norm1",
+            ),
+            MODEL_TENSOR.HEAD_FFN_NORM: (
+                "head.layers.{bid}.norm2",
+            ),
+            MODEL_TENSOR.HEAD_FFN_UP: (
+                "head.layers.{bid}.linear1",
+            ),
+            MODEL_TENSOR.HEAD_FFN_DOWN: (
+                "head.layers.{bid}.linear2",
+            ),
+        },
         MODEL_ARCH.ARCTIC: {
             MODEL_TENSOR.FFN_NORM: (
                 "model.layers.{bid}.residual_layernorm",

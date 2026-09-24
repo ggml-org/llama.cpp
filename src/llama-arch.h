@@ -26,6 +26,7 @@ enum llm_arch {
     LLM_ARCH_REFACT,
     LLM_ARCH_BERT,
     LLM_ARCH_MODERN_BERT,
+    LLM_ARCH_LAYA,
     LLM_ARCH_NOMIC_BERT,
     LLM_ARCH_NOMIC_BERT_MOE,
     LLM_ARCH_NEO_BERT,
@@ -229,6 +230,13 @@ enum llm_kv {
     LLM_KV_NUM_DEEPSTACK_LAYERS,
     LLM_KV_DEEPSTACK_MAPPING,
     LLM_KV_HIDDEN_ACT,
+    LLM_KV_HEAD_LAYERS,               // laya: decision head transformer layers
+    LLM_KV_N_QTYPE,                   // laya: question type count (choice/score/noul)
+    LLM_KV_MARKER_TOKEN_ID,           // laya: token id marking option positions
+    LLM_KV_MAX_LEN,                   // laya: max sequence length
+    LLM_KV_HEAD_MAX_LEN,              // laya: max head (option region) length
+    LLM_KV_TEMPERATURE,               // laya: per-qtype temperature (3 floats)
+    LLM_KV_ACT_CLASSES,               // laya: action head class count
     LLM_KV_POOLING_TYPE,
     LLM_KV_LOGIT_SCALE,
     LLM_KV_DECODER_START_TOKEN_ID,
@@ -652,6 +660,18 @@ enum llm_tensor {
     LLM_TENSOR_CLS,
     LLM_TENSOR_CLS_OUT,
     LLM_TENSOR_CLS_NORM,
+    LLM_TENSOR_TYPE_EMB,              // laya: question type embedding
+    LLM_TENSOR_HEAD_ATTN_QKV,         // laya: decision head attention qkv
+    LLM_TENSOR_HEAD_ATTN_OUT,         // laya: decision head attention output
+    LLM_TENSOR_HEAD_ATTN_NORM,        // laya: decision head attention pre-norm
+    LLM_TENSOR_HEAD_FFN_NORM,         // laya: decision head ffn pre-norm
+    LLM_TENSOR_HEAD_FFN_UP,           // laya: decision head ffn up
+    LLM_TENSOR_HEAD_FFN_DOWN,         // laya: decision head ffn down
+    LLM_TENSOR_SCORER_0,              // laya: scorer LayerNorm
+    LLM_TENSOR_SCORER_1,              // laya: scorer Linear(768,768)
+    LLM_TENSOR_SCORER_3,              // laya: scorer Linear(768,1)
+    LLM_TENSOR_ACT_HEAD_0,            // laya: act head Linear(d+4,256)
+    LLM_TENSOR_ACT_HEAD_2,            // laya: act head Linear(256,2)
     LLM_TENSOR_CONV1D,
     LLM_TENSOR_CONVNEXT_DW,
     LLM_TENSOR_CONVNEXT_NORM,
