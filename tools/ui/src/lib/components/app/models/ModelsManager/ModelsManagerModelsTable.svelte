@@ -403,69 +403,74 @@
 				? `${entry.quants.length} variants`
 				: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
+	// a repo row stands for its quants, so it reports what they agree on
+	{@const contextSource = entry.quants.find((quant) => quant.contextLength) ?? entry.base}
+	{@const mediaSource = entry.quants.find((quant) => quant.modalities) ?? entry.base}
 
-	<div class="px-2">
-		<div
-			class={[rowGrid, 'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40']}
-			onclick={() => toggleQuants(entry.key)}
-			onkeydown={(event) => event.key === 'Enter' && toggleQuants(entry.key)}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<ModelAvatar
-					option={entry.base}
-					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
-					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-					size="size-9"
+	<div
+		class={[rowGrid, 'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40']}
+		onclick={() => toggleQuants(entry.key)}
+		onkeydown={(event) => event.key === 'Enter' && toggleQuants(entry.key)}
+		role="button"
+		tabindex="0"
+	>
+		<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+			<ModelAvatar
+				option={entry.base}
+				showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+				showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+				size="size-9"
+			/>
+
+			<span class="min-w-0">
+				<ModelId
+					aliases={entry.base.aliases}
+					class="min-w-0"
+					hideCapabilities
+					hideModalities
+					hideParameters
+					hideQuantization
+					modalities={entry.base.modalities}
+					modelId={entry.base.model}
+					tags={entry.base.tags}
+					title={entry.base.model}
 				/>
 
-				<span class="min-w-0">
-					<ModelId
-						aliases={entry.base.aliases}
-						class="min-w-0"
-						hideCapabilities
-						hideModalities
-						hideParameters
-						hideQuantization
-						modalities={entry.base.modalities}
-						modelId={entry.base.model}
-						tags={entry.base.tags}
-						title={entry.base.model}
-					/>
-
-					<span class="block text-xs text-muted-foreground">{groupLabel}</span>
-				</span>
+				<span class="block text-xs text-muted-foreground">{groupLabel}</span>
 			</span>
+		</span>
 
-			<span></span>
+		<ModelContext
+			class="justify-self-end"
+			configured={configuredContext(contextSource)}
+			option={contextSource}
+		/>
 
-			<span></span>
+		{@render modalities(mediaSource)}
 
-			{@render capabilities(entry.base)}
+		{@render capabilities(entry.base)}
 
-			<span></span>
+		<span></span>
 
-			{@render parameters(entry.base)}
+		{@render parameters(entry.base)}
 
-			<span></span>
+		<span></span>
 
-			<span class="justify-self-center">
-				<span
-					class="block h-2.5 w-2.5 rounded-full {anyLoaded
-						? 'bg-emerald-500'
-						: 'border border-muted-foreground/50'}"
-				></span>
-			</span>
+		<span class="justify-self-center">
+			<span
+				class="block h-2.5 w-2.5 rounded-full {anyLoaded
+					? 'bg-emerald-500'
+					: 'border border-muted-foreground/50'}"
+			></span>
+		</span>
 
-			<span class="flex justify-center">
-				{#if isExpanded}
-					<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
-				{:else}
-					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
-				{/if}
-			</span>
-		</div>
+		<span class="flex justify-center">
+			{#if isExpanded}
+				<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
+			{:else}
+				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+			{/if}
+		</span>
 	</div>
 {/snippet}
 
@@ -475,49 +480,47 @@
 	{@const isHidden = modelsStore.isHidden(option.id)}
 	{@const quant = option.parsedId?.quantization ?? option.model}
 
-	<div class="px-2">
-		<div
-			class={[
-				rowGrid,
-				'group cursor-pointer rounded-md px-2 py-2 transition',
-				isHidden && 'opacity-60',
-				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
-			]}
-			onclick={() => onSelect(option)}
-			onkeydown={(event) => event.key === 'Enter' && onSelect(option)}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
-					{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
-				</Badge>
+	<div
+		class={[
+			rowGrid,
+			'group cursor-pointer rounded-md px-2 py-2 transition',
+			isHidden && 'opacity-60',
+			selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
+		]}
+		onclick={() => onSelect(option)}
+		onkeydown={(event) => event.key === 'Enter' && onSelect(option)}
+		role="button"
+		tabindex="0"
+	>
+		<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
+			<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
+				{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
+			</Badge>
 
-				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
-			</span>
+			<span class="truncate text-sm text-muted-foreground">{option.model}</span>
+		</span>
 
-			<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
+		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
-			{@render modalities(option)}
+		{@render modalities(option)}
 
-			{@render capabilities(option)}
+		{@render capabilities(option)}
 
-			{@render size(option)}
+		{@render size(option)}
 
-			{@render parameters(option)}
+		{@render parameters(option)}
 
-			{@render lastUsed(option)}
+		{@render lastUsed(option)}
 
-			{@render statusDot(option)}
+		{@render statusDot(option)}
 
-			<div class="flex items-center justify-center justify-self-center">
-				<DropdownMenuActions
-					actions={rowActions(option, canLoad, favorite, isHidden)}
-					align="end"
-					triggerIcon={MoreHorizontal}
-					triggerTooltip="Model actions"
-				/>
-			</div>
+		<div class="flex items-center justify-center justify-self-center">
+			<DropdownMenuActions
+				actions={rowActions(option, canLoad, favorite, isHidden)}
+				align="end"
+				triggerIcon={MoreHorizontal}
+				triggerTooltip="Model actions"
+			/>
 		</div>
 	</div>
 {/snippet}
