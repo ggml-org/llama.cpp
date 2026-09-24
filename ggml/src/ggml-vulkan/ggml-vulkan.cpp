@@ -121,6 +121,23 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 return vk_device_architecture::NVIDIA_TURING;
             }
         }
+    } else if(props.vendorID == VK_VENDOR_ID_QUALCOMM){
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool cooperative_matrix = false;
+        bool cooperative_matrix_conversion = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0) {
+                cooperative_matrix = true;
+            } else if (strcmp("VK_QCOM_cooperative_matrix_conversion", properties.extensionName) == 0) {
+                cooperative_matrix_conversion = true;
+            }
+        }
+
+        if (cooperative_matrix && cooperative_matrix_conversion) {
+            return vk_device_architecture::QUALCOMM_ADRENO;
+        }
     }
     return vk_device_architecture::OTHER;
 }
@@ -1734,6 +1751,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, mm_warp_16, 64, 1, 4, 2, 1, mm_warp_16 };
+        } else if (device->vendor_id == VK_VENDOR_ID_QUALCOMM && device->coopmat_support) {
+            m_warptile     = { 64, 64, 64, 16, 64, 64, 1, tm_l, tn_l, tk_l, 64 };
+            m_warptile_mmq = { 64, 64, 64, 32, 64, 64, 1, tm_m, tn_m, tk_m, 64 };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -4606,10 +4626,10 @@ vk_device ggml_vk_get_device(size_t idx) {
             case VK_VENDOR_ID_QUALCOMM:
                 device->mul_mat_l[i] = false;
                 device->mul_mat_m[i] = true;
-                device->mul_mat_s[i] = true;
+                device->mul_mat_s[i] = !device->coopmat_support;
                 device->mul_mat_id_l[i] = false;
                 device->mul_mat_id_m[i] = true;
-                device->mul_mat_id_s[i] = true;
+                device->mul_mat_id_s[i] = !device->coopmat_support;
                 break;
 #endif
             default:
@@ -6393,6 +6413,8 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         default:
             return true;
         }
+    case VK_VENDOR_ID_QUALCOMM:
+        return false;
     default:
         return true;
     }
@@ -15956,6 +15978,9 @@ bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& 
             return arch == vk_device_architecture::AMD_RDNA3;
         }
         return true;
+    case VK_VENDOR_ID_QUALCOMM:
+        // Only allow Adreno GPUs with hardware matrix cores (Gen 6+).
+        return arch == vk_device_architecture::QUALCOMM_ADRENO;
     default:
         return true;
     }
