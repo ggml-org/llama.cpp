@@ -86,7 +86,7 @@ class TensorNameMap:
             "model.lm_head",             # dflash
             "model.transformer.ff_out",  # llada
             "heead.decoder",             # modern-bert
-            "encoder.out",               # granite-speech-5 (also reused mid-stack for self-conditioning)
+            "encoder.out",               # granite_speech_5 (also reused mid-stack for self-conditioning)
         ),
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
@@ -217,7 +217,7 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
-            "encoder.layers.{bid}.norm_self_att",                   # granite-speech-5
+            "encoder.layers.{bid}.norm_self_att",                   # granite_speech_5
         ),
 
         # Attention norm 2
@@ -273,7 +273,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_query",                        # talkie
-            "encoder.layers.{bid}.self_attn.q_proj",                     # granite-speech-5
+            "encoder.layers.{bid}.self_attn.q_proj",                     # granite_speech_5
         ),
 
         # Attention key
@@ -296,7 +296,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
             "model.blocks.{bid}.attn.attn_key",                        # talkie
-            "encoder.layers.{bid}.self_attn.k_proj",                   # granite-speech-5
+            "encoder.layers.{bid}.self_attn.k_proj",                   # granite_speech_5
         ),
 
         # Attention value
@@ -318,7 +318,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_value",                        # talkie
-            "encoder.layers.{bid}.self_attn.v_proj",                     # granite-speech-5
+            "encoder.layers.{bid}.self_attn.v_proj",                     # granite_speech_5
         ),
 
         # Attention output
@@ -360,7 +360,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
             "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
             "model.blocks.{bid}.attn.attn_resid",                           # talkie
-            "encoder.layers.{bid}.self_attn.o_proj",                        # granite-speech-5
+            "encoder.layers.{bid}.self_attn.o_proj",                        # granite_speech_5
         ),
 
         # Attention output norm
@@ -427,7 +427,7 @@ class TensorNameMap:
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
             "layers.{bid}.mlp_norm",                                         # modern-bert
-            "encoder.layers.{bid}.norm_feed_forward1",                       # granite-speech-5
+            "encoder.layers.{bid}.norm_feed_forward1",                       # granite_speech_5
         ),
 
         # Pre feed-forward norm
@@ -450,7 +450,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
-            "encoder.layers.{bid}.norm_out",                  # granite-speech-5
+            "encoder.layers.{bid}.norm_out",                  # granite_speech_5
         ),
 
         MODEL_TENSOR.FFN_POST_NORM_1: (
@@ -541,7 +541,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.up_proj",            # cogvlm
             "model.blocks.{bid}.mlp.mlp_linear",                      # talkie
-            "encoder.layers.{bid}.feed_forward1.linear1",             # granite-speech-5
+            "encoder.layers.{bid}.feed_forward1.linear1",             # granite_speech_5
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -672,7 +672,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
             "model.blocks.{bid}.mlp.mlp_resid",                       # talkie
-            "encoder.layers.{bid}.feed_forward1.linear2",             # granite-speech-5
+            "encoder.layers.{bid}.feed_forward1.linear2",             # granite_speech_5
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -1522,49 +1522,49 @@ class TensorNameMap:
 
         # Shaw relative position embedding table
         MODEL_TENSOR.ATTN_REL_POS: (
-            "encoder.layers.{bid}.self_attn.rel_pos_emb", # granite-speech-5
+            "encoder.layers.{bid}.self_attn.rel_pos_emb", # granite_speech_5
         ),
 
         # pre-conv-module norm
         MODEL_TENSOR.CONV_NORM: (
-            "encoder.layers.{bid}.norm_conv",             # granite-speech-5
+            "encoder.layers.{bid}.norm_conv",             # granite_speech_5
         ),
 
         # pointwise convs (implemented as Linear)
         MODEL_TENSOR.CONV_PW1: (
-            "encoder.layers.{bid}.conv.pointwise_lin1",   # granite-speech-5
+            "encoder.layers.{bid}.conv.pointwise_lin1",   # granite_speech_5
         ),
 
         MODEL_TENSOR.CONV_PW2: (
-            "encoder.layers.{bid}.conv.pointwise_lin2",   # granite-speech-5
+            "encoder.layers.{bid}.conv.pointwise_lin2",   # granite_speech_5
         ),
 
         # depthwise conv
         MODEL_TENSOR.CONV_DW: (
-            "encoder.layers.{bid}.conv.depthwise_conv",   # granite-speech-5
+            "encoder.layers.{bid}.conv.depthwise_conv",   # granite_speech_5
         ),
 
         # folded batch norm (weight/bias only, running stats folded at conversion time)
         MODEL_TENSOR.CONV_DW_NORM: (
-            "encoder.layers.{bid}.conv.norm",             # granite-speech-5
+            "encoder.layers.{bid}.conv.norm",             # granite_speech_5
         ),
 
         # second half-step FFN (Macaron-style, applied after the conv module)
         MODEL_TENSOR.FFN_NORM_1: (
-            "encoder.layers.{bid}.norm_feed_forward2",    # granite-speech-5
+            "encoder.layers.{bid}.norm_feed_forward2",    # granite_speech_5
         ),
 
         MODEL_TENSOR.FFN_UP_1: (
-            "encoder.layers.{bid}.feed_forward2.linear1", # granite-speech-5
+            "encoder.layers.{bid}.feed_forward2.linear1", # granite_speech_5
         ),
 
         MODEL_TENSOR.FFN_DOWN_1: (
-            "encoder.layers.{bid}.feed_forward2.linear2", # granite-speech-5
+            "encoder.layers.{bid}.feed_forward2.linear2", # granite_speech_5
         ),
 
         # mid-stack self-conditioning back-projection (softmax(mid ctc logits) -> hidden_dim)
         MODEL_TENSOR.CTC_OUT_MID: (
-            "encoder.out_mid",                            # granite-speech-5
+            "encoder.out_mid",                            # granite_speech_5
         ),
 
         #############################################################################

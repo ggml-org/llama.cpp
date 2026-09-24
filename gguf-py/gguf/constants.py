@@ -449,8 +449,8 @@ class Keys:
         WINDOW_SIZE         = "clip.audio.window_size"
         LOCAL_BLOCK_COUNT   = "clip.audio.local_block_count" # mimo-v2.5: input_local_transformer layer count
         LOCAL_GROUP_SIZE    = "clip.audio.local_group_size"  # mimo-v2.5: input_local_transformer grouping size
-        RAW_NUM_MEL_BINS    = "clip.audio.raw_num_mel_bins" # granite_speech_5_fe: pre-delta, pre-stack mel bin count
-        DELTA_WIN_LENGTH    = "clip.audio.delta_win_length" # granite_speech_5_fe
+        RAW_NUM_MEL_BINS    = "clip.audio.raw_num_mel_bins" # granite_speech_5: pre-delta, pre-stack mel bin count
+        DELTA_WIN_LENGTH    = "clip.audio.delta_win_length" # granite_speech_5
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -918,16 +918,16 @@ class MODEL_TENSOR(IntEnum):
     INDEXER_COMPRESSOR_WGATE = auto()
     INDEXER_COMPRESSOR_APE = auto()
     INDEXER_COMPRESSOR_NORM = auto()
-    ATTN_REL_POS         = auto() # granite-speech-5 (Shaw relative position embedding)
-    CONV_NORM            = auto() # granite-speech-5 (pre-conv-module norm)
-    CONV_PW1             = auto() # granite-speech-5
-    CONV_PW2             = auto() # granite-speech-5
-    CONV_DW              = auto() # granite-speech-5 (depthwise conv)
-    CONV_DW_NORM         = auto() # granite-speech-5 (folded batch norm after depthwise conv)
-    FFN_NORM_1           = auto() # granite-speech-5 (second half-step FFN)
-    FFN_UP_1             = auto() # granite-speech-5
-    FFN_DOWN_1           = auto() # granite-speech-5
-    CTC_OUT_MID          = auto() # granite-speech-5 (mid-stack self-conditioning back-projection)
+    ATTN_REL_POS         = auto() # granite_speech_5 (Shaw relative position embedding)
+    CONV_NORM            = auto() # granite_speech_5 (pre-conv-module norm)
+    CONV_PW1             = auto() # granite_speech_5
+    CONV_PW2             = auto() # granite_speech_5
+    CONV_DW              = auto() # granite_speech_5 (depthwise conv)
+    CONV_DW_NORM         = auto() # granite_speech_5 (folded batch norm after depthwise conv)
+    FFN_NORM_1           = auto() # granite_speech_5 (second half-step FFN)
+    FFN_UP_1             = auto() # granite_speech_5
+    FFN_DOWN_1           = auto() # granite_speech_5
+    CTC_OUT_MID          = auto() # granite_speech_5 (mid-stack self-conditioning back-projection)
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -1368,7 +1368,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
     MODEL_ARCH.GRANITE_SWITCH:   "graniteswitch",
     MODEL_ARCH.GRANITE_SWA:      "granite_swa",
-    MODEL_ARCH.GRANITE_SPEECH_5: "granite-speech-5",
+    MODEL_ARCH.GRANITE_SPEECH_5: "granite_speech_5",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
@@ -5932,7 +5932,7 @@ class VisionProjectorType:
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
     MUSE_GLIMMER   = "muse-glimmer"
-    GRANITE_SPEECH_5_FE = "granite_speech_5_fe" # audio, front-end only, no learned encoder
+    GRANITE_SPEECH_5 = "granite_speech_5" # audio, front-end only, no learned encoder
 
 
 # Items here are (block size, type size)
