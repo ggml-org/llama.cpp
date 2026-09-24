@@ -6,6 +6,7 @@
 		CollapsibleSection
 	} from '$lib/components/app';
 	import { Badge } from '$lib/components/ui/badge';
+	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { ApiLlamaCppServerProps } from '$lib/types/api';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
@@ -23,6 +24,8 @@
 
 	let quant = $derived(modelQuantLabel(option));
 	let size = $derived(modelSizeLabel(option));
+	// a GGUF carries the count in its metadata, a transformers repo in its SafeTensors index
+	let hubParameters = $derived(HuggingFaceService.parameterCount(hub));
 	let resolvedSize = $state<string | null>(null);
 
 	// the router rarely reports a size, the repo tree does
@@ -75,7 +78,7 @@
 			label: 'Parameters',
 			value: meta?.n_params
 				? formatParameters(meta.n_params)
-				: (option.parsedId?.params ?? (gguf?.total ? formatParameters(gguf.total) : null))
+				: (option.parsedId?.params ?? (hubParameters ? formatParameters(hubParameters) : null))
 		},
 		{ label: 'Embedding Size', value: meta?.n_embd ? formatNumber(meta.n_embd) : null },
 		{

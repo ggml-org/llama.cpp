@@ -562,14 +562,14 @@ export class HuggingFaceService {
 		return `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}`;
 	}
 
-	// Utility Methods
-
 	/**
 	 * Get most liked GGUF models
 	 */
 	static async getMostLiked(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.LIKES });
 	}
+
+	// Utility Methods
 
 	/**
 	 * Get newly released GGUF models
@@ -666,6 +666,14 @@ export class HuggingFaceService {
 	 */
 	static async getTrending(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.TRENDING_SCORE });
+	}
+
+	/**
+	 * Parameter count a repo reports: a GGUF repo spells it out in its metadata,
+	 * a transformers repo reports it in its SafeTensors index.
+	 */
+	static parameterCount(details?: HfModelDetailInfo | null): number | null {
+		return details?.gguf?.total ?? details?.safetensors?.total ?? null;
 	}
 
 	/**

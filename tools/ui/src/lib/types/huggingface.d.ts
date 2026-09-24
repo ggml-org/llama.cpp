@@ -154,6 +154,13 @@ export interface HfModelDetailInfo extends HfModelInfo {
 	cardData?: HfModelCardData;
 	/** GGUF metadata (only present when full=true for GGUF repos) */
 	gguf?: HfModelGguf;
+	/** SafeTensors counts (only present when full=true for transformers repos) */
+	safetensors?: {
+		/** Total parameter count */
+		total?: number;
+		/** Per dtype parameter counts */
+		parameters?: Record<string, number>;
+	};
 	/** Model config (only present when full=true) */
 	config?: Record<string, unknown>;
 	/** Total repo storage in bytes (only present when full=true) */

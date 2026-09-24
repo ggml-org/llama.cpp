@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { isLocalOption, modelParamsLabel } from './ModelsManager/utils';
+	import { modelParamsLabel } from './ModelsManager/utils';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -42,11 +42,12 @@
 		total = null;
 
 		// nothing to look up when the id or the listing already carries the count
-		if (!isNearViewport || !isLocalOption(option)) return;
+		if (!isNearViewport) return;
 
 		if (option.parsedId?.params || typeof option.meta?.n_params === 'number') return;
 
-		// a local GGUF names no parameter count, but the Hub knows the model's
+		// a GGUF names no parameter count and a provider listing never carries one,
+		// but the Hub knows the model behind an `org/name` id
 		const repo = option.model.split(':')[0] ?? '';
 
 		if (!repo.includes('/')) return;
@@ -55,7 +56,7 @@
 
 		void HuggingFaceService.getDetails(repo)
 			.then((details) => {
-				if (!cancelled) total = details?.gguf?.total ?? null;
+				if (!cancelled) total = HuggingFaceService.parameterCount(details);
 			})
 			// best-effort: offline or a repo we cannot read keeps the dash
 			.catch(() => {});

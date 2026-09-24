@@ -140,7 +140,7 @@ export function modelSizeLabel(option: ModelOption): string | null {
 export function modelParamCount(option: ModelOption): number {
 	const label = modelParamsLabel(
 		option,
-		HuggingFaceService.cachedDetails(option.model)?.gguf?.total
+		HuggingFaceService.parameterCount(HuggingFaceService.cachedDetails(option.model))
 	);
 	const match = label ? /([\d.]+)\s*([BMK])?/i.exec(label) : null;
 	const value = match ? Number.parseFloat(match[1]) : Number.NaN;
