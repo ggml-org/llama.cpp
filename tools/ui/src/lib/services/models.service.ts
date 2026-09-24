@@ -131,13 +131,23 @@ export class ModelsService {
 	static isSidecarEntry(modelId: string): boolean {
 		const idx = modelId.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 
-		if (idx === MODEL_ID.NOT_FOUND) return false;
+		if (idx !== MODEL_ID.NOT_FOUND) {
+			const tag = modelId.slice(idx + 1).toLowerCase();
+			const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
+			const token = dash === -1 ? tag : tag.slice(dash + 1);
 
-		const tag = modelId.slice(idx + 1).toLowerCase();
-		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
-		const token = dash === -1 ? tag : tag.slice(dash + 1);
+			if (SIDECAR_TOKENS.includes(token)) return true;
+		}
 
-		return SIDECAR_TOKENS.includes(token);
+		// the router also lists projector and draft files by filename, e.g.
+		// `org/model-mmproj-F16.gguf` or `mmproj-model.gguf`
+		const name = modelId.split('/').pop() ?? modelId;
+
+		return (
+			MODEL_ID.SIDECAR_INFIX_REGEX.test(name) ||
+			MODEL_ID.SIDECAR_PREFIX_REGEX.test(name) ||
+			MODEL_ID.SIDECAR_SUFFIX_REGEX.test(name)
+		);
 	}
 
 	/**

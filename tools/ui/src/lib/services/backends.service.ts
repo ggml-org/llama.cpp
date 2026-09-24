@@ -7,6 +7,7 @@
  */
 
 import { API_MODELS, LOCAL_BACKEND_ID } from '$lib/constants';
+import { ModelsService } from '$lib/services/models.service';
 import type { ApiModelsListResponse, Backend, ModelOption } from '$lib/types';
 import { isAbortError } from '$lib/utils/abort';
 import { apiUrl } from '$lib/utils/api-base';
@@ -129,6 +130,9 @@ function normalizeBackendModel(entry: unknown): ModelOption[] {
 	const id = typeof raw.id === 'string' ? raw.id.trim() : '';
 
 	if (!id) return [];
+
+	// a llama-compat server lists its projector and draft sidecars as models too
+	if (ModelsService.isSidecarEntry(id)) return [];
 
 	return [
 		{ capabilities: [], contextLength: readModelContextLength(raw), id, model: id, name: id }

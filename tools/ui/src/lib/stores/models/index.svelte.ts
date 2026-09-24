@@ -668,8 +668,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return (
 			entries
-				// sidecar entries mark downloaded sidecar files, not loadable models
-				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
+				// sidecar entries mark downloaded sidecar files, not loadable models;
+				// the router also lists projector files by filename, which carry the
+				// sidecar token inside the id rather than after a colon
+				.filter(
+					({ item }) =>
+						!ModelsService.isSidecarEntry(item.id) && !ModelsService.parseModelId(item.id).sidecar
+				)
 				// in-flight downloads are not usable models yet; the selector tracks
 				// them in its "Download in progress" section instead
 				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
