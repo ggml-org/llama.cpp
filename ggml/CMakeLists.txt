@@ -169,6 +169,19 @@ if (NOT MSVC)
     option(GGML_AMX_INT8     "ggml: enable AMX-INT8"         OFF)
     option(GGML_AMX_BF16     "ggml: enable AMX-BF16"         OFF)
 endif()
+
+set(GGML_CPU_AMX_VARIANTS_DEFAULT ON)
+
+if (MSVC OR APPLE)
+    # MSVC and Apple clang don't support AMX
+    set(GGML_CPU_AMX_VARIANTS_DEFAULT OFF)
+endif()
+
+option(GGML_CPU_AMX_VARIANTS
+       "ggml: build x86 CPU backend variants requiring AMX"
+       ${GGML_CPU_AMX_VARIANTS_DEFAULT})
+mark_as_advanced(GGML_CPU_AMX_VARIANTS)
+
 option(GGML_LASX             "ggml: enable lasx"              ON)
 option(GGML_LSX              "ggml: enable lsx"               ON)
 option(GGML_RVV              "ggml: enable rvv"               ON)
