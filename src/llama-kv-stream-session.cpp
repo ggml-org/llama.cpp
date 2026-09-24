@@ -200,7 +200,7 @@ struct llama_kv_stream_session::implementation : llama_memory_executor_backend {
 
     // Capture owned leaf aliases, never the caller's model-graph metadata or unleased mutable storage.
     bool replay(uint32_t layer,ggml_tensor * q,ggml_tensor * mask,ggml_tensor * output,float scale) {
-        if (graphs.empty()) graphs.resize(config.policy.layers);
+        if (graphs.empty()) graphs.resize(order.size());
         auto & cached = graphs[layer];
         if (cached && (!same_tensor_storage(cached->q,*q) || !same_tensor_storage(cached->mask,*mask) ||
                 !same_tensor_storage(cached->output,*output) || cached->scale != scale || !cached->executor->ready(target))) cached.reset();
@@ -580,7 +580,7 @@ std::unique_ptr<llama_kv_stream_session> llama_kv_stream_session::create(ggml_ba
         result->impl = std::make_unique<implementation>(); auto & s = *result->impl;
         s.backend = backend; s.content = std::move(content); s.config = config; s.grant = total;
         for (size_t i = 0; i < grants.size(); ++i) s.leases[i].reset(ggml_backend_memory_lease_retain(grants[i]));
-        s.order.resize(config.policy.layers); std::iota(s.order.begin(),s.order.end(),0);
+        s.order.resize(s.content->host()->config().layers); std::iota(s.order.begin(),s.order.end(),0);
         s.expected_generation = s.content->generation();
         if (!s.install(state)) return {};
         s.publications = llama_kv_stream_publications::create({0,s.content->host()->config().context_tokens,s.expected_generation,1});
@@ -686,7 +686,7 @@ bool llama_kv_stream_session::begin(size_t active, uint32_t queries, bool decode
         for (const auto & lease : s.leases) dependencies.push_back(lease.get());
         const auto frontiers = s.publications->frontiers();
         if (frontiers.reserved != s.committed || frontiers.committed != s.committed ||
-                !s.publications->reserve(s.committed,queries,s.config.policy.layers,owners,dependencies,publication)) {
+                !s.publications->reserve(s.committed,queries,s.content->host()->config().layers,owners,dependencies,publication)) {
             s.drain(); s.poisoned = true; return false;
         }
         s.publication = std::move(publication);

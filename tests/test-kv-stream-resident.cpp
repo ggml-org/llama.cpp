@@ -189,5 +189,53 @@ int main(int argc, char ** argv) {
             evaluate(t, f, true, 1, 257, 8);
         }
     });
+    t.test("target_local_layers_use_only_their_slots_in_a_shared_physical_pool", [&](testing & t) {
+        fixture f(backend.get(), cuda, GGML_TYPE_F16, GGML_TYPE_F16, 769, false, 2, 2, 16);
+        f.policy.layers = 3;
+        f.policy.caches = {{999, 1}, {f.host->cache_id(), 2}};
+        auto * pool = ggml_backend_memory_lease_buffer(f.lease.get());
+        ggml_backend_buffer_clear(pool, 0xa5);
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        if (!t.assert_true(bool(pin) && f.resident->synchronize(256) && f.resident->ready(256))) return;
+        llama_kv_stream_policy_layout physical;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, f.binding->view()->initial_policy, 0, physical).status ==
+                llama_kv_stream_policy_status::success)) return;
+        t.assert_equal(size_t(3), physical.layers.size());
+        t.assert_equal(uint64_t(999), physical.layers[0].cache_id);
+        t.assert_equal(f.host->cache_id(), physical.layers[1].cache_id);
+        t.assert_equal(uint32_t(0), physical.layers[1].cache_layer);
+        t.assert_equal(uint32_t(1), physical.layers[2].cache_layer);
+        ggml_context_ptr context(ggml_init({16384, nullptr, true}));
+        auto * q = ggml_new_tensor_3d(context.get(), GGML_TYPE_F32, 256, 1, 4);
+        for (uint32_t local = 0; local < 2; ++local) {
+            auto * op = f.resident->attention(context.get(), local, q, nullptr, 256, 1.0f/16);
+            if (!t.assert_true(op != nullptr)) return;
+            t.assert_true(op->src[1]->data == static_cast<char *>(ggml_backend_buffer_get_base(pool)) +
+                physical.layers[local + 1].offset);
+            t.assert_true(op->src[2]->data == static_cast<char *>(ggml_backend_buffer_get_base(pool)) +
+                physical.layers[local + 1].offset + physical.layers[local + 1].planes.v_offset);
+        }
+        for (size_t offset : {physical.layers[0].offset,
+                physical.layers[0].offset + physical.layers[0].planes.v_offset}) {
+            auto * marker = ggml_new_tensor_1d(context.get(), GGML_TYPE_I8, 128);
+            if (!t.assert_true(ggml_backend_tensor_alloc(pool, marker,
+                    static_cast<char *>(ggml_backend_buffer_get_base(pool)) + offset) == GGML_STATUS_SUCCESS)) return;
+            std::vector<uint8_t> bytes(128);
+            ggml_backend_tensor_get(marker, bytes.data(), 0, bytes.size());
+            t.assert_true(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0xa5; }));
+        }
+    });
+    t.test("shared_physical_policy_rejects_foreign_or_partial_target_mapping", [&](testing & t) {
+        fixture f(backend.get(), cuda, GGML_TYPE_F16, GGML_TYPE_F16, 769, false, 2, 2, 16);
+        f.policy.layers = 3;
+        f.policy.caches = {{999, 1}, {888, 2}};
+        t.assert_true(!f.attach());
+        f.policy.caches = {{f.host->cache_id(), 1}, {999, 2}};
+        t.assert_true(!f.attach());
+        f.policy.caches = {{999, 1}, {f.host->cache_id(), 2}};
+        t.assert_true(f.attach());
+    });
     return t.summary();
 }

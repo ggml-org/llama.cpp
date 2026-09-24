@@ -154,7 +154,9 @@ Stage 10.4 checkpoint: lease population is backend-neutral and synchronized befo
 
 Stage 10.5 infrastructure checkpoint: phase-scoped ring guards mask MTP-owned slots from target prefetch and survive prime/adopt. A populated MTP lease can expose a committed prefix while reserving physical slots up to the target frontier; future bytes remain untouched.
 
-Still required for catch-up: map the target's 16 cache-local layers into the shared 17-layer physical layout, pass the guard through the live target session, publish the new MTP tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
+Target resident and session now map cache-local target layers onto validated physical entries; only target layers receive roots, graphs, and publication pairs. CUDA tests cover resident attention, session append, and streamed target prefetch around MTP-held slots.
+
+Still required for live catch-up: construct the combined policy and MTP cache through the model/context facade, pass the guard from the phase owner into live target sessions, publish the new MTP tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
 
 ## Milestone 11: end-to-end speculative server integration
 

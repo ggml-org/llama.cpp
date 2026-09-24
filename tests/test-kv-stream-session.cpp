@@ -18,11 +18,13 @@ struct session_inputs {
 };
 
 int main(int argc, char ** argv) {
-    const bool cuda = argc > 1 && !std::strcmp(argv[1],"--cuda");
+    const bool physical_map_only = argc > 1 && !std::strcmp(argv[1],"--cuda-physical-map");
+    const bool cuda = physical_map_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     testing t;
+    if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
     t.test("unsupported_and_missing_session_dependencies_are_rejected", [&](testing & t) {
         fixture f(backend.get(),cuda);
         t.assert_true(!llama_kv_stream_session::create(backend.get(),f.content,{f.policy,33,4,false},nullptr,nullptr,nullptr));
@@ -440,6 +442,44 @@ int main(int argc, char ** argv) {
         t.assert_equal(size_t(514),session->tokens());
         shrunk.lease.reset();session.reset();
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(shrunk.arena.get()));
+    });
+    if (cuda) t.test("shared_physical_pool_publishes_only_target_pairs", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_F16, GGML_TYPE_F16, 769, false, 2, 2, 16);
+        f.policy.layers = 3;
+        f.policy.caches = {{999, 1}, {f.host->cache_id(), 2}};
+        auto * pool = ggml_backend_memory_lease_buffer(f.lease.get());
+        ggml_backend_buffer_clear(pool, 0xa5);
+        ggml_kv_stream_block_layout work;
+        if (!t.assert_true(ggml_kv_stream_block_layout_make(4, 256, work).status ==
+                ggml_kv_stream_partial_status::success)) return;
+        block_workspace writer(f, 32768, 19), attention(f, work.bytes, 29);
+        auto session = llama_kv_stream_session::create(backend.get(), f.content,
+            {f.policy, 1, 4, false}, f.lease.get(), writer.lease.get(), attention.lease.get());
+        if (!t.assert_true(bool(session))) return;
+        session_inputs kv(backend.get(), 1);
+        block_inputs input(f, 1, 1);
+        if (!t.assert_true(session->begin(1, 1, false))) return;
+        for (uint32_t local = 0; local < 2; ++local) {
+            if (!t.assert_true(session->produce(local, kv.k, kv.v) &&
+                    session->attention(local, input.q, input.mask, input.output, 1.0f/16))) return;
+            close_values(t, oracle(f, local, 1, 1, input.qdata), input.read(), 1e-3f);
+        }
+        t.assert_equal(size_t(1), session->tokens());
+        t.assert_equal(size_t(1), session->publication_frontiers().committed);
+        t.assert_true(!session->active() && !session->failed());
+        llama_kv_stream_policy_layout physical;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, session->policy(), 1, physical).status == llama_kv_stream_policy_status::success)) return;
+        ggml_context_ptr context(ggml_init({8192, nullptr, true}));
+        for (size_t offset : {physical.layers[0].offset,
+                physical.layers[0].offset + physical.layers[0].planes.v_offset}) {
+            auto * marker = ggml_new_tensor_1d(context.get(), GGML_TYPE_I8, 128);
+            if (!t.assert_true(ggml_backend_tensor_alloc(pool, marker,
+                    static_cast<char *>(ggml_backend_buffer_get_base(pool)) + offset) == GGML_STATUS_SUCCESS)) return;
+            std::vector<uint8_t> bytes(128);
+            ggml_backend_tensor_get(marker, bytes.data(), 0, bytes.size());
+            t.assert_true(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0xa5; }));
+        }
     });
     return t.summary();
 }

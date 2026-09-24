@@ -96,7 +96,7 @@ int main(int argc, char ** argv) {
     else backend.reset(ggml_backend_cpu_init());
     if (bench) return benchmark(backend.get(),sequence,measured,fallback);
     testing t;
-    if (ring_guard_only) t.set_filter("(retained_mtp_slots_are_not_overwritten_by_target_prefetch|full_mtp_ring_rejects_target_sequence_without_submission)");
+    if (ring_guard_only) t.set_filter("(retained_mtp_slots_are_not_overwritten_by_target_prefetch|full_mtp_ring_rejects_target_sequence_without_submission|mapped_target_stream_avoids_mtp_ring_in_shared_pool)");
     if (cuda) t.test("completed_runtime_feedback_is_consumable_without_publishing_a_layout", [&](testing & t) {
         uint64_t previous_instance_epoch = 0;
         for (bool fallback : {false,true}) {
@@ -728,6 +728,57 @@ int main(int argc, char ** argv) {
         t.assert_true(!f.resident->sequence_active());
         t.assert_equal(size_t(1), owner->ring_slots_used());
         guard.reset();
+        llama_kv_stream_complete_layer_lease_free(mtp);
+        t.assert_true(owner->can_repartition());
+    });
+    if (cuda) t.test("mapped_target_stream_avoids_mtp_ring_in_shared_pool", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        f.policy.layers = 3;
+        f.policy.caches = {{999, 1}, {f.host->cache_id(), 2}};
+        f.policy.initial_ring_slots = 4;
+        f.policy.fixed_ring = true;
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        llama_kv_stream_policy_state placement;
+        if (!t.assert_true(llama_kv_stream_policy_initialize(f.policy, placement).status ==
+                llama_kv_stream_policy_status::success)) return;
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.lease.get(),
+            {f.policy, placement, 513, 11, f.content->generation()});
+        if (!t.assert_true(bool(owner))) return;
+        auto * mtp = owner->acquire({0, 1, 11, f.content->generation(), 999});
+        if (!t.assert_true(mtp != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_equal(size_t(4), guard->blocked_slots().size());
+        t.assert_equal(uint8_t(1), guard->blocked_slots()[0]);
+        t.assert_equal(uint8_t(1), guard->blocked_slots()[1]);
+        auto * pool = ggml_backend_memory_lease_buffer(f.lease.get());
+        ggml_backend_buffer_clear(pool, 0xa5);
+        block_inputs input(f, 513, 1);
+        ggml_kv_stream_block_layout work_layout;
+        ggml_kv_stream_block_layout_make(4, 256, work_layout);
+        block_workspace workspace(f, work_layout.bytes);
+        if (!t.assert_true(f.resident->begin_sequence({0, 1}, 513, 2, SIZE_MAX, {1, true}, guard))) return;
+        guard.reset();
+        t.assert_equal(size_t(2), f.resident->sequence_stats().pending_pages);
+        for (uint32_t local : {0u, 1u}) {
+            if (!t.assert_true(f.resident->compute_streamed(local, input.q, input.mask, input.output,
+                    513, 1.0f/16, workspace.lease.get(), true, 2))) return;
+            close_values(t, oracle(f, local, 513, 1, input.qdata), input.read(), 1e-3f);
+        }
+        t.assert_true(!f.resident->sequence_active());
+        llama_kv_stream_policy_layout physical;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, placement, 513, physical).status == llama_kv_stream_policy_status::success)) return;
+        ggml_context_ptr context(ggml_init({8192, nullptr, true}));
+        for (size_t offset : {size_t(0), physical.ring.v_offset}) {
+            auto * marker = ggml_new_tensor_1d(context.get(), GGML_TYPE_I8, 128);
+            if (!t.assert_true(ggml_backend_tensor_alloc(pool, marker,
+                    static_cast<char *>(ggml_backend_buffer_get_base(pool)) + offset) == GGML_STATUS_SUCCESS)) return;
+            std::vector<uint8_t> bytes(128);
+            ggml_backend_tensor_get(marker, bytes.data(), 0, bytes.size());
+            t.assert_true(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0xa5; }));
+        }
         llama_kv_stream_complete_layer_lease_free(mtp);
         t.assert_true(owner->can_repartition());
     });
