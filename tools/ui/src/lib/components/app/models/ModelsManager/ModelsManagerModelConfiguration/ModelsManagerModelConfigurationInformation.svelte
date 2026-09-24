@@ -104,6 +104,10 @@
 		value: string | null;
 	}>);
 
+	// a provider that reports little gets a short list: rows without a value say nothing,
+	// and a llama-compat server fills the rest in from /props once the model is loaded
+	let visibleRows = $derived(rows.filter((row) => row.value !== null));
+
 	const sectionTrigger = 'flex w-full cursor-pointer items-center gap-2 py-2 text-left';
 </script>
 
@@ -122,7 +126,7 @@
 		</span>
 	</div>
 
-	{#each rows as row (row.label)}
+	{#each visibleRows as row (row.label)}
 		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
 			<span class="text-sm text-muted-foreground">{row.label}</span>
 
@@ -156,6 +160,10 @@
 			</span>
 		</div>
 	{/each}
+
+	{#if visibleRows.length === 0}
+		<p class="py-2.5 text-sm text-muted-foreground">This provider reports no model metadata.</p>
+	{/if}
 
 	{#if modalities.length > 0}
 		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
