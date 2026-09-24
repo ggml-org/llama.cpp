@@ -12,16 +12,35 @@ import { versionStore } from './version.svelte';
 import { browser } from '$app/environment';
 import { MigrationService } from '$lib/services/migration.service';
 
+let hydration: Promise<void> | null = null;
 let startup: Promise<void> | null = null;
+
+/**
+ * Read the stored state the first request needs: migrations, the settings that
+ * carry the API key, and the backend that request goes to.
+ *
+ * Separate from {@link initStores} so a `load` can await it. The requests
+ * `initStores` starts belong after a load, where plain `window.fetch` is the
+ * intended one and SvelteKit raises no warning.
+ */
+export function hydrateStores(): Promise<void> {
+	if (!browser) return Promise.resolve();
+
+	hydration ??= (async () => {
+		await MigrationService.runAllMigrations();
+
+		settingsStore.initialize();
+		backendsStore.initialize();
+	})();
+
+	return hydration;
+}
 
 export function initStores(): Promise<void> {
 	if (!browser) return Promise.resolve();
 
 	startup ??= (async () => {
-		await MigrationService.runAllMigrations();
-
-		settingsStore.initialize();
-		backendsStore.initialize();
+		await hydrateStores();
 
 		// prefetch every backend's model list in the background; failures are
 		// per-backend and never block startup
