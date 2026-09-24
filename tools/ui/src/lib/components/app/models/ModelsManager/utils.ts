@@ -1,7 +1,7 @@
 import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { settingsStore } from '$lib/stores';
-import type { ModelLoadProgress, ModelOption } from '$lib/types/models';
+import type { ModelLoadProgress, ModelModalities, ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
 import { SvelteMap } from 'svelte/reactivity';
@@ -119,6 +119,21 @@ export function servedByLabel(option: ModelOption): string {
 	if (!backend || backend.id === LOCAL_BACKEND_ID) return 'This server';
 
 	return backend.name;
+}
+
+/** Modalities a model can accept, as the manager filter offers them. */
+export type ModalityKey = keyof ModelModalities;
+
+/**
+ * Context a model reports: the provider listing first, then whatever the Hub has
+ * cached for it. 0 means nothing is known yet.
+ */
+export function modelContextLength(option: ModelOption): number {
+	return (
+		option.contextLength ??
+		HuggingFaceService.cachedDetails(option.model)?.gguf?.context_length ??
+		0
+	);
 }
 
 export function isLocalOption(option: ModelOption): boolean {

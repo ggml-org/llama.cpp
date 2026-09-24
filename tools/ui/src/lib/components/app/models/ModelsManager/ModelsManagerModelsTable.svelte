@@ -1,6 +1,9 @@
 <script lang="ts">
+	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import {
 		isLocalOption,
+		type ModalityKey,
+		modelContextLength,
 		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup
@@ -18,7 +21,8 @@
 		HeartOff,
 		MoreHorizontal,
 		Power,
-		Trash2
+		Trash2,
+		X
 	} from '@lucide/svelte';
 	import {
 		DropdownMenuActions,
@@ -36,10 +40,10 @@
 	import { SearchInput } from '$lib/components/app/forms';
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
+	import { backendsStore, modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -47,27 +51,37 @@
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
+		/** Smallest context a model must support; 0 keeps every model. */
+		contextLimit?: number;
 		filter?: string;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
 		/** Per-model load and inference overrides, keyed by backend-qualified id. */
+		/** Modalities a model must support at least one of. */
+		modalities?: ModalityKey[];
 		overrides: Record<string, ModelOverride>;
+		/** Backend ids to keep; empty keeps every provider. */
+		providers?: string[];
 		selectedId: string | null;
 		summary: string;
 	}
 
 	let {
+		contextLimit = $bindable(0),
 		filter = $bindable(''),
 		groups,
 		isFavorite,
+		modalities = $bindable<ModalityKey[]>([]),
 		onSelect,
 		overrides,
+		providers = $bindable<string[]>([]),
 		selectedId,
 		summary
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
+	let hasFilters = $derived(providers.length > 0 || contextLimit > 0 || modalities.length > 0);
 	let filterInput = $state<HTMLInputElement | null>(null);
 
 	// the dialog hands focus to its first control, so the filter takes it instead
@@ -196,22 +210,13 @@
 	let sortKey = $state<SortKey | null>(null);
 	let sortAsc = $state(true);
 
-	/** The context column's own value: what the listing reports, else what the Hub does. */
-	function contextOf(option: ModelOption): number {
-		return (
-			option.contextLength ??
-			HuggingFaceService.cachedDetails(option.model)?.gguf?.context_length ??
-			0
-		);
-	}
-
 	function compareEntries(left: ModelQuantGroup, right: ModelQuantGroup): number {
 		const a = left.base;
 		const b = right.base;
 
 		switch (sortKey) {
 			case 'context':
-				return contextOf(a) - contextOf(b);
+				return modelContextLength(a) - modelContextLength(b);
 			case 'name':
 				return a.model.localeCompare(b.model);
 			case 'status':
@@ -585,9 +590,34 @@
 			bind:value={filter}
 			class="max-w-64"
 			placeholder="Filter models..."
+			size="sm"
+		/>
+
+		<ModelsManagerFilters
+			bind:contextLimit
+			bind:modalities
+			bind:providers
+			backends={backendsStore.enabled}
 		/>
 
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
+
+		{#if hasFilters}
+			<Button
+				class="gap-1.5 text-muted-foreground"
+				onclick={() => {
+					providers = [];
+					contextLimit = 0;
+					modalities = [];
+				}}
+				size="sm"
+				variant="ghost"
+			>
+				<X class="h-3.5 w-3.5" />
+
+				Clear filters
+			</Button>
+		{/if}
 	</div>
 
 	<div
@@ -662,7 +692,9 @@
 		{/each}
 
 		{#if isEmpty}
-			<p class="px-4 py-10 text-center text-sm text-muted-foreground">No models found.</p>
+			<p class="px-4 py-10 text-center text-sm text-muted-foreground">
+				{hasFilters ? 'No models match these filters.' : 'No models found.'}
+			</p>
 		{/if}
 	</div>
 </div>

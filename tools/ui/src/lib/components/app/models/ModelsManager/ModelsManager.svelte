@@ -7,6 +7,8 @@
 		isLocalOption,
 		loadExtraArgs,
 		loadOverrides,
+		type ModalityKey,
+		modelContextLength,
 		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup,
@@ -36,6 +38,9 @@
 	let { class: className, onClose }: Props = $props();
 
 	let filter = $state('');
+	let providerFilter = $state<string[]>([]);
+	let contextLimit = $state(0);
+	let modalityFilter = $state<ModalityKey[]>([]);
 	let selectedId = $state<string | null>(null);
 	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
@@ -51,7 +56,18 @@
 		return allModels.filter((option) => {
 			if (term && !`${option.name} ${option.model}`.toLowerCase().includes(term)) return false;
 
-			return true;
+			if (providerFilter.length > 0) {
+				const backendId = option.backendId ?? LOCAL_BACKEND_ID;
+
+				if (!providerFilter.includes(backendId)) return false;
+			}
+
+			// a model whose modalities are unknown cannot be shown to match
+			if (modalityFilter.length > 0 && !modalityFilter.some((key) => option.modalities?.[key])) {
+				return false;
+			}
+
+			return contextLimit === 0 || modelContextLength(option) >= contextLimit;
 		});
 	});
 	// recently used models lead their section, the rest keep the server's order
@@ -278,7 +294,10 @@
 >
 	<div class="min-h-0">
 		<ModelsManagerModelsTable
+			bind:contextLimit
 			bind:filter
+			bind:modalities={modalityFilter}
+			bind:providers={providerFilter}
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
