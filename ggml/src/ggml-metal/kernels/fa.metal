@@ -1260,6 +1260,12 @@ kernel void kernel_flash_attn_ext_vec(
     threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 +   sgitg*SH + 2*Q*C + Q*NSG*PK); // scratch buffer for mask
     threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + 2*sgitg*Q*PV       + Q*NSG*PK + NSG*SH); // scratch buffer for the results
 
+    // sparse indices for the current block
+    threadgroup int * spidx = nullptr;
+    if (FC_flash_attn_ext_vec_has_sparse) {
+        spidx = (threadgroup int *) ((threadgroup char *) shmem_f16 + (Q*NSG*PK + NSG*SH + 2*NSG*Q*PV)*sizeof(half) + sgitg*C*sizeof(int));
+    }
+
     // store the result for all queries in shared memory (the O matrix from the paper)
     so4 += tiisg;
 
@@ -1388,10 +1394,18 @@ kernel void kernel_flash_attn_ext_vec(
                 ic = 0;
             }
 
+            // load the sparse KV indices for the current block into shared memory
+            if (FC_flash_attn_ext_vec_has_sparse) {
+                for (short i = tiisg; i < C; i += NW) {
+                    spidx[i] = pidx[ic + i];
+                }
+                simdgroup_barrier(mem_flags::mem_threadgroup);
+            }
+
             if (FC_flash_attn_ext_vec_has_mask) {
                 if (FC_flash_attn_ext_vec_has_sparse) {
                     FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
-                        const int i11 = pidx[ic + tiisg];
+                        const int i11 = spidx[tiisg];
                         if ((iq1*Q + qq) < args.ne01 && i11 >= 0) {
                             sm[qq*C + tiisg] = pm[qq][i11];
                         } else {
@@ -1449,7 +1463,7 @@ kernel void kernel_flash_attn_ext_vec(
                 FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
                     if (FC_flash_attn_ext_vec_has_sparse) {
                         // the KV rows are gathered from the index list; -1 entries are padding
-                        const int i11 = pidx[ic + NE*cc + ty];
+                        const int i11 = spidx[NE*cc + ty];
                         if (i11 >= 0) {
                             if (is_same<kd4_t, k4_t>::value) {
                                 device const k4_t * pk4s = (device const k4_t *) (k + i11*args.nb11) + tx;
@@ -1593,7 +1607,7 @@ kernel void kernel_flash_attn_ext_vec(
                 if (FC_flash_attn_ext_vec_has_sparse) {
                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
                         // the KV rows are gathered from the index list; -1 entries are padding
-                        const int i11 = pidx[ic + NE*cc + ty];
+                        const int i11 = spidx[NE*cc + ty];
                         if (i11 >= 0) {
                             if (is_same<vd4_t, v4_t>::value) {
                                 device const v4_t * pv4 = (device const v4_t *) (v + i11*args.nb21);
