@@ -78,5 +78,5 @@
 </script>
 
 <span bind:this={el} class={className}>
-	<ModelCapabilityIcons hideModalities {supportsThinking} {supportsToolUse} />
+	<ModelCapabilityIcons modalities={option.modalities} {supportsThinking} {supportsToolUse} />
 </span>

@@ -1,8 +1,14 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import { modelDraftsFor } from '../ModelsManager/utils';
-	import { ModelAvatar, ModelId, ModelLoadControl, ModelRowActions } from '$lib/components/app';
-	import { ModelCapability, ServerModelStatus } from '$lib/enums';
+	import {
+		ModelAvatar,
+		ModelCapabilities,
+		ModelId,
+		ModelLoadControl,
+		ModelRowActions
+	} from '$lib/components/app';
+	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
@@ -63,10 +69,6 @@
 	// list. Loaded models usually carry the `base_model` tag on the option; GGUF
 	// repos only known to HF are resolved lazily via the cached getBaseModel
 	// lookup.
-	let capabilities = $derived.by(() => ({
-		reasoning: modelsStore.props.checkModelSupportsThinking(option.model),
-		tools: option.capabilities.includes(ModelCapability.TOOL_USE)
-	}));
 </script>
 
 <div
@@ -96,14 +98,16 @@
 		aliases={option.aliases}
 		class="min-w-0 flex-1"
 		drafts={modelDraftsFor(option)}
+		hideCapabilities
+		hideModalities
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
-		supportsThinking={capabilities.reasoning}
-		supportsToolUse={capabilities.tools}
 		tags={option.tags}
 		title={option.model}
 	/>
+
+	<ModelCapabilities {option} />
 
 	<div class="flex shrink-0 items-center gap-1">
 		<ModelRowActions {isFav} {option} />

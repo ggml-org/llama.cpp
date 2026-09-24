@@ -382,6 +382,7 @@
 					class="min-w-0 flex-1"
 					drafts={draftsFor(option)}
 					hideCapabilities
+					hideModalities
 					modalities={option.modalities}
 					modelId={option.model}
 					tags={option.tags}
@@ -445,6 +446,7 @@
 						class="min-w-0"
 						drafts={draftsFor(entry.base)}
 						hideCapabilities
+						hideModalities
 						hideQuantization
 						modalities={mediaSource.modalities}
 						modelId={entry.base.model}
