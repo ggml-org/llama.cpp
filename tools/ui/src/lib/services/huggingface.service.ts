@@ -139,6 +139,19 @@ export class HuggingFaceService {
 	private static treePending = new Map<string, Promise<HfModelSibling[]>>();
 
 	/**
+	 * Details already fetched for a model, for a caller that cannot await, such as a
+	 * table ordering its rows. `undefined` means no lookup has happened yet.
+	 */
+	static cachedDetails(modelId: string): HfModelDetailInfo | null | undefined {
+		// llama.cpp model ids carry the quant tag after a colon
+		const [hfRepoId] = modelId.split(':');
+
+		return HuggingFaceService.detailsCache.get(hfRepoId);
+	}
+
+	// GGUF Model Browsing
+
+	/**
 	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
 	 * shard, summing every shard's size so the kept entry reflects the whole
 	 * quant. Non-sharded files pass through unchanged. Downloads are tag-based
@@ -176,8 +189,6 @@ export class HuggingFaceService {
 
 		return result;
 	}
-
-	// GGUF Model Browsing
 
 	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
@@ -356,6 +367,8 @@ export class HuggingFaceService {
 		return `${Math.floor(diffDays / DAYS_PER_YEAR)} ${YEARS_AGO_LABEL}`;
 	}
 
+	// Model Details & Files
+
 	/**
 	 * Format a min-max size range with a single shared unit and no spaces
 	 * around the dash, e.g. `19.0-28.6 GB`.
@@ -381,8 +394,6 @@ export class HuggingFaceService {
 
 		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
-
-	// Model Details & Files
 
 	/**
 	 * Avatar URL for an author (org or user). 404s when the author does not

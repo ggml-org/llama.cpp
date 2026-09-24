@@ -3,7 +3,7 @@
 		formatLastUsed,
 		isLocalOption,
 		type ModelOverride,
-		modelParamsLabel,
+		modelParamCount,
 		type ModelQuantGroup,
 		modelSizeLabel,
 		type ModelsTableGroup
@@ -34,6 +34,7 @@
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
+		ModelParameters,
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
@@ -42,6 +43,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
+	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
@@ -207,13 +209,22 @@
 		return typeof value === 'number' ? value : 0;
 	}
 
+	/** The context column's own value: what the listing reports, else what the Hub does. */
+	function contextOf(option: ModelOption): number {
+		return (
+			option.contextLength ??
+			HuggingFaceService.cachedDetails(option.model)?.gguf?.context_length ??
+			0
+		);
+	}
+
 	function compareEntries(left: ModelQuantGroup, right: ModelQuantGroup): number {
 		const a = left.base;
 		const b = right.base;
 
 		switch (sortKey) {
 			case 'context':
-				return (a.contextLength ?? 0) - (b.contextLength ?? 0);
+				return contextOf(a) - contextOf(b);
 			case 'lastUsed':
 				return (
 					(modelsStore.recentModelUsage[a.id] ?? 0) - (modelsStore.recentModelUsage[b.id] ?? 0)
@@ -221,7 +232,7 @@
 			case 'name':
 				return a.model.localeCompare(b.model);
 			case 'parameters':
-				return metaNumber(a, 'n_params') - metaNumber(b, 'n_params');
+				return modelParamCount(a) - modelParamCount(b);
 			case 'size':
 				return metaNumber(a, 'size') - metaNumber(b, 'size');
 			case 'status':
@@ -332,9 +343,7 @@
 {/snippet}
 
 {#snippet parameters(option: ModelOption)}
-	{@const label = modelParamsLabel(option)}
-
-	<span class="justify-self-end text-sm text-muted-foreground">{label ?? '—'}</span>
+	<ModelParameters class="justify-self-end" {option} />
 {/snippet}
 
 {#snippet lastUsed(option: ModelOption)}

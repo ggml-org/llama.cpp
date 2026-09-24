@@ -134,10 +134,31 @@ export function modelSizeLabel(option: ModelOption): string | null {
 	return null;
 }
 
-export function modelParamsLabel(option: ModelOption): string | null {
+/**
+ * Parameter count in numbers, so a table can order by it: "27B" -> 27e9, "E4B" -> 4e9.
+ */
+export function modelParamCount(option: ModelOption): number {
+	const label = modelParamsLabel(
+		option,
+		HuggingFaceService.cachedDetails(option.model)?.gguf?.total
+	);
+	const match = label ? /([\d.]+)\s*([BMK])?/i.exec(label) : null;
+	const value = match ? Number.parseFloat(match[1]) : Number.NaN;
+
+	if (!Number.isFinite(value)) return 0;
+
+	const unit = (match?.[2] ?? 'B').toUpperCase();
+
+	return value * (unit === 'B' ? 1e9 : unit === 'M' ? 1e6 : 1e3);
+}
+
+export function modelParamsLabel(
+	option: ModelOption,
+	parameterCount?: number | null
+): string | null {
 	if (option.parsedId?.params) return option.parsedId.params;
 
-	const params = option.meta?.n_params;
+	const params = option.meta?.n_params ?? parameterCount;
 
 	return typeof params === 'number' ? formatParameters(params) : null;
 }

@@ -53,6 +53,7 @@ export { default as ModelId } from './ModelId.svelte';
 export { default as ModelAvatar } from './ModelAvatar.svelte';
 export { default as ModelLoadControl } from './ModelLoadControl.svelte';
 export { default as ModelRowActions } from './ModelRowActions.svelte';
+export { default as ModelParameters } from './ModelParameters.svelte';
 export { default as ModelsSection } from './ModelsSection.svelte';
 
 /**
