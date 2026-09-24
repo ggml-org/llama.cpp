@@ -122,8 +122,6 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             }
         }
     } else if(props.vendorID == VK_VENDOR_ID_QUALCOMM){
-        VK_LOG_DEBUG("ggml_vulkan: [DEBUG] Qualcomm Adreno GPU device=\""<< props.deviceName << "\")");
-
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
 
         bool cooperative_matrix = false;
