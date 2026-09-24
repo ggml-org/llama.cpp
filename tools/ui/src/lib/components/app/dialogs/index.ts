@@ -549,4 +549,3 @@ export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
  *
  * @see ModelsDiscover in $lib/components/app/models/discover
  */
-export { default as DialogModelsDiscover } from './DialogModelsDiscover.svelte';

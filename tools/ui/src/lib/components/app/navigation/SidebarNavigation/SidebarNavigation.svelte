@@ -6,7 +6,6 @@
 		ActionIcon,
 		DialogConversationRename,
 		DialogManageModels,
-		DialogModelsDiscover,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -456,8 +455,6 @@
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
 <DialogManageModels bind:open={uiStore.manageModelsOpen} />
-
-<DialogModelsDiscover bind:open={uiStore.discoverModelsOpen} />
 
 <style>
 	aside {

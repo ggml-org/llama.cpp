@@ -4,7 +4,8 @@
 	import { CheckCircle2, Loader2, XCircle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { BACKEND_ID_PREFIX, BACKEND_PRESETS } from '$lib/constants';
+	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import { BACKEND_ID_PREFIX, BACKEND_PRESETS, BACKEND_PROTOCOLS } from '$lib/constants';
 	import { BackendsService } from '$lib/services';
 	import type { BackendTestResult } from '$lib/services/backends.service';
 	import { backendsStore } from '$lib/stores';
@@ -29,8 +30,15 @@
 
 	let draft = $state<Backend>(createBackend());
 
-	// presets offered for the protocol the caller is adding
-	let presets = $derived(BACKEND_PRESETS.filter((preset) => preset.protocol === defaultProtocol));
+	// the caller seeds the protocol, the picker overrides it while adding
+	let protocolPick = $state<string | undefined>(undefined);
+	let protocol = $derived(
+		BACKEND_PROTOCOLS.includes(protocolPick as BackendProtocol)
+			? (protocolPick as BackendProtocol)
+			: (backend?.protocol ?? defaultProtocol)
+	);
+	// presets offered for the protocol being added
+	let presets = $derived(BACKEND_PRESETS.filter((preset) => preset.protocol === protocol));
 	let testResult = $state<BackendTestResult | null>(null);
 	let testing = $state(false);
 
@@ -149,11 +157,25 @@
 			<Dialog.Title>{isEdit ? 'Edit backend' : 'Add backend'}</Dialog.Title>
 
 			<Dialog.Description>
-				{defaultProtocol === 'llama.cpp'
+				{protocol === 'llama.cpp'
 					? 'Point at another llama-server.'
 					: 'Connect an OpenAI-compatible endpoint.'}
 			</Dialog.Description>
 		</Dialog.Header>
+
+		{#if !isEdit}
+			<div class="space-y-3 pt-2">
+				<h3 class="text-sm font-medium">Protocol</h3>
+
+				<ToggleGroup.Root bind:value={protocolPick} type="single" variant="outline">
+					{#each BACKEND_PROTOCOLS as option (option)}
+						<ToggleGroup.Item value={option}>
+							{option === 'llama.cpp' ? 'llama.cpp' : 'OpenAI-compatible'}
+						</ToggleGroup.Item>
+					{/each}
+				</ToggleGroup.Root>
+			</div>
+		{/if}
 
 		{#if !isEdit && presets.length > 0}
 			<div class="space-y-3 pt-2">

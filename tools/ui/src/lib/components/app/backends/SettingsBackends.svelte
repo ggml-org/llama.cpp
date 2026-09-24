@@ -9,14 +9,33 @@
 
 	interface Props {
 		class?: string;
-		protocol: BackendProtocol;
+		/** Narrows the list to one protocol; omit it to list every provider at once. */
+		protocol?: BackendProtocol;
 	}
 
 	let { class: className, protocol }: Props = $props();
 
-	// the switcher above the list narrows it to one protocol
-	let backends = $derived(backendsStore.external.filter((b) => b.protocol === protocol));
-	let isLlamaCpp = $derived(protocol === 'llama.cpp');
+	let backends = $derived(
+		protocol
+			? backendsStore.external.filter((b) => b.protocol === protocol)
+			: backendsStore.external
+	);
+	// the bundled server belongs to the list whenever llama.cpp providers are in it
+	let showsLocal = $derived(protocol === undefined || protocol === 'llama.cpp');
+	let addTitle = $derived(
+		protocol === 'openai'
+			? 'Add a backend'
+			: protocol === 'llama.cpp'
+				? 'Add a llama.cpp backend'
+				: 'Add a provider'
+	);
+	let addDescription = $derived(
+		protocol === 'openai'
+			? 'Connect an OpenAI-compatible endpoint.'
+			: protocol === 'llama.cpp'
+				? 'Point at another llama-server.'
+				: 'Point at a llama-server or connect an OpenAI-compatible endpoint.'
+	);
 
 	let isAdding = $state(false);
 	let editing = $state<Backend | null>(null);
@@ -48,12 +67,12 @@
 	<DialogBackendForm
 		bind:open={isAdding}
 		backend={editing}
-		defaultProtocol={protocol}
+		defaultProtocol={protocol ?? 'llama.cpp'}
 		onOpenChange={handleOpenChange}
 		onSaved={() => void backendsModelsStore.loadAll()}
 	/>
 
-	{#if isLlamaCpp && !serverStore.localServerMissing}
+	{#if showsLocal && !serverStore.localServerMissing}
 		<BackendCard
 			backend={backendsStore.local}
 			isLocal
@@ -82,11 +101,9 @@
 				<Plus />
 			</Empty.Media>
 
-			<Empty.Title>{isLlamaCpp ? 'Add a llama.cpp backend' : 'Add a backend'}</Empty.Title>
+			<Empty.Title>{addTitle}</Empty.Title>
 
-			<Empty.Description>
-				{isLlamaCpp ? 'Point at another llama-server.' : 'Connect an OpenAI-compatible endpoint.'}
-			</Empty.Description>
+			<Empty.Description>{addDescription}</Empty.Description>
 		</Empty.Header>
 
 		<Empty.Content>
