@@ -1894,6 +1894,9 @@ class TextModel(ModelBase):
         if chkhsh == "653660222fb704f61cbf2b618a8ae6502b7f8b20c980f9a5de07ed78e13319cd":
             # ref: https://huggingface.co/ufakai/ufakzeka-1
             res = "ufakzeka"
+        if chkhsh == "a7cafb5f55b1a0c289dfcbe964388ba449cb6bf373d5fe8f356185e84e5888c7":
+            # ref: https://huggingface.co/skt/A.X-K2
+            res = "axk2"
 
         if res is None:
             logger.warning("\n")
