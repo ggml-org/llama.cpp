@@ -9,6 +9,8 @@
 		type ModelsTableGroup
 	} from './utils';
 	import {
+		ArrowDown,
+		ArrowUp,
 		Boxes,
 		ChevronDown,
 		ChevronUp,
@@ -103,11 +105,13 @@
 		groups.map((group) => {
 			// a flat section lists its models straight, families or not
 			const flat = FLAT_SECTIONS.has(group.kind) || !settingsStore.config.groupModelsByFamily;
+			const items = sortEntries(group.items);
 
 			return {
 				...group,
-				families: flat ? [] : groupModelFamilies(group.items, (entry) => entry.base.model),
-				flat
+				families: flat ? [] : groupModelFamilies(items, (entry) => entry.base.model),
+				flat,
+				items
 			};
 		})
 	);
@@ -171,7 +175,7 @@
 		];
 	}
 	const rowGrid =
-		'grid grid-cols-[minmax(0,1fr)_11rem_5rem_6rem_5rem_5rem_4.5rem_3rem_4.5rem] items-center gap-4';
+		'grid grid-cols-[minmax(0,1fr)_11rem_6rem_7rem_5rem_6rem_5.5rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -188,6 +192,62 @@
 		return isLocalOption(option) && isLoadedOption(option)
 			? modelsStore.props.getModelContextSize(option.model)
 			: null;
+	}
+
+	type SortKey = 'context' | 'lastUsed' | 'name' | 'parameters' | 'size' | 'status';
+
+	/** Column the table is ordered by; unset keeps the manager's own order. */
+	let sortKey = $state<SortKey | null>(null);
+	let sortAsc = $state(true);
+
+	/** The router's `meta` is untyped, so read its numbers defensively, as the labels do. */
+	function metaNumber(option: ModelOption, key: string): number {
+		const value = option.meta?.[key];
+
+		return typeof value === 'number' ? value : 0;
+	}
+
+	function compareEntries(left: ModelQuantGroup, right: ModelQuantGroup): number {
+		const a = left.base;
+		const b = right.base;
+
+		switch (sortKey) {
+			case 'context':
+				return (a.contextLength ?? 0) - (b.contextLength ?? 0);
+			case 'lastUsed':
+				return (
+					(modelsStore.recentModelUsage[a.id] ?? 0) - (modelsStore.recentModelUsage[b.id] ?? 0)
+				);
+			case 'name':
+				return a.model.localeCompare(b.model);
+			case 'parameters':
+				return metaNumber(a, 'n_params') - metaNumber(b, 'n_params');
+			case 'size':
+				return metaNumber(a, 'size') - metaNumber(b, 'size');
+			case 'status':
+				return Number(isLoadedOption(b)) - Number(isLoadedOption(a));
+			default:
+				return 0;
+		}
+	}
+
+	function sortEntries(entries: ModelQuantGroup[]): ModelQuantGroup[] {
+		if (!sortKey) return entries;
+
+		const direction = sortAsc ? 1 : -1;
+
+		return [...entries].sort((a, b) => direction * compareEntries(a, b));
+	}
+
+	function toggleSort(key: SortKey): void {
+		if (sortKey === key) {
+			sortAsc = !sortAsc;
+
+			return;
+		}
+
+		sortKey = key;
+		sortAsc = true;
 	}
 
 	function isLoadedOption(option: ModelOption): boolean {
@@ -217,6 +277,25 @@
 		{option}
 		showRemoteMark
 	/>
+{/snippet}
+
+{#snippet sortHeader(key: SortKey, label: string)}
+	<button
+		class="inline-flex cursor-pointer items-center gap-1 uppercase transition hover:text-foreground focus:outline-none"
+		onclick={() => toggleSort(key)}
+		title="Sort by {label.toLowerCase()}"
+		type="button"
+	>
+		{label}
+
+		{#if sortKey === key}
+			{#if sortAsc}
+				<ArrowUp class="h-3 w-3" />
+			{:else}
+				<ArrowDown class="h-3 w-3" />
+			{/if}
+		{/if}
+	</button>
 {/snippet}
 
 {#snippet capabilities(option: ModelOption)}
@@ -571,21 +650,23 @@
 	<div
 		class="{rowGrid} shrink-0 border-y border-border/40 px-2 py-2 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
 	>
-		<span>Model</span>
+		<span>{@render sortHeader('name', 'Model')}</span>
 
-		<span class="text-right whitespace-nowrap">Context</span>
+		<span class="text-right whitespace-nowrap">{@render sortHeader('context', 'Context')}</span>
 
 		<span class="text-center">Modalities</span>
 
 		<span class="text-center">Capabilities</span>
 
-		<span class="text-right">Size</span>
+		<span class="justify-self-end">{@render sortHeader('size', 'Size')}</span>
 
-		<span class="text-right">Parameters</span>
+		<span class="justify-self-end">{@render sortHeader('parameters', 'Parameters')}</span>
 
-		<span class="text-right whitespace-nowrap">Last used</span>
+		<span class="justify-self-end whitespace-nowrap">
+			{@render sortHeader('lastUsed', 'Last used')}
+		</span>
 
-		<span class="text-center">Status</span>
+		<span class="justify-self-center">{@render sortHeader('status', 'Status')}</span>
 
 		<span class="text-center">Actions</span>
 	</div>
