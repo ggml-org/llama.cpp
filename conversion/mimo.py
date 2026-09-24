@@ -101,7 +101,7 @@ class MimoV2Model(TextModel):
         qkv_overrides: dict[str, tuple[Callable, Callable, int]] = {}
         qc = self.hparams.get("quantization_config")
         if isinstance(qc, dict) and qc.get("quant_method") == "fp8":
-            pat = re.compile(r"^model\.layers\.(\d+)\.self_attn\.qkv_proj\.weight_scale_inv$")
+            pat = re.compile(r"^model\.(mtp\.)?layers\.(\d+)\.self_attn\.qkv_proj\.weight_scale_inv$")
             for name in list(self.model_tensors.keys()):
                 m = pat.match(name)
                 if not m:
@@ -109,10 +109,13 @@ class MimoV2Model(TextModel):
                 weight_name = name.removesuffix("_scale_inv")
                 if weight_name not in self.model_tensors:
                     continue
+                bid = int(m.group(2))
+                if m.group(1) is not None:
+                    bid += self.hparams["num_hidden_layers"]
                 qkv_overrides[weight_name] = (
                     self.model_tensors[weight_name],
                     self.model_tensors[name],
-                    int(m.group(1)),
+                    bid,
                 )
 
         super().dequant_model()
