@@ -107,6 +107,25 @@ static ticket publication_ticket(testing & t, std::unique_ptr<llama_kv_stream_pu
 
 int main(int argc, char ** argv) {
     testing t;
+    t.test("host_authoritative_frontier_advances_without_device_mirror", [](testing & t) {
+        auto state = llama_kv_stream_publications::create({0, 8, 7, 1, true});
+        if (!t.assert_true(bool(state))) return;
+        ticket first;
+        if (!t.assert_true(state->reserve(0, 2, 1, {}, {}, first))) return;
+        completion invalid;
+        t.assert_true(!first.submit(0, plane::k, domain::device, invalid));
+        t.assert_true(finish_pair(first, 0, domain::host));
+        t.assert_equal(size_t(2), state->frontiers().host);
+        t.assert_equal(size_t(0), state->frontiers().device);
+        t.assert_equal(size_t(2), state->frontiers().committed);
+        t.assert_true(first.committed() && first.retire());
+        ticket second;
+        t.assert_true(state->reserve(2, 3, 1, {}, {}, second));
+        t.assert_true(finish_pair(second, 0, domain::host));
+        t.assert_equal(size_t(5), state->frontiers().committed);
+        t.assert_equal(size_t(0), state->frontiers().device);
+        t.assert_true(second.retire());
+    });
 
     t.test("initial_and_invalid_reservations_are_transactional", [](testing & t) {
         t.assert_true(!llama_kv_stream_publications::create({9, 8, 1, 1}));

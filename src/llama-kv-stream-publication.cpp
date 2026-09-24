@@ -85,12 +85,12 @@ struct llama_kv_stream_publication_state {
 
     void advance() {
         if (closed) return;
-        frontiers.device = advance(frontiers.device, llama_kv_stream_publication_domain::device);
+        if (!config.host_authoritative) frontiers.device = advance(frontiers.device, llama_kv_stream_publication_domain::device);
         frontiers.host = advance(frontiers.host, llama_kv_stream_publication_domain::host);
         size_t committed = frontiers.committed;
         for (const auto & entry : entries) {
             if (entry->first + entry->count <= committed) continue;
-            if (entry->first != committed || !entry_ready(*entry, llama_kv_stream_publication_domain::device) ||
+            if (entry->first != committed || (!config.host_authoritative && !entry_ready(*entry, llama_kv_stream_publication_domain::device)) ||
                     !entry_ready(*entry, llama_kv_stream_publication_domain::host)) break;
             committed = entry->first + entry->count;
         }
@@ -107,7 +107,8 @@ struct llama_kv_stream_publication_state {
     bool submit(const std::shared_ptr<llama_kv_stream_publication_entry> & entry, uint32_t pair,
             llama_kv_stream_publication_plane plane, llama_kv_stream_publication_domain domain) {
         if (closed || !entry || entry->generation != config.generation || terminal(*entry) ||
-                pair >= entry->pairs.size() || !valid(plane) || !valid(domain)) return false;
+                pair >= entry->pairs.size() || !valid(plane) || !valid(domain) ||
+                (config.host_authoritative && domain == llama_kv_stream_publication_domain::device)) return false;
         auto & operation = entry->pairs[pair].operations[index(domain)][index(plane)];
         if (operation != publication_operation::idle || entry->outstanding == std::numeric_limits<size_t>::max()) return false;
         operation = publication_operation::pending;
@@ -423,7 +424,7 @@ std::unique_ptr<llama_kv_stream_publications> llama_kv_stream_publications::crea
         auto result = std::unique_ptr<llama_kv_stream_publications>(new llama_kv_stream_publications);
         result->state = std::make_shared<llama_kv_stream_publication_state>();
         result->state->config = config;
-        result->state->frontiers = {config.tokens, config.tokens, config.tokens, config.tokens};
+        result->state->frontiers = {config.tokens, config.host_authoritative ? 0 : config.tokens, config.tokens, config.tokens};
         result->state->next_sequence = config.next_sequence;
         return result;
     } catch (const std::bad_alloc &) {

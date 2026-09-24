@@ -128,6 +128,16 @@ std::unique_ptr<llama_kv_stream_writer> llama_kv_stream_writer::create(ggml_back
 }
 
 // Only completed dense F32 source rows from this backend are admitted at this synchronous boundary.
+bool llama_kv_stream_writer::matches_shape(const ggml_kv_stream_shape & shape) const noexcept {
+    if (!impl) return false;
+    const auto & actual = impl->shape;
+    return actual.type_k == shape.type_k && actual.type_v == shape.type_v &&
+        actual.head_dim_k == shape.head_dim_k && actual.head_dim_v == shape.head_dim_v &&
+        actual.heads == shape.heads && actual.page_tokens == shape.page_tokens &&
+        actual.alignment == shape.alignment;
+}
+
+
 bool llama_kv_stream_writer::accepts(const ggml_tensor * source, bool value) const {
     const auto & s = *impl;
     if (!source || source->type != GGML_TYPE_F32 || !source->data || source->ne[0] != int64_t(s.width(value)) ||

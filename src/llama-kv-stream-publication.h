@@ -25,6 +25,7 @@ struct llama_kv_stream_publication_config {
     size_t capacity = 0;
     uint64_t generation = 0;
     uint64_t next_sequence = 0;
+    bool host_authoritative = false;
 };
 
 struct llama_kv_stream_publication_frontiers {

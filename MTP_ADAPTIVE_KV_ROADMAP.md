@@ -143,8 +143,8 @@ Outcome: the MTP logical cache participates in the same bounded physical KV budg
 | --- | --- | --- |
 | 10.1 | Generalize physical policy from 16 target layers to 17 logical attention layers without merging target and MTP cache identities. | Dynamic geometry, exact total bytes, minimum-ring feasibility, and no hardcoded 16-layer arithmetic. |
 | 10.2 | Add separate authoritative host cache, revision, publication frontiers, and truncate/commit operations for MTP. | Accepted/rejected suffixes, cache reuse, cancellation, save/restore, and cross-context identity rejection. |
-| 10.3 | Populate MTP prompt KV through the common writer/publication path. | Prompt chunking, wide ubatch, exact host/device contents, delayed completion, and restart from host state. |
-| 10.4 | Acquire and populate a retained complete-MTP-layer lease from resident plus ring spans. | One H2D load per lease, full logical coverage, ring exclusion, failure rollback, and release/reuse rules. |
+| 10.3 | Populate authoritative MTP prompt KV through the common writer/publication path without claiming device residency. | Prompt chunking, wide ubatch, exact host contents, delayed completion, an unadvanced device frontier, and restart from host state. |
+| 10.4 | Acquire and populate a retained complete-MTP-layer lease from resident plus ring spans. | One H2D load per lease, exact resident/ring device bytes, full logical coverage, ring exclusion, failure rollback, and release/reuse rules. |
 | 10.5 | Run MTP catch-up over the retained spans with TG1-TG4. | All catch-up widths, exact logical frontier advancement, span-aware attention qualification, and no repeated suffix transfer. |
 | 10.6 | Run sequential MTP draft tokens while retaining the same complete-layer lease. | Multiple draft tokens, append publication, mutable tail handling, and one-transfer invariant. |
 | 10.7 | Integrate acceptance, MTP truncate/commit, and retained-lease invalidation. | Every accepted length, full rejection, target/MTP frontier agreement, cache generation changes, and retry behavior. |

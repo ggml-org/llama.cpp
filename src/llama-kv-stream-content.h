@@ -42,6 +42,7 @@ public:
 
 private:
     friend class llama_kv_stream_content;
+    friend class llama_kv_stream_logical_cache;
     struct part { uint32_t layer; ggml_kv_stream_operand operand; size_t offset, begin, bytes; };
     std::shared_ptr<llama_kv_stream_content_state> owner;
     std::shared_ptr<llama_kv_stream_host> backing;
