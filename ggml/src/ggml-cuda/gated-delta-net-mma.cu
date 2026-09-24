@@ -5,14 +5,8 @@
 #include <mutex>
 
 namespace {
-constexpr int D     = 128;
-constexpr int WARPS = 8;
-using bf16          = nv_bfloat16;
-#ifdef GGML_USE_HIP
-constexpr int N = 16;
-#else
-constexpr int N = 8;
-#endif // GGML_USE_HIP
+constexpr int D = 128;
+using bf16      = nv_bfloat16;
 
 template <int R, int C> struct matrix {
     bf16 hi[R * C], lo[R * C];
@@ -131,6 +125,12 @@ template <int R, int C> __device__ __forceinline__ void store(matrix<R, C> & m, 
 template <int C, int V, int BLOCKS = 1>
 static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_mma_args a) {
 #if defined(AMPERE_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA3))
+    constexpr int WARPS = 8;
+#ifdef GGML_USE_HIP
+    constexpr int N = 16;
+#else
+    constexpr int N = 8;
+#endif // GGML_USE_HIP
     static_assert(C >= 16 && (C & (C - 1)) == 0 && V % N == 0 && D % V == 0, "invalid GDN tile");
     extern __shared__ __align__(128) unsigned char bytes[];
     auto &                                         s    = *reinterpret_cast<shared<C, V> *>(bytes);
