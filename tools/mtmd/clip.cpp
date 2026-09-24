@@ -5865,17 +5865,21 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     }
     if (params->state_out != nullptr) {
         auto & state_out = *params->state_out;
+        const auto slots = list_gen_state_slots(hparams, model);
+        std::vector<ggml_tensor *> tensors;
+        tensors.reserve(slots.size());
         size_t total = 0;
-        for (const auto & slot : list_gen_state_slots(hparams, model)) {
-            total += (size_t) (slot.ne0 * slot.ne1) * sizeof(float);
-        }
-        state_out.resize(total);
-        size_t offset = 0;
-        for (const auto & slot : list_gen_state_slots(hparams, model)) {
+        for (const auto & slot : slots) {
             ggml_tensor * t = ggml_graph_get_tensor(gf, ("state_out_" + slot.name).c_str());
             if (t == nullptr) {
                 GGML_ABORT("state_out requested but graph has no \"state_out_%s\" tensor", slot.name.c_str());
             }
+            tensors.push_back(t);
+            total += ggml_nbytes(t);
+        }
+        state_out.resize(total);
+        size_t offset = 0;
+        for (ggml_tensor * t : tensors) {
             const size_t nb = ggml_nbytes(t);
             ggml_backend_tensor_get(t, state_out.data() + offset, 0, nb);
             offset += nb;
