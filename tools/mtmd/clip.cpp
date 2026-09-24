@@ -1085,6 +1085,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_granite_speech>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+            {
+                builder = std::make_unique<clip_graph_granite_speech_5>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GLM4V:
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
@@ -1996,6 +2000,19 @@ struct clip_model_loader {
                         get_u32(KEY_A_PROJ_HEAD_COUNT,      hparams.audio_proj_head_count);
                         // NOTE: feature layers loaded above in common path
                     } break;
+                case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+                    {
+                        // front-end only (no learned encoder stack, see clip_graph_granite_speech_5);
+                        // real front-end constants shared with the granite_speech preprocessor family
+                        hparams.audio_chunk_len   = 0;
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_n_fft       = 512;
+                        hparams.audio_window_len  = 400;
+                        hparams.audio_hop_len     = 160;
+                        get_u32(KEY_A_CTC_RAW_NUM_MEL_BINS, hparams.audio_ctc_raw_mel_bins);
+                        get_u32(KEY_A_CTC_DELTA_WIN_LENGTH, hparams.audio_ctc_delta_win_length);
+                        get_u32(KEY_A_PROJ_STACK_FACTOR,    hparams.proj_stack_factor);
+                    } break;
                 case PROJECTOR_TYPE_JANUS_PRO:
                     {
                         hparams.image_pad_color   = {127, 127, 127};
@@ -2097,7 +2114,9 @@ struct clip_model_loader {
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
 
                 // Validate audio hparams loaded from GGUF metadata
-                if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+                // granite-speech-5 is fft-based, but uses n_mel_bins post-delta and post-stack (320), so exceeds the 256 limit
+                if (hparams.n_mel_bins <= 0 ||
+                    (fft_based && model.proj_type != PROJECTOR_TYPE_GRANITE_SPEECH_5 && hparams.n_mel_bins > 256)) {
                     throw std::runtime_error(string_format("%s: n_mel_bins (%d) must be in range [1, 256]\n", __func__, hparams.n_mel_bins));
                 }
                 if (fft_based && (hparams.audio_sample_rate <= 0 || hparams.audio_n_fft <= 0 || hparams.audio_hop_len <= 0 || hparams.audio_window_len <= 0)) {
@@ -3545,6 +3564,12 @@ struct clip_model_loader {
                         pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, il, "bias"));
                     }
                 } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+                {
+                    // front-end only: the single input_linear projection, no encoder stack
+                    model.inp_proj_w = get_tensor(string_format(TN_INP_PROJ, "weight"));
+                    model.inp_proj_b = get_tensor(string_format(TN_INP_PROJ, "bias"));
+                } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
                 {
                     // image_newline lives at the top-level.
@@ -3692,8 +3717,11 @@ struct clip_model_loader {
         } else {
             // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
             // so the [1, 256] bound only applies to FFT-based models.
+            // granite-speech-5-fe is fft-based, but n_mel_bins there is the post-delta and
+            // post-stack width (e.g. 320), not a raw mel-bin count, so it's exempted from the cap.
             const bool fft_based = ctx_clip.model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
-            if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
+            if (hparams.n_mel_bins <= 0 ||
+                (fft_based && ctx_clip.model.proj_type != PROJECTOR_TYPE_GRANITE_SPEECH_5 && hparams.n_mel_bins > 256)) {
                 throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
             }
             img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
@@ -4367,6 +4395,13 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 const int ws = ctx->model.hparams.audio_proj_window_size;
                 const int ds = ctx->model.hparams.audio_proj_downsample_rate;
                 n_patches = ((img->nx() + ws - 1) / ws) * (ws / ds);
+            } break;
+        case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+            {
+                // front-end is a 1:1 projection; stack_factor downsampling already happened in
+                // the host-side preprocessor, and the real subsampling lives in the paired
+                // native model's encoder, not in this graph
+                n_patches = img->nx();
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
             {
@@ -5297,6 +5332,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_GEMMA4UA:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+        case PROJECTOR_TYPE_GRANITE_SPEECH_5:
             {
                 // do nothing
             } break;
@@ -6027,6 +6063,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
+        case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+            return ctx->model.inp_proj_w->ne[1];
         case PROJECTOR_TYPE_GRANITE4_VISION:
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:

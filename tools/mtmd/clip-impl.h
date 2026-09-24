@@ -97,6 +97,8 @@
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
 #define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
+#define KEY_A_CTC_RAW_NUM_MEL_BINS "clip.audio.raw_num_mel_bins"   // granite_speech_5: pre-delta, pre-stack mel bin count
+#define KEY_A_CTC_DELTA_WIN_LENGTH "clip.audio.delta_win_length"   // granite_speech_5
 
 //
 // tensor name constants
@@ -505,6 +507,7 @@ enum projector_type {
     PROJECTOR_TYPE_POCKETTTS_SPKENC,
     PROJECTOR_TYPE_POCKETTTS_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
+    PROJECTOR_TYPE_GRANITE_SPEECH_5,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -561,6 +564,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_HUNYUANVL,         "hunyuanvl"},
     { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
+    { PROJECTOR_TYPE_GRANITE_SPEECH_5,  "granite_speech_5"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
