@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <map>
 
-// granite-speech-5: a CTC (Connectionist Temporal Classification) acoustic model. Non-causal,
+// granite_speech_5: a CTC (Connectionist Temporal Classification) acoustic model. Non-causal,
 // no KV-cache (see create_memory() in llama-model.cpp), single forward pass - llama_decode()
 // auto-redirects to the non-causal encode() path since this arch has no memory. Input is raw
 // per-frame features injected via the standard .embd path (fed by a paired, front-end-only

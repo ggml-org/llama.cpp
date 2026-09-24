@@ -105,7 +105,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE_HYBRID,   "granitehybrid"    },
     { LLM_ARCH_GRANITE_SWITCH,   "graniteswitch"    },
     { LLM_ARCH_GRANITE_SWA,      "granite_swa"      },
-    { LLM_ARCH_GRANITE_SPEECH_5, "granite-speech-5" },
+    { LLM_ARCH_GRANITE_SPEECH_5, "granite_speech_5" },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
     { LLM_ARCH_PLM,              "plm"              },
