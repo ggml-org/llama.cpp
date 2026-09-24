@@ -48,6 +48,7 @@ static std::vector<std::string> split_array(const std::string & s) {
 const char * system_one_readout_name(enum system_one_readout readout) {
     switch (readout) {
         case SYSTEM_ONE_READOUT_MASKED_SLOT: return "masked_slot";
+        case SYSTEM_ONE_READOUT_SCORED_SLOT: return "scored_slot";
         case SYSTEM_ONE_READOUT_RANK_HEAD:   return "rank_head";
         default:                             return "letter_slot";
     }
@@ -66,24 +67,47 @@ system_one_params system_one_params_from_model(const llama_model * model) {
     //   a classification head  -> the answer is that head's score, one sequence per option
     //   bidirectional          -> the answer is read at a mask token inside the question
     //   otherwise              -> the answer is the next token after the question
+    std::string arch_name;
+    meta_str(model, "general.architecture", arch_name);
+
     {
-        std::string arch;
+        const std::string & arch = arch_name;
+
         bool causal = true;
-        if (meta_str(model, "general.architecture", arch)) {
+        if (!arch.empty()) {
             std::string c;
             if (meta_str(model, (arch + ".attention.causal").c_str(), c) && !c.empty()) {
                 causal = (c == "true" || c == "1");
             }
         }
+        // Not derivable from a vocab-only load: the labels are read in load_hparams(), which
+        // returns early there, and the metadata map skips array kv (llama-model.cpp), so the
+        // classifier's own key cannot stand in for them either. A rank_head checkpoint therefore
+        // needs its weights loaded before this answers correctly.
         const bool has_cls_head = llama_model_cls_label(model, 0) != nullptr;
         out.causal = causal;
 
-        out.readout = has_cls_head ? SYSTEM_ONE_READOUT_RANK_HEAD
-                    : (causal      ? SYSTEM_ONE_READOUT_LETTER_SLOT
-                                   : SYSTEM_ONE_READOUT_MASKED_SLOT);
+        // A model whose output row is a single number has a head of its own scoring each
+        // position; there is no distribution over labels to read, so the answer is the K
+        // positions the question marked. Nothing declares this -- it is what the output width
+        // says. Read from the metadata rather than hparams: a vocab-only load, which is all a
+        // template check needs, never gets as far as the hparams.
+        bool scores_tokens = false;
+        if (!arch.empty()) {
+            std::string w;
+            scores_tokens = meta_str(model, (arch + ".embedding_length_out").c_str(), w) && w == "1";
+        }
+
+        out.readout = has_cls_head   ? SYSTEM_ONE_READOUT_RANK_HEAD
+                    : causal         ? SYSTEM_ONE_READOUT_LETTER_SLOT
+                    : scores_tokens  ? SYSTEM_ONE_READOUT_SCORED_SLOT
+                                     : SYSTEM_ONE_READOUT_MASKED_SLOT;
     }
 
     if (meta_str(model, "system_one.segment_separator", s) && !s.empty()) out.segment_separator = s;
+    // NOTE: array kv never reach the metadata map -- load_hparams() skips GGUF_TYPE_ARRAY -- so a
+    // checkpoint that sets system_one.labels still gets the default alphabet here. No checkpoint
+    // has set it yet, which is why nothing has noticed.
     if (meta_str(model, "system_one.labels", s) && !s.empty()) out.labels = split_array(s);
 
     if (out.labels.empty()) {
@@ -110,10 +134,21 @@ system_one_params system_one_params_from_model(const llama_model * model) {
         out.eos_text = piece(llama_vocab_eos(vocab));
     }
 
-    if (out.readout == SYSTEM_ONE_READOUT_MASKED_SLOT) {
-        out.mask_token = llama_vocab_mask(vocab);
+    if (out.readout == SYSTEM_ONE_READOUT_MASKED_SLOT || out.readout == SYSTEM_ONE_READOUT_SCORED_SLOT) {
+        // Which token marks an answer is the architecture's, not the tokenizer's: a masked LM
+        // marks with its mask token, a class-token head with its own. The arch says so when it
+        // differs, the way laya's question-type ids do.
+        std::string marker;
+        if (!arch_name.empty() &&
+            meta_str(model, (arch_name + ".decision_head.slot_token_id").c_str(), marker) && !marker.empty()) {
+            out.mask_token = (llama_token) std::stoi(marker);
+        } else {
+            out.mask_token = llama_vocab_mask(vocab);
+        }
         if (out.mask_token < 0) {
-            throw std::runtime_error("masked_slot needs the model's tokenizer.ggml.mask_token_id");
+            throw std::runtime_error(std::string(system_one_readout_name(out.readout)) +
+                  " needs a slot marker: {arch}.decision_head.slot_token_id, or the model's "
+                  "tokenizer.ggml.mask_token_id");
         }
         const char * piece = llama_vocab_get_text(vocab, out.mask_token);
         out.mask_text = piece ? piece : "";
@@ -308,6 +343,28 @@ system_one_tokenized system_one_tokenize_segments(const llama_vocab * vocab,
     out.ids.clear();
     out.slots.clear();
 
+    // A scored slot is found by its mask rather than by where the segment ends, so this readout
+    // does not need the question block to come last -- laya puts the state after it.
+    if (cfg.readout == SYSTEM_ONE_READOUT_SCORED_SLOT) {
+        for (size_t i = 0; i < segments.size(); i++) {
+            const auto ids = common_tokenize(vocab, segments[i], false, true);
+            if (ids.empty()) {
+                throw std::invalid_argument("segment " + std::to_string(i) + " tokenized to nothing");
+            }
+            for (size_t j = 0; j < ids.size(); j++) {
+                if (ids[j] == cfg.mask_token) {
+                    out.slots.push_back((int) (out.ids.size() + j));
+                }
+            }
+            out.ids.insert(out.ids.end(), ids.begin(), ids.end());
+        }
+        if (out.slots.empty()) {
+            throw std::invalid_argument("no mask token (" + std::to_string(cfg.mask_token) +
+                  ") in the sequence: a scored slot is read at one");
+        }
+        return out;
+    }
+
     // the question blocks are the trailing segments; everything before them is the state
     const size_t first_question = segments.size() - n_questions;
     for (size_t i = 0; i < first_question; i++) {
@@ -392,6 +449,23 @@ system_one_plan system_one_build_plan(const system_one_params & cfg,
                 seq.option   = oi;
                 out.sequences.push_back(std::move(seq));
             }
+        }
+        return out;
+    }
+
+    if (cfg.readout == SYSTEM_ONE_READOUT_SCORED_SLOT) {
+        // the head scores positions, not sequences, but the format still asks one question at a
+        // time: every mask in the sequence is one of that question's options
+        out.scored_slots = true;
+
+        for (size_t qi = 0; qi < qs.size(); qi++) {
+            const std::vector<system_one_question> one(qs.begin() + qi, qs.begin() + qi + 1);
+
+            system_one_sequence seq;
+            seq.segments = system_one_render_segments(cfg, state, one);
+            seq.n_question_segments = 0;   // the slots are found by their mask, not by position
+            seq.question = qi;
+            out.sequences.push_back(std::move(seq));
         }
         return out;
     }
@@ -482,6 +556,26 @@ std::vector<system_one_answer> system_one_answers_from_logits(const system_one_p
 std::vector<system_one_answer> system_one_answers_from_scores(const system_one_plan & p,
                                                               const std::vector<float> & scores) {
     std::vector<system_one_answer> out;
+
+    if (p.scored_slots) {
+        // one number per answer slot, question-major -- the same flat layout rank_head produces
+        // across its sequences, only the grouping comes from n_options
+        size_t total = 0;
+        for (int n : p.n_options) total += (size_t) n;
+        if (scores.size() != total) {
+            throw std::runtime_error("expected one score per answer slot");
+        }
+
+        out.reserve(p.n_options.size());
+        size_t at = 0;
+        for (int n : p.n_options) {
+            out.push_back(system_one_answer_from_scores(
+                        std::vector<float>(scores.begin() + at, scores.begin() + at + n)));
+            at += (size_t) n;
+        }
+        return out;
+    }
+
     if (scores.size() != p.sequences.size()) {
         throw std::runtime_error("expected one score per planned sequence");
     }
@@ -572,6 +666,12 @@ system_one_context_needs system_one_required_context(const system_one_params & c
     if (cfg.readout == SYSTEM_ONE_READOUT_RANK_HEAD) {
         need.embeddings   = true;
         need.pooling_type = LLAMA_POOLING_TYPE_RANK;
+    }
+
+    if (cfg.readout == SYSTEM_ONE_READOUT_SCORED_SLOT) {
+        // the number is the model's output at each marked position, so nothing is pooled
+        need.embeddings   = true;
+        need.pooling_type = LLAMA_POOLING_TYPE_NONE;
     }
 
     return need;

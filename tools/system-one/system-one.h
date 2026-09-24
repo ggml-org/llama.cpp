@@ -33,11 +33,15 @@ enum system_one_kind {
 // Where an answer is read, and what is read there.
 //   LETTER_SLOT  the next-token distribution at the end of a question's segment
 //   MASKED_SLOT  the distribution at a mask token inside it (bidirectional models)
+//   SCORED_SLOT  one sequence per question, with one mask per option, each scored to a single
+//                number by the model's own head -- so the answer is read at K positions of one
+//                sequence rather than as a distribution over labels
 //   RANK_HEAD    one sequence per option, scored by the model's classification head -- the
 //                reranker shape, and the only readout that costs K forward passes
 enum system_one_readout {
     SYSTEM_ONE_READOUT_LETTER_SLOT,
     SYSTEM_ONE_READOUT_MASKED_SLOT,
+    SYSTEM_ONE_READOUT_SCORED_SLOT,
     SYSTEM_ONE_READOUT_RANK_HEAD,
 };
 
@@ -58,8 +62,9 @@ struct system_one_params {
     std::string segment_separator = "\x1e";               // system_one.segment_separator
 
     // Derived from the model's capabilities in system_one_params_from_model(), not required
-    // in the GGUF: a classification head means RANK_HEAD, a bidirectional model means
-    // MASKED_SLOT, and a causal one means LETTER_SLOT.
+    // in the GGUF: a classification head means RANK_HEAD, a bidirectional model that answers
+    // with one number per token means SCORED_SLOT, any other bidirectional one MASKED_SLOT,
+    // and a causal one LETTER_SLOT.
     enum system_one_readout readout = SYSTEM_ONE_READOUT_LETTER_SLOT;
 
     // system_one.labels: option i is labelled labels[i] and that token is what gets read.
@@ -90,7 +95,11 @@ std::vector<std::string> system_one_render_segments(const system_one_params & cf
 
 struct system_one_tokenized {
     std::vector<llama_token> ids;
-    std::vector<int>         slots;   // one per question: where its answer is read
+
+    // Where the answers are read. One per question for a letter or mask slot, where the slot
+    // carries a distribution over the labels; one per *option* for a scored slot, where each
+    // carries a single number and a question's answer is the softmax over its own.
+    std::vector<int>         slots;
 };
 
 // One sequence the request turns into. A slot readout plans exactly one; a rank_head readout
@@ -129,9 +138,10 @@ struct system_one_sequence {
 struct system_one_plan {
     std::vector<system_one_sequence> sequences;
     std::vector<int>                 n_options;   // per question, in request order
-    std::vector<llama_token>         labels;      // label token ids; empty for rank_head
+    std::vector<llama_token>         labels;      // label token ids; empty for the scored readouts
 
-    bool rank_pooling = false;  // sequences are scored by the model's head, not read at a slot
+    bool rank_pooling  = false;  // sequences are scored by the model's head, not read at a slot
+    bool scored_slots  = false;  // every slot is one number, so a question's answer is its K slots
 };
 
 // Stage one: what the request is, before anything is tokenized.
@@ -190,7 +200,8 @@ system_one_answer system_one_answer_from_scores(const std::vector<float> & score
 // so the caller only says where the numbers are:
 //
 //   _from_logits  a slot readout: one row of vocab logits per answer slot, in question order
-//   _from_scores  a rank_head readout: one score per planned sequence, in plan order
+//   _from_scores  one score per planned sequence for rank_head, or one per answer slot in
+//                 question order for scored_slot -- the same flat, question-major layout
 std::vector<system_one_answer> system_one_answers_from_logits(const system_one_plan & p,
                                                               const std::vector<const float *> & rows);
 
