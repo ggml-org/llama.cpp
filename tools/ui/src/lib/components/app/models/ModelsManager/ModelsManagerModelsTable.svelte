@@ -229,10 +229,13 @@
 
 {#snippet repoRow(entry: ModelQuantGroup, indent = 0, compact = false)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
+	{@const providerCount = new Set(entry.quants.map((option) => option.backendId ?? '')).size}
 	{@const groupLabel =
-		entry.kind === 'variants'
-			? `${entry.quants.length} variants`
-			: `${entry.quants.length} quants available`}
+		entry.kind === 'providers'
+			? `${providerCount} provider${providerCount === 1 ? '' : 's'}`
+			: entry.kind === 'variants'
+				? `${entry.quants.length} variants`
+				: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
 
 	<div class="px-2">
@@ -295,7 +298,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0, compact = false)}
+{#snippet quantRow(option: ModelOption, indent = 0, compact = false, showProvider = false)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
@@ -316,7 +319,9 @@
 			tabindex="0"
 		>
 			<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+				<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
+					{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
+				</Badge>
 
 				<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 			</span>
@@ -347,7 +352,7 @@
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24, compact)}
+				{@render quantRow(quant, indent + 24, compact, entry.kind === 'providers')}
 			{/each}
 		{/if}
 	{:else}

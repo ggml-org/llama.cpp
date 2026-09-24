@@ -148,7 +148,11 @@
 				ordered.push({
 					backendId: null,
 					isLocal: false,
-					items: leading(chatOnly),
+					// one repo, one row per provider that serves it
+					items: groupModelQuants(
+						chatOnly.flatMap((entry) => entry.quants),
+						true
+					),
 					key: 'oai-compat',
 					kind: 'compat',
 					label: 'OAI-compat'
