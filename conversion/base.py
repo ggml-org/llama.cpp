@@ -831,6 +831,17 @@ class ModelBase:
         raw = np.concatenate([d_grouped, qs_grouped], axis=-1).reshape(out_features, n_super * 36)
         return raw, [out_features, n_super * 64]
 
+    @staticmethod
+    def _nvfp4_pack_stacked(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
+        # Checkpoints that already stack experts as [n_expert, out, packed_in].
+        n_expert = weight.shape[0]
+        raws: list[np.ndarray] = []
+        shape: list[int] = []
+        for expert_id in range(n_expert):
+            raw, shape = ModelBase._nvfp4_pack(weight[expert_id], scale[expert_id])
+            raws.append(raw)
+        return np.stack(raws, axis=0), [n_expert, *shape]
+
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         new_name = self.map_tensor_name(name)
 
@@ -875,6 +886,25 @@ class ModelBase:
                 consumed.append(scale2_name)
             if input_scale_name in self.model_tensors:
                 consumed.append(input_scale_name)
+
+            # Step-style checkpoints with an already-stacked routed-expert axis.
+            # Keep the existing per-expert path below for checkpoints that ship one
+            # tensor per expert, and do not claim arbitrary 3-D NVFP4 tensors.
+            stacked_m = re.search(r'\.moe\.(gate_proj|up_proj|down_proj)\.weight$', name)
+            if stacked_m and weight.ndim == 3 and scale.ndim == 3:
+                n_expert = weight.shape[0]
+                if scale.shape[0] != n_expert:
+                    raise ValueError(f"NVFP4 stacked expert count mismatch for {name}: "
+                                     f"weight={n_expert}, scale={scale.shape[0]}")
+                if scale2.numel() != n_expert or input_scale.numel() != n_expert:
+                    raise ValueError(f"NVFP4 stacked expert sidecars must each have {n_expert} values for {name}")
+                new_name = self.map_tensor_name(name)
+                raw, shape = self._nvfp4_pack_stacked(weight, scale)
+                logger.info(f"Repacked {new_name} with shape {shape} and quantization NVFP4")
+                self.gguf_writer.add_tensor(new_name, raw, raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+                self._write_scales_tensor(new_name.replace(".weight", ".scale"), scale2.float().flatten().tolist())
+                self._write_scales_tensor(new_name.replace(".weight", ".input_scale"), input_scale.float().flatten().tolist())
+                continue
 
             # Check if this is a per-expert tensor
             m = re.search(r'\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$', name)
