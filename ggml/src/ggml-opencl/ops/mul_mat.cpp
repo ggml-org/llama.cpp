@@ -3938,7 +3938,7 @@ void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggm
 
         // q4_k x fp32
         if (src0t == GGML_TYPE_Q4_K && src1t == GGML_TYPE_F32 && !use_flat_gemv_for_large_m_q4_K(backend_ctx, src0)) {
-            ggml_cl_mul_mat_q4_k_f32_adreno(backend, src0, src1, dst);
+            ggml_cl_mul_mat_q4_K_f32_adreno(backend, src0, src1, dst);
             return;
         }
 
