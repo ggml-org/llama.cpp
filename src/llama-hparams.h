@@ -100,7 +100,7 @@ struct llama_hparams {
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
 
-    // for granite-speech-5 / ctc encoder
+    // for granite_speech_5 / ctc encoder
     struct llama_hparams_ctc ctc;
 
     uint32_t n_shortconv_l_cache  = 0;
@@ -195,7 +195,7 @@ struct llama_hparams {
     // for hybrid state space models
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
 
-    // granite-speech-5: integer temporal subsample factor per-layer
+    // granite_speech_5: integer temporal subsample factor per-layer
     std::array<uint32_t, LLAMA_MAX_LAYERS> subsample_factor_impl;
 
     // for State Space Models

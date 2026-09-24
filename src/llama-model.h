@@ -587,7 +587,7 @@ struct llama_layer {
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
-    // granite-speech-5
+    // granite_speech_5
     struct ggml_tensor * attn_rel_pos   = nullptr;
     struct ggml_tensor * conv_norm      = nullptr;
     struct ggml_tensor * conv_norm_b    = nullptr;
@@ -697,7 +697,7 @@ struct llama_model {
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
 
-    // granite-speech-5: mid-stack self-conditioning back-projection
+    // granite_speech_5: mid-stack self-conditioning back-projection
     struct ggml_tensor * ctc_out_mid   = nullptr;
     struct ggml_tensor * ctc_out_mid_b = nullptr;
 

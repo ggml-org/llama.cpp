@@ -696,16 +696,16 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_COMPRESSOR_WGATE,
     LLM_TENSOR_INDEXER_COMPRESSOR_APE,
     LLM_TENSOR_INDEXER_COMPRESSOR_NORM,
-    LLM_TENSOR_ATTN_REL_POS,   // granite-speech-5
-    LLM_TENSOR_CONV_NORM,      // granite-speech-5
-    LLM_TENSOR_CONV_PW1,       // granite-speech-5
-    LLM_TENSOR_CONV_PW2,       // granite-speech-5
-    LLM_TENSOR_CONV_DW,        // granite-speech-5
-    LLM_TENSOR_CONV_DW_NORM,   // granite-speech-5
-    LLM_TENSOR_FFN_NORM_1,     // granite-speech-5
-    LLM_TENSOR_FFN_UP_1,       // granite-speech-5
-    LLM_TENSOR_FFN_DOWN_1,     // granite-speech-5
-    LLM_TENSOR_CTC_OUT_MID,    // granite-speech-5
+    LLM_TENSOR_ATTN_REL_POS,   // granite_speech_5
+    LLM_TENSOR_CONV_NORM,      // granite_speech_5
+    LLM_TENSOR_CONV_PW1,       // granite_speech_5
+    LLM_TENSOR_CONV_PW2,       // granite_speech_5
+    LLM_TENSOR_CONV_DW,        // granite_speech_5
+    LLM_TENSOR_CONV_DW_NORM,   // granite_speech_5
+    LLM_TENSOR_FFN_NORM_1,     // granite_speech_5
+    LLM_TENSOR_FFN_UP_1,       // granite_speech_5
+    LLM_TENSOR_FFN_DOWN_1,     // granite_speech_5
+    LLM_TENSOR_CTC_OUT_MID,    // granite_speech_5
     LLM_TENSOR_FFN_GATE_TID2EID,
     LLM_TENSOR_NEXTN_PROJ_PRE,
     LLM_TENSOR_NEXTN_PROJ_POST,
