@@ -1,9 +1,11 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
+	import type { ModelDraft } from './ModelsManager/utils';
 	import { Database, ScrollText } from '@lucide/svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { type ModelSidecar } from '$lib/constants';
+	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { ModelsService } from '$lib/services/models.service';
 	import { settingsStore } from '$lib/stores';
@@ -36,6 +38,8 @@
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
 		sizeRange?: { min: number; max: number } | null;
 		draftSidecars?: ModelSidecar[];
+		/** Drafts a load would use, rendered as `+ [KIND] [QUANT]` next to the id. */
+		drafts?: ModelDraft[];
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
 		class?: string;
@@ -45,6 +49,7 @@
 		aliases,
 		class: className = '',
 		contextLength,
+		drafts = [],
 		draftSidecars = [],
 		hideCapabilities = false,
 		hideModalities = false,
@@ -67,12 +72,10 @@
 		...rest
 	}: Props = $props();
 
-	const badgeClass =
-		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+	const badgeClass = MODEL_BADGE_CLASS;
 	const tagBadgeClass =
 		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
-	const variantBadgeClass =
-		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+	const variantBadgeClass = MODEL_VARIANT_BADGE_CLASS;
 
 	/** Alias badges beyond this many collapse into a single `+x more` badge. */
 	const MAX_ALIAS_BADGES = 2;
@@ -89,6 +92,7 @@
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
 	let uniqueDraftSidecars = $derived([...new Set(draftSidecars)].filter((s) => !isAuxSidecar(s)));
+	let activeDrafts = $derived(drafts.filter((draft) => draft.active && draft.kind));
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
@@ -130,6 +134,18 @@
 						{parsed.params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
 					</span>
 				{/if}
+
+				{#each activeDrafts as draft (draft.kind ?? 'draft')}
+					<span class="flex shrink-0 items-center gap-1">
+						<span class="text-[10px] text-muted-foreground">+</span>
+
+						<span class={variantBadgeClass} title="Speculative draft in use">{draft.kind}</span>
+
+						{#if draft.quant}
+							<span class={badgeClass}>{draft.quant}</span>
+						{/if}
+					</span>
+				{/each}
 
 				{#each uniqueDraftSidecars as sidecar (sidecar)}
 					<span class={variantBadgeClass} title={`${sidecar.toUpperCase()} draft model available`}>

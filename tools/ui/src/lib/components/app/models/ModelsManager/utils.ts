@@ -7,8 +7,13 @@ import {
 	SPEC_TYPE
 } from '$lib/constants';
 import { HuggingFaceService, ModelsService } from '$lib/services';
-import { settingsStore } from '$lib/stores';
-import type { ModelLoadProgress, ModelModalities, ModelOption } from '$lib/types/models';
+import { backendsModelsStore, modelsStore, settingsStore } from '$lib/stores';
+import type {
+	ModelLoadProgress,
+	ModelModalities,
+	ModelOption,
+	ModelSidecarFile
+} from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
 import { rawModelId } from '$lib/utils/model-option-id';
@@ -121,13 +126,15 @@ export function saveOverrides(overrides: ModelOverrideMap): void {
 }
 
 /** Backend a model is served by, the local server reads as "This server". */
-/** A draft a model can speculate with, and whether the load settings point at it. */
+/** A draft a model can speculate with, and whether a load would use it. */
 export interface ModelDraft {
-	/** The draft the settings name, which is the one a load would use. */
+	/** The draft a load would use, from the server's own arguments or from the settings. */
 	active: boolean;
 	kind: ModelSidecar | null;
-	/** Qualified id of a draft from another repo; null when the file sits in this repo. */
+	/** Repo the draft comes from; null when the file sits in the model's own repo. */
 	model: string | null;
+	params: string | null;
+	quant: string | null;
 }
 
 /** Repo an id belongs to: the id without its quant tag. */
@@ -166,17 +173,62 @@ function repoFromDraftPath(path: string): string {
  * Draft the server's own launch arguments point at. The router reports the arguments a
  * model loads with, so this is what a load would really speculate with.
  */
-export function draftFromArgs(args: string[] | undefined): ModelDraft | null {
+export function draftFromArgs(args: string[] | undefined, option: ModelOption): ModelDraft | null {
 	const flag = args?.indexOf('--model-draft') ?? -1;
 	const path = flag === -1 ? null : (args?.[flag + 1] ?? null);
 
 	if (!path) return null;
 
+	const parsed = ModelsService.parseModelId(path.split(/[/\\]/).pop() ?? path);
+	const repo = repoFromDraftPath(path);
+
 	return {
 		active: true,
-		kind: sidecarFromSpecType(args?.[(args?.indexOf('--spec-type') ?? -1) + 1]),
-		model: repoFromDraftPath(path)
+		kind: sidecarFromSpecType(args?.[(args?.indexOf('--spec-type') ?? -1) + 1]) ?? parsed.sidecar,
+		model: repo === repoOf(option.model) ? null : repo,
+		params: parsed.params
+			? `${parsed.params}${parsed.activatedParams ? `-${parsed.activatedParams}` : ''}`
+			: null,
+		quant: parsed.quantization
 	};
+}
+
+/** Draft the load settings name, resolved against the model's own repo. */
+export function draftFromSetting(option: ModelOption, value?: string | null): ModelDraft | null {
+	const id = value?.trim();
+
+	if (!id || id === 'off') return null;
+
+	const parsed = ModelsService.parseModelId(id);
+
+	return {
+		active: true,
+		kind: parsed.sidecar,
+		model: repoOf(id) === repoOf(option.model) ? null : id,
+		params: parsed.params
+			? `${parsed.params}${parsed.activatedParams ? `-${parsed.activatedParams}` : ''}`
+			: null,
+		quant: parsed.quantization
+	};
+}
+
+/**
+ * Drafts of a model, in the order they matter: what the server loads with, else what the
+ * settings name, then any other sidecar the model's own repo ships.
+ */
+export function modelDraftsFor(option: ModelOption, settingValue?: string | null): ModelDraft[] {
+	const args = modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args;
+	const configured = draftFromArgs(args, option) ?? draftFromSetting(option, settingValue);
+
+	return modelDrafts(option, sidecarFilesFor(option), configured);
+}
+
+/** Draft sidecars a listing reported for the model's repo. */
+export function sidecarFilesFor(option: ModelOption): ModelSidecarFile[] {
+	const repo = option.model.split(':')[0] ?? '';
+	const state = backendsModelsStore.get(option.backendId ?? LOCAL_BACKEND_ID);
+
+	return state.drafts?.[repo] ?? [];
 }
 
 /**
@@ -186,30 +238,24 @@ export function draftFromArgs(args: string[] | undefined): ModelDraft | null {
  */
 export function modelDrafts(
 	option: ModelOption,
-	available: ModelSidecar[] = [],
-	configured?: string | null,
-	configuredKind?: ModelSidecar | null
+	available: ModelSidecarFile[] = [],
+	configured?: ModelDraft | null
 ): ModelDraft[] {
-	const value = configured?.trim() ?? '';
 	const drafts: ModelDraft[] = [];
 
-	if (value && value !== 'off') {
-		const parsed = ModelsService.parseModelId(value);
-		const sameRepo = repoOf(value) === repoOf(option.model);
+	if (configured) drafts.push(configured);
+
+	for (const file of available) {
+		// a sidecar a load already points at is the active draft, not a second entry
+		if (drafts.some((draft) => draft.kind === file.kind)) continue;
 
 		drafts.push({
-			active: true,
-			kind: parsed.sidecar ?? configuredKind ?? null,
-			model: sameRepo ? null : value
+			active: false,
+			kind: file.kind,
+			model: null,
+			params: file.params,
+			quant: file.quant
 		});
-	}
-
-	for (const kind of available) {
-		const alreadyActive = drafts.some((draft) => draft.active && draft.kind === kind);
-
-		if (alreadyActive) continue;
-
-		drafts.push({ active: false, kind, model: null });
 	}
 
 	return drafts;

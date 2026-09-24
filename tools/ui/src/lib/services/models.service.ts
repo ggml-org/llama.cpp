@@ -14,7 +14,7 @@ import {
 	SIDECAR_TOKENS
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
-import type { ParsedModelId } from '$lib/types/models';
+import type { ModelSidecarFile, ParsedModelId } from '$lib/types/models';
 import {
 	apiDelete,
 	apiFetch,
@@ -38,6 +38,13 @@ function sidecarTokenInFilename(modelId: string): ModelSidecar | null {
 	);
 
 	return (match as ModelSidecar | undefined) ?? null;
+}
+
+/** Parameter label a parsed id reports, e.g. `35B-A3B`. */
+function paramsLabel(parsed: ParsedModelId): string | null {
+	if (!parsed.params) return null;
+
+	return `${parsed.params}${parsed.activatedParams ? `-${parsed.activatedParams}` : ''}`;
 }
 
 export class ModelsService {
@@ -117,27 +124,35 @@ export class ModelsService {
 	 * belong to. The router lists a downloaded sidecar as a model of its own, so this
 	 * keeps the pairing that the model list itself is filtered to drop.
 	 */
-	static draftSidecarsByRepo(response: ApiModelsListResponse): Record<string, ModelSidecar[]> {
-		const byRepo: Record<string, ModelSidecar[]> = {};
+	static draftSidecarsByRepo(response: ApiModelsListResponse): Record<string, ModelSidecarFile[]> {
+		const byRepo: Record<string, ModelSidecarFile[]> = {};
 
 		for (const entry of response.data ?? []) {
-			const sidecar =
-				ModelsService.parseModelId(entry.id).sidecar ?? sidecarTokenInFilename(entry.id);
+			const parsed = ModelsService.parseModelId(entry.id);
+			const sidecar = parsed.sidecar ?? sidecarTokenInFilename(entry.id);
 
 			if (!sidecar || isAuxSidecar(sidecar)) continue;
 
 			// the repo is the id with its quant tag and sidecar token taken off; naming
 			// parts of the id are not touched, a model name may carry `-4b` for instance
-			const repo = entry.id
+			const model = entry.id
 				.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0]
 				.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '')
 				.replace(new RegExp(`[-_ ]?${sidecar}([-_ ]?draft)?$`, 'i'), '');
 
-			if (!repo) continue;
+			if (!model) continue;
 
-			const kinds = (byRepo[repo] ??= []);
+			const files = (byRepo[model] ??= []);
 
-			if (!kinds.includes(sidecar)) kinds.push(sidecar);
+			if (files.some((file) => file.kind === sidecar)) continue;
+
+			files.push({
+				id: entry.id,
+				kind: sidecar,
+				model,
+				params: paramsLabel(parsed),
+				quant: parsed.quantization
+			});
 		}
 
 		return byRepo;

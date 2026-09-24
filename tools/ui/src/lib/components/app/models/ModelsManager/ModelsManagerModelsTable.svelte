@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelDraftChip from '../ModelDraftChip.svelte';
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import {
 		draftFromArgs,
+		draftFromSetting,
 		isLocalOption,
 		type ModalityKey,
 		modelContextLength,
@@ -10,7 +10,8 @@
 		modelDrafts,
 		type ModelOverride,
 		type ModelQuantGroup,
-		type ModelsTableGroup
+		type ModelsTableGroup,
+		sidecarFilesFor
 	} from './utils';
 	import {
 		ArrowDown,
@@ -46,20 +47,13 @@
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { FAMILY_ROW_WINDOW, LOCAL_BACKEND_ID, MODEL_ROW_WINDOW } from '$lib/constants';
+	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import {
-		backendsModelsStore,
-		backendsStore,
-		modelsStore,
-		settingsStore,
-		uiStore
-	} from '$lib/stores';
+	import { backendsStore, modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
-	import { rawModelId } from '$lib/utils/model-option-id';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -227,32 +221,13 @@
 		// speculative decoding is a llama.cpp feature
 		if (!getBackendCapabilities(getBackend(option.backendId)).loadUnload) return [];
 
-		const repo = option.model.split(':')[0] ?? '';
-		const state = backendsModelsStore.get(option.backendId ?? LOCAL_BACKEND_ID);
 		// the router reports the arguments a model loads with, draft included
-		const serverDraft = draftFromArgs(
-			modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args
-		);
+		const args = modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args;
 		const configured =
-			serverDraft?.model ?? overrides[option.id]?.load?.speculativeDecoding ?? null;
+			draftFromArgs(args, option) ??
+			draftFromSetting(option, overrides[option.id]?.load?.speculativeDecoding);
 
-		return modelDrafts(option, state.drafts?.[repo] ?? [], configured, serverDraft?.kind ?? null);
-	}
-
-	/** The draft model's own option, when the manager lists it, for its avatar. */
-	function draftOptionFor(draft: ModelDraft): ModelOption | null {
-		const id = draft.model;
-
-		if (!id) return null;
-
-		const raw = rawModelId(id);
-
-		// a draft may be named as a repo, in which case any of its quants will do
-		return (
-			modelsStore.models.find((option) => option.id === id) ??
-			modelsStore.models.find((option) => rawModelId(option.id).startsWith(`${raw}:`)) ??
-			null
-		);
+		return modelDrafts(option, sidecarFilesFor(option), configured);
 	}
 
 	/** Name of the model the configuration pane has open, for the draft action label. */
@@ -405,6 +380,7 @@
 				<ModelId
 					aliases={option.aliases}
 					class="min-w-0 flex-1"
+					drafts={draftsFor(option)}
 					hideCapabilities
 					modalities={option.modalities}
 					modelId={option.model}
@@ -413,10 +389,6 @@
 				/>
 
 				<ModelCapabilities {option} />
-
-				{#each draftsFor(option) as draft (draft.model ?? draft.kind)}
-					<ModelDraftChip {draft} option={draftOptionFor(draft)} />
-				{/each}
 			</span>
 		</span>
 
@@ -471,6 +443,7 @@
 					<ModelId
 						aliases={entry.base.aliases}
 						class="min-w-0"
+						drafts={draftsFor(entry.base)}
 						hideCapabilities
 						hideQuantization
 						modalities={mediaSource.modalities}
@@ -480,10 +453,6 @@
 					/>
 
 					<ModelCapabilities option={entry.base} />
-
-					{#each draftsFor(entry.base) as draft (draft.model ?? draft.kind)}
-						<ModelDraftChip {draft} option={draftOptionFor(draft)} />
-					{/each}
 				</span>
 
 				<span class="block text-xs text-muted-foreground">{groupLabel}</span>

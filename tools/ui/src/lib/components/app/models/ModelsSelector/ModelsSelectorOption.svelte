@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import { modelDraftsFor } from '../ModelsManager/utils';
 	import { ModelAvatar, ModelId, ModelLoadControl, ModelRowActions } from '$lib/components/app';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
@@ -94,6 +95,7 @@
 	<ModelId
 		aliases={option.aliases}
 		class="min-w-0 flex-1"
+		drafts={modelDraftsFor(option)}
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}

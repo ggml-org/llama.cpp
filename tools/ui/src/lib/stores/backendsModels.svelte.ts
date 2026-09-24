@@ -7,16 +7,16 @@
  * cache is the prefetch layer the switches start from.
  */
 
-import type { ModelSidecar } from '$lib/constants';
 import { BackendsService } from '$lib/services/backends.service';
 import { ModelsService } from '$lib/services/models.service';
 import { backendsStore } from '$lib/stores/backends.svelte';
 import type { ApiModelsListResponse } from '$lib/types';
+import type { ModelSidecarFile } from '$lib/types/models';
 import type { ModelOption } from '$lib/types/models';
 
 export interface BackendModelsState {
 	/** Draft sidecars the listing carries, keyed by the repo they belong to. */
-	drafts?: Record<string, ModelSidecar[]>;
+	drafts?: Record<string, ModelSidecarFile[]>;
 	error: string | null;
 	loaded: boolean;
 	loading: boolean;

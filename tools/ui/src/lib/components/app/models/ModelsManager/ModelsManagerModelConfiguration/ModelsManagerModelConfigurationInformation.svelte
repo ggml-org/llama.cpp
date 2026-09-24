@@ -1,5 +1,11 @@
 <script lang="ts">
-	import { isLocalOption, modelQuantLabel, modelSizeLabel, resolveModelSize } from '../utils';
+	import {
+		isLocalOption,
+		modelDraftsFor,
+		modelQuantLabel,
+		modelSizeLabel,
+		resolveModelSize
+	} from '../utils';
 	import {
 		ActionIconCopyToClipboard,
 		BadgesModality,
@@ -14,13 +20,15 @@
 	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
+		/** Draft the load settings name, when one is set. */
+		draftSetting?: string | null;
 		/** Hugging Face details, filled in when discovery is on and the server has none. */
 		hub?: HfModelDetailInfo | null;
 		option: ModelOption;
 		serverProps: ApiLlamaCppServerProps | null | undefined;
 	}
 
-	let { hub = null, option, serverProps }: Props = $props();
+	let { draftSetting = null, hub = null, option, serverProps }: Props = $props();
 
 	let quant = $derived(modelQuantLabel(option));
 	let size = $derived(modelSizeLabel(option));
@@ -55,6 +63,10 @@
 				? `${formatNumber(hub.gguf.context_length)} tokens`
 				: null
 	);
+	// the draft a load would speculate with, and any other sidecar on disk
+	let drafts = $derived(modelDraftsFor(option, draftSetting));
+	let activeDraft = $derived(drafts.find((draft) => draft.active) ?? null);
+	let idleDrafts = $derived(drafts.filter((draft) => !draft.active));
 	let meta = $derived(option.meta);
 	// the server reports these once the model is loaded; the Hub knows them anyway
 	let gguf = $derived(hub?.gguf ?? null);
@@ -93,6 +105,22 @@
 			value: (option.meta?.architecture as string) ?? gguf?.architecture ?? null
 		},
 		{ label: 'Format', value: isLocalOption(option) ? 'GGUF' : null },
+		...(activeDraft
+			? [
+					{ isBadge: true, label: 'Draft sidecar', value: activeDraft.kind },
+					{
+						isCopyable: true,
+						label: 'Draft model',
+						value: activeDraft.model ?? option.model.split(':')[0]
+					},
+					{ isBadge: true, label: 'Draft quant', value: activeDraft.quant }
+				]
+			: []),
+		{
+			isBadge: true,
+			label: 'Other sidecars',
+			value: idleDrafts.length > 0 ? idleDrafts.map((draft) => draft.kind).join(', ') : null
+		},
 		{ label: 'Parallel Slots', value: serverProps ? String(serverProps.total_slots) : null },
 		{ isMono: true, label: 'Build Info', value: serverProps?.build_info ?? null }
 	] satisfies Array<{

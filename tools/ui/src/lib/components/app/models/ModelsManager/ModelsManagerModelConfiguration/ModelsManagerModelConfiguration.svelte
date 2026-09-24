@@ -108,7 +108,12 @@
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
 			<Tabs.Content value="information">
-				<ModelsManagerModelConfigurationInformation hub={hubDetails} {option} {serverProps} />
+				<ModelsManagerModelConfigurationInformation
+					draftSetting={override?.load?.speculativeDecoding ?? null}
+					hub={hubDetails}
+					{option}
+					{serverProps}
+				/>
 			</Tabs.Content>
 
 			<Tabs.Content value="load">
