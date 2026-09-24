@@ -260,7 +260,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 # Do it manually.
                 list(APPEND ARCH_DEFINITIONS GGML_AVX512)
                 if (GGML_AVX512_VBMI)
-                    list(APPEND ARCH_DEFINITIONS __AVX512VBMI__)
+                    list(APPEND ARCH_DEFINITIONS __AVX512VBMI__ GGML_AVX512_VBMI)
                     if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
                         list(APPEND ARCH_FLAGS -mavx512vbmi)
                     endif()
