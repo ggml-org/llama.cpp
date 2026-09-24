@@ -67,6 +67,7 @@ struct llama_grammar_candidate {
     const uint32_t     * code_points;
     llama_partial_utf8   partial_utf8;
     llama_token          id;
+    bool                 opaque;
 };
 
 using llama_grammar_rule  = std::vector<      llama_grammar_element>;
@@ -163,6 +164,8 @@ struct llama_grammar {
                              trigger_patterns;         // Regular expressions that trigger a lazy grammar. Must be a full match of the entire generated
                                                        // string, and the grammar will be given the string from the first match group onwards.
 
+    // token ids named by token rules, as sorted inclusive ranges. char rules never match these tokens.
+    std::vector<std::pair<uint32_t, uint32_t>> opaque_tokens;
 };
 
 //
@@ -207,3 +210,6 @@ void llama_grammar_accept_token(
               struct llama_grammar & grammar,
                        llama_token   token,
                  const std::string & piece);
+
+// true if a token rule names the token, char rules do not match it
+bool llama_grammar_is_opaque(const llama_grammar & grammar, llama_token token);
