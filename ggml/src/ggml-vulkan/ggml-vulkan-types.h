@@ -386,6 +386,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
