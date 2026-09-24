@@ -73,6 +73,12 @@ public:
 
     bool spill_enabled() const noexcept;
     bool complete_spill();
+    bool staged_publication_enabled() const noexcept;
+    bool begin_spill_capture(uint32_t tokens);
+    void abort_spill_capture() noexcept;
+    bool restore_spill_async(ggml_backend_sched_t sched);
+    bool complete_restore_spill();
+    bool materialize_spill_for_device_state();
     bool capture_spill(ggml_backend_sched_t sched,
             const std::vector<llm_graph_recurrent_snapshot> & outputs);
     const llama_recurrent_spill_bank * spill_bank() const noexcept;
@@ -124,10 +130,12 @@ public:
 private:
     std::unique_ptr<llama_recurrent_spill_bank> spill;
     bool restore_spill_slot(uint32_t slot);
+    bool spill_slot_valid(uint32_t slot);
     uint64_t spill_cache_id = 0;
     uint64_t spill_epoch = 0;
     bool spill_pending = false;
     //const llama_model & model;
+    bool spill_restore_pending = false;
     const llama_hparams & hparams;
 
     const uint32_t n_seq_max = 1;
@@ -178,6 +186,10 @@ public:
 
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
+
+    bool staged_publication_enabled() const;
+    ggml_tensor * staging_tensor(size_t layer, bool value, uint32_t snapshot) const;
+    ggml_tensor * publication_tensor(size_t layer, bool value, uint32_t snapshot) const;
 
     //
     // llama_memory_recurrent_context specific API

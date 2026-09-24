@@ -1635,6 +1635,12 @@ llm_graph_result * llama_context::process_ubatch(
         gf_res_prev_active = res;
     }
 
+    if (rs_spill && !rs_spill->restore_spill_async(sched.get())) {
+        LLAMA_LOG_ERROR("%s: failed to enqueue recurrent restore\n",__func__);
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
@@ -1645,7 +1651,22 @@ llm_graph_result * llama_context::process_ubatch(
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    struct staged_spill_guard {
+        llama_memory_recurrent * owner;
+        bool active;
+        ~staged_spill_guard() { if (active) owner->abort_spill_capture(); }
+    } spill_capture{rs_spill,rs_spill && rs_spill->staged_publication_enabled()};
+    if (spill_capture.active && !rs_spill->begin_spill_capture(ubatch.n_tokens)) {
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    if (rs_spill && !rs_spill->complete_restore_spill()) {
+        LLAMA_LOG_ERROR("%s: failed to complete recurrent restore\n",__func__);
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -1663,6 +1684,7 @@ llm_graph_result * llama_context::process_ubatch(
         LLAMA_LOG_ERROR("%s: KV streaming graph did not complete every attention layer\n",__func__);
         ret = GGML_STATUS_FAILED; return nullptr;
     }
+    spill_capture.active=false;
     streaming.completed = true;
     ret = GGML_STATUS_SUCCESS;
 
@@ -3527,7 +3549,13 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
     if (cparams.kv_streaming() && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) && cparams.n_rs_seq && model.arch == LLM_ARCH_QWEN35 && memory) {
+        auto * recurrent=static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        if (recurrent && !recurrent->materialize_spill_for_device_state()) return 0;
+    }
+
     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+
     try {
         io.write(&io_magic, sizeof(io_magic));
         io.write(&seq_id, sizeof(seq_id));
@@ -3543,6 +3571,11 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
     if (cparams.kv_streaming() && (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)) {
         LLAMA_LOG_ERROR("%s: KV streaming does not yet support device-native snapshots\n",__func__); return 0;
     }
+    if ((flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) && cparams.n_rs_seq && model.arch == LLM_ARCH_QWEN35 && memory) {
+        auto * recurrent=static_cast<llama_memory_hybrid *>(memory.get())->get_mem_recr();
+        if (recurrent && !recurrent->materialize_spill_for_device_state()) return 0;
+    }
+
     std::unique_ptr<llama_io_write_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);

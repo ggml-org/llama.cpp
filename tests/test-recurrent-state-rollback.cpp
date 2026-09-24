@@ -22,6 +22,8 @@
 #include <string>
 #include <vector>
 
+static bool rollback_only = false;
+
 enum class test_status {
     PASS,
     FAIL,
@@ -580,8 +582,8 @@ static test_results run_tests(const common_params & params, llama_model * model)
     for (uint8_t fill : { 0, 0x3e }) {
         LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
         const test_status rb = test_rollback(params, model, fill);
-        const test_status rp = test_multi_seq_split_replay(params, model, fill);
-        const test_status ss = test_shared_seq_reserve(params, model, fill);
+        const test_status rp = rollback_only ? test_status::SKIP : test_multi_seq_split_replay(params, model, fill);
+        const test_status ss = rollback_only ? test_status::SKIP : test_shared_seq_reserve(params, model, fill);
         res.rollback = merge_status(res.rollback, rb);
         res.replay   = merge_status(res.replay,   rp);
         res.shared   = merge_status(res.shared,   ss);
@@ -636,7 +638,9 @@ int main(int argc, char ** argv) {
     std::vector<char *> filtered_argv;
     filtered_argv.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--models") == 0) {
+        if (strcmp(argv[i], "--rollback-only") == 0) {
+            rollback_only = true;
+        } else if (strcmp(argv[i], "--models") == 0) {
             if (i + 1 >= argc) {
                 LOG_ERR("%s: --models requires a directory argument\n", __func__);
                 return 1;

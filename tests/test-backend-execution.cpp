@@ -75,6 +75,42 @@ int main(int argc, char ** argv) {
         t.assert_equal(0,probe.frees);
         backing->iface.reset = reset;
     });
+    t.test("cpu_graph_dispatches_publication_marker_between_ordinary_nodes", [&](testing & t) {
+        execution_probe probe;
+        auto marker_ops=ops;
+        marker_ops.supports=[](void *,const ggml_tensor * op) { return op->op == GGML_OP_CPY; };
+        marker_ops.compute=[](void * p,ggml_backend_t,ggml_tensor * op) -> ggml_status {
+            ++static_cast<execution_probe *>(p)->computes;
+            float values[4];
+            ggml_backend_tensor_get(op->src[0],values,0,sizeof(values));
+            ggml_backend_tensor_set(op,values,0,sizeof(values));
+            return GGML_STATUS_SUCCESS;
+        };
+        ggml_backend_buffer_ptr backing(ggml_backend_alloc_buffer(backend.get(),1024));
+        ggml_backend_buffer_ptr marker(ggml_backend_execution_buffer_new(
+            ggml_backend_get_device(backend.get()),backing.get(),marker_ops,&probe));
+        if (!t.assert_true(bool(marker))) return;
+        ggml_context_ptr ctx(ggml_init({16384,nullptr,true}));
+        auto * input=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,4);
+        auto * destination=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_F32,4);
+        ggml_backend_buffer_ptr input_buffer(ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(),64));
+        if (!t.assert_true(bool(input_buffer))) return;
+        if (!t.assert_true(ggml_backend_tensor_alloc(input_buffer.get(),input,
+                ggml_backend_buffer_get_base(input_buffer.get())) == GGML_STATUS_SUCCESS &&
+                ggml_backend_tensor_alloc(marker.get(),destination,
+                    ggml_backend_buffer_get_base(marker.get())) == GGML_STATUS_SUCCESS)) return;
+        const float values[4]={1,2,3,4};
+        ggml_backend_tensor_set(input,values,0,sizeof(values));
+        auto * copied=ggml_cpy(ctx.get(),input,destination);
+        auto * graph=ggml_new_graph_custom(ctx.get(),16,false);
+        ggml_build_forward_expand(graph,copied);
+        t.assert_true(ggml_backend_graph_compute(backend.get(),graph) == GGML_STATUS_SUCCESS);
+        float result[4]={};
+        ggml_backend_tensor_get(destination,result,0,sizeof(result));
+        t.assert_true(!std::memcmp(values,result,sizeof(values)));
+        t.assert_equal(1,probe.computes);
+    });
+
     if (argc > 1 && !std::strcmp(argv[1],"--cuda")) t.test("cuda_scheduler_dispatches_managed_nodes_between_native_segments", [&](testing & t) {
         ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0");
         if (!t.assert_true(dev != nullptr)) return;

@@ -125,7 +125,7 @@ static bool host_experts_test(const llm_arch arch) {
     }
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, bool multi_recurrent = false) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -187,6 +187,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
         n_head_kv = 2; // GQA coverage
     }
+    if (multi_recurrent && arch == LLM_ARCH_QWEN35) n_layer=4;
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llm_arch_name(arch));
@@ -217,7 +218,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_LOGIT_SCALE,             1.0f);
     ms.add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,      uint32_t(64));
     ms.add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,    uint32_t(128));
-    ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
+    ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(multi_recurrent && arch == LLM_ARCH_QWEN35 ? 4 : 2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR ||
@@ -949,6 +950,12 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
+        }
+        if (arch == LLM_ARCH_QWEN35) {
+            gguf_context_ptr gguf_ctx=get_gguf_ctx(arch,false,true);
+            auto model_and_ctx=get_model_and_ctx(gguf_ctx.get(),nullptr,seed,{});
+            const std::string path=dir+"/qwen35-multi-recurrent.gguf";
+            llama_model_save_to_file(model_and_ctx.first.get(),path.c_str());
         }
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);

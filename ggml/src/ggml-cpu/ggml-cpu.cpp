@@ -1,5 +1,6 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend-execution.h"
 #include "ggml-cpu.h"
 #include "repack.h"
 #include "traits.h"
@@ -169,6 +170,35 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
 
 static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
+
+    bool managed=false;
+    for (int i=0;ggml_backend_execution_buffers_present() && i<cgraph->n_nodes;++i) {
+        ggml_backend_buffer_t owner=nullptr;
+        if (!ggml_backend_execution_owner(cgraph->nodes[i],owner)) return GGML_STATUS_FAILED;
+        if (owner && !ggml_backend_execution_supports(owner,ggml_backend_get_device(backend),cgraph->nodes[i])) {
+            return GGML_STATUS_FAILED;
+        }
+        managed |= owner != nullptr;
+    }
+    if (managed) {
+        int first=0;
+        for (int i=0;i<=cgraph->n_nodes;++i) {
+            ggml_backend_buffer_t owner=nullptr;
+            if (i<cgraph->n_nodes && !ggml_backend_execution_owner(cgraph->nodes[i],owner)) return GGML_STATUS_FAILED;
+            if (!owner && i<cgraph->n_nodes) continue;
+            if (i>first) {
+                auto ordinary=ggml_graph_view(cgraph,first,i);
+                const auto status=ggml_backend_cpu_graph_compute(backend,&ordinary);
+                if (status != GGML_STATUS_SUCCESS) return status;
+            }
+            if (owner) {
+                const auto status=ggml_backend_execution_compute(owner,backend,cgraph->nodes[i]);
+                if (status != GGML_STATUS_SUCCESS) return status;
+            }
+            first=i+1;
+        }
+        return GGML_STATUS_SUCCESS;
+    }
 
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
 
@@ -423,6 +453,10 @@ static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_b
 
 static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
+    ggml_backend_buffer_t owner=nullptr;
+    if (!ggml_backend_execution_owner(op,owner)) return false;
+    if (owner) return ggml_backend_execution_supports(owner,dev,op);
+
     const struct ggml_tensor * src1 = op->src[1];
 
     if (op->op == GGML_OP_NONE || op->op == GGML_OP_RESHAPE || op->op == GGML_OP_VIEW || op->op == GGML_OP_PERMUTE || op->op == GGML_OP_TRANSPOSE) {
@@ -487,7 +521,8 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
 }
 
 static bool ggml_backend_cpu_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return ggml_backend_buft_is_host(buft) || ggml_backend_cpu_is_extra_buffer_type(buft);
+    return (ggml_backend_buft_is_execution(buft) && buft->device == dev) ||
+        ggml_backend_buft_is_host(buft) || ggml_backend_cpu_is_extra_buffer_type(buft);
     GGML_UNUSED(dev);
 }
 
