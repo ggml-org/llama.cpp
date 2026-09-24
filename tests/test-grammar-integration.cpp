@@ -41,15 +41,21 @@ struct token_and_piece {
     std::string piece;
 };
 
-// token() encodes a 32-bit ID as 5 bytes: a 0xff marker followed by the ID in big-endian order.
-static std::string token(llama_token id) {
+// token_piece() encodes a token and its piece as a 0xff marker, the ID in big-endian order, the piece length, and the piece.
+static std::string token_piece(llama_token id, const std::string & piece) {
     return std::string{
         static_cast<char>(0xff),
         static_cast<char>((id >> 24) & 0xff),
         static_cast<char>((id >> 16) & 0xff),
         static_cast<char>((id >> 8) & 0xff),
-        static_cast<char>(id & 0xff)
-    };
+        static_cast<char>(id & 0xff),
+        static_cast<char>(piece.size())
+    } + piece;
+}
+
+// token() encodes a token whose piece is its <[id]> spelling.
+static std::string token(llama_token id) {
+    return token_piece(id, "<[" + std::to_string(id) + "]>");
 }
 
 // parse_tokens() parses the token encodes above and UTF-8 text.
@@ -60,7 +66,7 @@ static std::vector<token_and_piece> parse_tokens(const std::string & input) {
     while (offset < input.size()) {
         try {
             if (static_cast<unsigned char>(input[offset]) == 0xff) {
-                if (offset + 5 > input.size()) {
+                if (offset + 6 > input.size()) {
                     throw std::runtime_error("not enough bytes for token id");
                 }
                 uint32_t val =
@@ -68,9 +74,12 @@ static std::vector<token_and_piece> parse_tokens(const std::string & input) {
                     (static_cast<unsigned char>(input[offset + 2]) << 16) |
                     (static_cast<unsigned char>(input[offset + 3]) << 8)  |
                     (static_cast<unsigned char>(input[offset + 4]));
-                auto piece = "<[" + std::to_string(val) + "]>";
-                result.push_back({static_cast<llama_token>(val), piece});
-                offset += 5;
+                size_t len = static_cast<unsigned char>(input[offset + 5]);
+                if (offset + 6 + len > input.size()) {
+                    throw std::runtime_error("not enough bytes for token piece");
+                }
+                result.push_back({static_cast<llama_token>(val), input.substr(offset + 6, len)});
+                offset += 6 + len;
             } else {
                 uint32_t cpt = unicode_cpt_from_utf8(input, offset);
                 result.push_back({0, unicode_cpt_to_utf8(cpt)});
@@ -84,20 +93,41 @@ static std::vector<token_and_piece> parse_tokens(const std::string & input) {
     return result;
 }
 
+// Whether the sampler's mask lets the token through, it is masked only when every stack rejects it
+static bool mask_allows(llama_grammar * grammar, const token_and_piece & in) {
+    const auto decoded = llama_grammar_decode_utf8(in.piece, grammar->partial_utf8);
+
+    llama_grammar_candidates rejects = { { 0, decoded.first.data(), decoded.second, in.token } };
+    for (const auto & stack : llama_grammar_get_stacks(grammar)) {
+        rejects = llama_grammar_reject_candidates_for_stack(llama_grammar_get_rules(grammar), stack, rejects);
+    }
+    return rejects.empty();
+}
+
 static bool match_string(const std::string & input, llama_grammar * grammar) {
     const auto parsed = parse_tokens(input);
 
     auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
     for (const auto & in : parsed) {
+        const bool allowed = mask_allows(grammar, in);
+
+        bool accepted = true;
         try {
             llama_grammar_accept_token(*grammar, in.token, in.piece);
         } catch (const std::runtime_error & /*e*/) {
-            // normally this shouldn't get hit because of llama_grammar_apply
-            return false;
+            accepted = false;
         }
+        accepted = accepted && !stacks_cur.empty();
 
-        if (stacks_cur.empty()) {
+        // the mask decides what can be sampled, so it has to agree with what accepting the token does
+        if (allowed != accepted) {
+            fprintf(stderr, "❌ (token %d \"%s\" is %s by the mask but %s)\n", in.token, in.piece.c_str(),
+                    allowed ? "allowed" : "masked", accepted ? "accepted" : "not accepted");
+        }
+        assert(allowed == accepted);
+
+        if (!accepted) {
             // no stacks means that the grammar failed to match at this point
             return false;
         }
@@ -121,6 +151,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
 
     // Save the original grammar stacks so that we can reset after every new string we want to test
     const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar); // copy
+    const llama_partial_utf8   partial_org = grammar->partial_utf8;
 
     llama_grammar_stacks & stacks_cur = llama_grammar_get_stacks(grammar);
 
@@ -160,6 +191,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
 
         // Reset the grammar stacks
         stacks_cur = stacks_org;
+        grammar->partial_utf8 = partial_org;
     }
 
     fprintf(stderr, "  🟠 Invalid strings:\n");
@@ -180,6 +212,7 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
 
         // Reset the grammar stacks
         stacks_cur = stacks_org;
+        grammar->partial_utf8 = partial_org;
     }
 
     // Clean up allocated memory
@@ -505,6 +538,61 @@ static void test_simple_grammar() {
             "missing start token" + token(11),
             token(10) + token(11) + token(11),  // double end token
             token(11) + "wrong order" + token(10),
+        }
+    );
+}
+
+static void test_token_rule_utf8() {
+    // A byte-level token can hold part of a multibyte character, a token rule still takes it as a whole token
+    test_grammar(
+        "byte-split characters under token rules",
+        R"""(
+            root ::= <[10]> content <[11]>
+            content ::= (!<[11]>)*)""",
+        // Passing strings
+        {
+            token(10) + token_piece(20, "\xF0") + token_piece(21, "\x9F\xA6\x99") + token(11),
+            token(10) + token_piece(22, "\xE2") + token_piece(23, "\x98\x80") + token(11),
+            token(10) + token_piece(24, "a\xF0") + token_piece(21, "\x9F\xA6\x99") + token(11),
+        },
+        // Failing strings
+        {
+            token(10) + token_piece(20, "\xF0"),
+        }
+    );
+
+    // A token rule can only start where a token starts, not after char rules consumed part of it
+    test_grammar(
+        "token rule after a char rule",
+        R"""(
+            root ::= "a" <[11]>)""",
+        // Passing strings
+        {
+            "a" + token(11),
+            token_piece(12, "a") + token(11),
+        },
+        // Failing strings
+        {
+            token_piece(11, "ab"),
+            token_piece(12, "ab") + token(11),
+        }
+    );
+
+    // A token partly matched by a char rule stays partly matched for every alternative, whichever is checked first
+    test_grammar(
+        "token rule alternative after a char rule",
+        R"""(
+            root ::= "a" (!<[7]> | "bx"))""",
+        // Passing strings
+        {
+            "abx",
+            token_piece(12, "abx"),
+            "a" + token(5),
+        },
+        // Failing strings
+        {
+            token_piece(5, "aby"),
+            token_piece(5, "ab"),
         }
     );
 }
@@ -1482,6 +1570,7 @@ int main() {
     fprintf(stdout, "Running grammar integration tests...\n");
     test_simple_grammar();
     test_complex_grammar();
+    test_token_rule_utf8();
     test_special_chars();
     test_quantifiers();
     test_failure_missing_root();

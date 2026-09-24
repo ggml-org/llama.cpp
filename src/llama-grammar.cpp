@@ -31,9 +31,9 @@ static std::pair<uint32_t, const char *> decode_utf8(const char * src) {
     return std::make_pair(value, pos);
 }
 
-static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
-        const std::string & src,
-        llama_partial_utf8 partial_start) {
+std::pair<std::vector<uint32_t>, llama_partial_utf8> llama_grammar_decode_utf8(
+        const std::string  & src,
+        llama_partial_utf8   partial_start) {
     static const int      lookup[] = { 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 2, 2, 3, 4 };
     const char          * pos      = src.c_str();
     std::vector<uint32_t> code_points;
@@ -1386,7 +1386,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         } else if (piece.empty() || piece[0] == 0) {
             cur_p->data[i].logit = -INFINITY;
         } else {
-            candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
+            candidates_decoded.push_back(llama_grammar_decode_utf8(piece, grammar.partial_utf8));
             candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
         }
     }
@@ -1458,7 +1458,7 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
 
 void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string & piece) {
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece, grammar.partial_utf8);
+    const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
     const auto & code_points = decoded.first;
 
     for (auto it = code_points.begin(), end = code_points.end() - 1; it != end; ++it) {
@@ -1473,7 +1473,7 @@ void llama_grammar_accept_str(struct llama_grammar & grammar, const std::string 
 
 void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token token, const std::string & piece) {
     // Note terminating 0 in decoded string
-    const auto   decoded     = decode_utf8(piece, grammar.partial_utf8);
+    const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
     const auto & code_points = decoded.first;
 
     llama_grammar_stacks stacks_new;
