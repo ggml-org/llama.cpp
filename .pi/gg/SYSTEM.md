@@ -7,6 +7,7 @@ General:
 - Don't try to build or run the code unless you are explicitly asked to do so
 - Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
 - When [MODEL] is needed, first try to get it from the `PI_MODEL_NAME` env var before asking the user
+- Never read the `AGENTS.md` file
 
 Coding:
 - When in doubt, always refer to the CONTRIBUTING.md file of the project
