@@ -6,6 +6,7 @@
 #include "ggml-backend-impl.h"
 
 #include <vector>
+#include <cstdlib>
 
 // must stay in sync with the kernel_fwht_<type>_<N> templates in misc.metal
 static bool ggml_metal_fwht_supported_size(int64_t n) {
@@ -39,6 +40,18 @@ bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_sim
     const int64_t ne21 = op->src[2]->ne[1];
 
     return has_simdgroup_mm && ne00 >= 64 && ne21 >= 32;
+}
+
+bool ggml_metal_op_mul_mat_use_mm_i8(const struct ggml_tensor * op, bool has_simdgroup_mm, bool has_tensor) {
+    static const bool i8_disabled = getenv("GGML_METAL_MUL_MM_I8_DISABLE") != NULL;
+
+    return !i8_disabled &&
+           has_tensor &&
+           ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm) &&
+           op->type == GGML_TYPE_F32 &&
+           op->src[0]->type == GGML_TYPE_Q8_0 &&
+           op->src[0]->ne[0] % 32 == 0 &&
+           (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
 }
 
 // represents a memory range (i.e. an interval from a starting address p0 to an ending address p1 in a given buffer pb)

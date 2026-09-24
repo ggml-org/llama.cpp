@@ -31,6 +31,9 @@ int ggml_metal_op_encode(ggml_metal_op_t ctx, int idx);
 // available ops:
 //
 
+// int8 mul_mat scratch: planar q8_1 of src1 (payload + {d, s} plane)
+size_t ggml_metal_op_mul_mat_extra_q8_1(const struct ggml_tensor * op);
+
 // tokens per expert
 size_t ggml_metal_op_mul_mat_id_extra_tpe(const struct ggml_tensor * op);
 

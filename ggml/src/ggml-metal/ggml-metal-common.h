@@ -52,6 +52,9 @@ bool ggml_metal_op_mul_mat_use_fwht (const struct ggml_tensor * op);
 bool ggml_metal_op_mul_mat_use_mm   (const struct ggml_tensor * op, bool has_simdgroup_mm);
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm);
 
+// int8 matmul path: q8_0 src0 x src1 pre-quantized to planar q8_1 (requires the tensor API)
+bool ggml_metal_op_mul_mat_use_mm_i8(const struct ggml_tensor * op, bool has_simdgroup_mm, bool has_tensor);
+
 #ifdef __cplusplus
 }
 #endif

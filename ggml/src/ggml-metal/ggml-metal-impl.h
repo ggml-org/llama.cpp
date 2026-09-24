@@ -16,6 +16,15 @@
 
 #define N_MM_NPART_AMAX 256
 
+// kernel parameters for the int8 mat-mat path (tensor API)
+//
+// N_MM_I8_NRB x N_MM_I8_NRA: output tile per threadgroup
+// N_MM_I8_NK:                K per matmul call, must match the q8_0/q8_1 block size
+
+#define N_MM_I8_NRB 64
+#define N_MM_I8_NRA 64
+#define N_MM_I8_NK  32
+
 // kernel parameters for mat-vec threadgroups
 //
 // N_R0: number of src0 rows to process per simdgroup
@@ -506,6 +515,16 @@ typedef struct {
     int16_t  r2;
     int16_t  r3;
 } ggml_metal_kargs_mul_mm;
+
+typedef struct {
+    int32_t  ne10; // K
+    int32_t  ne11;
+    int32_t  ne12;
+    int32_t  ne13;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+} ggml_metal_kargs_quantize_q8_1;
 
 typedef struct {
     int32_t  ne00;

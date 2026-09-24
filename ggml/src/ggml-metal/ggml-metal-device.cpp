@@ -1,5 +1,6 @@
 #include "ggml-metal-device.h"
 
+#include "ggml-metal-common.h"
 #include "ggml-metal-impl.h"
 #include "ggml-metal-tuning.h"
 
@@ -803,7 +804,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
     constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
 
-    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+    const ggml_metal_device_props * props = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
+
+    const bool has_tensor = props->has_tensor;
+
+    const bool use_i8 = ggml_metal_op_mul_mat_use_mm_i8(op, props->has_simdgroup_mm, has_tensor);
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
@@ -814,6 +819,31 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t ne13 = (int16_t) op->src[1]->ne[3];
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
+
+    if (use_i8) {
+        snprintf(base, 256, "kernel_mul_mm_q8_0_q8_1");
+        snprintf(name, 256, "%s_ne12=%d_r2=%d_r3=%d", base, ne12, r2, r3);
+
+        ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+        if (!res.pipeline) {
+            ggml_metal_cv_t cv = ggml_metal_cv_init();
+
+            ggml_metal_cv_set_int16(cv, ne12, FC_MUL_MM + 2);
+            ggml_metal_cv_set_int16(cv, r2,   FC_MUL_MM + 4);
+            ggml_metal_cv_set_int16(cv, r3,   FC_MUL_MM + 5);
+
+            res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+            ggml_metal_cv_free(cv);
+        }
+
+        res.nr0 = N_MM_I8_NRA;
+        res.nr1 = N_MM_I8_NRB;
+        res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
+        res.smem = N_MM_I8_NRA*N_MM_I8_NK*sizeof(int8_t) + N_MM_I8_NRA*sizeof(ggml_fp16_t);
+
+        return res;
+    }
 
     snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
     snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
@@ -849,6 +879,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     }
 
     res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_quantize_q8_1(ggml_metal_library_t lib, ggml_type tsrc1) {
+    char name[256];
+
+    snprintf(name, 256, "kernel_quantize_q8_1_%s", ggml_type_name(tsrc1));
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
 
     return res;
 }

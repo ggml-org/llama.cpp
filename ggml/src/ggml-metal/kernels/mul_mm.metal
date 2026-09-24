@@ -360,6 +360,172 @@ kernel void kernel_mul_mm(
 
 #endif // GGML_METAL_HAS_TENSOR
 
+#ifdef GGML_METAL_HAS_TENSOR
+
+// quantize src1 into a planar q8_1 scratch: [nrows][K] int8 payload + [nrows][K/32] half2 {d, s} plane
+// ref: https://github.com/ggml-org/llama.cpp/pull/27952
+template<typename T1>
+kernel void kernel_quantize_q8_1(
+        constant ggml_metal_kargs_quantize_q8_1 & args,
+        device const char * src1,
+        device       char * qx,
+        uint tpitg [[thread_position_in_grid]]) {
+    const int K       = args.ne10;
+    const int nrows   = args.ne11*args.ne12*args.ne13;
+    const int64_t nblocks = (int64_t)nrows*(K/QK8_1);
+
+    if (tpitg >= nblocks) {
+        return;
+    }
+
+    const int row = tpitg/(K/QK8_1);
+    const int kb  = tpitg%(K/QK8_1);
+
+    const int i11 =  row%args.ne11;
+    const int i12 = (row/args.ne11)%args.ne12;
+    const int i13 =  row/(args.ne11*args.ne12);
+
+    device const T1 * x = (device const T1 *)(src1 + args.nb11*i11 + args.nb12*i12 + args.nb13*i13) + QK8_1*kb;
+
+    float amax = 0.0f;
+
+    FOR_UNROLL (short i = 0; i < QK8_1; i++) {
+        amax = max(amax, fabs((float)x[i]));
+    }
+
+    const float d  = amax/127.0f;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    device int8_t * qs = (device int8_t *)qx + (uint64_t)row*K + QK8_1*kb;
+
+    int sum = 0;
+
+    FOR_UNROLL (short i = 0; i < QK8_1; i++) {
+        const int8_t q = (int8_t)round((float)x[i]*id);
+        qs[i] = q;
+        sum += q;
+    }
+
+    device half2 * ds = (device half2 *)(qx + (uint64_t)nrows*K) + tpitg;
+    ds[0] = half2((half)d, (half)(d*sum));
+}
+
+typedef decltype(kernel_quantize_q8_1<float>) quantize_q8_1_f32_t;
+typedef decltype(kernel_quantize_q8_1<half>)  quantize_q8_1_f16_t;
+
+template [[host_name("kernel_quantize_q8_1_f32")]] kernel quantize_q8_1_f32_t kernel_quantize_q8_1<float>;
+template [[host_name("kernel_quantize_q8_1_f16")]] kernel quantize_q8_1_f16_t kernel_quantize_q8_1<half>;
+
+// int8 matmul: q8_0 src0 staged as int8 + per-block scales, x planar-quantized src1
+// one matmul call per 32-element K block so the int32 partial can be scaled into the fp32 accumulator
+// ref: https://github.com/ggml-org/llama.cpp/pull/27952
+[[host_name("kernel_mul_mm_q8_0_q8_1")]]
+kernel void kernel_mul_mm_q8_0_q8_1(
+        constant ggml_metal_kargs_mul_mm & args [[buffer(0)]],
+        device const char * src0 [[buffer(1)]],
+        device       char * dst  [[buffer(3)]],
+        device const char * qx   [[buffer(4)]],
+        device const char * qds  [[buffer(5)]],
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig [[threadgroup_position_in_grid]],
+        ushort tiitg [[thread_index_in_threadgroup]]) {
+    const int K = args.ne00;
+    const int M = args.ne0;
+    const int N = args.ne1;
+
+    const int im = tgpig.z;
+    const int i12 = im % FC_mul_mm_ne12;
+    const int i13 = im / FC_mul_mm_ne12;
+
+    constexpr int NRA = N_MM_I8_NRA;
+    constexpr int NRB = N_MM_I8_NRB;
+    constexpr int NK  = N_MM_I8_NK;
+
+    const int ra = tgpig.y*NRA;
+    const int rb = tgpig.x*NRB;
+
+    const uint64_t offset0 = (i12/FC_mul_mm_r2)*args.nb02 + (i13/FC_mul_mm_r3)*args.nb03;
+
+    // planar q8_1 of src1 for this batch
+    const uint64_t row_base = (uint64_t)(i12 + i13*args.ne12)*N;
+
+    device int8_t * ptrB = (device int8_t *)(qx + row_base*K);
+    device const half2 * dsB = (device const half2 *)qds + row_base*(K/NK);
+
+    // threadgroup: int8 A tile + per-row scales
+    threadgroup int8_t * sa  = (threadgroup int8_t *)shmem;
+    threadgroup half   * sad = (threadgroup half *)(sa + NRA*NK);
+
+    auto tA = tensor(sa, dextents<int32_t, 2>(NK, NRA), array<int, 2>({1, NK}));
+    auto tB = tensor(ptrB, dextents<int32_t, 2>(K, N), array<int, 2>({1, (int)K}));
+
+    mpp::tensor_ops::matmul2d<
+        mpp::tensor_ops::matmul2d_descriptor(NRB, NRA, NK, false, true, false,
+            mpp::tensor_ops::matmul2d_descriptor::mode::multiply),
+        execution_simdgroups<N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y>> mm;
+
+    auto cP = mm.get_destination_cooperative_tensor<decltype(tB), decltype(tA), int32_t>();
+    auto cF = mm.get_destination_cooperative_tensor<decltype(tB), decltype(tA), float>();
+
+    FOR_UNROLL (uint16_t i = 0; i < cF.get_capacity(); ++i) {
+        if (cF.is_valid_element(i)) {
+            cF[i] = 0.0f;
+        }
+    }
+
+    for (int loop_k = 0; loop_k < K; loop_k += NK) {
+        // stage one q8_0 block-row of A
+        for (int row = tiitg; row < NRA; row += N_SIMDWIDTH*N_MM_SIMD_GROUP_X*N_MM_SIMD_GROUP_Y) {
+            const int m = ra + row;
+
+            if (m < M) {
+                device const block_q8_0 * x = (device const block_q8_0 *)(src0 + args.nb01*m + offset0) + loop_k/QK8_0;
+
+                sad[row] = x->d;
+
+                FOR_UNROLL (short i = 0; i < QK8_0; i++) {
+                    sa[row*NK + i] = x->qs[i];
+                }
+            } else {
+                sad[row] = (half)0.0f;
+
+                FOR_UNROLL (short i = 0; i < QK8_0; i++) {
+                    sa[row*NK + i] = 0;
+                }
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        auto tBv = tensor(ptrB + loop_k + (uint64_t)rb*K, dextents<int32_t, 2>(NK, N - rb), array<int, 2>({1, (int)K}));
+
+        mm.run(tBv, tA, cP);
+
+        // dst[m][n] += float(partial) * dA[m] * dB[n]
+        FOR_UNROLL (uint16_t i = 0; i < cP.get_capacity(); ++i) {
+            if (cP.is_valid_element(i)) {
+                const auto c = cP.get_multidimensional_index(i);
+
+                const int lm = (int)c[0];
+                const int ln = clamp(rb + (int)c[1], 0, N - 1);
+
+                const half2 dsn = dsB[(uint64_t)ln*(K/NK) + loop_k/NK];
+
+                cF[i] = fma((float)cP[i], (float)sad[lm]*(float)dsn.x, cF[i]);
+            }
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    device float * dstBatch = (device float *)dst + (uint64_t)im*N*M;
+
+    auto tD = tensor(dstBatch, dextents<int32_t, 2>(M, N), array<int, 2>({1, M}));
+    cF.store(tD.slice(ra, rb));
+}
+
+#endif // GGML_METAL_HAS_TENSOR
+
 template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,

@@ -2413,6 +2413,20 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+size_t ggml_metal_op_mul_mat_extra_q8_1(const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_MUL_MAT);
+
+    // note: device tensor-API support is unknown at alloc time - allocate whenever the type/shape match
+    if (!ggml_metal_op_mul_mat_use_mm_i8(op, true, true)) {
+        return 0;
+    }
+
+    const int64_t K     = op->src[1]->ne[0];
+    const int64_t nrows = op->src[1]->ne[1]*op->src[1]->ne[2]*op->src[1]->ne[3];
+
+    return nrows*K*sizeof(int8_t) + nrows*(K/32)*sizeof(uint32_t);
+}
+
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2544,6 +2558,41 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     } else if (ggml_metal_op_mul_mat_use_mm(op, props_dev->has_simdgroup_mm)) {
         //GGML_LOG_INFO("matrix: ne00 = %6d, ne01 = %6d, ne02 = %6d, ne11 = %6d, ne12 = %6d\n", ne00, ne01, ne02, ne11, ne12);
 
+        const bool use_i8 = ggml_metal_op_mul_mat_use_mm_i8(op, props_dev->has_simdgroup_mm, props_dev->has_tensor);
+
+        if (use_i8) {
+            ggml_metal_kargs_quantize_q8_1 qargs = {
+                /*.ne10 =*/ ne10,
+                /*.ne11 =*/ ne11,
+                /*.ne12 =*/ ne12,
+                /*.ne13 =*/ ne13,
+                /*.nb11 =*/ nb11,
+                /*.nb12 =*/ nb12,
+                /*.nb13 =*/ nb13,
+            };
+
+            auto pipeline_q = ggml_metal_library_get_pipeline_quantize_q8_1(lib, op->src[1]->type);
+
+            GGML_ASSERT(nb10 == ggml_type_size(op->src[1]->type));
+            GGML_ASSERT(256 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline_q));
+
+            ggml_metal_buffer_id bid_payload = ggml_metal_get_buffer_id(op);
+            bid_payload.offs += ggml_nbytes(op);
+
+            const int64_t nrows   = ne11*ne12*ne13;
+            const int64_t nblocks = nrows*(ne10/32);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline_q);
+            ggml_metal_encoder_set_bytes   (enc, &qargs, sizeof(qargs), 0);
+            ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_payload, 2);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, (int)((nblocks + 255)/256), 1, 1, 256, 1, 1);
+
+            // the matmul has to wait for the quantized src1
+            ggml_metal_op_concurrency_reset(ctx);
+        }
+
         // some Metal matrix data types require aligned pointers
         // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf (Table 2.5)
         //switch (op->src[0]->type) {
@@ -2577,6 +2626,17 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+        if (use_i8) {
+            ggml_metal_buffer_id bid_payload = ggml_metal_get_buffer_id(op);
+            bid_payload.offs += ggml_nbytes(op);
+
+            ggml_metal_buffer_id bid_dscales = bid_payload;
+            bid_dscales.offs += (size_t)ne11*ne12*ne13*ne10*sizeof(int8_t);
+
+            ggml_metal_encoder_set_buffer(enc, bid_payload,  4);
+            ggml_metal_encoder_set_buffer(enc, bid_dscales,  5);
+        }
 
         const size_t smem = pipeline.smem;
 
