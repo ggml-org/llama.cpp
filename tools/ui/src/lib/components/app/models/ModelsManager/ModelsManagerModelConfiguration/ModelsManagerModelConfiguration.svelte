@@ -60,6 +60,7 @@
 		{onToggleLoad}
 		{onUseInNewChat}
 		{option}
+		{status}
 	/>
 
 	<Tabs.Root class="mt-3 min-h-0 flex-1 gap-0" onValueChange={(value) => (tab = value)} value={tab}>
