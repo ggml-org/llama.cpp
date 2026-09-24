@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { ModelsTableGroup } from './utils';
-	import { formatLastUsed, type ModelQuantGroup } from './utils';
+	import type { ModelQuantGroup } from './utils';
 	import {
 		Boxes,
 		ChevronDown,
@@ -164,7 +164,7 @@
 			}
 		];
 	}
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_7rem_5rem_3rem_4.5rem] items-center gap-6';
+	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_7rem_3rem_4.5rem] items-center gap-6';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -241,10 +241,6 @@
 
 		<ModelContext class="justify-self-end" {option} />
 
-		<span class="justify-self-end text-sm text-muted-foreground">
-			{formatLastUsed(modelsStore.recentModelUsage[option.id])}
-		</span>
-
 		{@render statusDot(option)}
 
 		<div class="flex items-center justify-center justify-self-center">
@@ -305,8 +301,6 @@
 
 			<span></span>
 
-			<span></span>
-
 			<span class="justify-self-center">
 				<span
 					class="block h-2.5 w-2.5 rounded-full {anyLoaded
@@ -354,10 +348,6 @@
 			</span>
 
 			<ModelContext class="justify-self-end" {option} />
-
-			<span class="justify-self-end text-sm text-muted-foreground">
-				{formatLastUsed(modelsStore.recentModelUsage[option.id])}
-			</span>
 
 			{@render statusDot(option)}
 
@@ -453,8 +443,6 @@
 
 			<span></span>
 
-			<span></span>
-
 			<span class="flex justify-center">
 				{#if expanded}
 					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
@@ -522,8 +510,6 @@
 		<span>Model</span>
 
 		<span class="text-right">Context</span>
-
-		<span class="text-right">Last used</span>
 
 		<span class="text-center">Status</span>
 
