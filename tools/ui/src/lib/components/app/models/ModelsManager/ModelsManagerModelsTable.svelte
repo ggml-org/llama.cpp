@@ -630,12 +630,12 @@
 />
 
 <div class="flex h-full min-h-0 flex-col">
-	<div class="flex shrink-0 items-center gap-2 py-4">
+	<div class="flex shrink-0 items-center gap-2 pb-4">
 		<SearchInput
 			bind:ref={filterInput}
 			bind:value={filter}
 			class="max-w-64"
-			placeholder="Filter models..."
+			placeholder="Search your models"
 			size="sm"
 		/>
 

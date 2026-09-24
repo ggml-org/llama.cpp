@@ -2,7 +2,6 @@
 	import { Plus } from '@lucide/svelte';
 	import { BackendCard, DialogBackendForm } from '$lib/components/app/backends';
 	import { Button } from '$lib/components/ui/button';
-	import * as Empty from '$lib/components/ui/empty';
 	import { backendsModelsStore, backendsStore, serverStore } from '$lib/stores';
 	import type { Backend, BackendProtocol } from '$lib/types';
 	import { fade } from 'svelte/transition';
@@ -26,15 +25,15 @@
 		protocol === 'openai'
 			? 'Add a backend'
 			: protocol === 'llama.cpp'
-				? 'Add a llama.cpp backend'
-				: 'Add a provider'
+				? 'Add a Llama-compatible backend'
+				: 'Add new provider'
 	);
 	let addDescription = $derived(
 		protocol === 'openai'
 			? 'Connect an OpenAI-compatible endpoint.'
 			: protocol === 'llama.cpp'
 				? 'Point at another llama-server.'
-				: 'Point at a llama-server or connect an OpenAI-compatible endpoint.'
+				: 'External llama-server or connect an OpenAI-compatible API.'
 	);
 
 	let isAdding = $state(false);
@@ -62,7 +61,7 @@
 <div
 	in:fade={{ duration: 150 }}
 	class={['grid gap-4', className]}
-	style="grid-auto-rows: 1fr; grid-template-columns: repeat(auto-fill, minmax(min(25rem, calc(100dvw - 4rem)), 1fr));"
+	style="grid-template-columns: repeat(auto-fill, minmax(min(25rem, calc(100dvw - 4rem)), 1fr));"
 >
 	<DialogBackendForm
 		bind:open={isAdding}
@@ -95,23 +94,15 @@
 		/>
 	{/each}
 
-	<Empty.Root class="border">
-		<Empty.Header>
-			<Empty.Media variant="icon">
-				<Plus />
-			</Empty.Media>
+	<div
+		class="flex w-full flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-4"
+	>
+		<Button onclick={handleAdd} size="sm">
+			<Plus />
 
-			<Empty.Title>{addTitle}</Empty.Title>
+			{addTitle}
+		</Button>
 
-			<Empty.Description>{addDescription}</Empty.Description>
-		</Empty.Header>
-
-		<Empty.Content>
-			<Button onclick={handleAdd} size="sm">
-				<Plus />
-
-				Add Backend
-			</Button>
-		</Empty.Content>
-	</Empty.Root>
+		<p class="text-xs text-muted-foreground">{addDescription}</p>
+	</div>
 </div>

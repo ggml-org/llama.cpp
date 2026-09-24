@@ -8,7 +8,7 @@
 
 	const PROTOCOL_OPTIONS: Array<{ label: string; value: BackendProtocol }> = [
 		{ label: 'OpenAI-compatible', value: 'openai' },
-		{ label: 'llama.cpp (llama-server)', value: 'llama.cpp' }
+		{ label: 'Llama-compatible (llama-server)', value: 'llama.cpp' }
 	];
 
 	interface Props {

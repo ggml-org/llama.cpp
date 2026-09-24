@@ -23,7 +23,7 @@
 	}: Props = $props();
 </script>
 
-<ul class="space-y-0.5 p-2">
+<ul class="space-y-0.5">
 	{#if loading}
 		{#each Array(loadingSkeletonRowsCount) as _, index (index)}
 			<ModelsDiscoverListItemSkeleton {index} />

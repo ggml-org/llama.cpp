@@ -95,7 +95,7 @@
 </script>
 
 <aside
-	class="w-md shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1"
+	class="w-md shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:pr-4 h-full space-y-4"
 >
 	<ModelsDiscoverListSearch bind:value={searchQuery} onSearch={handleSearchInput} />
 

@@ -170,7 +170,7 @@
 				<ToggleGroup.Root bind:value={protocolPick} type="single" variant="outline">
 					{#each BACKEND_PROTOCOLS as option (option)}
 						<ToggleGroup.Item value={option}>
-							{option === 'llama.cpp' ? 'llama.cpp' : 'OpenAI-compatible'}
+							{option === 'llama.cpp' ? 'Llama-compatible' : 'OpenAI-compatible'}
 						</ToggleGroup.Item>
 					{/each}
 				</ToggleGroup.Root>

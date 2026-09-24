@@ -8,7 +8,11 @@
 		placeholder?: string;
 	}
 
-	let { onSearch, placeholder = 'Search models...', value = $bindable('') }: Props = $props();
+	let {
+		onSearch,
+		placeholder = 'Search models on Hugging Face',
+		value = $bindable('')
+	}: Props = $props();
 
 	function handleInput(next: string) {
 		value = next;
@@ -17,6 +21,6 @@
 	}
 </script>
 
-<div class="sticky top-0 z-99 p-2">
-	<SearchInput bind:value onInput={(v) => handleInput(v)} {placeholder} />
+<div class="sticky top-0 z-99">
+	<SearchInput bind:value onInput={(v) => handleInput(v)} {placeholder} size="sm" />
 </div>

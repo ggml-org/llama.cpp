@@ -77,7 +77,7 @@
 		<p class="text-sm text-destructive">{error}</p>
 	</div>
 {:else if details}
-	<div class="space-y-6 p-6">
+	<div class="space-y-6 p-6 pr-0">
 		<ModelsDiscoverDetailsHeader
 			{baseModels}
 			{details}
