@@ -1248,23 +1248,24 @@ kernel void kernel_flash_attn_ext_vec(
     constexpr short NL  = NW/NE; // note: this can be adjusted to support different head sizes and simdgroup work loads
     constexpr short SH  = 4*Q*C; // shared memory per simdgroup
 
+    const int SMEM_Q = Q*NSG*PK;
+    const int SMEM_S = NSG*SH;
+    const int SMEM_O = 2*NSG*Q*PV;
+    const int SMEM   = SMEM_Q + SMEM_S + SMEM_O;
+
     static_assert(DK4 % NL == 0, "DK4 must be divisible by NL");
     static_assert(DV4 % NL == 0, "DV4 must be divisible by NL");
 
-  //const short T = PK + NSG*SH; // shared memory size per query in (half)
-
-  //threadgroup q_t   * sq  = (threadgroup q_t   *) (shmem_f16 +                          0*PK); // holds the query data
-    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) (shmem_f16 +                          0*PK); // same as above but in q4_t
-    threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 +   sgitg*SH         + Q*NSG*PK); // scratch buffer for attention
-    threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 +   sgitg*SH         + Q*NSG*PK); // same as above but in s4_t
-    threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 +   sgitg*SH + 2*Q*C + Q*NSG*PK); // scratch buffer for mask
-    threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + 2*sgitg*Q*PV       + Q*NSG*PK + NSG*SH); // scratch buffer for the results
+    threadgroup q4_t  * sq4 = (threadgroup q4_t  *) shmem_f16; // holds the query data
+    threadgroup s_t   * ss  = (threadgroup s_t   *) (shmem_f16 + SMEM_Q + sgitg*SH); // scratch buffer for attention
+    threadgroup s4_t  * ss4 = (threadgroup s4_t  *) (shmem_f16 + SMEM_Q + sgitg*SH); // same as above but in s4_t
+    threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 + SMEM_Q + sgitg*SH + 2*Q*C); // scratch buffer for mask
+    threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + SMEM_Q + SMEM_S + 2*sgitg*Q*PV); // scratch buffer for the results
 
     // sparse indices for the current block
-    threadgroup int * spidx = nullptr;
-    if (FC_flash_attn_ext_vec_has_sparse) {
-        spidx = (threadgroup int *) ((threadgroup char *) shmem_f16 + (Q*NSG*PK + NSG*SH + 2*NSG*Q*PV)*sizeof(half) + sgitg*C*sizeof(int));
-    }
+    threadgroup int * spidx = FC_flash_attn_ext_vec_has_sparse
+        ? (threadgroup int *) (shmem_f16 + SMEM) + sgitg*C
+        : nullptr;
 
     // store the result for all queries in shared memory (the O matrix from the paper)
     so4 += tiisg;
