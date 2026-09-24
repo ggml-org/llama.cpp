@@ -391,67 +391,71 @@
 	{@const countLabel = `${family.entries.length} model${family.entries.length === 1 ? '' : 's'}`}
 	{@const favorite = modelsStore.isFavoriteFamily(key)}
 
-	<div class="px-2">
-		<div
-			class="{rowGrid} group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
-			onclick={toggle}
-			onkeydown={(event) => event.key === 'Enter' && toggle()}
-			role="button"
-			tabindex="0"
-		>
-			<span class="flex min-w-0 items-center gap-3">
-				<ModelAvatar
-					option={family.entries[0].base}
-					showBaseModelAvatar
-					showQuantBadge={false}
-					size="size-7"
-				/>
+	<!-- <div class="px-2"> -->
+	<div
+		class="{rowGrid} group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
+		onclick={toggle}
+		onkeydown={(event) => event.key === 'Enter' && toggle()}
+		role="button"
+		tabindex="0"
+	>
+		<span class="flex min-w-0 items-center gap-3">
+			<ModelAvatar
+				option={family.entries[0].base}
+				showBaseModelAvatar
+				showQuantBadge={false}
+				size="size-7"
+			/>
 
-				<span class="truncate text-sm font-medium">{family.label}</span>
+			<span class="truncate text-sm font-medium">{family.label}</span>
 
-				<span class="text-sm text-muted-foreground">{countLabel}</span>
+			<span class="text-sm text-muted-foreground">{countLabel}</span>
 
-				<span
-					class="flex shrink-0"
-					onclick={(event) => event.stopPropagation()}
-					onkeydown={(event) => event.stopPropagation()}
-					role="presentation"
-				>
-					{#if favorite}
-						<ActionIcon
-							class="h-5 w-5 text-rose-500 hover:text-rose-400"
-							icon={Heart}
-							iconSize="h-4 w-4"
-							onclick={() => modelsStore.toggleFamilyFavorite(key)}
-							tooltip="Remove family from favorites"
-							tooltipAsTitle
-						/>
-					{:else}
-						<ActionIcon
-							class="h-5 w-5 opacity-0 transition group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
-							icon={Heart}
-							iconSize="h-4 w-4"
-							onclick={() => modelsStore.toggleFamilyFavorite(key)}
-							tooltip="Add family to favorites"
-							tooltipAsTitle
-						/>
-					{/if}
-				</span>
-			</span>
-
-			<span></span>
-
-			<span></span>
-
-			<span class="flex justify-center">
-				{#if expanded}
-					<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+			<span
+				class="flex shrink-0"
+				onclick={(event) => event.stopPropagation()}
+				onkeydown={(event) => event.stopPropagation()}
+				role="presentation"
+			>
+				{#if favorite}
+					<ActionIcon
+						class="h-5 w-5 text-rose-500 hover:text-rose-400"
+						icon={Heart}
+						iconSize="h-4 w-4"
+						onclick={() => modelsStore.toggleFamilyFavorite(key)}
+						tooltip="Remove family from favorites"
+						tooltipAsTitle
+					/>
 				{:else}
-					<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+					<ActionIcon
+						class="h-5 w-5 opacity-0 transition group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
+						icon={Heart}
+						iconSize="h-4 w-4"
+						onclick={() => modelsStore.toggleFamilyFavorite(key)}
+						tooltip="Add family to favorites"
+						tooltipAsTitle
+					/>
 				{/if}
 			</span>
-		</div>
+		</span>
+
+		<span></span>
+
+		<span></span>
+
+		<span
+			class="flex justify-center {expanded
+				? 'opacity-0 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100'
+				: ''}"
+		>
+			{#if expanded}
+				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+			{:else}
+				<ChevronRight class="h-3.5 w-3.5 text-muted-foreground" />
+			{/if}
+		</span>
 	</div>
+	<!-- </div> -->
 {/snippet}
 
 {#snippet listItem({ depth, entry }: { depth: number; entry: ModelQuantGroup })}
@@ -552,6 +556,7 @@
 					defaultOpen={group.kind !== 'hidden'}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					revealChevronOnHover
 					sticky
 					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
 				>
