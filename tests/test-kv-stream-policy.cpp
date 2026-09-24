@@ -49,6 +49,71 @@ static uint32_t reference_target(uint32_t pool, uint32_t layers, uint32_t active
 
 int main() {
     testing t;
+    t.test("target_and_mtp_share_seventeen_layer_budget_without_sharing_identity", [](testing & t) {
+        auto c = config(358, 17);
+        c.caches = {{101, 16}, {202, 1}};
+        llama_kv_stream_policy_state state;
+        if (!start(t, c, state)) return;
+        t.assert_equal(uint32_t(17), state.budget.layers);
+        t.assert_equal(uint32_t(20), state.resident_pages_per_layer);
+        t.assert_equal(uint32_t(18), state.ring_slots);
+        t.assert_equal(size_t(358)*425984, state.budget.conversion_offset);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c, state, 256, layout).status == status::success)) return;
+        t.assert_equal(size_t(17), layout.layers.size());
+        t.assert_equal(uint64_t(101), layout.layers[0].cache_id);
+        t.assert_equal(uint32_t(0), layout.layers[0].cache_layer);
+        t.assert_equal(uint64_t(101), layout.layers[15].cache_id);
+        t.assert_equal(uint32_t(15), layout.layers[15].cache_layer);
+        t.assert_equal(uint64_t(202), layout.layers[16].cache_id);
+        t.assert_equal(uint32_t(0), layout.layers[16].cache_layer);
+        t.assert_equal(layout.ring.bytes + size_t(17)*20*425984, layout.conversion_offset);
+
+        llama_kv_stream_policy_decision streamed;
+        if (!t.assert_true(llama_kv_stream_policy_step(c, state, observe(24), streamed).status == status::success)) return;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c, streamed.next, 24*256, layout).status == status::success)) return;
+        size_t accounted = layout.ring.bytes;
+        for (const auto & layer : layout.layers) accounted += layer.planes.bytes;
+        t.assert_equal(layout.conversion_offset, accounted);
+        t.assert_equal(uint64_t(101), layout.layers[15].cache_id);
+        t.assert_equal(uint32_t(15), layout.layers[15].cache_layer);
+        t.assert_equal(uint64_t(202), layout.layers[16].cache_id);
+        t.assert_equal(uint32_t(0), layout.layers[16].cache_layer);
+
+        auto changed = c;
+        changed.caches[1].id = 303;
+        llama_kv_stream_policy_decision decision;
+        t.assert_true(llama_kv_stream_policy_step(changed, state, observe(1), decision).status == status::invalid_state);
+        changed = c;
+        changed.caches[1].id = changed.caches[0].id;
+        t.assert_true(llama_kv_stream_policy_initialize(changed, state).status == status::invalid_config);
+        changed = c;
+        changed.caches[1].layers = 2;
+        t.assert_true(llama_kv_stream_policy_initialize(changed, state).status == status::invalid_config);
+        t.assert_equal(uint32_t(20), state.resident_pages_per_layer);
+
+        for (const auto & types : {
+                std::pair{GGML_TYPE_F16, GGML_TYPE_F16},
+                std::pair{GGML_TYPE_Q5_0, GGML_TYPE_Q4_0}}) {
+            auto alternate = c;
+            alternate.shape.type_k = types.first;
+            alternate.shape.type_v = types.second;
+            alternate.capabilities.k.type = types.first;
+            alternate.capabilities.v.type = types.second;
+            size_t minimum = 0;
+            if (!t.assert_true(llama_kv_stream_policy_minimum_pool_bytes(alternate, minimum).status == status::success)) return;
+            ggml_kv_stream_execution page;
+            if (!t.assert_true(ggml_kv_stream_resolve(alternate.shape, alternate.capabilities, 256, page).status == ggml_kv_stream_status::success)) return;
+            t.assert_equal(size_t(18)*page.storage.bytes + page.conversion.bytes, minimum);
+            alternate.pool_bytes = minimum - 1;
+            t.assert_true(llama_kv_stream_policy_initialize(alternate, state).status == status::invalid_budget);
+            alternate.pool_bytes = minimum;
+            if (!start(t, alternate, state)) return;
+            t.assert_equal(uint32_t(17), state.budget.layers);
+            t.assert_equal(uint32_t(1), state.ring_slots);
+            t.assert_equal(uint32_t(1), state.resident_pages_per_layer);
+        }
+    });
     t.test("minimum_pool_is_exact_and_transactional", [](testing & t) {
         for (const auto & types : {
                 std::pair{GGML_TYPE_F16,GGML_TYPE_F16},

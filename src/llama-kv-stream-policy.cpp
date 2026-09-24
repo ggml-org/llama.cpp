@@ -25,6 +25,18 @@ static llama_kv_stream_policy_result budget_make(
             !c.grow_evaluations || !c.shrink_evaluations || !c.cooldown_evaluations) {
         return {status::invalid_config, {}};
     }
+    if (!c.caches.empty()) {
+        uint64_t mapped = 0;
+        for (size_t i = 0; i < c.caches.size(); ++i) {
+            const auto & cache = c.caches[i];
+            if (!cache.id || !cache.layers || cache.layers > c.layers - mapped) return {status::invalid_config, {}};
+            for (size_t j = 0; j < i; ++j) {
+                if (c.caches[j].id == cache.id) return {status::invalid_config, {}};
+            }
+            mapped += cache.layers;
+        }
+        if (mapped != c.layers) return {status::invalid_config, {}};
+    }
     if (c.shape.page_tokens <= 0 || uint64_t(c.shape.page_tokens) > SIZE_MAX) return {status::geometry_error, {ggml_kv_stream_status::invalid_shape}};
     const auto result = ggml_kv_stream_resolve(c.shape, c.capabilities, size_t(c.shape.page_tokens), b.page);
     if (result.status != ggml_kv_stream_status::success) return {status::geometry_error, result};
@@ -42,6 +54,11 @@ static llama_kv_stream_policy_result budget_make(
     b.shape = c.shape;
     b.pool_bytes = c.pool_bytes;
     b.pages = uint32_t(pages);
+    try {
+        b.caches = c.caches;
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed, {}};
+    }
     b.layers = c.layers;
     b.minimum_ring_slots = b.pages - ((b.pages - hint)/b.layers)*b.layers;
     b.conversion_offset = pages*page.bytes;
@@ -63,7 +80,12 @@ llama_kv_stream_policy_result llama_kv_stream_policy_minimum_pool_bytes(
                 (SIZE_MAX-execution.conversion.bytes)/execution.storage.bytes) {
         return {status::overflow,{}};
     }
-    llama_kv_stream_policy_config minimum = config;
+    llama_kv_stream_policy_config minimum;
+    try {
+        minimum = config;
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed, {}};
+    }
     minimum.pool_bytes = (size_t(config.layers)+1)*execution.storage.bytes +
         execution.conversion.bytes;
     llama_kv_stream_policy_budget budget;
@@ -89,6 +111,10 @@ static bool same_planes(const ggml_kv_stream_layout & a, const ggml_kv_stream_la
 // Reject stale budget identity and malformed state before using counters or calculating offsets.
 static bool state_valid(const llama_kv_stream_policy_budget & b, const llama_kv_stream_policy_state & s) {
     const auto & old = s.budget;
+    if (b.caches.size() != old.caches.size()) return false;
+    for (size_t i = 0; i < b.caches.size(); ++i) {
+        if (b.caches[i].id != old.caches[i].id || b.caches[i].layers != old.caches[i].layers) return false;
+    }
     return same_shape(b.shape, old.shape) && same_planes(b.page.storage, old.page.storage) &&
         same_planes(b.page.conversion, old.page.conversion) && b.page.attention == old.page.attention &&
         b.pool_bytes == old.pool_bytes && b.pages == old.pages && b.layers == old.layers &&
@@ -200,7 +226,7 @@ llama_kv_stream_policy_result llama_kv_stream_policy_initialize(
     if (result.status != status::success) return result;
     next.ring_slots = next.budget.minimum_ring_slots;
     next.resident_pages_per_layer = (next.budget.pages - next.ring_slots)/next.budget.layers;
-    output = next;
+    output = std::move(next);
     return {};
 }
 
@@ -217,7 +243,11 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     if (active_wide > UINT32_MAX) return {status::overflow, {}};
     const uint32_t active = uint32_t(active_wide);
     llama_kv_stream_policy_decision d;
-    d.next = previous;
+    try {
+        d.next = previous;
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed, {}};
+    }
     auto & s = d.next;
     double miss_ratio = 0;
     ingest_feedback(observation.feedback,d,miss_ratio);
@@ -263,7 +293,7 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     s.decode_active_pages = !observation.uniform_prefill && observation.query_tokens <= DECODE_QUERY_LIMIT && active > s.resident_pages_per_layer ? active : 0;
     if (!s.decode_active_pages) s.spread_streaming = false;
     d.layout_changed = d.partition_changed || !same_capacity(profile(previous), profile(s));
-    output = d;
+    output = std::move(d);
     return {};
 }
 
@@ -273,7 +303,11 @@ static llama_kv_stream_policy_result resize_plan(
     if ((growing && pool_bytes <= current.pool_bytes) ||
             (!growing && pool_bytes >= current.pool_bytes)) return {status::invalid_budget, {}};
     llama_kv_stream_policy_rebind next;
-    next.config = current;
+    try {
+        next.config = current;
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed, {}};
+    }
     next.config.pool_bytes = pool_bytes;
     auto result = llama_kv_stream_policy_initialize(next.config,next.state);
     if (result.status != status::success) return result;
@@ -323,8 +357,20 @@ llama_kv_stream_policy_result llama_kv_stream_policy_layout_make(
         next.layers.resize(b.layers);
         const auto p = profile(s);
         size_t offset = next.ring.bytes;
+        size_t cache_index = 0;
+        uint32_t cache_layer = 0;
         for (uint32_t layer = 0; layer < b.layers; ++layer) {
             auto & entry = next.layers[layer];
+            if (b.caches.empty()) {
+                entry.cache_layer = layer;
+            } else {
+                entry.cache_id = b.caches[cache_index].id;
+                entry.cache_layer = cache_layer++;
+                if (cache_layer == b.caches[cache_index].layers) {
+                    ++cache_index;
+                    cache_layer = 0;
+                }
+            }
             entry.capacity_pages = capacity(p, layer);
             entry.resident_live_pages = std::min(active, entry.capacity_pages);
             entry.streamed_pages = active - entry.resident_live_pages;

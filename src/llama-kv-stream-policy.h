@@ -4,12 +4,19 @@
 
 #include <vector>
 
+struct llama_kv_stream_policy_cache {
+    uint64_t id = 0;
+    uint32_t layers = 0;
+};
+
 struct llama_kv_stream_policy_config {
     ggml_kv_stream_shape shape;
     ggml_kv_stream_capabilities capabilities;
     size_t pool_bytes = 0;
     // Full-attention layers in execution order, not all model blocks.
     uint32_t layers = 0;
+    // Empty for legacy single-cache callers. Otherwise, cache-local layers are concatenated in execution order.
+    std::vector<llama_kv_stream_policy_cache> caches;
     // Zero uses the reference's automatic (up to eight slots) startup hint.
     uint32_t initial_ring_slots = 0;
     bool fixed_ring = false;
@@ -22,6 +29,7 @@ struct llama_kv_stream_policy_budget {
     ggml_kv_stream_execution page;
     size_t pool_bytes = 0, conversion_offset = 0, unused_bytes = 0;
     uint32_t pages = 0, layers = 0, minimum_ring_slots = 0;
+    std::vector<llama_kv_stream_policy_cache> caches;
 };
 
 struct llama_kv_stream_feedback {
@@ -67,6 +75,8 @@ struct llama_kv_stream_policy_decision {
 };
 
 struct llama_kv_stream_policy_layer {
+    uint64_t cache_id = 0;
+    uint32_t cache_layer = 0;
     uint32_t capacity_pages = 0, resident_live_pages = 0, streamed_pages = 0, waves = 0;
     size_t offset = 0;
     ggml_kv_stream_layout planes;
