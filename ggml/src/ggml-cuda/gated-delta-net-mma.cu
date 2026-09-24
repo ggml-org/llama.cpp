@@ -125,6 +125,7 @@ template <int R, int C> __device__ __forceinline__ void store(matrix<R, C> & m, 
 template <int C, int V, int BLOCKS = 1>
 static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_mma_args a) {
 #if defined(AMPERE_MMA_AVAILABLE) || (defined(AMD_WMMA_AVAILABLE) && defined(RDNA3))
+    static_assert(ggml_cuda_get_physical_warp_size() == 32, "GDN MMA requires 32-lane warps");
     constexpr int WARPS = 8;
 #ifdef GGML_USE_HIP
     constexpr int N = 16;
@@ -376,7 +377,7 @@ template <int C, int V, int BLOCKS = 1> bool init(int device) {
 
 enum class gdn_path { ar, slice32_one_block, slice32_two_blocks, slice64, whole_head };
 
-static gdn_path plan(int device, const ggml_cuda_gdn_mma_args & a) {
+static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a) {
     GGML_ASSERT(device >= 0 && device < GGML_CUDA_MAX_DEVICES);
     if (!a.eligible || a.H_k != 16 || (a.H != 16 && a.H != 32 && a.H != 48 && a.H != 64) || a.n_tokens < 64 ||
         a.n_tokens > INT64_MAX - 32 || a.rq3 <= 0 || a.n_seqs <= 0 || a.n_seqs > INT_MAX / (a.H * 4)) {
@@ -384,7 +385,7 @@ static gdn_path plan(int device, const ggml_cuda_gdn_mma_args & a) {
     }
     const auto & info = ggml_cuda_info().devices[device];
 #ifdef GGML_USE_HIP
-    if (info.cc != GGML_CUDA_CC_OFFSET_AMD + 0x1151 || a.n_tokens < 2048) {
+    if (!GGML_CUDA_CC_IS_RDNA3_5(info.cc) || a.n_tokens < 2048) {
         return gdn_path::ar;
     }
     return init<16, 64>(device) ? gdn_path::slice64 : gdn_path::ar;
@@ -413,7 +414,7 @@ bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & a, cuda
     if (!a.state_out) {
         return false;
     }
-    const auto path = plan(device, a);
+    const auto path = select_gdn_mma_path(device, a);
     if (path == gdn_path::ar) {
         return false;
     }
