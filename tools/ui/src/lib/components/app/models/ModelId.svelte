@@ -135,6 +135,12 @@
 					</span>
 				{/if}
 
+				{#if parsed.quantization && !resolvedHideQuantization}
+					<span class={badgeClass}>
+						{parsed.quantization}
+					</span>
+				{/if}
+
 				{#each activeDrafts as draft (draft.kind ?? 'draft')}
 					<span class="flex shrink-0 items-center gap-1">
 						<span class="text-[10px] text-muted-foreground">+</span>
@@ -152,12 +158,6 @@
 						{sidecar}
 					</span>
 				{/each}
-
-				{#if parsed.quantization && !resolvedHideQuantization}
-					<span class={badgeClass}>
-						{parsed.quantization}
-					</span>
-				{/if}
 
 				{#if primaryAlias}
 					{#if primaryAlias !== parsed.modelName}
