@@ -2,6 +2,9 @@
 #include "dequantize.h"
 #include "fa_common.metal"
 
+// TODO: this is quite ugly. in the future these types will be hardcoded in the kernel, but for now keep them as
+//       template to be able to explore different combinations
+
 #define FA_TYPES \
     half,   half4,     simdgroup_half8x8,  \
     half,   half4x4,   simdgroup_half8x8,  \

@@ -708,6 +708,3 @@ kernel void kernel_flash_attn_ext(
 #undef FWD_TMPL
 #undef FWD_ARGS
 }
-
-// TODO: this is quite ugly. in the future these types will be hardcoded in the kernel, but for now keep them as
-//       template to be able to explore different combinations
