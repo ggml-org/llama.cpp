@@ -13,7 +13,37 @@ struct vk_mat_mat_push_constants {
     uint32_t k_split;
     uint32_t ne02; uint32_t ne12; uint32_t broadcast2; uint32_t broadcast3;
     uint32_t padded_N;
+    uint32_t k_units_per_tile;
+    uint32_t work_units_per_group;
+    uint32_t groups_with_extra_unit;
+    uint32_t k_units_mp;
+    uint32_t blocks_m_mp;
+    uint32_t blocks_n_mp;
+    uint32_t ne12_mp;
+    uint32_t broadcast2_mp;
+    uint32_t broadcast3_mp;
+    uint32_t div_Ls0;
+    uint32_t div_Ls1;
 };
+
+struct vk_mat_mat_stream_k_fixup_push_constants {
+    uint32_t M; uint32_t N;
+    uint32_t BM; uint32_t BN;
+    uint32_t k_units_per_tile;
+    uint32_t blocks_m;
+    uint32_t blocks_n;
+    uint32_t work_units_per_group;
+    uint32_t groups_with_extra_unit;
+    uint32_t k_units_mp;
+    uint32_t blocks_m_mp;
+    uint32_t blocks_n_mp;
+    uint32_t work_units_mp;
+    uint32_t large_group_work_mp;
+    uint32_t div_Ls0;
+    uint32_t div_Ls1;
+};
+
+static_assert(sizeof(vk_mat_mat_push_constants) <= 128);
 
 struct vk_mat_vec_push_constants {
     uint32_t ncols;
@@ -362,6 +392,34 @@ static uint32_t pack_fastdiv_L(uint32_t L0, uint32_t L1, uint32_t L2) {
 template <typename T> void init_pushconst_fastdiv(T &p) {
     GGML_UNUSED(p);
     static_assert(!std::is_const<T>::value, "unexpected type");
+}
+
+inline void init_pushconst_fastdiv(vk_mat_mat_push_constants &p) {
+    uint32_t ne12_L, broadcast2_L, broadcast3_L;
+    init_fastdiv_values(p.ne12,       p.ne12_mp,       ne12_L);
+    init_fastdiv_values(p.broadcast2, p.broadcast2_mp, broadcast2_L);
+    init_fastdiv_values(p.broadcast3, p.broadcast3_mp, broadcast3_L);
+    p.div_Ls1 = pack_fastdiv_L(ne12_L, broadcast2_L, broadcast3_L);
+}
+
+inline void init_pushconst_fastdiv(vk_mat_mat_push_constants &p, uint32_t blocks_m, uint32_t blocks_n) {
+    uint32_t k_units_L, blocks_m_L, blocks_n_L;
+    init_fastdiv_values(p.k_units_per_tile, p.k_units_mp, k_units_L);
+    init_fastdiv_values(blocks_m, p.blocks_m_mp, blocks_m_L);
+    init_fastdiv_values(blocks_n, p.blocks_n_mp, blocks_n_L);
+    p.div_Ls0 = pack_fastdiv_L(k_units_L, blocks_m_L, blocks_n_L);
+    init_pushconst_fastdiv(p);
+}
+
+template <> inline void init_pushconst_fastdiv(vk_mat_mat_stream_k_fixup_push_constants &p) {
+    uint32_t k_units_L, blocks_m_L, blocks_n_L, work_units_L, large_group_work_L;
+    init_fastdiv_values(p.k_units_per_tile, p.k_units_mp, k_units_L);
+    init_fastdiv_values(p.blocks_m, p.blocks_m_mp, blocks_m_L);
+    init_fastdiv_values(p.blocks_n, p.blocks_n_mp, blocks_n_L);
+    init_fastdiv_values(p.work_units_per_group, p.work_units_mp, work_units_L);
+    init_fastdiv_values(p.work_units_per_group + 1, p.large_group_work_mp, large_group_work_L);
+    p.div_Ls0 = pack_fastdiv_L(k_units_L, blocks_m_L, blocks_n_L);
+    p.div_Ls1 = pack_fastdiv_L(work_units_L, large_group_work_L, 0);
 }
 
 template <> inline void init_pushconst_fastdiv(vk_op_unary_push_constants &p) {
