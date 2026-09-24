@@ -1,0 +1,9 @@
+{
+  "choice_single_zh": "choice_single_zh.json",
+  "choice_multi_zh": "choice_multi_zh.json",
+  "score_zh": "score_zh.json",
+  "noul_zh": "noul_zh.json",
+  "choice_single_en": "choice_single_en.json",
+  "score_en": "score_en.json",
+  "noul_en": "noul_en.json"
+}

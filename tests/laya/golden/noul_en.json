@@ -1,0 +1,158 @@
+{
+  "model": "laya-multilingual",
+  "state": {
+    "dialogue": [
+      {
+        "role": "user",
+        "content": "Please recommend a high-performance laptop for programmers."
+      },
+      {
+        "role": "assistant",
+        "content": "Sure, I recommend a thin-and-light laptop with a high-performance processor and a dedicated GPU, priced around 2000 dollars."
+      }
+    ]
+  },
+  "questions": {
+    "q1": {
+      "type": "noul",
+      "instructions": "Is the user ready to make a purchase?"
+    }
+  },
+  "per_question": {
+    "q1": {
+      "qtype": "noul",
+      "options": [
+        "false: no, the statement does not hold",
+        "true: yes, the statement holds"
+      ],
+      "input_ids": [
+        2,
+        552,
+        6311,
+        2872,
+        235292,
+        2125,
+        573,
+        2425,
+        5628,
+        577,
+        1501,
+        476,
+        8210,
+        235336,
+        1,
+        4,
+        1566,
+        235292,
+        793,
+        235269,
+        573,
+        6218,
+        1721,
+        780,
+        3385,
+        4,
+        1382,
+        235292,
+        7778,
+        235269,
+        573,
+        6218,
+        12723,
+        1,
+        19946,
+        138960,
+        1192,
+        892,
+        9766,
+        8247,
+        1192,
+        664,
+        1645,
+        824,
+        664,
+        3312,
+        1192,
+        664,
+        5958,
+        5656,
+        476,
+        1536,
+        235290,
+        33402,
+        15690,
+        604,
+        107783,
+        1464,
+        789,
+        19946,
+        8247,
+        1192,
+        664,
+        105776,
+        824,
+        664,
+        3312,
+        1192,
+        664,
+        21404,
+        235269,
+        590,
+        5656,
+        476,
+        11342,
+        235290,
+        639,
+        235290,
+        2462,
+        15690,
+        675,
+        476,
+        1536,
+        235290,
+        33402,
+        29028,
+        578,
+        476,
+        14613,
+        37783,
+        235269,
+        36900,
+        2449,
+        235248,
+        235284,
+        235276,
+        235276,
+        235276,
+        12035,
+        1464,
+        12765,
+        235270,
+        1
+      ],
+      "marker_pos": [
+        15,
+        25
+      ],
+      "raw_logits": [
+        -1.9365203380584717,
+        0.563133955001831
+      ],
+      "act_logits": [
+        1.0,
+        0.0
+      ],
+      "act_probability": 1.0
+    }
+  },
+  "answers": {
+    "q1": {
+      "type": "noul",
+      "noul": 0.9241,
+      "confidence": 0.9241,
+      "action": {
+        "act_probability": 1.0
+      }
+    }
+  }
+}
