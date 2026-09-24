@@ -10844,6 +10844,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(72, 64, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 72, 4, {1, 1}, 256, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // CPU SME2 Flash Attention activation boundary.
+    for (int size : { 63, 64, 65 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, { 1, 1 }, size, size, true, false, 0, 0,
+                                                        GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+
+    // Feature combinations for independently sized QK and AV kernels.
+    test_cases.emplace_back(new test_flash_attn_ext(256, 512, 4, { 4, 1 }, 128, 65, true, true, 8.0f, 10.0f,
+                                                    GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(512, 256, 4, { 4, 2 }, 129, 128, false, false, 0, 0, GGML_PREC_F32,
+                                                    GGML_TYPE_F16, GGML_TYPE_F16));
+
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));

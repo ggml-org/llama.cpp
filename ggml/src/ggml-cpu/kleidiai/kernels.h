@@ -93,6 +93,8 @@ struct ggml_kleidiai_kernels {
     ggml_type lhs_type;
     ggml_type rhs_type;
     ggml_type op_type;
+
+    rhs_packing_info rhs_kxn_info = {};
 };
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor);

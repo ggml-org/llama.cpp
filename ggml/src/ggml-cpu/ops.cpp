@@ -7,6 +7,9 @@
 #include "ggml.h"
 #include "unary-ops.h"
 #include "vec.h"
+#ifdef GGML_USE_CPU_KLEIDIAI
+#    include "kleidiai/kleidiai.h"
+#endif
 
 #include <algorithm>
 #include <cfloat>
@@ -8852,7 +8855,12 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 static void ggml_compute_forward_flash_attn_ext_tiled(
         const ggml_compute_params * params,
         ggml_tensor * dst,
-        int ir0, int ir1) {
+        int ir0, int ir1,
+        size_t accel_work_size,
+        size_t accel_thread_size) {
+#ifndef GGML_USE_CPU_KLEIDIAI
+    GGML_UNUSED(accel_work_size);
+#endif
     const ggml_tensor * q     = dst->src[0];
     const ggml_tensor * k     = dst->src[1];
     const ggml_tensor * v     = dst->src[2];
@@ -8958,14 +8966,20 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         // VKQ32:  Q_TILE_SZ * DV (FP32 output accumulator)
         // V32:    KV_TILE_SZ * DV (F32 buffer for V tile)
         // K_f32:  KV_TILE_SZ * DK (F32 buffer for K tile — GEMM path)
-        float * base  = (float *) params->wdata + ith*(Q_TILE_SZ*DK + 2*Q_TILE_SZ*KV_TILE_SZ + Q_TILE_SZ*DV + KV_TILE_SZ*DV + KV_TILE_SZ*DK + CACHE_LINE_SIZE_F32);
+        const size_t tile_scratch_size = sizeof(float) * (Q_TILE_SZ * DK + 2 * Q_TILE_SZ * KV_TILE_SZ + Q_TILE_SZ * DV +
+                                                          KV_TILE_SZ * DV + KV_TILE_SZ * DK);
+        const size_t thread_scratch_size = tile_scratch_size + accel_thread_size;
+        uint8_t * base = (uint8_t *) params->wdata + ith * thread_scratch_size;
 
         void  * Q_q    = base;
-        float * KQ     = (float *)((char *)base + Q_TILE_SZ * DK * sizeof(float));
+        float * KQ     = (float *) (base + Q_TILE_SZ * DK * sizeof(float));
         float * mask32 = KQ + Q_TILE_SZ * KV_TILE_SZ;
         float * VKQ32  = mask32 + Q_TILE_SZ * KV_TILE_SZ;
         float * V32    = VKQ32 + Q_TILE_SZ * DV;
         float * K_f32  = V32 + KV_TILE_SZ * DV;
+#ifdef GGML_USE_CPU_KLEIDIAI
+        void * sme2_work_data = base + tile_scratch_size;
+#endif
 
         memset(VKQ32, 0, Q_TILE_SZ * DV * sizeof(float));
         memset(mask32, 0, Q_TILE_SZ * KV_TILE_SZ * sizeof(float));
@@ -8988,6 +9002,14 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 memset(Q_f32 + tq * DK, 0, DK * sizeof(float));
             }
         }
+
+#ifdef GGML_USE_CPU_KLEIDIAI
+        bool sme2_q_prepared = false;
+        if (accel_work_size != 0) {
+            sme2_q_prepared = ggml_kleidiai_sme2_flash_attn_prepare_q(
+                (const float *) Q_q, Q_TILE_SZ, DK, DV, sme2_work_data, accel_work_size);
+        }
+#endif
 
         memset(K_f32, 0, DK * KV_TILE_SZ * sizeof(float));
         memset(V32,   0, KV_TILE_SZ * DV * sizeof(float));
@@ -9034,7 +9056,16 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                 }
             }
             memset(KQ, 0, Q_TILE_SZ * KV_TILE_SZ * sizeof(float));
-            simd_gemm(KQ, (const float *)Q_q, K_f32, Q_TILE_SZ, DK, KV_TILE_SZ);
+            bool used_sme2 = false;
+#ifdef GGML_USE_CPU_KLEIDIAI
+            if (sme2_q_prepared) {
+                used_sme2 = ggml_kleidiai_sme2_flash_attn_qk(KQ, K_f32, Q_TILE_SZ, KV_TILE_SZ, DK,
+                                                             sme2_work_data, accel_work_size);
+            }
+#endif
+            if (!used_sme2) {
+                simd_gemm(KQ, (const float *) Q_q, K_f32, Q_TILE_SZ, DK, KV_TILE_SZ);
+            }
             ggml_vec_scale_f32(Q_TILE_SZ * KV_TILE_SZ, KQ, scale);
 
             // Set padded KQ entries to -inf so softmax gives them zero weight
@@ -9097,7 +9128,16 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
                     memset(KQ + tq * KV_TILE_SZ, 0, KV_TILE_SZ * sizeof(float));
                 }
             }
-            simd_gemm(VKQ32, KQ, V32, Q_TILE_SZ, KV_TILE_SZ, DV);
+            bool used_sme2_av = false;
+#ifdef GGML_USE_CPU_KLEIDIAI
+            if (sme2_q_prepared) {
+                used_sme2_av = ggml_kleidiai_sme2_flash_attn_av(VKQ32, KQ, V32, Q_TILE_SZ, DV, KV_TILE_SZ,
+                                                                sme2_work_data, accel_work_size);
+            }
+#endif
+            if (!used_sme2_av) {
+                simd_gemm(VKQ32, KQ, V32, Q_TILE_SZ, KV_TILE_SZ, DV);
+            }
         }
 
         // sinks (apply only to valid rows in the tile)
@@ -9328,6 +9368,15 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 #endif
         use_tiled &= (DV % f32_epr == 0);
 #endif
+        size_t accel_work_size   = 0;
+        size_t accel_thread_size = sizeof(float) * CACHE_LINE_SIZE_F32;
+#ifdef GGML_USE_CPU_KLEIDIAI
+        ggml_kleidiai_sme2_flash_attn_workspace workspace;
+        if (ggml_kleidiai_sme2_flash_attn_get_workspace(dst, &workspace)) {
+            accel_work_size   = workspace.work_size;
+            accel_thread_size = workspace.thread_size;
+        }
+#endif
         int current_chunk = ith;
 
         while (current_chunk < nchunk) {
@@ -9335,7 +9384,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             const int64_t ir1 = MIN(ir0 + dr, nr);
 
             if (use_tiled) {
-                ggml_compute_forward_flash_attn_ext_tiled(params, dst, ir0, ir1);
+                ggml_compute_forward_flash_attn_ext_tiled(
+                    params, dst, ir0, ir1, accel_work_size, accel_thread_size);
             } else {
                 ggml_compute_forward_flash_attn_ext_f16_one_chunk(params, dst, ir0, ir1, 0, nek1, nullptr, 0);
             }
