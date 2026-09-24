@@ -1129,6 +1129,9 @@ private:
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
+                // PATCH: o assistant do Gemma4 (e drafts que compartilham memoria)
+                // exigem ctx_other apontando para o contexto do alvo.
+                params_dft.speculative.draft.ctx_tgt = ctx_tgt;
                 spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();

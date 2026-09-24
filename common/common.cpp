@@ -1348,6 +1348,10 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
+    // PATCH: repassa o contexto do alvo como ctx_other (assistant do Gemma4/DSpark)
+    if (params.speculative.draft.ctx_tgt != nullptr) {
+        cparams.ctx_other = params.speculative.draft.ctx_tgt;
+    }
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
