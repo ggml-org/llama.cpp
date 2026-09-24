@@ -239,15 +239,30 @@
 		return [...entries].sort((a, b) => direction * compareEntries(a, b));
 	}
 
+	/** A click on a new column sorts lowest first, then highest first, then clears. */
 	function toggleSort(key: SortKey): void {
-		if (sortKey === key) {
-			sortAsc = !sortAsc;
+		if (sortKey !== key) {
+			sortKey = key;
+			sortAsc = true;
 
 			return;
 		}
 
-		sortKey = key;
-		sortAsc = true;
+		if (sortAsc) {
+			sortAsc = false;
+
+			return;
+		}
+
+		sortKey = null;
+	}
+
+	function sortTitle(key: SortKey, label: string): string {
+		const name = label.toLowerCase();
+
+		if (sortKey !== key) return `Sort by ${name}, lowest first`;
+
+		return sortAsc ? `Sort by ${name}, highest first` : `Stop sorting by ${name}`;
 	}
 
 	function isLoadedOption(option: ModelOption): boolean {
@@ -283,7 +298,7 @@
 	<button
 		class="inline-flex cursor-pointer items-center gap-1 uppercase transition hover:text-foreground focus:outline-none"
 		onclick={() => toggleSort(key)}
-		title="Sort by {label.toLowerCase()}"
+		title={sortTitle(key, label)}
 		type="button"
 	>
 		{label}
