@@ -60,7 +60,7 @@ export interface ModelsTableGroup {
 	items: ModelQuantGroup[];
 	key: string;
 	/** Picks the header icon; providers use their backend logo instead. */
-	kind: 'favorites' | 'hidden' | 'loaded' | 'local' | 'provider';
+	kind: 'compat' | 'favorites' | 'hidden' | 'loaded' | 'local' | 'provider';
 	label: string;
 }
 

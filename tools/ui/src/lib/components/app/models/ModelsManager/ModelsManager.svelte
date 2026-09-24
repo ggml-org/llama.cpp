@@ -13,7 +13,14 @@
 		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
-	import { backendsStore, conversationsStore, modelsStore, uiStore } from '$lib/stores';
+	import { ModelGroupingMode } from '$lib/enums/settings.enums';
+	import {
+		backendsStore,
+		conversationsStore,
+		modelsStore,
+		settingsStore,
+		uiStore
+	} from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -108,33 +115,74 @@
 			});
 		}
 
-		const localItems = byBackend.get(LOCAL_BACKEND_ID);
+		// by capability: one block whose models can load and unload, one that is chat only
+		if (settingsStore.config.modelGrouping === ModelGroupingMode.COMPAT) {
+			const local = (entry: ModelQuantGroup) => entry.base.backendId === LOCAL_BACKEND_ID;
+			const loadable: ModelQuantGroup[] = [];
+			const chatOnly: ModelQuantGroup[] = [];
 
-		if (localItems?.length) {
-			ordered.push({
-				backendId: LOCAL_BACKEND_ID,
-				isLocal: true,
-				items: localItems,
-				key: LOCAL_BACKEND_ID,
-				kind: 'local',
-				label: 'Local models'
-			});
-		}
+			for (const entry of entries) {
+				if (claimed.has(entry.key) || hiddenKeys.has(entry.key)) continue;
 
-		for (const backend of backendsStore.enabled) {
-			if (backend.id === LOCAL_BACKEND_ID) continue;
+				const canLoad = getBackendCapabilities(getBackend(entry.base.backendId)).loadUnload;
 
-			const items = byBackend.get(backend.id);
+				(canLoad ? loadable : chatOnly).push(entry);
+			}
 
-			if (items?.length) {
+			// the bundled server leads the block it belongs to
+			const leading = (list: ModelQuantGroup[]) =>
+				[...list].sort((a, b) => Number(local(b)) - Number(local(a)));
+
+			if (loadable.length) {
 				ordered.push({
-					backendId: backend.id,
+					backendId: null,
 					isLocal: false,
-					items,
-					key: backend.id,
-					kind: 'provider',
-					label: backend.name
+					items: leading(loadable),
+					key: 'llama-compat',
+					kind: 'compat',
+					label: 'Llama-compat'
 				});
+			}
+
+			if (chatOnly.length) {
+				ordered.push({
+					backendId: null,
+					isLocal: false,
+					items: leading(chatOnly),
+					key: 'oai-compat',
+					kind: 'compat',
+					label: 'OAI-compat'
+				});
+			}
+		} else {
+			const localItems = byBackend.get(LOCAL_BACKEND_ID);
+
+			if (localItems?.length) {
+				ordered.push({
+					backendId: LOCAL_BACKEND_ID,
+					isLocal: true,
+					items: localItems,
+					key: LOCAL_BACKEND_ID,
+					kind: 'local',
+					label: 'Local models'
+				});
+			}
+
+			for (const backend of backendsStore.enabled) {
+				if (backend.id === LOCAL_BACKEND_ID) continue;
+
+				const items = byBackend.get(backend.id);
+
+				if (items?.length) {
+					ordered.push({
+						backendId: backend.id,
+						isLocal: false,
+						items,
+						key: backend.id,
+						kind: 'provider',
+						label: backend.name
+					});
+				}
 			}
 		}
 

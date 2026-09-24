@@ -2,6 +2,7 @@
 	import type { ModelsTableGroup } from './utils';
 	import { formatLastUsed, type ModelQuantGroup } from './utils';
 	import {
+		Boxes,
 		ChevronDown,
 		ChevronRight,
 		Eye,
@@ -495,8 +496,10 @@
 						<Power class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === 'hidden'}
 						<EyeOff class="h-3.5 w-3.5 shrink-0" />
-					{:else if group.kind === 'local'}
+					{:else if group.kind === 'local' || group.key === 'llama-compat'}
 						<Logo class="shrink-0" style="--size: 0.875rem" />
+					{:else if group.kind === 'compat'}
+						<Boxes class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 				{/snippet}
 
