@@ -780,16 +780,6 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
         ggml_graph_reset(opt_ctx->gb_grad);
     }
 
-    // For non-static graphs the compute graph is rebuilt every call, so ggml_graph_reset
-    // is not called and grad_accs may carry over values from the previous accumulation window.
-    // Explicitly zero them at the start of each gradient-accumulation cycle.
-    if (!opt_ctx->static_graphs && backward && opt_ctx->opt_i == 0) {
-        for (struct ggml_tensor * ga : opt_ctx->grad_accs) {
-            if (ga) {
-                ggml_set_zero(ga);
-            }
-        }
-    }
     if (backward) {
         const int32_t opt_i_next = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
         opt_ctx->build_type = opt_i_next == 0 ? GGML_OPT_BUILD_TYPE_OPT : GGML_OPT_BUILD_TYPE_GRAD;
@@ -799,6 +789,15 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
 
     if (!opt_ctx->static_graphs) {
         ggml_opt_build(opt_ctx);
+
+        // On the dynamic-graph path the graphs are rebuilt on every call. The reset of gb_grad
+        // above runs before this rebuild, while gb_grad is still null (ggml_opt_eval clears it
+        // after every step on this path), so it has no effect and the gradient accumulators are
+        // never cleared. Reset the rebuilt gb_grad at the start of each accumulation window.
+        // gb_grad holds no optimizer step, so the AdamW moments in gb_opt are left untouched.
+        if (opt_ctx->gb_grad && opt_ctx->opt_i == 0) {
+            ggml_graph_reset(opt_ctx->gb_grad);
+        }
     }
 
     struct ggml_cgraph * graph = nullptr;
