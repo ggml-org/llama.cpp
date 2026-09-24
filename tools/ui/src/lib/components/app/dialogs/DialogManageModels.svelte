@@ -21,6 +21,7 @@
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
 		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360! flex flex-col p-4"
+		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		<Dialog.Header class="flex flex-row items-center justify-between p-2 pr-8">
 			<Dialog.Title class="flex items-center gap-2">

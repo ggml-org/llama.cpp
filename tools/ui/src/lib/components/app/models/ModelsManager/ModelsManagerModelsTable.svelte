@@ -27,12 +27,12 @@
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import { SearchInput } from '$lib/components/app/forms';
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Input } from '$lib/components/ui/input';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -58,6 +58,26 @@
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
+	let filterInput = $state<HTMLInputElement | null>(null);
+
+	// the dialog hands focus to its first control, so the filter takes it instead
+	$effect(() => {
+		if (!uiStore.manageModelsOpen) return;
+
+		let frames = 0;
+		let handle = requestAnimationFrame(function focusFilter() {
+			if (filterInput) {
+				filterInput.focus({ preventScroll: true });
+
+				return;
+			}
+
+			if (frames++ < 20) handle = requestAnimationFrame(focusFilter);
+		});
+
+		return () => cancelAnimationFrame(handle);
+	});
+
 	/** In-flight and paused downloads, tracked by the status feed. */
 	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
 	let pendingCancel = $state('');
@@ -486,7 +506,12 @@
 
 <div class="flex h-full min-h-0 flex-col">
 	<div class="flex shrink-0 items-center gap-2 py-4">
-		<Input bind:value={filter} class="h-8 max-w-64 text-sm" placeholder="Filter models..." />
+		<SearchInput
+			bind:ref={filterInput}
+			bind:value={filter}
+			class="max-w-64"
+			placeholder="Filter models..."
+		/>
 
 		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
 	</div>
