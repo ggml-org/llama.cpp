@@ -71,6 +71,26 @@ static __device__ __forceinline__ void dequantize_q4_1(const void * vx, const in
     v.y = (v.y * dm.x) + dm.y;
 }
 
+static __device__ __forceinline__ void dequantize_q4_h(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_q4_h * x = (const block_q4_h *) vx;
+
+    // zeroed KV cache padding reaches this kernel, and 1/0 would spread NaN over the whole row.
+    // blocks sit on 4-byte boundaries, so one load gets both header halves
+    half2 sz;
+    ggml_cuda_memcpy_1<sizeof(half2)>(&sz, &x[ib].scale);
+    const float2 szf = __half22float2(sz);
+    const float d = szf.x != 0.0f ? 1.0f/szf.x : 0.0f;
+    const float z = szf.y;
+
+    const int vui = x[ib].qs[iqs];
+
+    v.x = vui & 0xF;
+    v.y = vui >> 4;
+
+    v.x = (v.x - z) * d;
+    v.y = (v.y - z) * d;
+}
+
 static __device__ __forceinline__ void dequantize_q5_0(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_q5_0 * x = (const block_q5_0 *) vx;
 

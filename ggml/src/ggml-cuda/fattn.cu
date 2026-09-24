@@ -317,6 +317,12 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q5_1, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0, GGML_TYPE_BF16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_BF16, GGML_TYPE_BF16)
+
+    // Q4_H is only instantiated for the combinations that ggml_cuda_fattn_vec_kv_combo_supported allows
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_H, GGML_TYPE_F16)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,    GGML_TYPE_Q4_H)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_H, GGML_TYPE_Q4_H)
+    FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q8_0,   GGML_TYPE_Q4_H)
 #else
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_F16,  GGML_TYPE_F16)
     FATTN_VEC_CASES_ALL_D(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0)
@@ -341,6 +347,7 @@ static bool ggml_cuda_fattn_kv_type_supported(ggml_type type) {
         case GGML_TYPE_F16:
             return true;
         case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q4_H:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
 #ifndef GGML_CUDA_FA_ALL_QUANTS
@@ -353,6 +360,17 @@ static bool ggml_cuda_fattn_kv_type_supported(ggml_type type) {
         default:
             return false;
     }
+}
+
+// the tile and MMA kernels dequantize K/V to FP16 first, only the vec kernel needs a template instance per K/V pair
+static bool ggml_cuda_fattn_vec_kv_combo_supported(ggml_type type_K, ggml_type type_V) {
+    if (type_K == GGML_TYPE_Q4_H) {
+        return type_V == GGML_TYPE_Q4_H || type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_F32;
+    }
+    if (type_V == GGML_TYPE_Q4_H) {
+        return type_K == GGML_TYPE_Q8_0 || type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_F32;
+    }
+    return true;
 }
 
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
@@ -455,7 +473,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0
+        && ggml_cuda_fattn_vec_kv_combo_supported(K->type, V->type);
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {

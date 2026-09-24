@@ -169,6 +169,37 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
     return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
 }
 
+#define VDR_Q4_H_Q8_1_MMVQ 2
+
+// hqq decodes as (q - zero)/scale, the same affine map as q4_1 with d4 = 1/scale and m4 = -zero/scale.
+// sz packs {scale, zero}, read from the block header with one 4-byte load
+template <int vdr> static __device__ __forceinline__ float vec_dot_q4_h_q8_1_impl(
+    const int * v, const int * u, const half2 & sz, const half2 & ds8) {
+
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        const int vi0 = (v[i] >> 0) & 0x0F0F0F0F;
+        const int vi1 = (v[i] >> 4) & 0x0F0F0F0F;
+
+        // SIMD dot product of quantized values
+        sumi = ggml_cuda_dp4a(vi0, u[2*i+0], sumi);
+        sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
+    }
+
+    // the reciprocal stays out of the loop above, one division per call is enough.
+    // an all-zero block must dequantize to 0, not to NaN
+    const float2 szf = __half22float2(sz);
+    const float d4 = szf.x != 0.0f ? 1.0f/szf.x : 0.0f;
+    const float m4 = -szf.y * d4;
+
+    const float2 ds8f = __half22float2(ds8);
+
+    // scale second part of sum by QI8_1/(vdr * QR4_H) to compensate for multiple threads adding it
+    return sumi * (d4 * ds8f.x) + (m4 * ds8f.y) / (QI8_1 / (vdr * QR4_H));
+}
+
 #define VDR_Q5_0_Q8_1_MMVQ 2
 #define VDR_Q5_0_Q8_1_MMQ  4
 
@@ -806,6 +837,28 @@ static __device__ __forceinline__ float vec_dot_q4_1_q8_1(
     }
 
     return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
+}
+
+static __device__ __forceinline__ float vec_dot_q4_h_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q4_h * bq4_h = (const block_q4_h *) vbq + kbx;
+
+    int v[VDR_Q4_H_Q8_1_MMVQ];
+    int u[2*VDR_Q4_H_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_Q4_H_Q8_1_MMVQ; ++i) {
+        v[i]     = get_int_b4(bq4_h->qs, iqs + i);
+        u[2*i+0] = get_int_b4(bq8_1->qs, iqs + i);
+        u[2*i+1] = get_int_b4(bq8_1->qs, iqs + i + QI4_H);
+    }
+
+    // blocks sit on 4-byte boundaries, so one load gets both header halves
+    half2 sz;
+    ggml_cuda_memcpy_1<sizeof(half2)>(&sz, &bq4_h->scale);
+
+    return vec_dot_q4_h_q8_1_impl<VDR_Q4_H_Q8_1_MMVQ>(v, u, sz, bq8_1->ds);
 }
 
 static __device__ __forceinline__ float vec_dot_q5_0_q8_1(

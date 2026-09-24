@@ -101,6 +101,23 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v0.zw));
             store_a(col, k_pair + 8, FLOAT_TYPEV2(v1.xy));
             store_a(col, k_pair + 9, FLOAT_TYPEV2(v1.zw));
+#elif defined(DATA_A_Q4_H)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib = idx / 4;
+            const uint iqs = idx & 0x03;
+
+            const vec2 sz = vec2(data_a_packed32[ib].sz);
+            const float d = 1.0f / sz.x;
+            const uint vui = data_a_packed32[ib].qs[iqs];
+            const vec4 v0 = (vec4(unpack8(vui & 0x0F0F0F0F)) - sz.y) * d;
+            const vec4 v1 = (vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - sz.y) * d;
+
+            const uint k_pair = row * LOAD_VEC_A / 4;
+            store_a(col, k_pair,     FLOAT_TYPEV2(v0.xy));
+            store_a(col, k_pair + 1, FLOAT_TYPEV2(v0.zw));
+            store_a(col, k_pair + 8, FLOAT_TYPEV2(v1.xy));
+            store_a(col, k_pair + 9, FLOAT_TYPEV2(v1.zw));
 #elif defined(DATA_A_Q5_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 

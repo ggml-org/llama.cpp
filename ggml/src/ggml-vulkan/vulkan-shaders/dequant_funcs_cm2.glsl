@@ -132,6 +132,41 @@ f16vec4 dequantFuncQ4_1_v(const in decodeBufQ4_1 bl, const in uint blockCoords[2
     return f16vec4(vec4(q) * vec4(float(d)) + vec4(float(m)));
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ4_H {
+   block_q4_h block;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ4_H_packed32 {
+   block_q4_h_packed32 block;
+};
+
+// the reciprocal is taken in fp32: 1/scale can reach the fp16 subnormal range
+float16_t dequantFuncQ4_H(const in decodeBufQ4_H bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float d = 1.0f / float(bl.block.scale);
+    const float z = float(bl.block.zero);
+    const uint idx = coordInBlock[1];
+    const uint iqs = idx & 0xF;
+    const uint shift = (idx & 0x10) >> 2;
+    uint32_t qs = bl.block.qs[iqs];
+    qs >>= shift;
+    qs &= 0xF;
+    return float16_t((float(qs) - z) * d);
+}
+
+f16vec4 dequantFuncQ4_H_v(const in decodeBufQ4_H bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    decodeBufQ4_H_packed32 bl32 = decodeBufQ4_H_packed32(bl);
+    const float d = 1.0f / float(bl.block.scale);
+    const float z = float(bl.block.zero);
+    const uint idx = coordInBlock[1];
+    const uint shift = (idx & 0x10) >> 2;     // 0 or 4
+    const uint qs_w  = (idx & 0xC) >> 2;      // iqs / 4 in [0,4)
+    const uint qsw   = uint32_t(bl32.block.qs[qs_w]);
+    const u8vec4 q   = unpack8((qsw >> shift) & 0x0F0F0F0Fu);
+    return f16vec4((vec4(q) - vec4(z)) * vec4(d));
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ5_0 {
    block_q5_0 block;
 };
@@ -1397,6 +1432,9 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_Q4_1)
 #define dequantFuncA dequantFuncQ4_1
 #define dequantFuncA_v dequantFuncQ4_1_v
+#elif defined(DATA_A_Q4_H)
+#define dequantFuncA dequantFuncQ4_H
+#define dequantFuncA_v dequantFuncQ4_H_v
 #elif defined(DATA_A_Q5_0)
 #define dequantFuncA dequantFuncQ5_0
 #define dequantFuncA_v dequantFuncQ5_0_v

@@ -83,6 +83,17 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_Q4_H)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
+    return vec2(vui & 0xF, vui >> 4);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint vui = uint(data_a_packed16[a_offset + ib].qs[iqs/2]);
+    return vec4(vui & 0xF, (vui >> 4) & 0xF, (vui >> 8) & 0xF, vui >> 12);
+}
+#endif
+
 #if defined(DATA_A_Q5_0)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint uint_qh = uint(data_a[a_offset + ib].qh[1]) << 16 | data_a[a_offset + ib].qh[0];
@@ -587,6 +598,16 @@ vec2 get_dm(uint ib, uint a_offset) {
 vec2 get_dm(uint ib, uint a_offset) {
     const vec2 dm = vec2(data_a_packed32[a_offset + ib].dm);
     return dm;
+}
+#endif
+
+#if defined(DATA_A_Q4_H)
+// w = (q - zero)/scale is the same affine map as q*d + m, so one fp32 reciprocal
+// per block turns q4_h into a q4_1 for every consumer of get_dm
+vec2 get_dm(uint ib, uint a_offset) {
+    const vec2 sz = vec2(data_a_packed32[a_offset + ib].sz);
+    const float d = 1.0f / sz.x;
+    return vec2(d, -sz.y * d);
 }
 #endif
 

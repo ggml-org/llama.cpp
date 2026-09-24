@@ -71,6 +71,80 @@ static __device__ void quantize_f32_q4_1_block(const float * __restrict__ x, blo
     }
 }
 
+// shrink_lp_op: sign(x) * relu(|x| - (1/beta) * |x|^(p-1))
+static __device__ __forceinline__ float ggml_cuda_hqq_shrink(float x, float beta, float lp_norm) {
+    const float ax = fabsf(x);
+    if (ax == 0.0f) {
+        return 0.0f;
+    }
+    const float shrunk = ax - (1.0f/beta)*powf(ax, lp_norm - 1.0f);
+    return shrunk <= 0.0f ? 0.0f : copysignf(shrunk, x);
+}
+
+// half-quadratic solve, same as quantize_row_q4_h_ref in ggml-quants.c: lane j owns element j, the whole warp works on one block
+static __device__ void quantize_f32_q4_h_block_warp(const float * __restrict__ x, block_q4_h * __restrict__ y) {
+    static_assert(QK4_H == WARP_SIZE, "one lane per element");
+
+    const int   lane = threadIdx.x % WARP_SIZE;
+    const float w    = x[lane];
+
+    float vmin = w;
+    float vmax = w;
+#pragma unroll
+    for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
+        vmin = fminf(vmin, __shfl_xor_sync(0xffffffff, vmin, offset, WARP_SIZE));
+        vmax = fmaxf(vmax, __shfl_xor_sync(0xffffffff, vmax, offset, WARP_SIZE));
+    }
+
+    // a near-constant block would send 15/denom past the fp16 range
+    const float denom = vmax - vmin;
+    float scale = fabsf(denom) <= 1e-4f ? 1.0f : 15.0f/denom;
+    if (scale > 2e4f) scale = 2e4f;
+
+    // scale is fixed across the iterations, so one reciprocal covers them all
+    const float inv_scale = 1.0f/scale;
+
+    float zero = -vmin*scale;
+    float beta = Q4_H_BETA;
+    float best_err = INFINITY;
+
+    for (int it = 0; it < Q4_H_ITERS; ++it) {
+        const float q  = fminf(15.0f, fmaxf(0.0f, roundf(w*scale + zero)));
+        const float wr = (q - zero)*inv_scale;
+        const float we = ggml_cuda_hqq_shrink(w - wr, beta, Q4_H_LP_NORM);
+
+        // the butterfly gives every lane the same sums, so the break below stays warp-uniform
+        const float2 sums = warp_reduce_sum(make_float2(fabsf(w - wr), q - (w - we)*scale));
+
+        zero = sums.y/QK4_H;
+
+        if (!(sums.x < best_err)) {
+            break;
+        }
+        best_err = sums.x;
+        beta *= Q4_H_KAPPA;
+    }
+
+    const half hs = __float2half(scale);
+    const half hz = __float2half(zero);
+
+    // quantize against the stored values so the encoder sees what the decoder will
+    const float s = __half2float(hs);
+    const float z = __half2float(hz);
+
+    const int qi  = min(15, max(0, (int) roundf(w*s + z)));
+    const int qhi = __shfl_down_sync(0xffffffff, qi, QK4_H/2, WARP_SIZE);
+
+    if (lane < QK4_H/2) {
+        y->qs[lane] = qi | (qhi << 4);
+    }
+    if (lane == 0) {
+        // blocks sit on 4-byte boundaries, so one store covers both header halves
+        const half2 sz = make_half2(hs, hz);
+        ggml_cuda_memcpy_1<sizeof(half2)>(&y->scale, &sz);
+    }
+}
+
 static __device__ void quantize_f32_q5_0_block(const float * __restrict__ x, block_q5_0 * __restrict__ y) {
     float amax = 0.0f;
     float vmax = 0.0f;
@@ -193,6 +267,10 @@ static __device__ void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
 
 static __device__ void cpy_blck_f32_q4_1(const char * cxi, char * cdsti) {
     quantize_f32_q4_1_block((const float *)cxi, (block_q4_1 *)cdsti);
+}
+
+static __device__ void cpy_blck_f32_q4_h(const char * cxi, char * cdsti) {
+    quantize_f32_q4_h_block_warp((const float *)cxi, (block_q4_h *)cdsti);
 }
 
 static __device__ void cpy_blck_f32_q5_0(const char * cxi, char * cdsti) {

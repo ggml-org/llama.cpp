@@ -19,6 +19,9 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
         case GGML_TYPE_Q4_1:
             mul_mat_q_case<GGML_TYPE_Q4_1>(ctx, args, stream);
             break;
+        case GGML_TYPE_Q4_H:
+            mul_mat_q_case<GGML_TYPE_Q4_H>(ctx, args, stream);
+            break;
         case GGML_TYPE_Q5_0:
             mul_mat_q_case<GGML_TYPE_Q5_0>(ctx, args, stream);
             break;
@@ -268,6 +271,7 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q4_H:
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:

@@ -184,6 +184,98 @@ void quantize_row_q4_1_ref(const float * GGML_RESTRICT x, block_q4_1 * GGML_REST
     }
 }
 
+// shrink_lp_op: sign(x) * relu(|x| - (1/beta) * |x|^(p-1))
+static inline float ggml_hqq_shrink(float x, float beta, float lp_norm) {
+    const float ax = fabsf(x);
+    if (ax == 0.0f) {
+        return 0.0f;
+    }
+    const float shrunk = ax - (1.0f/beta)*powf(ax, lp_norm - 1.0f);
+    return shrunk <= 0.0f ? 0.0f : copysignf(shrunk, x);
+}
+
+// fit one block of qk weights to w = (q - zero)/scale, q in [0, 15]
+static void ggml_hqq_solve_block(const float * GGML_RESTRICT x, int qk, float * GGML_RESTRICT scale_out, float * GGML_RESTRICT zero_out) {
+    float min = FLT_MAX;
+    float max = -FLT_MAX;
+
+    for (int j = 0; j < qk; j++) {
+        const float v = x[j];
+
+        if (v < min) min = v;
+        if (v > max) max = v;
+    }
+
+    // a near-constant block would send 15/denom past the fp16 range
+    const float denom = max - min;
+    float scale = fabsf(denom) <= 1e-4f ? 1.0f : 15.0f/denom;
+    if (scale > 2e4f) scale = 2e4f;
+
+    float zero = -min*scale;
+
+    // half-quadratic splitting: scale stays fixed, the zero-point absorbs the error.
+    // the lp<1 shrinkage lets outliers keep their error instead of dragging the zero-point
+    float beta = Q4_H_BETA;
+    float best_err = INFINITY;
+
+    for (int it = 0; it < Q4_H_ITERS; ++it) {
+        float err   = 0.0f;
+        float zsum  = 0.0f;
+
+        for (int j = 0; j < qk; j++) {
+            const float w  = x[j];
+            const float q  = MIN(15.0f, MAX(0.0f, roundf(w*scale + zero)));
+            const float wr = (q - zero)/scale;
+            const float we = ggml_hqq_shrink(w - wr, beta, Q4_H_LP_NORM);
+
+            err  += fabsf(w - wr);
+            zsum += q - (w - we)*scale;
+        }
+
+        zero = zsum/qk;
+
+        if (!(err < best_err)) {
+            break;
+        }
+        best_err = err;
+        beta *= Q4_H_KAPPA;
+    }
+
+    *scale_out = scale;
+    *zero_out  = zero;
+}
+
+void quantize_row_q4_h_ref(const float * GGML_RESTRICT x, block_q4_h * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK4_H;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float scale, zero;
+        ggml_hqq_solve_block(x + i*qk, qk, &scale, &zero);
+
+        y[i].scale = GGML_FP32_TO_FP16(scale);
+        y[i].zero  = GGML_FP32_TO_FP16(zero);
+
+        // quantize against the stored values so the encoder sees what the decoder will
+        const float s = GGML_FP16_TO_FP32(y[i].scale);
+        const float z = GGML_FP16_TO_FP32(y[i].zero);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const float x0 = x[i*qk + 0    + j]*s + z;
+            const float x1 = x[i*qk + qk/2 + j]*s + z;
+
+            const uint8_t xi0 = MIN(15, MAX(0, (int) roundf(x0)));
+            const uint8_t xi1 = MIN(15, MAX(0, (int) roundf(x1)));
+
+            y[i].qs[j]  = xi0;
+            y[i].qs[j] |= xi1 << 4;
+        }
+    }
+}
+
 void quantize_row_q5_0_ref(const float * GGML_RESTRICT x, block_q5_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK5_0;
 
@@ -493,6 +585,30 @@ void dequantize_row_q4_1(const block_q4_1 * GGML_RESTRICT x, float * GGML_RESTRI
 
             y[i*qk + j + 0   ] = x0*d + m;
             y[i*qk + j + qk/2] = x1*d + m;
+        }
+    }
+}
+
+void dequantize_row_q4_h(const block_q4_h * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK4_H;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        // one reciprocal per block keeps the inner loop free of divisions.
+        // zeroed row padding reaches this loop too, and 1/0 would spread NaN over the whole row
+        const float scale = GGML_FP16_TO_FP32(x[i].scale);
+        const float d = scale != 0.0f ? 1.0f/scale : 0.0f;
+        const float z = GGML_FP16_TO_FP32(x[i].zero);
+
+        for (int j = 0; j < qk/2; ++j) {
+            const int x0 = (x[i].qs[j] & 0x0F);
+            const int x1 = (x[i].qs[j] >>   4);
+
+            y[i*qk + j + 0   ] = (x0 - z)*d;
+            y[i*qk + j + qk/2] = (x1 - z)*d;
         }
     }
 }
@@ -2168,6 +2284,41 @@ static void quantize_row_q4_1_impl(const float * GGML_RESTRICT x, block_q4_1 * G
             y[ib].qs[j] = L[j] | (L[j+16] << 4);
         }
     }
+}
+
+size_t quantize_q4_h(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_q4_h_ref(src, dst, (int64_t)nrow*n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_Q4_H, n_per_row);
+    }
+
+    static_assert(QK4_H == QK4_1, "q4_h and q4_1 must share the block layout");
+    static_assert(sizeof(block_q4_h) == sizeof(block_q4_1), "q4_h and q4_1 must share the block layout");
+
+    // the HQQ solver cannot read an importance matrix, so it steps aside: fit with the weighted q4_1 method
+    const size_t res = quantize_q4_1(src, dst, nrow, n_per_row, quant_weights);
+
+    // the two blocks hold the same nibbles, so only the two halves need a rewrite
+    block_q4_1 * y = (block_q4_1 *)dst;
+
+    for (int64_t ib = 0; ib < nrow*n_per_row/QK4_H; ++ib) {
+        const float d = GGML_FP16_TO_FP32(y[ib].d);
+        const float m = GGML_FP16_TO_FP32(y[ib].m);
+
+        // q*d + m is the same affine map as (q - zero)/scale
+        float scale = 1.0f/d;
+
+        // a block this flat has no fp16 reciprocal, and it spans almost nothing, so keep it at the constant m
+        if (!(fabsf(scale) <= 2e4f && fabsf(m*scale) <= 2e4f)) {
+            scale = 1.0f;
+            memset(y[ib].qs, 0, sizeof(y[ib].qs));
+        }
+
+        y[ib].d = GGML_FP32_TO_FP16(scale);                          // block_q4_h::scale
+        y[ib].m = GGML_FP32_TO_FP16(-m*GGML_FP16_TO_FP32(y[ib].d));  // block_q4_h::zero, taken from the stored scale so that the decoder recovers m
+    }
+
+    return res;
 }
 
 size_t quantize_q4_1(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
@@ -5544,6 +5695,15 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q4_1:
             {
                 VALIDATE_ROW_DATA_DM_F16_IMPL(block_q4_1, data, nb, d, m);
+            } break;
+        case GGML_TYPE_Q4_H:
+            {
+                const block_q4_h * q = (const block_q4_h *) data;
+                for (size_t i = 0; i < nb; ++i) {
+                    if (!validate_fp16(q[i].scale, i) || !validate_fp16(q[i].zero, i)) {
+                        return false;
+                    }
+                }
             } break;
         case GGML_TYPE_Q5_0:
             {

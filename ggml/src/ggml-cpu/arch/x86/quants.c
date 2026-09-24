@@ -915,6 +915,59 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 #endif
 }
 
+void ggml_vec_dot_q4_h_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK8_1;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_h * GGML_RESTRICT x = vx;
+    const block_q8_1   * GGML_RESTRICT y = vy;
+
+    int ib = 0;
+
+#if defined(__AVX2__) || defined(__AVX__)
+    __m256 acc = _mm256_setzero_ps();
+
+    float summs = 0;
+
+    for (; ib < nb; ++ib) {
+        // hqq stores the reciprocal scale, so one divide per block
+        const float d0 = 1.0f/GGML_CPU_FP16_TO_FP32(x[ib].scale);
+        const float d1 = GGML_CPU_FP16_TO_FP32(y[ib].d);
+
+        // sum((q - z)/scale * y) folds the zero-point onto y[ib].s, which already holds sum(y)
+        summs += -d0*GGML_CPU_FP16_TO_FP32(x[ib].zero) * GGML_CPU_FP16_TO_FP32(y[ib].s);
+
+        const __m256 d0d1 = _mm256_mul_ps( _mm256_set1_ps( d0 ), _mm256_set1_ps( d1 ) );
+
+        const __m256i qx = bytes_from_nibbles_32(x[ib].qs);
+        const __m256i qy = _mm256_loadu_si256( (const __m256i *)y[ib].qs );
+
+        const __m256 xy = mul_sum_us8_pairs_float(qx, qy);
+
+#if defined(__AVX2__)
+        acc = _mm256_fmadd_ps( d0d1, xy, acc );
+#else
+        acc = _mm256_add_ps( _mm256_mul_ps( d0d1, xy ), acc );
+#endif
+    }
+
+    *s = hsum_float_8(acc) + summs;
+#else
+    UNUSED(nb);
+    UNUSED(x);
+    UNUSED(y);
+    UNUSED(ib);
+    ggml_vec_dot_q4_h_q8_1_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
 void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);

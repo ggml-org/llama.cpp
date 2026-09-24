@@ -2497,7 +2497,7 @@ struct test_set_rows : public test_case {
 
     double max_nmse_err() override {
         if (type_dst == GGML_TYPE_Q2_0 || type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 ||
-            type_dst == GGML_TYPE_IQ4_NL ||
+            type_dst == GGML_TYPE_Q4_H || type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
             // estimate what the max nmse error would be if one quantized value is
             // off by one. The test values are distributed in [-1,1], so it'll be
@@ -3030,7 +3030,8 @@ struct test_cpy : public test_case {
         if (type_src == type_dst) {
             return 0.0;
         }
-        if (type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_IQ4_NL ||
+        if (type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_Q4_H ||
+            type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
             // estimate what the max nmse error would be if one quantized value is
             // off by one. The test values are distributed in [-150,150], so it'll be
@@ -3046,6 +3047,10 @@ struct test_cpy : public test_case {
             }
             if (type_dst == GGML_TYPE_Q8_0) {
                 err_estimate /= 8.0f;
+            }
+            if (type_dst == GGML_TYPE_Q4_H) {
+                // the hqq solver is iterative, so a device build with fast math can stop on a neighbouring scale/zero and move a whole block by one step
+                err_estimate *= 2.0f;
             }
             err_estimate *= err_estimate;
             err_estimate /= (150.0f*150.0f*0.25f)*float(total_elements());
@@ -8393,6 +8398,7 @@ struct test_falcon : public test_llm {
 static const ggml_type all_types[] = {
     GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
     GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
+    GGML_TYPE_Q4_H,
     GGML_TYPE_Q5_0, GGML_TYPE_Q5_1,
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q1_0,
@@ -10156,6 +10162,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 2},  1025,   1, true, true,  8, 30, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1},  1025,  64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1}, 16384,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+
+    // q4_h KV cases: the four K/V pairs with a CUDA vec instance, at decode (nb=1) and prompt (nb=64) batch sizes
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_H, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16,    GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_H, GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0,   GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_H, GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {4, 1}, 512, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0,   GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext( 64,  64, 4, {1, 1}, 113,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_H, GGML_TYPE_Q4_H));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {1, 1}, 512,  1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_H, GGML_TYPE_Q4_H));
 
     // MLA shape: the V cache is a sub-view of the K cache, with quantized KV
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1},  113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));

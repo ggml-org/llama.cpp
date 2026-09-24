@@ -106,6 +106,9 @@ typedef sycl::half2 ggml_half2;
 #define QI4_1 (QK4_1 / (4 * QR4_1))
 #define QR4_1 2
 
+#define QI4_H (QK4_H / (4 * QR4_H))
+#define QR4_H 2
+
 #define QI_MXFP4 (QK_MXFP4 / (4 * QR_MXFP4))
 #define QR_MXFP4 2
 
@@ -210,6 +213,21 @@ typedef struct {
     uint8_t qs[QK4_1 / 2]; // nibbles / quants
 } block_q4_1;
 static_assert(sizeof(block_q4_1) == 2 * sizeof(ggml_half) + QK4_1 / 2, "wrong q4_1 block size/padding");
+
+#define QK4_H 32
+typedef struct {
+    ggml_half scale; // (2^4-1) / (max - min)
+    ggml_half zero;  // -min * scale
+    uint8_t qs[QK4_H / 2]; // nibbles / quants
+} block_q4_h;
+static_assert(sizeof(block_q4_h) == 2 * sizeof(ggml_half) + QK4_H / 2, "wrong q4_h block size/padding");
+
+// HQQ solver constants, from optimize_weights_proximal_legacy in hqq/core/optimize.py.
+// shared so that the CPU and the device quantizers cannot drift apart
+#define Q4_H_LP_NORM 0.7f
+#define Q4_H_BETA    10.0f
+#define Q4_H_KAPPA   1.01f
+#define Q4_H_ITERS   20
 
 #define QK_MXFP4 32
 typedef struct {
