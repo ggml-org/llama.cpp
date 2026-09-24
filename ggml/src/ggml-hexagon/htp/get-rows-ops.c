@@ -17,6 +17,7 @@
 #include "htp-tensor.h"
 #include "hvx-utils.h"
 #include "hvx-quant.h"
+#include "matmul-ops.h"
 #include "get-rows-ops.h"
 #include "work-queue.h"
 
@@ -208,13 +209,103 @@ GET_ROWS_THREAD_DT_FN(f16,  F16_BYTES,  int64_t, { hvx_dequantize_row_f16_f32((f
 GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int32_t, { hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00); })
 GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int64_t, { hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00); })
 
+static inline float get_rows_fp16_to_f32(ggml_half value) {
+    const HVX_Vector value_f16 = Q6_Vh_vsplat_R(*(const int16_t *) &value);
+    return hvx_vec_get_f32(Q6_V_lo_W(hvx_vec_f16_to_f32(value_f16)));
+}
+
+static void get_rows_reconstruct_q4_0_tiled(
+        block_q4_0 * block, const uint8_t * tile, uint32_t row) {
+    for (uint32_t q = 0; q < QK4_0 / 2; ++q) {
+        const uint8_t low  = tile[(q / 2) * HTP_MM_HMX_TILE_N_ROWS + row];
+        const uint8_t high = tile[(8 + q / 2) * HTP_MM_HMX_TILE_N_ROWS + row];
+        const uint32_t shift = (q & 1) * 4;
+        block->qs[q] = ((low >> shift) & 0x0F) | ((high >> shift) << 4);
+    }
+    memcpy(&block->d, tile + HTP_MM_HMX_TILE_N_ELMS / 2 + row * sizeof(block->d), sizeof(block->d));
+}
+
+static void get_rows_dequantize_q4_0_f32(float * dst, const block_q4_0 * blocks, uint32_t ne00) {
+    for (uint32_t k = 0; k < ne00 / QK4_0; ++k) {
+        const float d = get_rows_fp16_to_f32(blocks[k].d);
+        for (uint32_t q = 0; q < QK4_0 / 2; ++q) {
+            const uint8_t value = blocks[k].qs[q];
+            dst[k * QK4_0 + q]              = d * ((int) (value & 0x0F) - 8);
+            dst[k * QK4_0 + q + QK4_0 / 2] = d * ((int) (value >> 4) - 8);
+        }
+    }
+}
+
+static void get_rows_reconstruct_q8_0_tiled(
+        block_q8_0 * block, const uint8_t * tile, uint32_t row) {
+    for (uint32_t q = 0; q < QK8_0 / 2; ++q) {
+        const uint32_t offset = q * 2 * HTP_MM_HMX_TILE_N_ROWS + 2 * row;
+        block->qs[2 * q + 0] = tile[offset + 0];
+        block->qs[2 * q + 1] = tile[offset + 1];
+    }
+    memcpy(&block->d, tile + HTP_MM_HMX_TILE_N_ELMS + row * sizeof(block->d), sizeof(block->d));
+}
+
+#define GET_ROWS_THREAD_TILED_FN(TYPE_NAME, BLOCK_TYPE, TILE_SIZE, RECONSTRUCT, DEQUANTIZE, IDX_TYPE)                     \
+static void get_rows_thread_##TYPE_NAME##_tiled_##IDX_TYPE(unsigned int nth, unsigned int ith, void * data) {               \
+    struct get_rows_context * grctx = (struct get_rows_context *) data;                                                      \
+    struct htp_ops_context * octx = grctx->octx;                                                                              \
+    const struct htp_get_rows_kernel_params * kparams = grctx->kparams;                                                       \
+    get_rows_preamble;                                                                                                         \
+    const uint32_t dr  = grctx->tasks_per_thread;                                                                              \
+    const uint32_t ir0 = grctx->task_start + dr * ith;                                                                         \
+    if (ir0 >= grctx->task_start + grctx->tasks) {                                                                             \
+        return;                                                                                                                \
+    }                                                                                                                          \
+    const uint32_t ir1 = MIN(ir0 + dr, grctx->task_start + grctx->tasks);                                                      \
+    const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;                                                                 \
+    const struct htp_get_rows_vtcm_layout * vtcm_layout = &grctx->vtcm_layout;                                                \
+    uint8_t * raw_row = grctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;                 \
+    uint8_t * tile_buf = raw_row + vtcm_layout->src0_spad_half_size;                                                           \
+    dma_queue * dma_q = octx->ctx->dma[ith];                                                                                   \
+    for (uint32_t i = ir0; i < ir1; ++i) {                                                                                     \
+        const uint32_t i12 = fastdiv(i, &kparams->div_ne10_ne11);                                                             \
+        const uint32_t rem = i - i12 * ne11 * ne10;                                                                            \
+        const uint32_t i11 = fastdiv(rem, &kparams->div_ne10);                                                                \
+        const uint32_t i10 = rem - i11 * ne10;                                                                                 \
+        const IDX_TYPE * src1_ptr = (const IDX_TYPE *)(uintptr_t)(octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12);      \
+        const uint32_t i01 = (uint32_t) *src1_ptr;                                                                             \
+        assert(i01 < ne01);                                                                                                    \
+        const uint32_t q02 = fastdiv(i11, &kparams->div_ne02);                                                                \
+        const uint32_t i02 = i11 - q02 * ne02;                                                                                 \
+        const uint32_t q03 = fastdiv(i12, &kparams->div_ne03);                                                                \
+        const uint32_t i03 = i12 - q03 * ne03;                                                                                 \
+        const uint32_t column_tile = i01 / HTP_MM_HMX_TILE_N_ROWS;                                                            \
+        const uint32_t row = i01 % HTP_MM_HMX_TILE_N_ROWS;                                                                     \
+        const dma_addr_t matrix = octx->src[0]->data + i02*nb02 + i03*nb03;                                                    \
+        BLOCK_TYPE * blocks = (BLOCK_TYPE *) raw_row;                                                                          \
+        /* Tiled weights interleave 32 logical rows, so rebuild a conventional row in VTCM before dequantizing it. */         \
+        for (uint32_t k_tile = 0; k_tile < n_k_tiles; ++k_tile) {                                                              \
+            const dma_addr_t tile_src = matrix + (column_tile * n_k_tiles + k_tile) * TILE_SIZE;                              \
+            while (!dma_queue_push(dma_q, dma_make_data(tile_buf, tile_src), TILE_SIZE, TILE_SIZE, TILE_SIZE, 1)) {           \
+                dma_queue_pop(dma_q);                                                                                          \
+            }                                                                                                                   \
+            dma_queue_pop(dma_q);                                                                                              \
+            RECONSTRUCT(&blocks[k_tile], tile_buf, row);                                                                       \
+        }                                                                                                                       \
+        const uintptr_t dst_ptr = octx->dst->data + i10*nb1 + i11*nb2 + i12*nb3;                                              \
+        DEQUANTIZE((float *) dst_ptr, (const BLOCK_TYPE *) raw_row, ne00);                                                    \
+    }                                                                                                                          \
+}
+
+GET_ROWS_THREAD_TILED_FN(q4_0, block_q4_0, HTP_MM_WEIGHT_TILE_SIZE_Q4_0, get_rows_reconstruct_q4_0_tiled, get_rows_dequantize_q4_0_f32, int32_t)
+GET_ROWS_THREAD_TILED_FN(q4_0, block_q4_0, HTP_MM_WEIGHT_TILE_SIZE_Q4_0, get_rows_reconstruct_q4_0_tiled, get_rows_dequantize_q4_0_f32, int64_t)
+GET_ROWS_THREAD_TILED_FN(q8_0, block_q8_0, HTP_MM_WEIGHT_TILE_SIZE_Q8_0, get_rows_reconstruct_q8_0_tiled, hvx_dequantize_row_q8_0_f32, int32_t)
+GET_ROWS_THREAD_TILED_FN(q8_0, block_q8_0, HTP_MM_WEIGHT_TILE_SIZE_Q8_0, get_rows_reconstruct_q8_0_tiled, hvx_dequantize_row_q8_0_f32, int64_t)
+
 int op_get_rows(struct htp_ops_context * octx) {
     const struct htp_get_rows_kernel_params * kparams = (const struct htp_get_rows_kernel_params *) octx->kernel_params;
 
     if (octx->src[0]->type != HTP_TYPE_F32 &&
-        octx->src[0]->type != HTP_TYPE_F16 &&
-        octx->src[0]->type != HTP_TYPE_Q8_0 &&
-        octx->src[0]->type != HTP_TYPE_I32) {
+         octx->src[0]->type != HTP_TYPE_F16 &&
+         octx->src[0]->type != HTP_TYPE_Q4_0 &&
+         octx->src[0]->type != HTP_TYPE_Q8_0 &&
+         octx->src[0]->type != HTP_TYPE_I32) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -268,9 +359,15 @@ int op_get_rows(struct htp_ops_context * octx) {
     htp_get_rows_vtcm_layout_build(&grctx.vtcm_layout, octx->src[0]->type, ne00, n_threads);
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
+    const bool q4_0_tiled = octx->src[0]->type == HTP_TYPE_Q4_0 && (octx->src[0]->flags & HTP_TENSOR_REPACK);
+    const bool q8_0_tiled = octx->src[0]->type == HTP_TYPE_Q8_0 && (octx->src[0]->flags & HTP_TENSOR_REPACK);
 
     work_queue_func_t q_func = NULL;
-    if (kparams->use_dma) {
+    if (q4_0_tiled) {
+        q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q4_0_tiled_int32_t : get_rows_thread_q4_0_tiled_int64_t);
+    } else if (q8_0_tiled) {
+        q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q8_0_tiled_int32_t : get_rows_thread_q8_0_tiled_int64_t);
+    } else if (kparams->use_dma) {
         q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t : get_rows_thread_st_int64_t);
     } else {
         switch (octx->src[0]->type) {

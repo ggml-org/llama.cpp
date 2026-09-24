@@ -2,6 +2,7 @@
 #define HTP_GET_ROWS_OPS_H
 
 #include "hex-fastdiv.h"
+#include "matmul-ops.h"
 
 struct htp_get_rows_kernel_params {
     int32_t  n_threads;
@@ -46,6 +47,9 @@ static inline void htp_get_rows_vtcm_layout_build(
         case 1: // HTP_TYPE_F16
             src0_row_size = ne00 * 2;
             break;
+        case 2: // HTP_TYPE_Q4_0
+            src0_row_size = (ne00 / 32) * 18;
+            break;
         case 8: // HTP_TYPE_Q8_0
             src0_row_size = (ne00 / 32) * 34;
             break;
@@ -60,7 +64,17 @@ static inline void htp_get_rows_vtcm_layout_build(
     vtcm_layout->src0_spad_half_size = src0_row_size_aligned;
     vtcm_layout->dst_spad_half_size  = dst_row_size_aligned;
 
+    size_t tiled_src0_bytes = src0_row_size_aligned;
+    if (type == 2) {
+        tiled_src0_bytes += (HTP_MM_WEIGHT_TILE_SIZE_Q4_0 + 255) & ~255;
+    } else if (type == 8) {
+        tiled_src0_bytes += (HTP_MM_WEIGHT_TILE_SIZE_Q8_0 + 255) & ~255;
+    }
+
     vtcm_layout->src0_bytes_per_thread = src0_row_size_aligned * 2;
+    if (tiled_src0_bytes > vtcm_layout->src0_bytes_per_thread) {
+        vtcm_layout->src0_bytes_per_thread = tiled_src0_bytes;
+    }
     vtcm_layout->dst_bytes_per_thread  = dst_row_size_aligned * 2;
 
     vtcm_layout->off_src0 = 0;

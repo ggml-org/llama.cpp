@@ -6176,11 +6176,27 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op;
 
+    // A view offset is in raw Q4_0 layout and cannot address the tiled buffer.
+    if (src0->type == GGML_TYPE_Q4_0 && src0->view_src) {
+        return false;
+    }
+
+    // Q4_0 lacks Q8_0's raw GET_ROWS fallback, so mark it before backend allocation.
+    if (src0->type == GGML_TYPE_Q4_0 && !src0->buffer) {
+        sess->needs_repack.insert(src0);
+    }
+
+    bool is_repacked = false;
     if (src0->extra) {
         const auto * extra = (const ggml_hexagon_tensor_extra *) src0->extra;
-        if (extra->flags & GGML_HEXAGON_TENSOR_REPACK) {
+        is_repacked = (extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0;
+        if (is_repacked && src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q8_0) {
             return false;
         }
+    }
+
+    if (src0->type == GGML_TYPE_Q4_0 && !is_repacked && !sess->needs_repack.count(src0)) {
+        return false;
     }
 
     if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_I32 && src0->ne[0] < 32) {
@@ -6188,7 +6204,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     }
 
     if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 &&
-        src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_I32) {
+        src0->type != GGML_TYPE_Q4_0 && src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_I32) {
         return false;
     }
 
