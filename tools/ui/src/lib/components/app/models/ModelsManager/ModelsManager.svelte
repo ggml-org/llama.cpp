@@ -54,10 +54,20 @@
 			return true;
 		});
 	});
+	// recently used models lead their section, the rest keep the server's order
+	const rank = new SvelteMap<string, number>();
+
+	modelsStore.recentModelIds.forEach((id, index) => rank.set(id, index));
+
+	const rankOf = (entry: ModelQuantGroup) =>
+		Math.min(...entry.quants.map((quant) => rank.get(quant.id) ?? Number.MAX_SAFE_INTEGER));
+	const byRecency = (list: ModelQuantGroup[]) =>
+		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
+
 	// one entry per repo, so a model with several quants is a single table row;
 	// loaded models lead the table, then favorites, then one block per provider,
 	// and an entry lands in the first group that claims it
-	let entries = $derived(groupModelQuants(visible));
+	let entries = $derived(byRecency(groupModelQuants(visible)));
 	let groups = $derived.by(() => {
 		// only llama-compat servers report a load state
 		const isLlamaCompat = (entry: ModelQuantGroup) =>
