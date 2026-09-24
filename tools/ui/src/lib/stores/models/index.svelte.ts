@@ -12,12 +12,15 @@ import {
 	FAVORITE_MODEL_FAMILIES_LOCALSTORAGE_KEY,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
 	RECENT_MODELS_LOCALSTORAGE_KEY,
-	SELECTED_MODEL_LOCALSTORAGE_KEY
+	SELECTED_MODEL_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
+import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { backendsStore } from '$lib/stores/backends.svelte';
@@ -26,7 +29,8 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { readModelContextLength } from '$lib/utils/backend';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { getBackendCapabilities, readModelContextLength } from '$lib/utils/backend';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/model-option-id';
 import { SvelteSet } from 'svelte/reactivity';
@@ -381,6 +385,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
 			this.activeModels = this.buildModelOptions(response);
+			this.warmHubDetails();
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
@@ -601,6 +606,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this.routerModels = cached.raw.data;
 			this.activeModels = this.buildModelOptions(cached.raw);
 		}
+
+		this.warmHubDetails();
 	}
 
 	toDisplayName(id: string): string {
@@ -649,6 +656,33 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			localStorage.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save hidden models to local storage');
+		}
+	}
+
+	/**
+	 * Warm the Hub record for the local repos, so a list can read the context and the
+	 * size the server only reports once a model is loaded. Best effort, and only for
+	 * installs that opted into the Hub.
+	 */
+	warmHubDetails(): void {
+		if (!settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]) return;
+
+		const repos: string[] = [];
+
+		for (const backend of backendsStore.enabled) {
+			if (!getBackendCapabilities(backend).props) continue;
+
+			for (const option of backendsModelsStore.get(backend.id).models) {
+				const repo = option.model.split(':')[0];
+
+				if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
+			}
+		}
+
+		// a large catalog would fire one request per repo on every load, so this warms
+		// the ones the lists mount first and lets the rest arrive on demand
+		for (const repo of repos.slice(0, MODEL_ROW_WINDOW)) {
+			void HuggingFaceService.getDetails(repo).catch(() => {});
 		}
 	}
 

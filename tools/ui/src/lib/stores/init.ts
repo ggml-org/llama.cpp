@@ -2,6 +2,7 @@
 import { backendsStore } from './backends.svelte';
 import { backendsModelsStore } from './backendsModels.svelte';
 import { conversationsStore } from './conversations/index.svelte';
+import { modelsStore } from './models/index.svelte';
 import { permissionsStore } from './permissions.svelte';
 import { serverStore } from './server.svelte';
 import { settingsStore } from './settings/index.svelte';
@@ -24,7 +25,7 @@ export function initStores(): Promise<void> {
 
 		// prefetch every backend's model list in the background; failures are
 		// per-backend and never block startup
-		void backendsModelsStore.loadAll();
+		void backendsModelsStore.loadAll().then(() => modelsStore.warmHubDetails());
 
 		permissionsStore.initialize();
 		toolsStore.initialize();
