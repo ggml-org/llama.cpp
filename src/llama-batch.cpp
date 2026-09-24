@@ -88,7 +88,9 @@ bool llama_batch_allocr::init(
     }
 
     if (!batch.pos) {
-        pos.resize(batch.n_tokens);
+        const int64_t n_pos_all = (int64_t) batch.n_tokens * n_pos_per_embd;
+
+        pos.resize(n_pos_all);
 
         // initialize the starting position for each sequence based on the positions in the memory
         llama_pos p0[LLAMA_MAX_SEQ];
@@ -104,13 +106,18 @@ bool llama_batch_allocr::init(
         for (int32_t i = 0; i < batch.n_tokens; i++) {
             const llama_seq_id seq_id = batch.seq_id[i][0];
 
-            pos[i] = p0[seq_id];
+            const llama_pos p = p0[seq_id];
+
+            // broadcast the auto-generated position across all RoPE sections (if any)
+            for (uint32_t j = 0; j < n_pos_per_embd; ++j) {
+                pos[j*batch.n_tokens + i] = p;
+            }
 
             // update the starting position for all sequences that are assigned to the this token
             for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id = batch.seq_id[i][s];
 
-                p0[seq_id] = pos[i] + 1;
+                p0[seq_id] = p + 1;
             }
         }
 

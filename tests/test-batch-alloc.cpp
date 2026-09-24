@@ -623,6 +623,30 @@ static void test_mrope(testing & t) {
         }
     });
 
+    t.test("auto_pos_broadcast_for_embd", [&](testing & t) {
+        const uint32_t n_pos = 4;
+        const uint32_t n_embd = 2;
+
+        batch_builder bb(n_embd);
+        bb.add(0, {0}, false);
+        bb.add(0, {0}, true);
+
+        // pos == NULL: positions are auto-generated and must be broadcast across all sections
+        llama_batch batch = bb.make(false, true, true);
+
+        llama_batch_allocr ba(n_pos);
+        t.assert_true(ba.init(batch, vocab, nullptr, n_embd, 4, false));
+
+        llama_ubatch ub = ba.split_simple(2);
+        t.assert_equal(2u, ub.n_tokens);
+        t.assert_equal(n_pos, ub.n_pos);
+
+        const llama_pos expected[8] = {0, 1, 0, 1, 0, 1, 0, 1};
+        for (int i = 0; i < 8; ++i) {
+            t.assert_equal(expected[i], ub.pos[i]);
+        }
+    });
+
     t.test("pos_jump_allowed", [&](testing & t) {
         const uint32_t n_pos = 4;
         const uint32_t n_embd = 2;

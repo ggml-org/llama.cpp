@@ -252,6 +252,11 @@ extern "C" {
     // - embd   : token embeddings (i.e. float vector of size n_embd) (used when token is NULL)
     // - pos    : the positions of the respective token in the sequence
     //            (if set to NULL, the token position will be tracked automatically by llama_encode/llama_decode)
+    //            note: for models that use multiple positions per embedding (n_pos_per_embd > 1, e.g. Qwen2.5-VL),
+    //                  batches that contain embeddings (i.e. token == NULL) must provide
+    //                  n_tokens * n_pos_per_embd positions, laid out as consecutive sections of n_tokens
+    //                  positions each; token batches only need n_tokens positions (section 0 is broadcast
+    //                  to all sections)
     // - seq_id : the sequence to which the respective token belongs
     //            (if set to NULL, the sequence ID will be assumed to be 0)
     // - logits : if zero, the logits (and/or the embeddings) for the respective token will not be output
