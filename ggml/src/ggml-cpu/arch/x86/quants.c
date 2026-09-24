@@ -1322,6 +1322,28 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     int ib = 0;
     float sumf = 0;
 
+#if defined(__AVX2__) && !__AVXVNNIINT8__
+    for (int i = 0; i < nb; ++i) {
+        const __m256i qy = _mm256_loadu_si256((const __m256i *) y[i].qs);
+        const __m256i y_min = _mm256_cmpeq_epi8(qy, _mm256_set1_epi8(INT8_MIN));
+        if (!_mm256_testz_si256(y_min, y_min)) {
+            ggml_vec_dot_q8_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+            return;
+        }
+    }
+#elif defined(__AVX__)
+    const __m128i min = _mm_set1_epi8(INT8_MIN);
+    for (int i = 0; i < nb; ++i) {
+        const __m128i qyl = _mm_loadu_si128((const __m128i *) y[i].qs);
+        const __m128i qyh = _mm_loadu_si128((const __m128i *) y[i].qs + 1);
+        const __m128i y_min = _mm_or_si128(_mm_cmpeq_epi8(qyl, min), _mm_cmpeq_epi8(qyh, min));
+        if (_mm_movemask_epi8(y_min)) {
+            ggml_vec_dot_q8_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+            return;
+        }
+    }
+#endif
+
 #if defined(__AVX2__)
     // Initialize accumulator with zeros
     __m256 acc = _mm256_setzero_ps();
