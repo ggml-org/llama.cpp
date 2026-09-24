@@ -368,7 +368,8 @@
 				? `${entry.quants.length} variants`
 				: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
-	// a repo row stands for its quants, so it reports what they agree on
+
+	<!-- a repo row stands for its quants, so it reports what they agree on -->
 	{@const contextSource = entry.quants.find((quant) => quant.contextLength) ?? entry.base}
 	{@const mediaSource = entry.quants.find((quant) => quant.modalities) ?? entry.base}
 
