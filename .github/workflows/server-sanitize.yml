@@ -110,13 +110,15 @@ jobs:
           python3 -m venv .venv
           .venv/bin/pip install -r tools/server/tests/requirements.txt
 
+      # note: use a single process for the tests to avoid resource starvation on the runner
+      # ref: https://github.com/ggml-org/llama.cpp/pull/29297#issuecomment-5812505330
       - name: Tests
         id: server_integration_tests
         if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) }}
         run: |
           source .venv/bin/activate
           cd tools/server/tests
-          PYTEST_WORKERS=1 ./tests.sh
+          PYTEST_WORKERS=0 ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
@@ -124,4 +126,4 @@ jobs:
         run: |
           source .venv/bin/activate
           cd tools/server/tests
-          PYTEST_WORKERS=1 SLOW_TESTS=1 ./tests.sh
+          PYTEST_WORKERS=0 SLOW_TESTS=1 ./tests.sh
