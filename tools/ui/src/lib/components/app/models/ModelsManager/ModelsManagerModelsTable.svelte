@@ -168,7 +168,7 @@
 	/>
 {/snippet}
 
-{#snippet row(option: ModelOption, indent = 0, compact = false)}
+{#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
@@ -177,8 +177,7 @@
 	<div
 		class={[
 			rowGrid,
-			'group cursor-pointer rounded-md px-2 transition',
-			compact ? 'py-2' : 'py-2.5',
+			'group cursor-pointer rounded-md px-2 py-3 transition',
 			isHidden && 'opacity-60',
 			selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 		]}
@@ -192,7 +191,7 @@
 				{option}
 				showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
 				showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-				size={compact ? 'size-7' : 'size-9'}
+				size="size-9"
 			/>
 
 			<ModelId
@@ -227,7 +226,7 @@
 	<!-- </div> -->
 {/snippet}
 
-{#snippet repoRow(entry: ModelQuantGroup, indent = 0, compact = false)}
+{#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
 	{@const providerCount = new Set(entry.quants.map((option) => option.backendId ?? '')).size}
 	{@const groupLabel =
@@ -240,11 +239,7 @@
 
 	<div class="px-2">
 		<div
-			class={[
-				rowGrid,
-				'cursor-pointer rounded-md px-2 transition hover:bg-muted/40',
-				compact ? 'py-2' : 'py-2.5'
-			]}
+			class={[rowGrid, 'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40']}
 			onclick={() => toggleQuants(entry.key)}
 			onkeydown={(event) => event.key === 'Enter' && toggleQuants(entry.key)}
 			role="button"
@@ -255,7 +250,7 @@
 					option={entry.base}
 					showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
 					showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
-					size={compact ? 'size-7' : 'size-9'}
+					size="size-9"
 				/>
 
 				<span class="min-w-0">
@@ -298,7 +293,7 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0, compact = false, showProvider = false)}
+{#snippet quantRow(option: ModelOption, indent = 0, showProvider = false)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
@@ -308,8 +303,7 @@
 		<div
 			class={[
 				rowGrid,
-				'group cursor-pointer rounded-md px-2 transition',
-				compact ? 'py-1.5' : 'py-2',
+				'group cursor-pointer rounded-md px-2 py-2 transition',
 				isHidden && 'opacity-60',
 				selectedId === option.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 			]}
@@ -346,17 +340,17 @@
 	</div>
 {/snippet}
 
-{#snippet entryTree(entry: ModelQuantGroup, indent = 0, compact = false)}
+{#snippet entryTree(entry: ModelQuantGroup, indent = 0)}
 	{#if entry.quants.length > 1}
-		{@render repoRow(entry, indent, compact)}
+		{@render repoRow(entry, indent)}
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24, compact, entry.kind === 'providers')}
+				{@render quantRow(quant, indent + 24, entry.kind === 'providers')}
 			{/each}
 		{/if}
 	{:else}
-		{@render row(entry.base, indent, compact)}
+		{@render row(entry.base, indent)}
 	{/if}
 {/snippet}
 
@@ -376,7 +370,7 @@
 
 	<div class="px-2">
 		<div
-			class="{rowGrid} group cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40"
+			class="{rowGrid} group cursor-pointer rounded-md px-2 py-1 transition hover:bg-muted/40"
 			onclick={toggle}
 			onkeydown={(event) => event.key === 'Enter' && toggle()}
 			role="button"
@@ -440,7 +434,7 @@
 {/snippet}
 
 {#snippet listItem({ depth, entry }: { depth: number; entry: ModelQuantGroup })}
-	{@render entryTree(entry, depth > 0 ? 16 : 0, depth > 0)}
+	{@render entryTree(entry, depth > 0 ? 16 : 0)}
 {/snippet}
 
 {#snippet showMore({
@@ -515,7 +509,7 @@
 					label={group.label}
 					open={group.kind !== 'hidden'}
 					sticky
-					stickyClass="sticky z-10 bg-muted/60 backdrop-blur-sm"
+					stickyClass="sticky z-10 bg-muted/90 backdrop-blur-lg"
 				>
 					<GroupedList
 						group={familyRow}
@@ -526,7 +520,7 @@
 						keyOf={(entry) => entry.key}
 						more={showMore}
 						sectionWindow={MODEL_ROW_WINDOW}
-						stickyClass="bg-muted/30 backdrop-blur-sm"
+						stickyClass="bg-muted/30 backdrop-blur-lg"
 						stickyStyle="top: calc(2.25rem - 1px)"
 						weightOf={(entry) => entry.quants.length}
 					/>
