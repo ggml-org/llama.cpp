@@ -6922,6 +6922,11 @@ struct test_moe_reduce : public test_case {
         return "MOE_REDUCE";
     }
 
+    double max_nmse_err(ggml_backend_t backend) override {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+        return strcmp(ggml_backend_reg_name(reg), "CUDA") == 0 ? 0.0 : test_case::max_nmse_err(backend);
+    }
+
     bool run_whole_graph() override { return true; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {

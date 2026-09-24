@@ -12,14 +12,22 @@ static __global__ void moe_weighted_reduction_f32(const float * __restrict__ exp
         return;
     }
 
-    const uint64_t first_row   = (uint64_t) token * n_expert_used;
-    const float    first_scale = expert_scale != nullptr ? expert_scale[first_row] : 1.0f;
-    float          sum         = (experts[first_row * n_embd + col] * first_scale) * weights[first_row];
+    // Match the rounding of the separate MUL and ADD operations.
+    const uint64_t first_row = (uint64_t) token * n_expert_used;
+    float sum = experts[first_row * n_embd + col];
+    if (expert_scale != nullptr) {
+        sum = __fmul_rn(sum, expert_scale[first_row]);
+    }
+    sum = __fmul_rn(sum, weights[first_row]);
 
     for (int expert = 1; expert < n_expert_used; ++expert) {
-        const uint64_t row   = first_row + expert;
-        const float   scale = expert_scale != nullptr ? expert_scale[row] : 1.0f;
-        sum += (experts[row * n_embd + col] * scale) * weights[row];
+        const uint64_t row = first_row + expert;
+        float weighted = experts[row * n_embd + col];
+        if (expert_scale != nullptr) {
+            weighted = __fmul_rn(weighted, expert_scale[row]);
+        }
+        weighted = __fmul_rn(weighted, weights[row]);
+        sum = __fadd_rn(sum, weighted);
     }
     dst[token * n_embd + col] = sum;
 }
