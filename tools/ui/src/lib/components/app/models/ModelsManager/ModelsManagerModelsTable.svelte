@@ -1,8 +1,11 @@
 <script lang="ts">
 	import {
+		formatLastUsed,
 		isLocalOption,
 		type ModelOverride,
+		modelParamsLabel,
 		type ModelQuantGroup,
+		modelSizeLabel,
 		type ModelsTableGroup
 	} from './utils';
 	import {
@@ -25,6 +28,7 @@
 		Logo,
 		ModelAvatar,
 		ModelCapabilities,
+		ModelCapabilityIcons,
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
@@ -166,7 +170,8 @@
 			}
 		];
 	}
-	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_11rem_6rem_3rem_4.5rem] items-center gap-4';
+	const rowGrid =
+		'grid grid-cols-[minmax(0,1fr)_11rem_5rem_6rem_5rem_5rem_4.5rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
@@ -220,6 +225,30 @@
 	</span>
 {/snippet}
 
+{#snippet modalities(option: ModelOption)}
+	<span class="flex justify-center justify-self-center">
+		<ModelCapabilityIcons hideCapabilities modalities={option.modalities} />
+	</span>
+{/snippet}
+
+{#snippet size(option: ModelOption)}
+	{@const label = modelSizeLabel(option)}
+
+	<span class="justify-self-end text-sm text-muted-foreground">{label ?? '—'}</span>
+{/snippet}
+
+{#snippet parameters(option: ModelOption)}
+	{@const label = modelParamsLabel(option)}
+
+	<span class="justify-self-end text-sm text-muted-foreground">{label ?? '—'}</span>
+{/snippet}
+
+{#snippet lastUsed(option: ModelOption)}
+	<span class="justify-self-end text-sm text-muted-foreground">
+		{formatLastUsed(modelsStore.recentModelUsage[option.id])}
+	</span>
+{/snippet}
+
 {#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
 	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
@@ -251,6 +280,7 @@
 				class="min-w-0 flex-1"
 				hideCapabilities
 				hideModalities
+				hideParameters
 				modalities={option.modalities}
 				modelId={option.model}
 				tags={option.tags}
@@ -260,7 +290,15 @@
 
 		<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
+		{@render modalities(option)}
+
 		{@render capabilities(option)}
+
+		{@render size(option)}
+
+		{@render parameters(option)}
+
+		{@render lastUsed(option)}
 
 		{@render statusDot(option)}
 
@@ -309,6 +347,7 @@
 						class="min-w-0"
 						hideCapabilities
 						hideModalities
+						hideParameters
 						hideQuantization
 						modalities={entry.base.modalities}
 						modelId={entry.base.model}
@@ -322,7 +361,15 @@
 
 			<span></span>
 
+			<span></span>
+
 			{@render capabilities(entry.base)}
+
+			<span></span>
+
+			{@render parameters(entry.base)}
+
+			<span></span>
 
 			<span class="justify-self-center">
 				<span
@@ -372,7 +419,15 @@
 
 			<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
+			{@render modalities(option)}
+
 			{@render capabilities(option)}
+
+			{@render size(option)}
+
+			{@render parameters(option)}
+
+			{@render lastUsed(option)}
 
 			{@render statusDot(option)}
 
@@ -433,6 +488,14 @@
 
 			<span class="text-sm text-muted-foreground">{countLabel}</span>
 		</span>
+
+		<span></span>
+
+		<span></span>
+
+		<span></span>
+
+		<span></span>
 
 		<span></span>
 
@@ -512,7 +575,15 @@
 
 		<span class="text-right whitespace-nowrap">Context</span>
 
+		<span class="text-center">Modalities</span>
+
 		<span class="text-center">Capabilities</span>
+
+		<span class="text-right">Size</span>
+
+		<span class="text-right">Parameters</span>
+
+		<span class="text-right whitespace-nowrap">Last used</span>
 
 		<span class="text-center">Status</span>
 
