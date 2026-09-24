@@ -6,6 +6,10 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* shadcn components key their orientation styles off these, toggle-group among them */
+@custom-variant data-horizontal (&[data-orientation='horizontal']);
+@custom-variant data-vertical (&[data-orientation='vertical']);
+
 :root {
 	--radius: 0.625rem;
 	--background: oklch(1 0 0);
