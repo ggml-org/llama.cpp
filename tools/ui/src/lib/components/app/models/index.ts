@@ -47,6 +47,7 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * aliases, and tags. Supports raw mode to show the unprocessed model name.
  * Respects the user's `showRawModelNames` setting.
  */
+export { default as ModelCapabilities } from './ModelCapabilities.svelte';
 export { default as ModelContext } from './ModelContext.svelte';
 export { default as ModelId } from './ModelId.svelte';
 export { default as ModelAvatar } from './ModelAvatar.svelte';

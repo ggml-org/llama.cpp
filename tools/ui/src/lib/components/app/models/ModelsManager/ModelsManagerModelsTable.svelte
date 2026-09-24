@@ -24,7 +24,7 @@
 		type GroupedListGroup,
 		Logo,
 		ModelAvatar,
-		ModelCapabilityIcons,
+		ModelCapabilities,
 		ModelContext,
 		ModelId,
 		ModelLoadControl,
@@ -35,7 +35,7 @@
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
-	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
+	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
@@ -217,11 +217,7 @@
 
 {#snippet capabilities(option: ModelOption)}
 	<span class="flex justify-center justify-self-center">
-		<ModelCapabilityIcons
-			modalities={option.modalities}
-			supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
-			supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
-		/>
+		<ModelCapabilities {option} />
 	</span>
 {/snippet}
 
@@ -266,8 +262,6 @@
 				hideModalities
 				modalities={option.modalities}
 				modelId={option.model}
-				supportsThinking={option.capabilities.includes(ModelCapability.REASONING)}
-				supportsToolUse={option.capabilities.includes(ModelCapability.TOOL_USE)}
 				tags={option.tags}
 				title={option.model}
 			/>
@@ -329,8 +323,6 @@
 						hideQuantization
 						modalities={entry.base.modalities}
 						modelId={entry.base.model}
-						supportsThinking={entry.base.capabilities.includes(ModelCapability.REASONING)}
-						supportsToolUse={entry.base.capabilities.includes(ModelCapability.TOOL_USE)}
 						tags={entry.base.tags}
 						title={entry.base.model}
 					/>
