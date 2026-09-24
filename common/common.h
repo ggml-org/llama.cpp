@@ -1100,6 +1100,21 @@ std::string common_detokenize(
                                   bool   special = true);
 
 //
+// CTC utils
+//
+
+// greedy CTC decode: argmax per output row, collapse consecutive repeats, drop
+// blank (id 0), detokenize the survivors. `n_outputs` should come from
+// llama_n_outputs(ctx) - a CTC encoder (e.g. a conformer with internal time
+// subsampling) may produce fewer output rows than input tokens, and
+// llama_get_logits_ith() does not itself bound-check against that reduced
+// count.
+std::string common_ctc_greedy_decode(
+        const struct llama_vocab * vocab,
+              struct llama_context * ctx,
+                             int32_t n_outputs);
+
+//
 // Embedding utils
 //
 
