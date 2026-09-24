@@ -260,6 +260,8 @@
 	async function useInNewChat(option: ModelOption): Promise<void> {
 		await modelsStore.selectModelById(option.id);
 		await conversationsStore.openNewChat();
+		// the chat is behind the dialog, so it takes focus once the dialog is out of the way
+		uiStore.requestComposerFocus();
 		onClose?.();
 	}
 
