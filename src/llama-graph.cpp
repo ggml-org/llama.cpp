@@ -1362,6 +1362,8 @@ void llm_graph_result::reset() {
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
     t_h_nextn     = nullptr;
+    t_mtp_k     = nullptr;
+    t_mtp_v     = nullptr;
 
     t_layer_inp.resize(LLAMA_MAX_LAYERS + 1);
     std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
@@ -3057,6 +3059,15 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (inp->self_v_rot) {
         v_cur = llama_mul_mat_hadamard(ctx0, v_cur, inp->self_v_rot);
+    }
+
+    if (cparams.mtp_publish_host && arch == LLM_ARCH_QWEN35 && il == int(hparams.n_layer())) {
+        // Export the exact post-rotation rows consumed by stock SET_ROWS. Flatten only
+        // for the bounded writer; this branch does not change attention arithmetic.
+        res->t_mtp_k = ggml_cont_2d(ctx0, k_cur, ggml_nelements(k_cur)/n_tokens, n_tokens);
+        res->t_mtp_v = ggml_cont_2d(ctx0, v_cur, ggml_nelements(v_cur)/n_tokens, n_tokens);
+        ggml_build_forward_expand(gf, res->t_mtp_k);
+        ggml_build_forward_expand(gf, res->t_mtp_v);
     }
 
     // these nodes are added to the graph together so that they are not reordered

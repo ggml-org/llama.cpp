@@ -959,6 +959,9 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+    // Final post-transform MTP producer rows, before stock SET_ROWS quantization.
+    ggml_tensor * t_mtp_k = nullptr;
+    ggml_tensor * t_mtp_v = nullptr;
 
     std::vector<ggml_tensor *> t_layer_inp;
 

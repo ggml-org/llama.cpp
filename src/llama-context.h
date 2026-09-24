@@ -21,6 +21,7 @@
 struct llama_model;
 class llama_batch_allocr;
 class llama_moe_cache;
+class llama_kv_stream_writer;
 
 class llama_io_read_i;
 class llama_io_write_i;
@@ -293,6 +294,7 @@ private:
 
     // Create and attach arena workspaces from phase-major scheduler measurements.
     bool prepare_compute_arenas(const std::vector<size_t> & measurements, size_t n_phases);
+    bool publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_result & graph);
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -382,6 +384,10 @@ private:
     ggml_backend_sched_ptr sched;
     // Destroy coordinated ownership before the scheduler, including constructor-failure unwinding.
     std::unique_ptr<llama_context_memory> compute_memory;
+    // Drain publication before releasing the coordinator and scheduler source buffers.
+    ggml_backend_buffer_ptr mtp_writer_scratch;
+    std::shared_ptr<llama_kv_stream_writer> mtp_writer;
+    ggml_backend_t mtp_writer_backend = nullptr;
 
     llama_compute_reserve_state sched_reserve_state;
 

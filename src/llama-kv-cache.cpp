@@ -1320,6 +1320,22 @@ bool llama_kv_cache::get_can_shift() const {
     return true;
 }
 
+bool llama_kv_cache::attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache) {
+    if (!cache || attached_mtp_cache || kv_stream || layers.size() != 1 ||
+            hparams.n_layer_nextn != 1 || layers.front().il != hparams.n_layer() ||
+            cache->tokens() != 0 || cache->frontiers().device != 0) return false;
+    const auto & host = cache->host()->config();
+    const auto & shape = host.shape;
+    const uint32_t il = layers.front().il;
+    if (host.layers != 1 || host.context_tokens < get_size() ||
+            shape.type_k != type_k() || shape.type_v != type_v() ||
+            shape.head_dim_k != hparams.n_embd_head_k(il) ||
+            shape.head_dim_v != hparams.n_embd_head_v(il) ||
+            shape.heads != hparams.n_head_kv(il)) return false;
+    attached_mtp_cache = std::move(cache);
+    return true;
+}
+
 uint32_t llama_kv_cache::get_size() const {
     const auto & cells = v_cells[seq_to_stream[0]];
 
@@ -1367,6 +1383,12 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
     return layers[ikv].k;
+}
+
+ggml_tensor * llama_kv_cache::get_v_storage(int32_t il) const {
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return layers[ikv].v;
 }
 
 const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {

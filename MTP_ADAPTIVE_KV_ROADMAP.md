@@ -161,13 +161,33 @@ Stage 10.5 model/context checkpoint: an explicit, default-off target-context par
 reserves one separate MTP logical host cache and includes it in the combined physical
 KV policy and host-memory accounting. The target continues to use its cache-local
 layers, while the physical policy has 17 slots. A real Qwen3.8 context test confirms
-one target token executes without advancing MTP. Live MTP context attachment, tail
-publication, retained-lease handoff, and guard/repartition coordination remain pending;
-adaptive target repartition is not disabled by this checkpoint.
+one target token executes without advancing MTP. Adaptive target repartition
+remains enabled.
 
-Still required for live catch-up: attach the MTP context to the separate cache,
-pass the guard from the phase owner into live target sessions, publish the new MTP
-tail without re-uploading history, advance content generations, and run TG1-TG4 span attention.
+Stage 10.5 paired-context attachment checkpoint: when the target opts in, a serial
+Qwen3.8 MTP context on the same loaded model instance, with compatible device,
+context length, K/V types, and attention geometry, retains the target's separate
+logical cache identity. Unsupported pairs fail before graph execution. The real
+Unsloth UD-IQ4_XS GGUF, loaded once with its embedded MTP head, passes target/draft
+attachment and mismatch/legacy controls. This attachment is metadata-only: MTP still
+allocates and executes against stock KV, while the shared authoritative MTP cache
+remains at frontier zero.
+
+Stage 10.5 host-publication checkpoint: the attached MTP graph exposes the final
+post-transform K/V rows and publishes them through the common bounded writer to
+the separate authoritative host cache. A real UD-IQ4_XS test covers a 256-token
+prefill, one-token page-crossing append, byte-exact K/V parity with stock MTP storage, and
+suffix removal/republication with generation change and prefix preservation.
+The device frontier remains zero. This first live bridge synchronizes the producer
+and uses a separate bounded writer scratch; neither stock MTP device KV nor its
+compute workspace is reclaimed yet.
+
+Still required for live catch-up: pass the retained-layer guard from the phase
+owner into target sessions, use resident/ring spans for MTP TG1-TG4 attention,
+coordinate immediate acceptance/cancellation invalidation, eliminate duplicate
+stock MTP KV, and share/overlap publication workspaces safely. Standalone sidecars
+loaded as a different model instance need an explicit semantic-compatibility proof
+before the attachment gate can be relaxed.
 
 ## Milestone 11: end-to-end speculative server integration
 

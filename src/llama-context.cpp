@@ -8,6 +8,8 @@
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-memory-hybrid.h"
+#include "llama-kv-stream-writer.h"
+#include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -285,6 +287,34 @@ llama_context::llama_context(
             throw std::runtime_error("initial KV streaming integration requires all model layers on the single CUDA device");
         }
     }
+    // The target owns the physical pool. Attaching a draft here retains only the separate
+    // logical host cache; stock draft KV remains the execution source until publication lands.
+    std::shared_ptr<llama_kv_stream_logical_cache> mtp_attached;
+    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.ctx_other &&
+            params.ctx_other->get_cparams().kv_stream_auxiliary_layers) {
+        const auto & target_ctx = *params.ctx_other;
+        const auto & target_params = target_ctx.get_cparams();
+        if (model.arch != LLM_ARCH_QWEN35 || target_ctx.get_model().arch != LLM_ARCH_QWEN35 ||
+                target_params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || &model != &target_ctx.get_model() ||
+                hparams.n_layer_nextn != 1 || cparams.n_ctx != target_ctx.n_ctx() ||
+                cparams.n_seq_max != 1 || cparams.n_rs_seq || !cparams.offload_kqv ||
+                params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
+                cparams.kv_streaming() || cparams.kv_stream_auxiliary_layers ||
+                model.devices.size() != 1 || target_ctx.get_model().devices.size() != 1 ||
+                model.devices.front().dev != target_ctx.get_model().devices.front().dev) {
+            throw std::runtime_error("incompatible MTP context for target's auxiliary KV cache");
+        }
+        auto * target_hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(params.ctx_other));
+        auto * target_stream = target_hybrid ? target_hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+        mtp_attached = target_stream ? target_stream->auxiliary_cache() : nullptr;
+        if (!mtp_attached || mtp_attached->tokens() != 0 ||
+                mtp_attached->host()->config().shape.type_k != params.type_k ||
+                mtp_attached->host()->config().shape.type_v != params.type_v) {
+            throw std::runtime_error("missing or incompatible target MTP logical cache");
+        }
+    }
+    cparams.mtp_publish_host = bool(mtp_attached);
+
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
@@ -445,6 +475,12 @@ llama_context::llama_context(
         }
 
         memory.reset(model.create_memory(params_mem, cparams));
+        if (mtp_attached) {
+            auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
+            if (!draft_kv || !draft_kv->attach_mtp_auxiliary_cache(mtp_attached)) {
+                throw std::runtime_error("failed to attach the MTP logical KV cache");
+            }
+        }
     }
 
     // init backends
@@ -1556,6 +1592,55 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+// Publish only completed, serial MTP appends. Stock MTP KV remains the execution source
+// until retained-span attention and acceptance rollback use this authoritative host cache.
+bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_result & graph) {
+    auto * draft = dynamic_cast<llama_kv_cache *>(memory.get());
+    auto cache = draft ? draft->mtp_auxiliary_cache() : nullptr;
+    if (!cache || !graph.t_mtp_k || !graph.t_mtp_v || !sched || !ubatch.n_tokens ||
+            ubatch.n_seqs_unq != 1 || !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 ||
+            !ubatch.pos || ubatch.pos[0] < 0) return false;
+    const size_t first = size_t(ubatch.pos[0]);
+    if (first > cache->tokens() || first > cache->host()->config().context_tokens ||
+            ubatch.n_tokens > cache->host()->config().context_tokens - first) return false;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.pos[i] != llama_pos(first + i)) return false;
+    }
+
+    // The writer may use a distinct backend execution stream. Drain producer work
+    // before it reads these scheduler-owned tensors; the writer completion then
+    // establishes host visibility before the logical frontier advances.
+    synchronize();
+    if (first < cache->tokens() && !cache->truncate(first)) return false;
+    auto * k_backend = ggml_backend_sched_get_tensor_backend(sched.get(), graph.t_mtp_k);
+    auto * v_backend = ggml_backend_sched_get_tensor_backend(sched.get(), graph.t_mtp_v);
+    if (!k_backend || k_backend != v_backend) return false;
+    if (!mtp_writer || mtp_writer_backend != k_backend) {
+        mtp_writer.reset();
+        mtp_writer_scratch.reset();
+        mtp_writer_backend = nullptr;
+        ggml_kv_stream_layout row;
+        const auto & shape = cache->host()->config().shape;
+        if (ggml_kv_stream_layout_make(shape, 1, row).status != ggml_kv_stream_status::success) return false;
+        const size_t rows = std::min<size_t>(cparams.n_ubatch, size_t(shape.page_tokens));
+        const size_t max_row = std::max(row.k_token_bytes, row.v_token_bytes);
+        if (max_row > SIZE_MAX - sizeof(int64_t)) return false;
+        const size_t stride = max_row + sizeof(int64_t);
+        if (!rows || stride > (SIZE_MAX - 255)/rows) return false;
+        const size_t bytes = (rows*stride + 255)/256*256;
+        auto * buft = ggml_backend_get_default_buffer_type(k_backend);
+        mtp_writer_scratch.reset(buft ? ggml_backend_buft_alloc_buffer(buft, bytes) : nullptr);
+        if (!mtp_writer_scratch) return false;
+        auto writer = llama_kv_stream_writer::create(k_backend, mtp_writer_scratch.get(),
+                bytes, shape, cparams.n_ubatch);
+        if (!writer) return false;
+        mtp_writer = std::shared_ptr<llama_kv_stream_writer>(std::move(writer));
+        mtp_writer_backend = k_backend;
+    }
+    if (!cache->begin_generated(mtp_writer, graph.t_mtp_k, graph.t_mtp_v)) return false;
+    return cache->complete_generated();
+}
+
 llm_graph_result * llama_context::process_ubatch(
         const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx,
         llama_memory_text_phase phase, ggml_status & ret) {
@@ -1679,6 +1764,11 @@ llm_graph_result * llama_context::process_ubatch(
         return nullptr;
     }
 
+    if (cparams.mtp_publish_host && !publish_mtp_kv(ubatch, *res)) {
+        LLAMA_LOG_ERROR("%s: failed to publish authoritative MTP host KV\n", __func__);
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
     if (rs_spill && rs_spill->spill_enabled() &&
             !rs_spill->capture_spill(sched.get(), res->get_recurrent_snapshots())) {
         LLAMA_LOG_ERROR("%s: failed to capture recurrent snapshots\n", __func__);

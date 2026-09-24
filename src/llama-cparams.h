@@ -21,6 +21,7 @@ struct llama_cparams {
         return kv_stream_pool_bytes || shared_device_memory_bytes;
     }
     bool kv_stream_decode = false;
+    bool mtp_publish_host = false;
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation

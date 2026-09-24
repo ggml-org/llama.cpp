@@ -13,6 +13,7 @@ struct llama_hparams;
 struct llama_model;
 struct llama_context;
 class llama_kv_stream_model;
+class llama_kv_stream_logical_cache;
 
 //
 // llama_kv_cache
@@ -120,6 +121,12 @@ public:
 
     ~llama_kv_cache();
     llama_kv_stream_model * get_kv_stream() const noexcept { return kv_stream.get(); }
+    // Metadata-only attachment until the MTP producer and attention paths use this cache.
+    // The caller must keep the target context (which owns the physical pool) alive.
+    bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache);
+    std::shared_ptr<llama_kv_stream_logical_cache> mtp_auxiliary_cache() const noexcept {
+        return attached_mtp_cache;
+    }
     bool kv_stream_can_remove(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
 
     //
@@ -170,6 +177,7 @@ public:
 
     std::vector<uint32_t> get_layer_ids() const;
     ggml_tensor * get_k_storage(int32_t il) const;
+    ggml_tensor * get_v_storage(int32_t il) const;
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
@@ -270,6 +278,7 @@ private:
         std::vector<ggml_tensor *> v_stream;
     };
 
+    std::shared_ptr<llama_kv_stream_logical_cache> attached_mtp_cache;
     std::unique_ptr<llama_kv_stream_model> kv_stream;
     bool v_trans = true;  // the value tensor is transposed
 

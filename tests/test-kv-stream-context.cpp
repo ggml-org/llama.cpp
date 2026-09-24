@@ -11,7 +11,7 @@
 
 using context_ptr = std::unique_ptr<llama_context,decltype(&llama_free)>;
 using model_ptr = std::unique_ptr<llama_model,decltype(&llama_model_free)>;
-static bool auxiliary_control = false;
+static bool auxiliary_control = false, embedded_mtp_control = false;
 static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
 
@@ -322,12 +322,17 @@ int main(int argc,char ** argv) {
         shared_budget_control = shared_budget_control || !std::strcmp(argv[i],"--shared-budget");
         trace_control = trace_control || !std::strcmp(argv[i],"--trace");
         auxiliary_control = auxiliary_control || !std::strcmp(argv[i],"--auxiliary-only");
+        embedded_mtp_control = embedded_mtp_control || !std::strcmp(argv[i],"--embedded-mtp-pair");
     }
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
+    mparams.load_mtp = embedded_mtp_control;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
     if (!t.assert_true(bool(model))) return t.summary();
-    if (auxiliary_control) t.set_filter("target_context_owns_distinct_auxiliary_mtp_host_cache");
+    const char * auxiliary_test_name = embedded_mtp_control ?
+        "target_and_mtp_contexts_share_auxiliary_identity" :
+        "target_context_owns_distinct_auxiliary_mtp_host_cache";
+    if (auxiliary_control || embedded_mtp_control) t.set_filter(auxiliary_test_name);
     const auto * vocab = llama_model_get_vocab(model.get());
     std::string text;
     for (int i = 0; i < 200; ++i) text += "The capital of France is Paris. We are testing a serial language model with a bounded key and value cache. ";
@@ -348,7 +353,7 @@ int main(int argc,char ** argv) {
             context_ptr context(llama_init_from_model(model.get(),p),llama_free); t.assert_true(!context);
         }
     });
-    if (auxiliary_control) t.test("target_context_owns_distinct_auxiliary_mtp_host_cache", [&](testing & t) {
+    if (auxiliary_control || embedded_mtp_control) t.test(auxiliary_test_name, [&](testing & t) {
         auto p = llama_context_default_params();
         p.n_ctx = 1024; p.n_batch = p.n_ubatch = 256;
         p.n_threads = p.n_threads_batch = 8;
@@ -379,6 +384,85 @@ int main(int argc,char ** argv) {
         t.assert_equal(0, llama_decode(context.get(), llama_batch_get_one(&token, 1)));
         t.assert_equal(size_t(1), target->tokens());
         t.assert_equal(size_t(0), mtp->tokens());
+        if (!embedded_mtp_control) return;
+        auto draft_params = p;
+        draft_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        draft_params.ctx_other = context.get();
+        draft_params.kv_stream_pool_bytes = 0;
+        draft_params.kv_stream_auxiliary_layers = 0;
+        context_ptr draft(llama_init_from_model(model.get(), draft_params), llama_free);
+        if (!t.assert_true(bool(draft))) return;
+        auto * draft_kv = static_cast<llama_kv_cache *>(llama_get_memory(draft.get()));
+        t.assert_true(draft_kv->get_kv_stream() == nullptr);
+        t.assert_true(draft_kv->mtp_auxiliary_cache() == mtp);
+        t.assert_equal(size_t(0), draft_kv->mtp_auxiliary_cache()->tokens());
+        t.assert_equal(mtp->host()->cache_id(), draft_kv->mtp_auxiliary_cache()->host()->cache_id());
+        auto mtp_batch = llama_batch_init(257, llama_model_n_embd(model.get()), 1);
+        std::vector<llama_token> mtp_tokens(257, prompt.front());
+        mtp_batch.token = mtp_tokens.data();
+        struct mtp_batch_guard {
+            llama_batch & batch;
+            ~mtp_batch_guard() { batch.token = nullptr; llama_batch_free(batch); }
+        } mtp_batch_owner{mtp_batch};
+        std::fill(mtp_batch.embd, mtp_batch.embd + 257*llama_model_n_embd(model.get()), 0.0f);
+        const auto append_mtp = [&](int first, int count) {
+            mtp_batch.n_tokens = count;
+            for (int i = 0; i < count; ++i) {
+                mtp_batch.pos[i] = first + i;
+                mtp_batch.n_seq_id[i] = 1;
+                mtp_batch.seq_id[i][0] = 0;
+                mtp_batch.logits[i] = i + 1 == count;
+            }
+            return llama_decode(draft.get(), mtp_batch) == 0;
+        };
+        if (!t.assert_true(append_mtp(0, 256))) return;
+        t.assert_equal(size_t(256), mtp->tokens());
+        t.assert_equal(size_t(0), mtp->frontiers().device);
+        if (!t.assert_true(append_mtp(256, 1))) return;
+        t.assert_equal(size_t(257), mtp->tokens());
+        t.assert_equal(size_t(0), mtp->frontiers().device);
+        llama_synchronize(draft.get());
+        llama_kv_stream_host_layer host_rows;
+        if (!t.assert_true(mtp->host()->layer(0, host_rows))) return;
+        const auto & kv_layout = mtp->host()->layout();
+        const int mtp_layer = llama_model_n_layer(model.get());
+        std::vector<uint8_t> stock_k(257*kv_layout.k_token_bytes);
+        std::vector<uint8_t> stock_v(257*kv_layout.v_token_bytes);
+        ggml_backend_tensor_get(draft_kv->get_k_storage(mtp_layer), stock_k.data(), 0, stock_k.size());
+        ggml_backend_tensor_get(draft_kv->get_v_storage(mtp_layer), stock_v.data(), 0, stock_v.size());
+        t.assert_true(std::memcmp(stock_k.data(), host_rows.k, stock_k.size()) == 0);
+        t.assert_true(std::memcmp(stock_v.data(), host_rows.v, stock_v.size()) == 0);
+        const auto prior_generation = mtp->identity().generation;
+        const std::vector<uint8_t> prior_k(static_cast<const uint8_t *>(host_rows.k),
+                static_cast<const uint8_t *>(host_rows.k) + stock_k.size());
+        const std::vector<uint8_t> prior_v(static_cast<const uint8_t *>(host_rows.v),
+                static_cast<const uint8_t *>(host_rows.v) + stock_v.size());
+        if (!t.assert_true(llama_memory_seq_rm(llama_get_memory(draft.get()), 0, 256, -1))) return;
+        mtp_tokens[0] = prompt[1];
+        if (!t.assert_true(append_mtp(256, 1))) return;
+        t.assert_equal(size_t(257), mtp->tokens());
+        t.assert_true(mtp->identity().generation > prior_generation);
+        t.assert_true(std::memcmp(prior_k.data(), host_rows.k, 256*kv_layout.k_token_bytes) == 0);
+        t.assert_true(std::memcmp(prior_v.data(), host_rows.v, 256*kv_layout.v_token_bytes) == 0);
+        t.assert_true(std::memcmp(prior_k.data() + 256*kv_layout.k_token_bytes,
+                static_cast<const uint8_t *>(host_rows.k) + 256*kv_layout.k_token_bytes,
+                kv_layout.k_token_bytes) != 0);
+        auto wrong_ctx = draft_params;
+        wrong_ctx.n_ctx = 2048;
+        context_ptr mismatched_context(llama_init_from_model(model.get(), wrong_ctx), llama_free);
+        t.assert_true(!mismatched_context);
+        auto wrong_quant = draft_params;
+        wrong_quant.type_k = GGML_TYPE_F16;
+        context_ptr mismatched_quant(llama_init_from_model(model.get(), wrong_quant), llama_free);
+        t.assert_true(!mismatched_quant);
+        auto missing_target = draft_params;
+        missing_target.ctx_other = nullptr;
+        draft.reset();
+        context_ptr ordinary_draft(llama_init_from_model(model.get(), missing_target), llama_free);
+        if (t.assert_true(bool(ordinary_draft))) {
+            auto * ordinary_kv = static_cast<llama_kv_cache *>(llama_get_memory(ordinary_draft.get()));
+            t.assert_true(ordinary_kv->mtp_auxiliary_cache() == nullptr);
+        }
     });
     t.test("serial_phase_alternation_and_boundary_cancellation_match_stock", [&](testing & t) {
         const auto baseline = evaluate_serial_phases(t,model.get(),prompt,0);
