@@ -449,7 +449,7 @@
 				option={family.entries[0].base}
 				showBaseModelAvatar
 				showQuantBadge={false}
-				size="size-7"
+				size="size-6"
 			/>
 
 			<span class="truncate text-sm font-medium">{family.label}</span>
