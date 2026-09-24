@@ -5,8 +5,11 @@
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
 	import ModelsManagerModelConfigurationLoad from './ModelsManagerModelConfigurationLoad.svelte';
 	import * as Tabs from '$lib/components/ui/tabs';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { HuggingFaceService } from '$lib/services';
+	import { modelsStore, settingsStore } from '$lib/stores';
+	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -47,6 +50,32 @@
 			LOAD_DEFAULTS.contextLength
 	);
 
+	// The server only reports the full metadata once a model is loaded, which loads
+	// it. When discovery is on, the Hub fills those gaps instead.
+	let hubDetails = $state<HfModelDetailInfo | null>(null);
+
+	$effect(() => {
+		const repo = option.model.split(':')[0] ?? option.model;
+
+		let cancelled = false;
+
+		hubDetails = null;
+
+		if (!settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS] || !repo.includes('/')) {
+			return;
+		}
+
+		void HuggingFaceService.getDetails(repo)
+			.then((details) => {
+				if (!cancelled) hubDetails = details;
+			})
+			.catch(() => {});
+
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	function resetDraft(): void {
 		edits = null;
 	}
@@ -74,7 +103,7 @@
 
 		<div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
 			<Tabs.Content value="information">
-				<ModelsManagerModelConfigurationInformation {option} {serverProps} />
+				<ModelsManagerModelConfigurationInformation hub={hubDetails} {option} {serverProps} />
 			</Tabs.Content>
 
 			<Tabs.Content value="load">

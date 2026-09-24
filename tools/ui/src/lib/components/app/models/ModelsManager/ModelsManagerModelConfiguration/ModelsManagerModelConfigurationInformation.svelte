@@ -8,15 +8,18 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { modelsStore } from '$lib/stores';
 	import type { ApiLlamaCppServerProps } from '$lib/types/api';
+	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
 	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
+		/** Hugging Face details, filled in when discovery is on and the server has none. */
+		hub?: HfModelDetailInfo | null;
 		option: ModelOption;
 		serverProps: ApiLlamaCppServerProps | null | undefined;
 	}
 
-	let { option, serverProps }: Props = $props();
+	let { hub = null, option, serverProps }: Props = $props();
 
 	let quant = $derived(modelQuantLabel(option));
 	let size = $derived(modelSizeLabel(option));
@@ -42,6 +45,8 @@
 	});
 
 	let meta = $derived(option.meta);
+	// the server reports these once the model is loaded; the Hub knows them anyway
+	let gguf = $derived(hub?.gguf ?? null);
 	let modalities = $derived(modelsStore.props.getModelModalitiesArray(option.id));
 	let isMissingContext = $derived(!serverProps);
 	let rows = $derived([
@@ -58,7 +63,9 @@
 				? `${formatNumber(meta.n_ctx_train)} tokens`
 				: option.contextLength
 					? `${formatParameters(option.contextLength)} tokens`
-					: null
+					: gguf?.context_length
+						? `${formatNumber(gguf.context_length)} tokens`
+						: null
 		},
 		{
 			label: 'Model Size',
@@ -66,7 +73,9 @@
 		},
 		{
 			label: 'Parameters',
-			value: meta?.n_params ? formatParameters(meta.n_params) : (option.parsedId?.params ?? null)
+			value: meta?.n_params
+				? formatParameters(meta.n_params)
+				: (option.parsedId?.params ?? (gguf?.total ? formatParameters(gguf.total) : null))
 		},
 		{ label: 'Embedding Size', value: meta?.n_embd ? formatNumber(meta.n_embd) : null },
 		{
@@ -75,7 +84,11 @@
 		},
 		{ isCapitalized: true, label: 'Vocabulary Type', value: (meta?.vocab_type as string) ?? null },
 		{ isBadge: true, label: 'Quantization', value: quant },
-		{ isBadge: true, label: 'Architecture', value: (option.meta?.architecture as string) ?? null },
+		{
+			isBadge: true,
+			label: 'Architecture',
+			value: (option.meta?.architecture as string) ?? gguf?.architecture ?? null
+		},
 		{ label: 'Format', value: isLocalOption(option) ? 'GGUF' : null },
 		{ label: 'Parallel Slots', value: serverProps ? String(serverProps.total_slots) : null },
 		{ isMono: true, label: 'Build Info', value: serverProps?.build_info ?? null }
@@ -160,6 +173,12 @@
 	{/if}
 </div>
 
+{#if hub}
+	<p class="pt-2 text-xs text-muted-foreground">
+		Some values come from the Hugging Face Hub. Load the model to read them from the server.
+	</p>
+{/if}
+
 <div class="mt-4">
 	<CollapsibleSection triggerClass={sectionTrigger}>
 		{#snippet trigger()}
@@ -168,6 +187,7 @@
 
 		<pre
 			class="mt-1 max-h-48 overflow-auto rounded-md bg-muted/50 p-2 text-xs whitespace-pre-wrap">{serverProps?.chat_template ??
+				gguf?.chat_template ??
 				'Not reported by the server.'}</pre>
 	</CollapsibleSection>
 

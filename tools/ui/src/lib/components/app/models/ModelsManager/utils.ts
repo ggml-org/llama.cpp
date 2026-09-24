@@ -1,5 +1,6 @@
-import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
+import { LOCAL_BACKEND_ID, MODEL_OVERRIDES_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
 import { HuggingFaceService, ModelsService } from '$lib/services';
+import { settingsStore } from '$lib/stores';
 import type { ModelLoadProgress, ModelOption } from '$lib/types/models';
 import { getBackend } from '$lib/utils/api-base';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
@@ -155,7 +156,10 @@ export async function resolveModelSize(option: ModelOption): Promise<string | nu
 
 	if (reported) return reported;
 
-	if (!isLocalOption(option)) return null;
+	// the repo tree lookup only happens for installs that opted into the Hub
+	if (!isLocalOption(option) || !settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]) {
+		return null;
+	}
 
 	const [repo, quant] = option.model.split(':');
 
