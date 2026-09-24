@@ -8,6 +8,63 @@
 #include "ggml-sycl/presets.hpp"
 #include "ggml.h"
 
+
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum cpy1_tag {
+    CPY1_F32_F32,
+    CPY1_F32_F16,
+    CPY1_F16_F16,
+    CPY1_F16_F32,
+    CPY1_I16_I16,
+    CPY1_I32_I32,
+    CPY1_F32_I32,
+    CPY1_I32_F32,
+    CPY1_F32_BF16,
+    CPY1_BF16_F32,
+    CPY1_BF16_BF16,
+    CPY1_F16_BF16,
+    CPY1_BF16_F16,
+};
+
+enum dequant_tag {
+    DEQUANT_Q4_0,
+    DEQUANT_Q4_1,
+    DEQUANT_Q5_0,
+    DEQUANT_Q5_1,
+    DEQUANT_MXFP4,
+};
+
+enum cpy_blck_q_f32_tag {
+    CPY_BLCK_Q8_0_F32,
+    CPY_BLCK_Q2_0_F32,
+    CPY_BLCK_Q4_0_F32,
+    CPY_BLCK_Q4_1_F32,
+    CPY_BLCK_Q5_0_F32,
+    CPY_BLCK_Q5_1_F32,
+    CPY_BLCK_MXFP4_F32,
+};
+
+enum cpy_blck_f32_q_tag {
+    CPY_BLCK_F32_Q8_0,
+    CPY_BLCK_F32_Q4_0,
+    CPY_BLCK_F32_Q4_1,
+    CPY_BLCK_F32_Q5_0,
+    CPY_BLCK_F32_Q5_1,
+    CPY_BLCK_F32_IQ4_NL,
+    CPY_BLCK_F32_Q1_0,
+    CPY_BLCK_F32_Q2_0,
+    CPY_BLCK_F32_MXFP4,
+    CPY_BLCK_F32_NVFP4,
+    CPY_BLCK_F16_Q4_0,
+    CPY_BLCK_F16_Q4_1,
+    CPY_BLCK_F16_Q5_0,
+};
+
+static void cpy_blck_f16_q4_0(const char * cxi, char * cdsti);
+static void cpy_blck_f16_q4_1(const char * cxi, char * cdsti);
+static void cpy_blck_f16_q5_0(const char * cxi, char * cdsti);
+
 static void cpy_1_f32_f32(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     float *       dsti = (float *) cdsti;
@@ -101,7 +158,7 @@ static void cpy_1_bf16_f16(const char * cxi, char * cdsti) {
 }
 #endif
 
-template <cpy_kernel_t cpy_1>
+template <cpy1_tag cpy1>
 static void cpy_f32_f16(const char * cx, char * cdst, const int ne, const int ne00, const int ne01, const int ne02,
                         const int nb00, const int nb01, const int nb02, const int nb03, const int ne10, const int ne11,
                         const int ne12, const int nb10, const int nb11, const int nb12, const int nb13,
@@ -126,7 +183,49 @@ static void cpy_f32_f16(const char * cx, char * cdst, const int ne, const int ne
     const int i10        = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
     const int dst_offset = i10 * nb10 + i11 * nb11 + i12 * nb12 + i13 * nb13;
 
-    cpy_1(cx + x_offset, cdst + dst_offset);
+    switch (cpy1) {
+        case CPY1_F32_F32:
+            cpy_1_f32_f32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_F32_F16:
+            cpy_1_f32_f16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_F16_F16:
+            cpy_1_f16_f16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_F16_F32:
+            cpy_1_f16_f32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_I16_I16:
+            cpy_1_i16_i16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_I32_I32:
+            cpy_1_i32_i32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_F32_I32:
+            cpy_1_f32_i32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_I32_F32:
+            cpy_1_i32_f32(cx + x_offset, cdst + dst_offset);
+            break;
+#ifdef GGML_SYCL_HAS_BF16
+        case CPY1_F32_BF16:
+            cpy_1_f32_bf16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_BF16_F32:
+            cpy_1_bf16_f32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_BF16_BF16:
+            cpy_1_bf16_bf16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_F16_BF16:
+            cpy_1_f16_bf16(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY1_BF16_F16:
+            cpy_1_bf16_f16(cx + x_offset, cdst + dst_offset);
+            break;
+#endif
+    }
 }
 
 
@@ -166,12 +265,28 @@ static void cpy_blck_q2_0_f32(const char * cxi, char * cdsti) {
 
 
 
-template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32(const char * cxi, char * cdsti) {
+template <dequant_tag deq, int qk> static void cpy_blck_q_f32(const char * cxi, char * cdsti) {
     float * cdstf = (float *) (cdsti);
 
     for (int j = 0; j < qk / 2; j++) {
         dfloat2 dq;
-        dequant(cxi, 0, j, dq);
+        switch (deq) {
+            case DEQUANT_Q4_0:
+                dequantize_q4_0(cxi, 0, j, dq);
+                break;
+            case DEQUANT_Q4_1:
+                dequantize_q4_1(cxi, 0, j, dq);
+                break;
+            case DEQUANT_Q5_0:
+                dequantize_q5_0(cxi, 0, j, dq);
+                break;
+            case DEQUANT_Q5_1:
+                dequantize_q5_1(cxi, 0, j, dq);
+                break;
+            case DEQUANT_MXFP4:
+                dequantize_mxfp4(cxi, 0, j, dq);
+                break;
+        }
         *(cdstf + j)          = dq.x();
         *(cdstf + j + qk / 2) = dq.y();
     }
@@ -205,7 +320,7 @@ static void cpy_q_q(const char * cx, char * cdst, const int ne, const int ne00, 
     cpy_blck_q_q<T>(cx + x_offset, cdst + dst_offset);
 }
 
-template <cpy_kernel_t cpy_blck, int qk>
+template <cpy_blck_f32_q_tag cpy_blck, int qk>
 static void cpy_f32_q(const char * cx, char * cdst, const int ne, const int ne00, const int ne01, const int ne02,
                       const int nb00, const int nb01, const int nb02, const int nb03, const int ne10, const int ne11,
                       const int ne12, const int nb10, const int nb11, const int nb12, const int nb13,
@@ -229,10 +344,38 @@ static void cpy_f32_q(const char * cx, char * cdst, const int ne, const int ne00
     const int i10        = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
     const int dst_offset = (i10 / qk) * nb10 + i11 * nb11 + i12 * nb12 + i13 * nb13;
 
-    cpy_blck(cx + x_offset, cdst + dst_offset);
+    switch (cpy_blck) {
+        case CPY_BLCK_F32_Q8_0:
+            cpy_blck_f32_q8_0(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F32_Q4_0:
+            cpy_blck_f32_q4_0(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F32_Q4_1:
+            cpy_blck_f32_q4_1(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F32_Q5_0:
+            cpy_blck_f32_q5_0(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F32_Q5_1:
+            cpy_blck_f32_q5_1(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F32_IQ4_NL:
+            cpy_blck_f32_iq4_nl(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F16_Q4_0:
+            cpy_blck_f16_q4_0(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F16_Q4_1:
+            cpy_blck_f16_q4_1(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_F16_Q5_0:
+            cpy_blck_f16_q5_0(cx + x_offset, cdst + dst_offset);
+            break;
+    }
 }
 
-template <cpy_kernel_t cpy_blck, int qk>
+template <cpy_blck_q_f32_tag cpy_blck, int qk>
 static void cpy_q_f32(const char * cx, char * cdst, const int ne, const int ne00, const int ne01, const int ne02,
                       const int nb00, const int nb01, const int nb02, const int nb03, const int ne10, const int ne11,
                       const int ne12, const int nb10, const int nb11, const int nb12, const int nb13,
@@ -255,7 +398,29 @@ static void cpy_q_f32(const char * cx, char * cdst, const int ne, const int ne00
     const int i10        = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
     const int dst_offset = i10 * nb10 + i11 * nb11 + i12 * nb12 + i13 * nb13;
 
-    cpy_blck(cx + x_offset, cdst + dst_offset);
+    switch (cpy_blck) {
+        case CPY_BLCK_Q8_0_F32:
+            cpy_blck_q8_0_f32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_Q2_0_F32:
+            cpy_blck_q2_0_f32(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_Q4_0_F32:
+            cpy_blck_q_f32<DEQUANT_Q4_0, qk>(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_Q4_1_F32:
+            cpy_blck_q_f32<DEQUANT_Q4_1, qk>(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_Q5_0_F32:
+            cpy_blck_q_f32<DEQUANT_Q5_0, qk>(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_Q5_1_F32:
+            cpy_blck_q_f32<DEQUANT_Q5_1, qk>(cx + x_offset, cdst + dst_offset);
+            break;
+        case CPY_BLCK_MXFP4_F32:
+            cpy_blck_q_f32<DEQUANT_MXFP4, qk>(cx + x_offset, cdst + dst_offset);
+            break;
+    }
 }
 
 static void ggml_cpy_f16_f32_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
@@ -270,7 +435,7 @@ static void ggml_cpy_f16_f32_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_f16_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_F16_F32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -288,7 +453,7 @@ static void ggml_cpy_f32_f32_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_f32_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_F32_F32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -306,7 +471,7 @@ static void ggml_cpy_f32_f16_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_f32_f16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_F32_F16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -322,7 +487,7 @@ static void ggml_cpy_f32_i32_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_f32_i32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_F32_I32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -338,7 +503,7 @@ static void ggml_cpy_i32_f32_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_i32_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_I32_F32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -353,7 +518,7 @@ static void ggml_cpy_f32_q8_0_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f32_q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_f32_q<CPY_BLCK_F32_Q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -367,7 +532,7 @@ static void ggml_cpy_q8_0_f32_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_q_f32<cpy_blck_q8_0_f32, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_q_f32<CPY_BLCK_Q8_0_F32, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -382,7 +547,7 @@ static void ggml_cpy_q2_0_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            cpy_q_f32<cpy_blck_q2_0_f32, QK2_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11,
+            cpy_q_f32<CPY_BLCK_Q2_0_F32, QK2_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11,
                                                 ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -396,7 +561,7 @@ static void ggml_cpy_f32_q4_0_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f32_q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_f32_q<CPY_BLCK_F32_Q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -411,7 +576,7 @@ static void ggml_cpy_q4_0_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
+            cpy_q_f32<CPY_BLCK_Q4_0_F32, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
                                                                      nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13,
                                                                      item_ct1);
         });
@@ -426,7 +591,7 @@ static void ggml_cpy_f32_q4_1_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f32_q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_f32_q<CPY_BLCK_F32_Q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -441,7 +606,7 @@ static void ggml_cpy_q4_1_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_q_f32<cpy_blck_q_f32<dequantize_q4_1, QK4_1>, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
+            cpy_q_f32<CPY_BLCK_Q4_1_F32, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
                                                                      nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13,
                                                                      item_ct1);
         });
@@ -456,7 +621,7 @@ static void ggml_cpy_f32_q5_0_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                             cpy_f32_q<cpy_blck_f32_q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_f32_q<CPY_BLCK_F32_Q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -471,7 +636,7 @@ static void ggml_cpy_q5_0_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_q_f32<cpy_blck_q_f32<dequantize_q5_0, QK5_0>, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
+            cpy_q_f32<CPY_BLCK_Q5_0_F32, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
                                                                      nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13,
                                                                      item_ct1);
         });
@@ -486,7 +651,7 @@ static void ggml_cpy_f32_q5_1_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f32_q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                             cpy_f32_q<CPY_BLCK_F32_Q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
 }
@@ -501,7 +666,7 @@ static void ggml_cpy_q5_1_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_q_f32<cpy_blck_q_f32<dequantize_q5_1, QK5_1>, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
+            cpy_q_f32<CPY_BLCK_Q5_1_F32, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02,
                                                                      nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13,
                                                                      item_ct1);
         });
@@ -517,7 +682,7 @@ static void ggml_cpy_mxfp4_f32_sycl(const char * cx, char * cdst, const int ne, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            cpy_q_f32<cpy_blck_q_f32<dequantize_mxfp4, QK_MXFP4>, QK_MXFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
+            cpy_q_f32<CPY_BLCK_MXFP4_F32, QK_MXFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
                                                                              nb01, nb02, nb03, ne10, ne11, ne12,
                                                                              nb10, nb11, nb12, nb13, item_ct1);
         });
@@ -533,7 +698,7 @@ static void ggml_cpy_f32_iq4_nl_sycl(const char * cx, char * cdst, const int ne,
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            cpy_f32_q<cpy_blck_f32_iq4_nl, QK4_NL>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11,
+            cpy_f32_q<CPY_BLCK_F32_IQ4_NL, QK4_NL>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11,
                                                    ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -580,7 +745,7 @@ static void ggml_cpy_f16_q4_0_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f16_q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02,
+                             cpy_f32_q<CPY_BLCK_F16_Q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02,
                                                                  nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
@@ -595,7 +760,7 @@ static void ggml_cpy_f16_q4_1_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f16_q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02,
+                             cpy_f32_q<CPY_BLCK_F16_Q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02,
                                                                  nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
@@ -610,7 +775,7 @@ static void ggml_cpy_f16_q5_0_sycl(const char * cx, char * cdst, const int ne, c
     stream->parallel_for(sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                                            sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                             cpy_f32_q<cpy_blck_f16_q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02,
+                             cpy_f32_q<CPY_BLCK_F16_Q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02,
                                                                  nb00, nb01, nb02, nb03,
                                                                  ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
                          });
@@ -694,7 +859,7 @@ inline float ggml_sycl_src_to_f32<ggml_bf16_t>(const ggml_bf16_t & x) {
 }
 #endif
 
-template <typename SrcScalar, cpy_kernel_t quantize_block, int qk>
+template <typename SrcScalar, cpy_blck_f32_q_tag quantize_block, int qk>
 static void ggml_sycl_quantize_rows_q(const char * cx, char * cdst, const int64_t ne,
                                       const int64_t ne00, const int64_t ne01, const int64_t ne02,
                                       const size_t nb00, const size_t nb01, const size_t nb02, const size_t nb03,
@@ -742,7 +907,38 @@ static void ggml_sycl_quantize_rows_q(const char * cx, char * cdst, const int64_
             }
         }
 
-        quantize_block((const char *) xf, cdst + dst_offset);
+         switch (quantize_block) {
+             case CPY_BLCK_F32_Q8_0:
+                 cpy_blck_f32_q8_0((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q1_0:
+                 cpy_blck_f32_q1_0((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q2_0:
+                 cpy_blck_f32_q2_0((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q5_1:
+                 cpy_blck_f32_q5_1((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q5_0:
+                 cpy_blck_f32_q5_0((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q4_1:
+                 cpy_blck_f32_q4_1((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_Q4_0:
+                 cpy_blck_f32_q4_0((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_IQ4_NL:
+                 cpy_blck_f32_iq4_nl((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_MXFP4:
+                 cpy_blck_f32_mxfp4((const char *) xf, cdst + dst_offset);
+                 break;
+             case CPY_BLCK_F32_NVFP4:
+                 cpy_blck_f32_nvfp4((const char *) xf, cdst + dst_offset);
+                 break;
+         }
     });
 }
 
@@ -757,52 +953,52 @@ static void ggml_sycl_quantize_rows_sycl(const char * cx, char * cdst, const ggm
 
     switch (src1->type) {
         case GGML_TYPE_Q8_0:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q1_0:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q1_0, QK1_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q1_0, QK1_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q2_0:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q2_0, QK2_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q2_0, QK2_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q5_1:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q5_0:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q4_1:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_Q4_0:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_Q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01,
                                                                             nb02, nb03, ne10, ne11, ne12, nb10, nb11,
                                                                             nb12, nb13, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_iq4_nl, QK4_NL>(cx, cdst, ne, ne00, ne01, ne02, nb00,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_IQ4_NL, QK4_NL>(cx, cdst, ne, ne00, ne01, ne02, nb00,
                                                                                nb01, nb02, nb03, ne10, ne11, ne12,
                                                                                nb10, nb11, nb12, nb13, stream);
             break;
         case GGML_TYPE_MXFP4:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_mxfp4, QK_MXFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_MXFP4, QK_MXFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
                                                                                 nb01, nb02, nb03, ne10, ne11, ne12,
                                                                                 nb10, nb11, nb12, nb13, stream);
             break;
         case GGML_TYPE_NVFP4:
-            ggml_sycl_quantize_rows_q<SrcScalar, cpy_blck_f32_nvfp4, QK_NVFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
+            ggml_sycl_quantize_rows_q<SrcScalar, CPY_BLCK_F32_NVFP4, QK_NVFP4>(cx, cdst, ne, ne00, ne01, ne02, nb00,
                                                                                 nb01, nb02, nb03, ne10, ne11, ne12,
                                                                                 nb10, nb11, nb12, nb13, stream);
             break;
@@ -824,7 +1020,7 @@ static void ggml_cpy_f16_f16_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_f16_f16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_F16_F16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -843,7 +1039,7 @@ static void ggml_cpy_i16_i16_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_i16_i16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_I16_I16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -862,7 +1058,7 @@ static void ggml_cpy_i32_i32_sycl(const char * cx, char * cdst, const int ne, co
             sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                               sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-                cpy_f32_f16<cpy_1_i32_i32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+                cpy_f32_f16<CPY1_I32_I32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
             });
     }
@@ -1186,7 +1382,7 @@ static void ggml_cpy_f32_bf16_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_f32_f16<cpy_1_f32_bf16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+            cpy_f32_f16<CPY1_F32_BF16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -1200,7 +1396,7 @@ static void ggml_cpy_bf16_f32_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_f32_f16<cpy_1_bf16_f32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+            cpy_f32_f16<CPY1_BF16_F32>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -1214,7 +1410,7 @@ static void ggml_cpy_bf16_bf16_sycl(const char * cx, char * cdst, const int ne, 
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_f32_f16<cpy_1_bf16_bf16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+            cpy_f32_f16<CPY1_BF16_BF16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                             nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -1228,7 +1424,7 @@ static void ggml_cpy_f16_bf16_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_f32_f16<cpy_1_f16_bf16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+            cpy_f32_f16<CPY1_F16_BF16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
         });
 }
@@ -1242,7 +1438,7 @@ static void ggml_cpy_bf16_f16_sycl(const char * cx, char * cdst, const int ne, c
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_CPY_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]]{
-            cpy_f32_f16<cpy_1_bf16_f16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
+            cpy_f32_f16<CPY1_BF16_F16>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                            nb10, nb11, nb12, nb13, item_ct1);
         });
 }
