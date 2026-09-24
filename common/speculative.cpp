@@ -262,8 +262,9 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     bool process(const llama_batch & batch) override {
         auto * ctx_dft = params.ctx_dft;
 
+        std::vector<int8_t> logits(batch.n_tokens, 0);
         llama_batch batch_dft = batch;
-        batch_dft.logits = nullptr;
+        batch_dft.logits = logits.data();
 
         const int ret = llama_decode(ctx_dft, batch_dft);
 
@@ -335,6 +336,8 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
                 // only collect very high-confidence draft tokens
                 if (cur_p->data[0].p < params.p_min) {
+                    auto & dp = dparams.at(seq_id);
+                    dp.seed_reusable = n_seq == 1 && i == 0 && dp.result->empty();
                     drafting[seq_id] = false;
                     n_drafting--;
 
