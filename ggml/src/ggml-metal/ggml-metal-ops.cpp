@@ -2993,7 +2993,7 @@ static ggml_metal_tuning::fa_cfg_t ggml_metal_op_flash_attn_ext_cfg(const ggml_t
 
     const ggml_metal_tuning::fa_cfg_t baseline = { OP_FLASH_ATTN_EXT_NQPSG, 0 };
 
-    const ggml_metal_tuning::fa_cfg_t cfg = ggml_metal_tuning::fa_pick(props_dev->device_id, props_dev->gpu_family, (int) ne00, (int) ne20, ne11, ne01, ne02, ne03);
+    const ggml_metal_tuning::fa_cfg_t cfg = ggml_metal_tuning::fa_pick(props_dev->device_id, (int) ne00, (int) ne20, ne11, ne01, ne02, ne03);
 
     // only Q = 16 with nsg = 4 or 8 is instantiated
     if (cfg.Q != 2*OP_FLASH_ATTN_EXT_NQPSG || (cfg.NSG != 4 && cfg.NSG != 8)) {
@@ -3010,8 +3010,8 @@ static ggml_metal_tuning::fa_cfg_t ggml_metal_op_flash_attn_ext_cfg(const ggml_t
         return baseline;
     }
 
-    // see fa_smem in ggml_metal_op_flash_attn_ext
-    const size_t smem = GGML_PAD((cfg.Q*(ne00 + 2*GGML_PAD(ne20, 64) + 2*(2*OP_FLASH_ATTN_EXT_NCPSG)))*(sizeof(float)/2), 16);
+    // see fa_smem in ggml_metal_op_flash_attn_ext (the wide tile has no quantized KV scratch)
+    const size_t smem = GGML_PAD(cfg.Q*(ne00 + 2*GGML_PAD(ne20, 64) + 4*OP_FLASH_ATTN_EXT_NCPSG)*sizeof(ggml_fp16_t), 16);
 
     if (smem > props_dev->max_theadgroup_memory_size) {
         return baseline;
@@ -3560,12 +3560,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         if (nqptg > OP_FLASH_ATTN_EXT_NQPSG) {
             nsg = cfg.NSG;
+            GGML_ASSERT(fa_smem(nsg) <= props_dev->max_theadgroup_memory_size);
         }
 
         const size_t smem = fa_smem(nsg);
-        if (nqptg > OP_FLASH_ATTN_EXT_NQPSG) {
-            GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
-        }
 
         const int32_t ns10 = nb11_attn/nb10_attn;
         const int32_t ns20 = nb21_attn/nb20_attn;

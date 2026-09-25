@@ -73,11 +73,11 @@ fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01);
 
 // FA (non-vec) queries per threadgroup (Q) and simdgroups per threadgroup (NSG). Rows key an exact ne11 bucket,
-// or all of them with ne11_b == FA_NE11_DEFAULT. fa_pick tries exact bucket -> default, under the device and
-// then under its family representative -> baseline.
-// ne01 < FA_NE01_MIN always uses baseline, and so does a last wide tile of 1..8 rows until the batch is
-// long enough to amortize the rows it pads.
-// a row applies from tiles_min dispatched wide tiles (ceil(ne01/16)*ne02*ne03), below that baseline is kept.
+// or all of them with ne11_b == FA_NE11_DEFAULT. fa_pick tries exact bucket -> default -> baseline.
+// Keyed by device SKU, as tiles_min is an occupancy threshold that differs within a GPU family; an untuned
+// device matches no row and gets the baseline.
+// A row applies from tiles_min wide tiles (ceil(ne01/16)*ne02*ne03). ne01 < FA_NE01_MIN, or a last wide tile
+// of 1..8 rows in a short batch, keeps the baseline.
 constexpr int FA_NE11_BUCKETS[]         = { 4096, 8192, 16384, 32768, 65536 };
 constexpr int FA_NE01_MIN               = 64;
 constexpr int FA_NE01_MIN_PARTIAL_TILES = 50;  // such a tile pads 1/this of the row work; 50 keeps that under
@@ -115,6 +115,6 @@ struct fa_entry_t {
 void fa_set_override(fa_cfg_t cfg);
 void fa_clear_override();
 
-fa_cfg_t fa_pick(enum ggml_metal_device_id device_id, int gpu_family, int dk, int dv, int64_t ne11, int64_t ne01, int64_t ne02, int64_t ne03);
+fa_cfg_t fa_pick(int device_id, int dk, int dv, int64_t ne11, int64_t ne01, int64_t ne02, int64_t ne03);
 
 }  // namespace ggml_metal_tuning

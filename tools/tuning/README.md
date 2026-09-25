@@ -58,6 +58,7 @@ The tuner emits whatever token the runtime reports for the machine, so an unregi
 ```
 
 The sweep times the baseline tile against the wide tile with 4 and with 8 simdgroups at GQA 8, F16 K/V, over 8 KV depths (3 of them in the first bucket) x up to 4 batch widths per head size, and again with 8 query heads from 32 to 1024 tiles (30-45 minutes on M5, depending on how many cells are re-measured).
+Unlike the FA-vec table, rows stay keyed by the SKU token the tuner emits: `tiles_min` depends on how many GPU cores the device has, which varies within a family.
 A launch is counted in dispatched wide tiles: `ceil(batch/16) x query heads x streams`.
 A KV-depth bucket gets a row only for a config that is at least 2% faster in aggregate over the launches of 1024 tiles or more and has no clear loss (more than 1.5%) at any of them, so a device where the wide tile does not pay off emits nothing and stays at baseline.
 The last number of a row is `tiles_min`: the smallest sampled launch in that KV-depth bucket at or above which every small launch of full tiles wins and no partial-tile launch clearly loses. Below it the baseline tile is kept. A partial last tile also pays for the rows it pads, so it only raises `tiles_min` on a clear loss, never on a result near baseline.
