@@ -16,7 +16,7 @@
 
 struct llama_cparams;
 struct llama_ubatch;
-struct llama_lazy_reader;
+struct llama_lazy_reader_factory;
 struct llama_model_loader;
 
 // available models
@@ -716,8 +716,7 @@ struct llama_model {
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
 
-    // Source readers for lazy tables; contexts clone their handles before building graphs.
-    std::map<const ggml_tensor *, std::unique_ptr<llama_lazy_reader>> lazy_readers;
+    std::unique_ptr<llama_lazy_reader_factory> lazy_reader_factory;
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;

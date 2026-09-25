@@ -89,11 +89,9 @@ llama_context::llama_context(
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
-    for (const auto & [t, source] : model.lazy_readers) {
+    if (model.lazy_reader_factory) {
         const int n_readers = (int) std::max(1u, std::thread::hardware_concurrency());
-        auto reader = source->clone(n_readers);
-        lazy_reader_ptrs.emplace(t, reader.get());
-        lazy_readers.emplace(t, std::move(reader));
+        lazy_reader = model.lazy_reader_factory->create(n_readers);
     }
     // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
     //     may need to be backend-dependent
@@ -2568,7 +2566,7 @@ llm_graph_params llama_context::graph_params(
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
-        /*.lazy_readers =*/ &lazy_reader_ptrs,
+        /*.lazy_reader =*/ lazy_reader.get(),
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,

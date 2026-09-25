@@ -2706,7 +2706,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-lzm", "--lazy-mode"}, "MODE",
         "on-demand reading of certain tensors, for example per-layer embeddings (default: auto)\n"
         "- on: read the rows of such tensors from disk on demand instead of keeping them resident\n"
-        "- auto: on when using an integrated GPU, otherwise on only for tensors larger than 4 GiB\n"
+        "- auto: on only for tensors larger than 4 GiB\n"
         "- off: always keep them resident\n"
         "note: --check-tensors and --load-mode mmap+mlock force this option to 'off'",
         [](common_params & params, const std::string & value) {

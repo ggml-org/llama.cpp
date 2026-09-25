@@ -1445,16 +1445,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
 
-    if (n_gpu_layers > 0 && ml.lazy.mode == LLAMA_LAZY_MODE_AUTO) {
-        for (const auto & dev : devices) {
-            if (ggml_backend_dev_type(dev.dev) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
-                ml.lazy.mode = LLAMA_LAZY_MODE_ON;
-                LLAMA_LOG_INFO("%s: using lazy row reads for integrated GPU %s\n", __func__, ggml_backend_dev_name(dev.dev));
-                break;
-            }
-        }
-    }
-
     if (ml.use_mmap && params.load_mode == LLAMA_LOAD_MODE_AUTO) {
         for (const auto & dev : devices) {
             ggml_backend_dev_props props;
@@ -1897,12 +1887,13 @@ void llama_model_base::add_lazy_reader(llama_model_loader & ml, const ggml_tenso
         return;
     }
 
-    auto reader = std::make_unique<llama_lazy_reader>(*ml.files[w->idx], w->offs, t->type, t->ne[0], t->ne[1], 1);
+    if (!lazy_reader_factory) {
+        lazy_reader_factory = std::make_unique<llama_lazy_reader_factory>();
+    }
+    lazy_reader_factory->add(t, *ml.files[w->idx], w->offs);
 
     LLAMA_LOG_INFO("%s: tensor %s row reads enabled: %" PRId64 " rows of %zu bytes at offset %zu of %s\n",
-            __func__, name, reader->n_rows(), reader->row_size(), w->offs, ml.files[w->idx]->name().c_str());
-
-    lazy_readers.emplace(t, std::move(reader));
+            __func__, name, t->ne[1], ggml_row_size(t->type, t->ne[0]), w->offs, ml.files[w->idx]->name().c_str());
 }
 
 ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {

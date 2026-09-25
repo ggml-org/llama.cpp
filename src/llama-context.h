@@ -282,8 +282,7 @@ private:
     //
 
     const llama_model & model;
-    std::map<const ggml_tensor *, std::unique_ptr<llama_lazy_reader>> lazy_readers;
-    std::map<const ggml_tensor *, const llama_lazy_reader *> lazy_reader_ptrs;
+    std::unique_ptr<llama_lazy_reader> lazy_reader;
 
     llama_cparams cparams;
 

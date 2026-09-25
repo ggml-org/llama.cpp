@@ -500,7 +500,7 @@ struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_mo
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
-    if (!model->lazy_readers.empty()) {
+    if (model->lazy_reader_factory) {
         LLAMA_LOG_ERROR("%s: saving a model with lazy tensors is not supported\n", __func__);
         return;
     }

@@ -4,40 +4,48 @@
 #include "llama-mmap.h"
 
 #include <cstdint>
+#include <map>
 #include <memory>
-#include <string>
+#include <utility>
 #include <vector>
 
+struct llama_lazy_reader;
+
+struct llama_lazy_reader_factory {
+    void add(const ggml_tensor * tensor, const llama_file & source, size_t offs);
+    bool has(const ggml_tensor * tensor) const;
+    std::unique_ptr<llama_lazy_reader> create(int n_readers) const;
+
+private:
+    friend struct llama_lazy_reader;
+
+    struct tensor_info {
+        size_t file;
+        size_t offs;
+        size_t rsize;
+        int64_t nrows;
+    };
+
+    std::map<const ggml_tensor *, tensor_info> tensors;
+    std::vector<std::unique_ptr<llama_file>> sources;
+};
+
 struct llama_lazy_reader {
-    // path holds the table, whose row 0 starts at file offset offs
-    llama_lazy_reader(const llama_file & source, size_t offs, enum ggml_type type,
-                      int64_t row_elems, int64_t n_rows, int n_readers);
+    llama_lazy_reader(const llama_lazy_reader_factory & factory, int n_readers);
 
     llama_lazy_reader(const llama_lazy_reader &) = delete;
     llama_lazy_reader & operator=(const llama_lazy_reader &) = delete;
 
     ~llama_lazy_reader();
 
-    // fill dst with the n gathered rows in the table type; thread-safe
-    void gather(const int32_t * rows, int64_t n, uint8_t * dst) const;
-    std::unique_ptr<llama_lazy_reader> clone(int n_readers) const;
-
-    int64_t n_rows()    const { return nrows; }
-    size_t  row_size()  const { return rsize;  }
-    int     n_readers() const { return (int) files.size(); }
+    bool has(const ggml_tensor * tensor) const { return factory.has(tensor); }
+    void gather(const ggml_tensor * tensor, const int32_t * rows, int64_t n, uint8_t * dst) const;
 
 private:
-    // read the rows of pairs[begin, end) through files[fi], writing each to its slot
-    void read_range(const std::pair<int32_t, int32_t> * pairs, int64_t begin, int64_t end,
+    void read_range(const llama_lazy_reader_factory::tensor_info & info,
+                    const std::pair<int32_t, int32_t> * pairs, int64_t begin, int64_t end,
                     size_t fi, uint8_t * dst) const;
 
-    // one buffered file per reader thread: read_at is not thread-safe, and the loader's own descriptor may be direct I/O
-    std::vector<std::unique_ptr<llama_file>> files;
-    const std::string path;
-    const enum ggml_type type;
-
-    const size_t   offs;   // file offset of row 0
-    const size_t   rsize;  // bytes per stored row
-    const int64_t  relems; // elements per row
-    const int64_t  nrows;
+    const llama_lazy_reader_factory & factory;
+    std::vector<std::vector<std::unique_ptr<llama_file>>> files;
 };

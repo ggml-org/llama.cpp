@@ -109,6 +109,7 @@ public:
     bool can_reuse(int64_t n_rows) const;
 
 private:
+    const ggml_tensor * table = nullptr;
     const llama_lazy_reader * reader = nullptr;
 
     // I32 row indices or staged rows in the table type
@@ -802,7 +803,7 @@ struct llm_graph_params {
 
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
-    const std::map<const ggml_tensor *, const llama_lazy_reader *> * lazy_readers = nullptr;
+    const llama_lazy_reader * lazy_reader = nullptr;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
@@ -1043,15 +1044,9 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
-    const std::map<const ggml_tensor *, const llama_lazy_reader *> * lazy_readers;
+    const llama_lazy_reader * lazy_reader_ctx;
 
-    const llama_lazy_reader * lazy_reader(const ggml_tensor * t) const {
-        if (!lazy_readers) {
-            return nullptr;
-        }
-        const auto it = lazy_readers->find(t);
-        return it == lazy_readers->end() ? nullptr : it->second;
-    }
+    const llama_lazy_reader * lazy_reader(const ggml_tensor * t) const;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
