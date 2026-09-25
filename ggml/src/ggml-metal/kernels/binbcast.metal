@@ -185,6 +185,14 @@ kernel void kernel_add_id(
 
     device       float * dst_row  = (device       float *)((device char *)dst  +  i1*nb1       + i2*nb2);
     device const float * src0_row = (device const float *)((device char *)src0 +  i1*args.nb01 + i2*args.nb02);
+
+    if (i11 == -1) {
+        for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+            dst_row[i0] = src0_row[i0];
+        }
+        return;
+    }
+
     device const float * src1_row = (device const float *)((device char *)src1 + i11*args.nb11);
 
     for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {

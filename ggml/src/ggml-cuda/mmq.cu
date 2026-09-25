@@ -200,6 +200,11 @@ void ggml_cuda_mul_mat_q(
         ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
             ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ dedup_bcast, stream);
         CUDA_CHECK(cudaGetLastError());
+
+        // the matmul below only writes the rows an expert owns, the rest are skipped slots
+        ggml_cuda_launch_mm_ids_zero_dst((const int32_t *) ids->data, dst_d,
+            ne12, n_expert_used, ne0, si1, s1, s2, stream);
+        CUDA_CHECK(cudaGetLastError());
     }
 
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * y_block_size/y_values_per_block +
