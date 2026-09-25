@@ -1,4 +1,4 @@
-import { Box, Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
@@ -83,7 +83,7 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
 		action: SidebarAction.MANAGE_MODELS,
-		icon: Box,
+		icon: MODEL_SELECTOR_ICON,
 		tooltip: 'Models'
 	},
 	{

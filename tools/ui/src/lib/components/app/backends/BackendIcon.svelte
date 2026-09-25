@@ -15,7 +15,7 @@
 		fallback?: Snippet;
 	}
 
-	let { backend, class: className = 'h-4 w-4', fallback }: Props = $props();
+	let { backend, class: className = 'size-4', fallback }: Props = $props();
 
 	let preset = $derived(backend ? findBackendPreset(backend.baseUrl) : undefined);
 	let faviconUrl = $derived(preset || !backend ? null : backendFaviconUrl(backend.baseUrl));

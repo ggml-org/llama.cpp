@@ -1,10 +1,11 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Lightbulb, Loader2, Package } from '@lucide/svelte';
+	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorReasoningPanel,
+		ModelsSelectorTriggerIcon,
 		SearchInput
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
@@ -120,7 +121,7 @@
 				style="max-width: min(calc(100cqw - 9rem), 20rem)"
 				type="button"
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<ModelsSelectorTriggerIcon class="h-3.5 w-3.5 shrink-0" option={selectedOption} />
 
 				{#if !selectedOption}
 					<span class="min-w-0 font-medium">Select model</span>
@@ -225,7 +226,7 @@
 				onclick={() => ms.handleOpenChange(true)}
 				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 			>
-				<Package class="h-3.5 w-3.5 shrink-0" />
+				<ModelsSelectorTriggerIcon class="h-3.5 w-3.5 shrink-0" option={selectedOption} />
 
 				<ModelId
 					class="font-medium"

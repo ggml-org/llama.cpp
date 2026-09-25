@@ -6,7 +6,8 @@
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorReasoningPanel
+		ModelsSelectorReasoningPanel,
+		ModelsSelectorTriggerIcon
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
@@ -250,7 +251,7 @@
 								]}
 								disabled={disabled || ms.updating}
 							>
-								<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
+								<ModelsSelectorTriggerIcon class="size-3.5 shrink-0 mr-0.375" option={selectedOption} />
 
 								<span class="flex min-w-0 items-center gap-0.5">
 									{#if selectedOption}
@@ -409,7 +410,7 @@
 							onclick={() => ms.handleOpenChange(true)}
 							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 						>
-							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
+							<ModelsSelectorTriggerIcon class="size-3.5 shrink-0 mr-0.375" option={selectedOption} />
 
 							{#if selectedOption}
 								<ModelId

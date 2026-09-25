@@ -2,7 +2,7 @@
 	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { Logo } from '$lib/components/app/misc';
-	import { HF_BASE_MODEL_TAG_REGEX } from '$lib/constants';
+	import { HF_BASE_MODEL_TAG_REGEX, LOCAL_BACKEND_ID, MODEL_SELECTOR_ICON } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { orgOf } from '$lib/utils';
@@ -43,6 +43,8 @@
 	// so the provider's own mark identifies it better than an initial
 	let isLlamaCompat = $derived(getBackendCapabilities(getBackend(option.backendId)).props);
 	let useProviderIcon = $derived(isLlamaCompat && !orgName);
+	// the bundled server has no favicon to resolve, its mark is the llama.cpp logo
+	let isLocal = $derived(getBackend(option.backendId)?.id === LOCAL_BACKEND_ID);
 	let tagBaseModel = $derived(
 		(option.tags ?? [])
 			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
@@ -109,7 +111,11 @@
 	<span class={['inline-flex shrink-0', className]}>
 		<BackendIcon backend={getBackend(option.backendId)} class={size}>
 			{#snippet fallback()}
-				<Logo class={size} style="--size: 100%" />
+				{#if isLocal}
+					<Logo class={size} style="--size: 100%" />
+				{:else}
+					<MODEL_SELECTOR_ICON class={size} />
+				{/if}
 			{/snippet}
 		</BackendIcon>
 	</span>
