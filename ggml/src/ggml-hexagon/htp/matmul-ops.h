@@ -25,6 +25,9 @@ extern "C" {
 #define HTP_MM_WEIGHT_TILE_SIZE_Q8_0   1088
 #define HTP_MM_WEIGHT_TILE_SIZE_IQ4_NL 576
 #define HTP_MM_WEIGHT_TILE_SIZE_MXFP4  544
+// Q5_K: the Q4_1 tile (640) followed by a 128-byte plane with the 5th bit of every quant, transposed so that
+//   plane byte l holds the eight flags of lane l: bit 2i = low nibble of nibble vector i, bit 2i+1 = high nibble
+#define HTP_MM_WEIGHT_TILE_SIZE_Q5_K   768
 // Q6_K native 6-bit tile (32 rows x 32 k), vrmpy-ready: byte 4*row+b of a vector holds k = 4*group+b
 //   vectors 0..3: low nibbles, vector i holds group 2i (low nibble) and group 2i+1 (high nibble)
 //   vectors 4..5: high 2 bits, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
@@ -37,6 +40,7 @@ extern "C" {
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0   1152
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_IQ4_NL 640
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q5_K   768
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q6_K   896
 
 // --- Activation Tiled Block Sizes (including padding) ---
@@ -199,6 +203,8 @@ static inline uint32_t htp_mm_get_weight_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_TILE_SIZE_Q4_1;
         case HTP_TYPE_Q8_0:
             return HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+        case HTP_TYPE_Q5_K:
+            return HTP_MM_WEIGHT_TILE_SIZE_Q5_K;
         case HTP_TYPE_Q6_K:
             return HTP_MM_WEIGHT_TILE_SIZE_Q6_K;
         case HTP_TYPE_MXFP4:
@@ -218,6 +224,8 @@ static inline uint32_t htp_mm_get_weight_aligned_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_1;
         case HTP_TYPE_Q8_0:
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q8_0;
+        case HTP_TYPE_Q5_K:
+            return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q5_K;
         case HTP_TYPE_Q6_K:
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q6_K;
         case HTP_TYPE_MXFP4:
@@ -225,6 +233,11 @@ static inline uint32_t htp_mm_get_weight_aligned_tile_size(int weight_type) {
         default:
             return 0;
     }
+}
+
+// weight types whose tiles carry a per-block offset (x = d * q + m): the activations need block sums (q8_1)
+static inline bool htp_mm_weight_has_offset(int weight_type) {
+    return weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_Q4_K || weight_type == HTP_TYPE_Q5_K;
 }
 
 // --- Activation/Row Size Helpers ---
@@ -248,6 +261,7 @@ static inline size_t htp_mm_get_tiled_row_stride(int weight_type, uint32_t k) {
         case HTP_TYPE_Q4_1:
         case HTP_TYPE_Q4_K:
         case HTP_TYPE_Q8_0:
+        case HTP_TYPE_Q5_K:
         case HTP_TYPE_Q6_K:
         case HTP_TYPE_MXFP4:
             return (size_t) nb * htp_mm_get_weight_tile_size(weight_type);
@@ -487,7 +501,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     const bool is_repack = (wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 ||
                             wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL ||
                             wtype == HTP_TYPE_MXFP4 || wtype == HTP_TYPE_Q6_K ||
-                            wtype == HTP_TYPE_Q4_K);
+                            wtype == HTP_TYPE_Q4_K || wtype == HTP_TYPE_Q5_K);
 
     if (is_fused_nx) {
         const size_t src0_row_size_padded = hex_round_up(src0_row_size, 128);
@@ -504,7 +518,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
             weight_sz_per_thread = hex_round_up(n_prefetch * src0_row_size_padded, 128);
         }
 
-        size_t tiled_act_row_size = (wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q4_K) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+        size_t tiled_act_row_size = htp_mm_weight_has_offset(wtype) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
         size_t act_sz = hex_round_up(tiled_act_row_size * src1_nrows, 128);
         size_t raw_row_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float));
 
@@ -516,7 +530,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
         act_raw_sz = hex_round_up(raw_row_size * src1_nrows, 128);
     } else if (is_matmul_id) {
         const size_t src0_row_size_padded = htp_mm_round_up(src0_row_size, 128);
-        const size_t src1_row_size_tiled = (wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q4_K) ? htp_mm_q8_1_tiled_row_size(ne10)
+        const size_t src1_row_size_tiled = htp_mm_weight_has_offset(wtype) ? htp_mm_q8_1_tiled_row_size(ne10)
                                                                                                : htp_mm_q8_0_tiled_row_size(ne10);
 
         size_t src0_sz_per_thread = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256);
@@ -560,7 +574,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
             }
             case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
             case HTP_MM_KERNEL_HVX_QUANT_ROW: {
-                size_t q_src1_row_size = (wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q4_K) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+                size_t q_src1_row_size = htp_mm_weight_has_offset(wtype) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
                 src0_sz = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256);
                 src1_sz = htp_mm_round_up(q_src1_row_size * src1_nrows, 256);
@@ -647,7 +661,7 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
     const size_t avail_act = vtcm_budget - fixed_bytes;
     size_t row_size = 0;
     if (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-        row_size = (wtype == HTP_TYPE_Q4_1 || wtype == HTP_TYPE_Q4_K)
+        row_size = htp_mm_weight_has_offset(wtype)
                  ? htp_mm_q8_1_tiled_row_size(ne10)
                  : htp_mm_q8_0_tiled_row_size(ne10);
     } else if (kernel_type == HTP_MM_KERNEL_HVX_F16_F16_VTCM) {
