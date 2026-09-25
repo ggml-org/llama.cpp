@@ -9,6 +9,7 @@ from .base import MmprojModel, ModelBase, gguf, logger
 
 
 @ModelBase.register("YoutuVLForConditionalGeneration")
+@ModelBase.example("tencent/Youtu-VL-4B-Instruct")
 class YoutuVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 	import AlertDialogOverlay from './alert-dialog-overlay.svelte';
 	import { cn, type WithoutChild, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
+	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
 		portalProps,
+		ref = $bindable(null),
 		...restProps
 	}: WithoutChild<AlertDialogPrimitive.ContentProps> & {
 		portalProps?: WithoutChildrenOrChild<AlertDialogPrimitive.PortalProps>;
@@ -15,9 +15,9 @@
 
 <AlertDialogPrimitive.Portal {...portalProps}>
 	<AlertDialogOverlay />
+
 	<AlertDialogPrimitive.Content
 		bind:ref
-		data-slot="alert-dialog-content"
 		class={cn(
 			'fixed z-[999999] grid w-full gap-4 border bg-background p-6 shadow-lg duration-200',
 			// Mobile: Bottom sheet behavior
@@ -30,6 +30,7 @@
 			'sm:data-[state=open]:slide-in-from-bottom-0 sm:data-[state=open]:zoom-in-95',
 			className
 		)}
+		data-slot="alert-dialog-content"
 		{...restProps}
 	/>
 </AlertDialogPrimitive.Portal>

@@ -401,9 +401,9 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
     ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1);
     if (n_tokens == 1) {
-        cb(result, LLAMA_TENSOR_NAME_FGDN_AR, il);
+        res->add_fused_node({LLM_FUSED_OP_GDN_AR, result, il});
     } else {
-        cb(result, LLAMA_TENSOR_NAME_FGDN_CH, il);
+        res->add_fused_node({LLM_FUSED_OP_GDN_CH, result, il});
     }
 
     ggml_tensor * output = ggml_view_4d(ctx0, result,
@@ -496,8 +496,8 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_state_last, conv_state_update));
     } else {
         // [TAG_RECURRENT_ROLLBACK_SPLITS]
-        // TODO: this logic incorrectly assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are
-        //       inside the same ubatch. currently with `split_equal()` this is not correct
+        // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
+        //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
 
         const int64_t K = (int64_t) cparams.n_rs_seq + 1;
 
@@ -566,9 +566,9 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
     if (n_seq_tokens > 1) {
-        cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_CH, il);
+        res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {
-        cb(gdn_out, LLAMA_TENSOR_NAME_FGDN_AR, il);
+        res->add_fused_node({LLM_FUSED_OP_GDN_AR, gdn_out, il});
     }
 
     const int64_t attn_score_elems    = S_v * H_v * n_seq_tokens * n_seqs;

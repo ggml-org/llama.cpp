@@ -12,6 +12,7 @@ This script processes files with specified options.
 
 Options:
   -h, --help    Display this help message and exit.
+  -d, --device  <value>    Set SYCL devices (default: SYCL0).
   -c, --context <value>    Set context length. Bigger need more memory.
   -p, --promote <value>    Prompt to start generation with.
   -m, --model   <value>    Full model file path.
@@ -42,10 +43,16 @@ MODEL_FILE=../models/llama-2-7b.Q4_0.gguf
 NGL=99
 CONTEXT=4096
 GGML_SYCL_DEVICE=-1
+SYCL_DEVICES="SYCL0"
 SPLIT_MODE=layer
 LOG_VERBOSE=3
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -d|--device)
+            SYCL_DEVICES="$2"
+            shift
+            shift
+            ;;
         -c|--context)
             CONTEXT=$2
             # Shift twice to consume both the option flag and its value
@@ -115,16 +122,17 @@ source /opt/intel/oneapi/setvars.sh
 export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
 echo "UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=${UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS}"
 
+echo "ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR}"
+
 if [ $GGML_SYCL_DEVICE -ne -1 ]; then
     echo "Use $GGML_SYCL_DEVICE as main GPU"
     #use signle GPU only
     GPUS_SETTING="-mg $GGML_SYCL_DEVICE -sm ${SPLIT_MODE}"
-    echo "ONEAPI_DEVICE_SELECTOR=${ONEAPI_DEVICE_SELECTOR}"
 else
-    echo "Use all Intel GPUs, including iGPU & dGPU"
+    echo "Use Intel GPUs: ${SYCL_DEVICES}"
     GPUS_SETTING="-sm ${SPLIT_MODE}"
  fi
 
-echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE}  --mmap "
-ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --mmap
+echo "run cmd: ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto "
+ZES_ENABLE_SYSMAN=1 ${BIN_FILE} -m ${MODEL_FILE} -no-cnv -p "${INPUT_PROMPT}" -n 200 -e -ngl ${NGL} -s ${SEED} -c ${CONTEXT} ${GPUS_SETTING} -lv ${LOG_VERBOSE} --device ${SYCL_DEVICES} --load-mode auto
 

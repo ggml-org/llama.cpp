@@ -9,6 +9,7 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf
 
 
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")
+@ModelBase.example("THUDM/chatglm3-6b", "zai-org/glm-4-9b-chat-hf")
 class ChatGLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.CHATGLM
 
@@ -81,7 +82,7 @@ class ChatGLMModel(TextModel):
 
     @staticmethod
     def token_bytes_to_string(b):
-        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
+        from transformers.convert_slow_tokenizer import bytes_to_unicode
         byte_encoder = bytes_to_unicode()
         return ''.join([byte_encoder[ord(char)] for char in b.decode('latin-1')])
 

@@ -14,6 +14,7 @@ from .qwen import Qwen3_5TextModel
 
 
 @ModelBase.register("MiniCPMForCausalLM")
+@ModelBase.example("openbmb/MiniCPM-2B-sft-bf16")
 class MiniCPMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM
 
@@ -61,6 +62,7 @@ class MiniCPMModel(TextModel):
 
 
 @ModelBase.register("MiniCPM3ForCausalLM")
+@ModelBase.example("openbmb/MiniCPM3-4B")
 class MiniCPM3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINICPM3
 
@@ -117,6 +119,7 @@ class MiniCPM3Model(TextModel):
 # the LM (text mode) and once as the mmproj (vision mode), mirroring the Qwen3-VL setup.
 
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4_6")
 class MiniCPMV4_6TextModel(Qwen3_5TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
@@ -134,9 +137,19 @@ class MiniCPMV4_6TextModel(Qwen3_5TextModel):
 
 
 @ModelBase.register("MiniCPMV4_6ForConditionalGeneration")
+@ModelBase.example("openbmb/MiniCPM-V-4_6")
 class MiniCPMV4_6VisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.downsample_mode = self.preprocessor_config.get("downsample_mode", "16x")
+        if self.downsample_mode not in {"4x", "16x"}:
+            raise ValueError(f"Unsupported downsample mode: {self.downsample_mode}")
+        if self.downsample_mode == "4x":
+            self.model_tensors = {
+                name: tensor for name, tensor in self.model_tensors.items()
+                if ".vit_merger." not in name
+            }
+
         if self.hparams_vision is not None:
             # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
             # positional embedding bucket grid (70 x 70), while the per-slice processing
@@ -156,8 +169,8 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
 
-        # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
-        self.gguf_writer.add_vision_projector_scale_factor(4)
+        self.gguf_writer.add_vision_projector_scale_factor(
+            2 if self.downsample_mode == "4x" else 4)
 
         # borrow wa_layer_indexes for vit_merger insertion point
         insert_layer_id = int(self.global_config.get(

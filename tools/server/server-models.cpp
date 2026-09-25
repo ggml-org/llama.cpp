@@ -7,10 +7,12 @@
 #include "build-info.h"
 #include "preset.h"
 #include "download.h"
+#include "hf-cache.h"
+#include "http.h"
+#include "subproc.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
-#include <sheredom/subprocess.h>
 
 #include <functional>
 #include <optional>
@@ -28,14 +30,7 @@
 #include <sstream>
 #include <cstring>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#ifndef _WIN32
 extern char **environ;
 #endif
 
@@ -50,49 +45,380 @@ extern char **environ;
 #define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
 #define CMD_CHILD_TO_ROUTER_STATE "cmd_child_to_router:state:" // followed by json string
 
+// note: SIGPIPE is ignored by the server
+static void request_child_exit(server_subproc & proc) {
+    FILE * stdin_file = proc.sproc.stdin_file();
+    if (stdin_file) {
+        fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
+        fflush(stdin_file);
+    }
+}
+
 // address for child process, this is needed because router may run on 0.0.0.0
 // ref: https://github.com/ggml-org/llama.cpp/issues/17862
 #define CHILD_ADDR "127.0.0.1"
 
-struct server_subproc {
-    std::optional<subprocess_s> sproc; // empty while in DOWNLOADING state
-    std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
-
-    subprocess_s & get() {
-        GGML_ASSERT(sproc.has_value() && "subprocess not initialized");
-        return sproc.value();
+// single-threaded, watching all child processes at once
+struct server_monitor {
+    server_monitor(server_models & models) : models(models) {
+        th = std::thread([this]() { run(); });
     }
 
-    bool is_alive() {
-        return sproc.has_value() && subprocess_alive(&sproc.value());
+    ~server_monitor() {
+        push({ cmd_t::QUIT, {}, "", 0, false });
+        th.join();
     }
 
-    void request_exit() {
-        if (sproc.has_value()) {
-            FILE * stdin_file = subprocess_stdin(&sproc.value());
-            if (stdin_file) {
-                fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
-                fflush(stdin_file);
+    // thread-safe
+    void watch(const std::string & name, std::shared_ptr<server_subproc> proc, server_child_mode mode, int port) {
+        child_t c;
+        c.name = name;
+        c.proc = std::move(proc);
+        c.mode = mode;
+        c.port = port;
+        if (!c.proc->has_output()) {
+            SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
+            c.eof = true;
+        }
+        push({ cmd_t::WATCH, std::move(c), "", 0, false });
+    }
+
+    // thread-safe
+    void stop(const std::string & name, int stop_timeout, bool send_exit) {
+        push({ cmd_t::STOP, {}, name, stop_timeout, send_exit });
+    }
+
+private:
+    struct child_t {
+        std::string name;
+        std::shared_ptr<server_subproc> proc;
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        int port = 0;
+        std::string buf;      // partial line
+        bool eof = false;     // output closed, waiting for the process to be reaped
+        int64_t deadline = 0; // force-kill time in ms, 0 when no stop is pending
+    };
+
+    struct cmd_t {
+        enum { WATCH, STOP, QUIT } type;
+        child_t child;
+        std::string name;
+        int  stop_timeout;
+        bool send_exit;
+    };
+
+    void push(cmd_t && cmd) {
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            cmds.push_back(std::move(cmd));
+        }
+        waiter.wake();
+    }
+
+    // returns true if the loop should exit
+    bool handle_commands() {
+        std::deque<cmd_t> batch;
+        {
+            std::lock_guard<std::mutex> lk(mu);
+            batch.swap(cmds);
+        }
+        for (auto & cmd : batch) {
+            switch (cmd.type) {
+                case cmd_t::WATCH:
+                    children.push_back(std::move(cmd.child));
+                    break;
+                case cmd_t::STOP:
+                    // the newest child with this name is the one the registry knows
+                    for (auto it = children.rbegin(); it != children.rend(); ++it) {
+                        if (it->name != cmd.name) {
+                            continue;
+                        }
+                        if (cmd.send_exit && !it->eof) {
+                            request_child_exit(*it->proc);
+                        }
+                        it->deadline = ggml_time_ms() + (int64_t) cmd.stop_timeout * 1000;
+                        break;
+                    }
+                    break;
+                case cmd_t::QUIT:
+                    return true;
             }
         }
-        stopped.store(true, std::memory_order_relaxed);
+        return false;
     }
 
-    void terminate() {
-        if (!sproc.has_value()) {
-            return;
+    // read what the child wrote, forward complete lines
+    void read_output(child_t & c) {
+        char chunk[4096];
+        while (!c.eof) {
+            int n = c.proc->read_output(chunk, sizeof(chunk));
+            if (n < 0) {
+                c.eof = true;
+                break;
+            }
+            if (n == 0) {
+                break;
+            }
+            c.buf.append(chunk, (size_t) n);
+            size_t start = 0;
+            while (true) {
+                size_t nl = c.buf.find('\n', start);
+                if (nl == std::string::npos) {
+                    break;
+                }
+                std::string line = c.buf.substr(start, nl + 1 - start);
+                start = nl + 1;
+                on_line(c, line);
+            }
+            c.buf.erase(0, start);
+            if (c.buf.size() > max_line) {
+                c.buf.clear(); // a child that never writes a newline must not grow this without bound
+            }
         }
-#if defined(_WIN32)
-        if (sproc->hProcess == NULL) {
-            return;
+        if (c.eof && !c.buf.empty()) {
+            on_line(c, c.buf);
+            c.buf.clear();
         }
-#else
-        if (sproc->child <= 0) {
-            return;
-        }
-#endif
-        subprocess_terminate(&sproc.value());
     }
+
+    void on_line(child_t & c, const std::string & line) {
+        if (string_starts_with(line, CMD_CHILD_TO_ROUTER_STATE)) {
+            LOG_DBG("[%5d] %s", c.port, line.c_str()); // prevent spamming the log
+            models.handle_child_state(c.name, line);
+        } else {
+            LOG("[%5d] %s", c.port, line.c_str()); // forward log
+        }
+    }
+
+    void run() {
+        while (true) {
+            if (handle_commands()) {
+                return;
+            }
+
+            // wait for output, a wakeup, or the next deadline;
+            // a child whose output closed is polled for its exit every 50 ms
+            int64_t now     = ggml_time_ms();
+            int64_t timeout = -1;
+            for (const auto & c : children) {
+                if (c.eof) {
+                    timeout = timeout < 0 ? 50 : std::min<int64_t>(timeout, 50);
+                }
+                if (c.deadline) {
+                    int64_t d = std::max<int64_t>(0, c.deadline - now);
+                    timeout = timeout < 0 ? d : std::min(timeout, d);
+                }
+            }
+            std::vector<server_subproc *> procs;
+            std::vector<child_t *>        owners;
+            for (auto & c : children) {
+                if (!c.eof) {
+                    procs.push_back(c.proc.get());
+                    owners.push_back(&c);
+                }
+            }
+            std::vector<bool> ready;
+            waiter.wait(procs, ready, timeout);
+            for (size_t i = 0; i < owners.size(); i++) {
+                if (ready[i]) {
+                    read_output(*owners[i]);
+                }
+            }
+
+            // deadlines and exits
+            now = ggml_time_ms();
+            for (auto it = children.begin(); it != children.end();) {
+                if (it->deadline && now >= it->deadline && !it->proc->stopped.load(std::memory_order_acquire)) {
+                    SRV_WRN("force-killing model instance name=%s after timeout\n", it->name.c_str());
+                    it->proc->terminate();
+                    it->deadline = 0;
+                }
+                if (it->eof && !it->proc->is_alive()) {
+                    int exit_code = it->proc->join();
+                    it->proc->stopped.store(true, std::memory_order_release);
+                    models.on_child_exit(it->name, it->proc, it->mode, exit_code);
+                    SRV_INF("instance name=%s exited with status %d\n", it->name.c_str(), exit_code);
+                    it = children.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+    }
+
+    static constexpr size_t max_line = 1024 * 1024;
+
+    server_models & models;
+    std::mutex mu;
+    std::deque<cmd_t> cmds;
+    std::vector<child_t> children; // monitor thread only
+    server_subproc::waiter waiter;
+    std::thread th;
+};
+
+struct server_lru_sched {
+    server_lru_sched(server_models & models) : models(models) {}
+
+    bool has_capacity(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        return models.base_params.models_max <= 0
+            || count_running() < (size_t) models.base_params.models_max;
+    }
+
+    // returns "" if no model can be given up
+    std::string pick_victim(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        std::string victim;
+        int64_t victim_last_used = 0;
+        for (const auto & m : models.mapping) {
+            // a busy model is mid-request, one still coming up has no request to finish
+            if (m.second.req_count != 0 || !m.second.meta.is_ready_or_sleep()) {
+                continue;
+            }
+            // already on its way out, or a queued request wants it
+            if (models.stopping_models.count(m.first) || find(m.first)) {
+                continue;
+            }
+            if (victim.empty() || m.second.meta.last_used < victim_last_used) {
+                victim           = m.first;
+                victim_last_used = m.second.meta.last_used;
+            }
+        }
+        return victim;
+    }
+
+    // requests wanting the same model share one entry, so they all need only one slot
+    // and all get unblocked by the single load that entry performs
+    void join(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (entry_t * e = find(model_id)) {
+            e->n_waiters++;
+            SRV_INF("request for name=%s joined the queue, %d waiting\n", model_id.c_str(), e->n_waiters);
+            return;
+        }
+        queue.push_back({ model_id, 1, false });
+        SRV_INF("request for name=%s queued at position %zu\n",
+                model_id.c_str(), queue.size());
+    }
+
+    void leave(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (it->model_id == model_id) {
+                if (--it->n_waiters <= 0) {
+                    queue.erase(it); // last one waiting for this model went away
+                }
+                return;
+            }
+        }
+    }
+
+    bool queue_empty(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        return queue.empty();
+    }
+
+    // true if it is this model's turn to load, and nobody is loading it yet
+    bool try_claim(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (queue.empty() || queue.front().model_id != model_id || queue.front().loading) {
+            return false;
+        }
+        if (!has_capacity(lk)) {
+            return false;
+        }
+        queue.front().loading = true;
+        return true;
+    }
+
+    // on failure the entry is back in line; on success it stays until its waiters leave,
+    // so the model coming up is never picked as a victim before they use it
+    void claim_done(std::unique_lock<std::mutex> & lk, const std::string & model_id, bool ok) {
+        check_lock(lk);
+        if (ok) {
+            return;
+        }
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (it->model_id == model_id) {
+                it->loading = false;
+                return;
+            }
+        }
+    }
+
+    // evict idle models while queued requests outnumber the slots that are free or being freed
+    // caller must hold models.mutex; never blocks, so it is safe from any thread
+    void tick(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        if (models.base_params.models_max <= 0 || queue.empty()) {
+            return;
+        }
+        int n_running  = 0;
+        int n_stopping = 0;
+        for (const auto & m : models.mapping) {
+            if (m.second.meta.is_running()) {
+                n_running++;
+                if (models.stopping_models.count(m.first)) {
+                    n_stopping++;
+                }
+            }
+        }
+        int n_needed  = 0;
+        int n_claimed = 0; // claimed the slot, but load() has not spawned yet
+        for (const auto & e : queue) {
+            if (!e.loading) {
+                n_needed++;
+                continue;
+            }
+            auto it = models.mapping.find(e.model_id);
+            if (it != models.mapping.end() && !it->second.meta.is_running()) {
+                n_claimed++;
+            }
+        }
+        int n_free = models.base_params.models_max - n_running + n_stopping - n_claimed;
+        while (n_free < n_needed) {
+            std::string victim = pick_victim(lk);
+            if (victim.empty()) {
+                return; // all remaining models are busy, wait for a request to end
+            }
+            SRV_INF("evicting idle LRU name=%s for a queued request\n", victim.c_str());
+            models.request_stop(victim);
+            n_free++;
+        }
+    }
+
+  private:
+    struct entry_t {
+        std::string model_id;
+        int  n_waiters; // requests waiting for this model
+        bool loading;   // one of the waiters is doing the load right now
+    };
+
+    entry_t * find(const std::string & model_id) {
+        for (auto & e : queue) {
+            if (e.model_id == model_id) {
+                return &e;
+            }
+        }
+        return nullptr;
+    }
+
+    void check_lock(std::unique_lock<std::mutex> & lk) {
+        GGML_ASSERT(lk.owns_lock() && lk.mutex() == &models.mutex);
+    }
+
+    size_t count_running() {
+        size_t count = 0;
+        for (const auto & m : models.mapping) {
+            if (m.second.meta.is_running()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    server_models & models;
+    std::deque<entry_t> queue;
 };
 
 // short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
@@ -144,6 +470,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
     preset.unset_option("LLAMA_API_KEY");
+    preset.unset_option("LLAMA_ARG_API_KEY_FILE");
     preset.unset_option("LLAMA_ARG_MODELS_DIR");
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
@@ -156,25 +483,6 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
-#ifdef _WIN32
-static std::string wide_to_utf8(const wchar_t * ws) {
-    if (!ws || !*ws) {
-        return {};
-    }
-
-    const int len = static_cast<int>(std::wcslen(ws));
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
-    if (bytes == 0) {
-        return {};
-    }
-
-    std::string utf8(bytes, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
-
-    return utf8;
-}
-#endif
-
 static std::vector<std::string> get_environment() {
     std::vector<std::string> env;
 
@@ -184,7 +492,7 @@ static std::vector<std::string> get_environment() {
         return env;
     }
     for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
-        env.emplace_back(wide_to_utf8(e));
+        env.emplace_back(wstring_to_utf8(e));
     }
     FreeEnvironmentStringsW(env_block);
 #else
@@ -225,13 +533,14 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_MODEL_URL",
             "LLAMA_ARG_MMPROJ",
             "LLAMA_ARG_MMPROJ_URL",
+            "LLAMA_ARG_MMPROJ_AUTO",
             "LLAMA_ARG_HF_REPO",
             "LLAMA_ARG_HF_REPO_FILE",
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
         common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
-        if (params.mmproj.path.empty()) {
+        if (params.no_mmproj || params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
@@ -253,18 +562,31 @@ server_models::server_models(
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
               base_env(get_environment()),
-              base_preset(ctx_preset.load_from_args(argc, argv)) {
-    // clean up base preset
+              base_preset(ctx_preset.load_from_args(argc, argv)),
+              sched(std::make_unique<server_lru_sched>(*this)),
+              monitor(std::make_unique<server_monitor>(*this)) {
+    // propagate base params to child
     unset_reserved_args(base_preset, true);
+
+    // do not propagate these options, but allow preset to explicitly set them
+    base_preset.unset_option("LLAMA_ARG_LOG_FILE");
+
     // set binary path
     try {
-        bin_path = get_server_exec_path().string();
+        bin_path = fs_path_to_utf8(get_server_exec_path());
     } catch (const std::exception & e) {
         bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
+    debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
+}
+
+server_models::~server_models() = default;
+
+void server_models::instance_t::request_exit() const {
+    request_child_exit(*subproc);
 }
 
 void server_models::add_model(server_model_meta && meta) {
@@ -321,7 +643,6 @@ void server_models::add_model(server_model_meta && meta) {
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<server_subproc>(),
-        /* th      */ std::thread(),
         /* meta    */ std::move(meta)
     };
 }
@@ -343,19 +664,19 @@ void server_models::load_models() {
     // Phase 1: load presets from all sources - pure I/O, no lock needed
     // 1. cached models
     common_presets cached_models = ctx_preset.load_from_cache();
-    SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    SRV_TRC("Loaded %zu cached model presets from %s\n", cached_models.size(), hf_cache::get_cache_path().c_str());
     // 2. local models from --models-dir
     common_presets local_models;
     if (!base_params.models_dir.empty()) {
         local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
-        SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
+        SRV_TRC("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
     }
     // 3. custom-path models from presets
     common_preset global = {};
     common_presets custom_presets = {};
     if (!base_params.models_preset.empty()) {
         custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
-        SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
+        SRV_TRC("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
     }
 
     // cascade, apply global preset first
@@ -393,9 +714,45 @@ void server_models::load_models() {
         return source_map.count(name) ? source_map.at(name) : SERVER_MODEL_SOURCE_PRESET;
     };
 
+    // hide cache models whose resolved file is already used by a preset with dedup-cache-models enabled
+    std::set<std::string> hidden_models;
+    {
+        std::set<std::string> preset_paths;
+        auto add_hf_path = [&preset_paths](const common_preset & preset, const char * repo_key, const char * file_key) {
+            std::string hf_repo;
+            if (!preset.get_option(repo_key, hf_repo) || hf_repo.empty()) {
+                return;
+            }
+            std::string hf_file;
+            preset.get_option(file_key, hf_file);
+            std::string path = common_download_resolve_path(hf_repo, hf_file);
+            if (!path.empty()) {
+                preset_paths.insert(path);
+            }
+        };
+        for (const auto & [name, preset] : custom_presets) {
+            std::string val;
+            if (!preset.get_option(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS, val) || !common_arg_utils::is_truthy(val)) {
+                continue;
+            }
+            add_hf_path(preset, "LLAMA_ARG_HF_REPO", "LLAMA_ARG_HF_FILE");
+            add_hf_path(preset, "LLAMA_ARG_SPEC_DRAFT_HF_REPO", "LLAMA_ARG_SPEC_DRAFT_MODEL");
+        }
+        if (!preset_paths.empty()) {
+            for (const auto & [name, preset] : cached_models) {
+                if (get_source(name) != SERVER_MODEL_SOURCE_CACHE) {
+                    continue; // merged with another source, not a pure cache entry
+                }
+                std::string path = common_download_resolve_path(name);
+                if (!path.empty() && preset_paths.count(path)) {
+                    SRV_INF("hiding cache model name=%s (deduplicated by a preset)\n", name.c_str());
+                    hidden_models.insert(name);
+                }
+            }
+        }
+    }
+
     // Helpers that read `mapping` - must be called while holding the lock.
-    std::unordered_set<std::string> custom_names;
-    for (const auto & [name, preset] : custom_presets) custom_names.insert(name);
     auto join_set = [](const std::set<std::string> & s) {
         std::string result;
         for (const auto & v : s) {
@@ -405,13 +762,19 @@ void server_models::load_models() {
         return result;
     };
     auto log_available_models = [&]() {
-        SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
-        for (const auto & [name, inst] : mapping) {
-            bool has_custom = custom_names.find(name) != custom_names.end();
-            std::string info;
-            if (!inst.meta.aliases.empty()) info += " (aliases: " + join_set(inst.meta.aliases) + ")";
-            if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
-            SRV_INF("  %c %s%s\n", has_custom ? '*' : ' ', name.c_str(), info.c_str());
+        SRV_INF("Available models (%zu):\n", mapping.size());
+        if (mapping.empty()) {
+            SRV_INF("%s", "  no models found on the system (visit https://llama.app/models for suggestions)\n");
+        } else {
+            for (const auto & [name, inst] : mapping) {
+                const std::string source = server_model_source_to_string(inst.meta.source);
+
+                std::string info;
+                if (!inst.meta.aliases.empty()) info += " (aliases: " + join_set(inst.meta.aliases) + ")";
+                if (!inst.meta.tags.empty())    info += " [tags: "    + join_set(inst.meta.tags)    + "]";
+
+                SRV_INF("  [%10s] %s%s\n", source.c_str(), name.c_str(), info.c_str());
+            }
         }
     };
     auto apply_stop_timeout = [&]() {
@@ -428,6 +791,11 @@ void server_models::load_models() {
             }
         }
     };
+    auto apply_hidden = [&]() {
+        for (auto & [name, inst] : mapping) {
+            inst.meta.hidden = hidden_models.count(name) > 0;
+        }
+    };
     // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
     auto preset_options_for_compare = [](common_preset p) {
         p.unset_option("LLAMA_ARG_HOST");
@@ -437,9 +805,7 @@ void server_models::load_models() {
     };
 
     // Phase 2: acquire the lock once for all mapping mutations.
-    // We temporarily release it only when calling functions that acquire it internally
-    // (unload, load) or when joining threads (the monitoring thread calls update_status
-    // which locks the mutex, so joining while holding it would deadlock).
+    // We temporarily release it only when calling functions that acquire it internally (unload)
     std::unique_lock<std::mutex> lk(mutex);
 
     need_reload = false;
@@ -468,26 +834,29 @@ void server_models::load_models() {
             add_model(std::move(meta));
         }
         apply_stop_timeout();
+        apply_hidden();
         log_available_models();
 
-        std::vector<std::string> models_to_load;
-        for (const auto & [name, inst] : mapping) {
-            std::string val;
-            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
-                models_to_load.push_back(name);
+        // skipped on reload, see startup_models
+        if (startup_models.has_value()) {
+            std::vector<std::string> models_to_load;
+            for (const auto & [name, inst] : mapping) {
+                std::string val;
+                if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
+                    models_to_load.push_back(name);
+                }
             }
-        }
-        if ((int)models_to_load.size() > base_params.models_max) {
-            throw std::runtime_error(string_format(
-                "number of models to load on startup (%zu) exceeds models_max (%d)",
-                models_to_load.size(), base_params.models_max));
+            if ((int)models_to_load.size() > base_params.models_max) {
+                throw std::runtime_error(string_format(
+                    "number of models to load on startup (%zu) exceeds models_max (%d)",
+                    models_to_load.size(), base_params.models_max));
+            }
+
+            // to be lazy-loaded after main() setup phase is completed
+            startup_models = std::move(models_to_load);
         }
 
         lk.unlock();
-        for (const auto & name : models_to_load) {
-            SRV_INF("(startup) loading model %s\n", name.c_str());
-            load(name);
-        }
     } else {
         // RELOAD: diff the new preset list against the current mapping and reconcile
         is_reloading = true;
@@ -521,43 +890,15 @@ void server_models::load_models() {
             return true;
         });
 
-        // collect all threads to join in one pass while the lock is held:
-        // - monitoring threads from just-unloaded models (to_unload)
-        // - threads of already-UNLOADED models that are being removed from source
-        std::vector<std::thread> threads_to_join;
-        for (const auto & name : to_unload) {
-            auto it = mapping.find(name);
-            if (it != mapping.end() && it->second.th.joinable()) {
-                threads_to_join.push_back(std::move(it->second.th));
-            }
-        }
-        for (auto & [name, inst] : mapping) {
-            if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
-                continue; // downloading models are not from config sources, leave them alone
-            }
-            if (final_presets.find(name) == final_presets.end() && !inst.meta.is_running() && inst.th.joinable()) {
-                threads_to_join.push_back(std::move(inst.th));
-            }
-        }
-
-        // join outside the lock - monitoring thread calls update_status (needs lock)
-        lk.unlock();
-        for (auto & th : threads_to_join) th.join();
-        lk.lock();
-
         // erase models no longer in any source
         for (auto it = mapping.begin(); it != mapping.end(); ) {
             if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
                 ++it; // download thread is still busy, skip
             } else if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADED) {
                 // download finished, safe to erase
-                if (it->second.th.joinable()) {
-                    it->second.th.join();
-                }
                 it = mapping.erase(it);
             } else if (final_presets.find(it->first) == final_presets.end()) {
                 SRV_INF("(reload) removing model name=%s (no longer in source)\n", it->first.c_str());
-                GGML_ASSERT(!it->second.th.joinable()); // must have been joined above
                 it = mapping.erase(it);
             } else {
                 ++it;
@@ -611,8 +952,8 @@ void server_models::load_models() {
             inst.meta.update_caps();
         }
 
-        // add models that are new in this reload
-        std::vector<std::string> newly_added;
+        // add models that are new in this reload, load-on-startup is not honored here since a
+        // reload never spawns an instance
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
@@ -633,38 +974,37 @@ void server_models::load_models() {
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));
-                newly_added.push_back(name);
             }
         }
 
         apply_stop_timeout();
+        apply_hidden();
 
-        // clear reload flag before unlocking for autoload - load() blocks on !is_reloading,
-        // so clearing it here (while still locked) prevents a deadlock in the autoload calls below
+        // clear reload flag under the lock, this releases the load() calls waiting on !is_reloading
         is_reloading = false;
         cv.notify_all();
 
         log_available_models();
 
-        // collect autoload candidates while still under the lock
-        std::vector<std::string> to_autoload;
-        for (const auto & name : newly_added) {
-            auto it = mapping.find(name);
-            if (it != mapping.end()) {
-                std::string val;
-                if (it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
-                    to_autoload.push_back(name);
-                }
-            }
-        }
-
         lk.unlock();
-        for (const auto & name : to_autoload) {
-            SRV_INF("(reload) loading new model %s\n", name.c_str());
-            load(name);
-        }
 
         notify_sse("models_reload", "*");
+    }
+}
+
+void server_models::load_startup_models() {
+    std::vector<std::string> to_load;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (!startup_models.has_value()) {
+            return; // already drained
+        }
+        to_load = std::move(*startup_models);
+        startup_models.reset();
+    }
+    for (const auto & name : to_load) {
+        SRV_INF("(startup) loading model %s\n", name.c_str());
+        load(name);
     }
 }
 
@@ -710,78 +1050,6 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     return std::nullopt;
 }
 
-static int get_free_port() {
-#ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return -1;
-    }
-    typedef SOCKET native_socket_t;
-#define INVALID_SOCKET_VAL INVALID_SOCKET
-#define CLOSE_SOCKET(s) closesocket(s)
-#else
-    typedef int native_socket_t;
-#define INVALID_SOCKET_VAL -1
-#define CLOSE_SOCKET(s) close(s)
-#endif
-
-    native_socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET_VAL) {
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    struct sockaddr_in serv_addr;
-    std::memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_addr.sin_port = htons(0);
-
-    if (bind(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-#ifdef _WIN32
-    int namelen = sizeof(serv_addr);
-#else
-    socklen_t namelen = sizeof(serv_addr);
-#endif
-    if (getsockname(sock, (struct sockaddr*)&serv_addr, &namelen) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    int port = ntohs(serv_addr.sin_port);
-
-    CLOSE_SOCKET(sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
-
-    return port;
-}
-
-// helper to convert vector<string> to char **
-// pointers are only valid as long as the original vector is valid
-static std::vector<char *> to_char_ptr_array(const std::vector<std::string> & vec) {
-    std::vector<char *> result;
-    result.reserve(vec.size() + 1);
-    for (const auto & s : vec) {
-        result.push_back(const_cast<char*>(s.c_str()));
-    }
-    result.push_back(nullptr);
-    return result;
-}
-
 std::vector<server_model_meta> server_models::get_all_meta() {
     std::unique_lock<std::mutex> lk(mutex);
     if (need_reload) {
@@ -803,22 +1071,15 @@ void server_models::unload_lru() {
         return; // no limit
     }
     // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
-    size_t count_active = 0;
+    std::string lru_model_name;
     {
         std::unique_lock<std::mutex> lk(mutex);
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
-                }
-            }
+        if (sched->has_capacity(lk)) {
+            return;
         }
+        lru_model_name = sched->pick_victim(lk);
     }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
+    if (!lru_model_name.empty()) {
         SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
         unload(lru_model_name);
         // wait for unload to complete
@@ -836,6 +1097,11 @@ void server_models::load(const std::string & name) {
 }
 
 void server_models::load(const std::string & name, const load_options & opts) {
+    if (debug_fake_timing) {
+        // do not hold the mutex here, other requests must keep making progress
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
     if (!opts.custom_meta.has_value()) {
         if (!has_model(name)) {
             throw std::runtime_error("model name=" + name + " is not found");
@@ -858,7 +1124,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // exceeding models_max. Without this, the window between unload_lru()
     // releasing its lock and this lock_guard acquiring allows multiple
     // threads to each observe capacity and all proceed to load.
-    if (base_params.models_max > 0) {
+    // Download workers do not use models_max slots.
+    if (opts.mode == SERVER_CHILD_MODE_NORMAL && base_params.models_max > 0) {
         size_t count_active = 0;
         for (const auto & m : mapping) {
             if (m.second.meta.is_running()) {
@@ -873,7 +1140,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // prepare new instance info
     instance_t inst;
     inst.meta             = meta;
-    inst.meta.port        = get_free_port();
+    inst.meta.port        = common_http_get_free_port();
     inst.meta.status      = SERVER_MODEL_STATUS_LOADING;
     inst.meta.loaded_info = json{};
     inst.meta.last_used   = ggml_time_ms();
@@ -904,129 +1171,20 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = child_args; // save for debugging
 
-        std::vector<char *> argv = to_char_ptr_array(child_args);
-        std::vector<char *> envp = to_char_ptr_array(child_env);
-
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging
         int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
-        inst.subproc->sproc.emplace();
-        int result = subprocess_create_ex(argv.data(), options, envp.data(), &inst.subproc->get());
-        if (result != 0) {
+        if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
     }
 
-    // start a thread to manage the child process
-    // captured variables are guaranteed to be destroyed only after the thread is joined
-    inst.th = std::thread([
-        this, name,
-        child_proc = inst.subproc,
-        port = inst.meta.port,
-        stop_timeout = inst.meta.stop_timeout,
-        child_mode = opts.mode
-    ]() {
-        FILE * stdin_file = subprocess_stdin(&child_proc->get());
-        FILE * stdout_file = subprocess_stdout(&child_proc->get()); // combined stdout/stderr
-
-        std::thread log_thread([&]() {
-            // read stdout/stderr and forward to main server log
-            // also handle status report from child process
-            std::vector<char> vec_buf(128 * 1024); // large buffer for storing info
-            char * buffer = vec_buf.data();
-            if (stdout_file) {
-                while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
-                    LOG("[%5d] %s", port, buffer);
-                    std::string str(buffer);
-                    if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_STATE)) {
-                        this->handle_child_state(name, str);
-                    }
-                }
-            } else {
-                SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
-            }
-        });
-
-        std::thread stopping_thread([&]() {
-            // thread to monitor explicit stop requests; child crash is signalled via child_proc->stopped
-            auto is_stopping = [this, &name]() {
-                return this->stopping_models.find(name) != this->stopping_models.end();
-            };
-            {
-                std::unique_lock<std::mutex> lk(this->mutex);
-                this->cv_stop.wait(lk, [&]() {
-                    return is_stopping() || child_proc->stopped.load(std::memory_order_acquire);
-                });
-            }
-            // child crashed or finished on its own, skip graceful shutdown sequence
-            if (child_proc->stopped.load(std::memory_order_acquire)) {
-                return;
-            }
-            SRV_INF("stopping model instance name=%s\n", name.c_str());
-            fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
-            fflush(stdin_file);
-            int64_t start_time = ggml_time_ms();
-            while (true) {
-                std::unique_lock<std::mutex> lk(this->mutex);
-                if (!is_stopping() || child_proc->stopped.load(std::memory_order_acquire)) {
-                    return;
-                }
-                int64_t elapsed = ggml_time_ms() - start_time;
-                if (elapsed >= stop_timeout * 1000) {
-                    lk.unlock();
-                    SRV_WRN("force-killing model instance name=%s after %d seconds timeout\n", name.c_str(), stop_timeout);
-                    child_proc->terminate();
-                    return;
-                }
-                this->cv_stop.wait_for(lk, std::chrono::seconds(1), [&]() {
-                    return !is_stopping() || child_proc->stopped.load(std::memory_order_acquire);
-                });
-            }
-        });
-
-        // we reach here when the child process exits (stdout EOF)
-        // note: we cannot join() prior to this point because it will close stdin_file
-        if (log_thread.joinable()) {
-            log_thread.join();
-        }
-
-        child_proc->stopped.store(true, std::memory_order_release);
-        {
-            std::lock_guard<std::mutex> lk(this->mutex);
-            stopping_models.erase(name);
-            cv_stop.notify_all();
-        }
-        if (stopping_thread.joinable()) {
-            stopping_thread.join();
-        }
-
-        // get the exit code
-        int exit_code = 0;
-        subprocess_join(&child_proc->get(), &exit_code);
-        subprocess_destroy(&child_proc->get());
-
-        // update status and exit code
-        if (child_mode == SERVER_CHILD_MODE_DOWNLOAD) {
-            // instance will be cleaned up on next load_models() call
-        } else {
-            this->update_status(name, {
-                SERVER_MODEL_STATUS_UNLOADED,
-                exit_code
-            });
-        }
-        SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
-    });
-
-    // clean up old process/thread if exists
+    // old process should have exited already, but just in case, we clean it up here
     {
-        auto & old_instance = mapping[name];
-        // old process should have exited already, but just in case, we clean it up here
-        if (old_instance.subproc && old_instance.subproc->is_alive()) {
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.subproc && it->second.subproc->is_alive()) {
             SRV_WRN("old process for model name=%s is still alive, this is unexpected\n", name.c_str());
-            old_instance.subproc->terminate(); // force kill
-        }
-        if (old_instance.th.joinable()) {
-            old_instance.th.join();
+            it->second.subproc->terminate(); // force kill
         }
     }
 
@@ -1034,8 +1192,42 @@ void server_models::load(const std::string & name, const load_options & opts) {
         {"status", server_model_status_to_string(inst.meta.status)},
     });
 
+    auto proc = inst.subproc;
+    int  port = inst.meta.port;
     mapping[name] = std::move(inst);
+    monitor->watch(name, proc, opts.mode, port);
     cv.notify_all();
+}
+
+void server_models::request_stop(const std::string & name, bool send_exit) {
+    auto it = mapping.find(name);
+    if (it == mapping.end() || stopping_models.count(name)) {
+        return;
+    }
+    stopping_models.insert(name);
+    monitor->stop(name, it->second.meta.stop_timeout, send_exit);
+}
+
+void server_models::on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code) {
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it == mapping.end() || it->second.subproc != proc) {
+            stopping_models.erase(name);
+            return; // entry erased, or a newer instance took the name
+        }
+    }
+    if (mode == SERVER_CHILD_MODE_DOWNLOAD) {
+        // instance will be cleaned up on next load_models() call
+        std::lock_guard<std::mutex> lk(mutex);
+        stopping_models.erase(name);
+        cv.notify_all();
+    } else {
+        update_status(name, {
+            SERVER_MODEL_STATUS_UNLOADED,
+            exit_code
+        });
+    }
 }
 
 void server_models::unload(const std::string & name) {
@@ -1044,21 +1236,21 @@ void server_models::unload(const std::string & name) {
     if (it != mapping.end()) {
         if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
             SRV_INF("cancelling download for model name=%s\n", name.c_str());
-            it->second.subproc->request_exit();
+            it->second.request_exit();
             // for convenience, we wait the status change here
             wait(lk, name, [](const server_model_meta & new_meta) {
                 return new_meta.status != SERVER_MODEL_STATUS_DOWNLOADING;
             });
         } else if (it->second.meta.is_running()) {
             SRV_INF("stopping model instance name=%s\n", name.c_str());
-            stopping_models.insert(name);
-            if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+            bool loading = it->second.meta.status == SERVER_MODEL_STATUS_LOADING;
+            if (loading) {
                 // special case: if model is in loading state, unloading means force-killing it
                 SRV_WRN("model name=%s is still loading, force-killing\n", name.c_str());
                 it->second.subproc->terminate();
             }
-            cv_stop.notify_all();
-            // status change will be handled by the managing thread
+            request_stop(name, !loading);
+            // status change will be handled by the monitor
         } else {
             SRV_WRN("model instance name=%s is not running\n", name.c_str());
         }
@@ -1066,28 +1258,29 @@ void server_models::unload(const std::string & name) {
 }
 
 void server_models::unload_all() {
-    std::vector<std::thread> to_join;
-    {
-        std::lock_guard<std::mutex> lk(mutex);
-        for (auto & [name, inst] : mapping) {
-            if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
-                SRV_INF("cancelling download for model name=%s\n", name.c_str());
-                inst.subproc->stopped.store(true, std::memory_order_relaxed);
-            } else if (inst.meta.is_running()) {
-                SRV_INF("stopping model instance name=%s\n", name.c_str());
-                stopping_models.insert(name);
-                cv_stop.notify_all();
-                // status change will be handled by the managing thread
+    std::unique_lock<std::mutex> lk(mutex);
+    for (auto & [name, inst] : mapping) {
+        if (inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
+            SRV_INF("cancelling download for model name=%s\n", name.c_str());
+            inst.request_exit();
+        } else if (inst.meta.is_running()) {
+            SRV_INF("stopping model instance name=%s\n", name.c_str());
+            bool loading = inst.meta.status == SERVER_MODEL_STATUS_LOADING;
+            if (loading) {
+                inst.subproc->terminate();
             }
-            // moving the thread to join list to avoid deadlock
-            to_join.push_back(std::move(inst.th));
+            request_stop(name, !loading);
         }
     }
-    for (auto & th : to_join) {
-        if (th.joinable()) {
-            th.join();
+    // wait for every child to exit, the monitor force-kills the ones that ignore the exit command
+    cv.wait(lk, [this]() {
+        for (const auto & [name, inst] : mapping) {
+            if (inst.meta.is_running() || inst.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
+                return false;
+            }
         }
-    }
+        return true;
+    });
 }
 
 void server_models::update_status(const std::string & name, const update_status_args & args) {
@@ -1097,12 +1290,17 @@ void server_models::update_status(const std::string & name, const update_status_
         auto & meta = it->second.meta;
         meta.status      = args.status;
         meta.exit_code   = args.exit_code;
+        if (args.status == SERVER_MODEL_STATUS_UNLOADED) {
+            stopping_models.erase(name);
+        }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
         }
         if (!args.progress.is_null()) {
             meta.progress = args.progress;
         }
+        // a model that comes up idle or goes down changes the slot count for queued requests
+        sched->tick(lk);
     }
     // broadcast status change to SSE
     {
@@ -1172,18 +1370,18 @@ bool server_models::remove(const std::string & name) {
     if (it->second.meta.status == SERVER_MODEL_STATUS_DOWNLOADING) {
         // cancel in-flight download
         SRV_INF("cancelling download for model name=%s\n", name.c_str());
-        it->second.subproc->request_exit();
+        it->second.request_exit();
     } else if (it->second.meta.is_running()) {
         // stop running instance
         SRV_INF("stopping model instance name=%s\n", name.c_str());
-        stopping_models.insert(name);
-        if (it->second.meta.status == SERVER_MODEL_STATUS_LOADING) {
+        bool loading = it->second.meta.status == SERVER_MODEL_STATUS_LOADING;
+        if (loading) {
             it->second.subproc->terminate();
         }
-        cv_stop.notify_all();
+        request_stop(name, !loading);
     }
 
-    // wait until the monitoring thread finishes
+    // wait until the child is gone
     wait(lk, name, [](const server_model_meta & meta) {
         return meta.status == SERVER_MODEL_STATUS_UNLOADED
             || meta.status == SERVER_MODEL_STATUS_DOWNLOADED;
@@ -1192,18 +1390,12 @@ bool server_models::remove(const std::string & name) {
     // re-find after wait - load_models() may have erased the entry during the wait
     it = mapping.find(name);
     if (it == mapping.end()) {
-        // load_models() already joined the thread and erased the entry;
-        // we just need to clean up the cached files on disk
+        // load_models() already erased the entry; we just need to clean up the cached files on disk
         lk.unlock();
         bool ok = common_download_remove(name);
         SRV_INF("removing model name=%s from cache (%s)\n", name.c_str(), ok ? "succeeded" : "partial");
         notify_sse("model_remove", name, {});
         return true;
-    }
-
-    // join before erasing - thread no longer acquires this mutex
-    if (it->second.th.joinable()) {
-        it->second.th.join();
     }
 
     // remove from disk (best-effort: cancelled downloads may have no cached files)
@@ -1235,41 +1427,126 @@ void server_models::wait(std::unique_lock<std::mutex> & lk, const std::string & 
     });
 }
 
-bool server_models::ensure_model_ready(const std::string & name) {
+bool server_models::ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->is_ready()) {
+    bool stopping;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        stopping = stopping_models.count(name) > 0;
+    }
+    if (!stopping && meta->is_ready()) {
         return false; // ready for taking requests
     }
-    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
+    if (!stopping && meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
-    if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
-        SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name);
-    }
 
-    // wait for loading to complete
-    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
-    wait(name, [&meta](const server_model_meta & new_meta) {
-        if (new_meta.status != SERVER_MODEL_STATUS_LOADING) {
-            meta = new_meta; // update meta for final check after wait
-            return true;
+    bool queued   = false;
+    bool did_load = false;
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+            // the queue entry protects the model from eviction until its waiters leave
+            sched->join(lk, name);
+            sched->tick(lk);
+            queued = true;
         }
-        return false;
-    });
-
-    // check final status
-    if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
     }
+
+    // while queued, this is also where the load happens: the head of the queue does it
+    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
+    std::unique_lock<std::mutex> lk(mutex);
+    auto leave_queue = [this, &queued, &lk, &name]() {
+        if (queued) {
+            sched->leave(lk, name);
+            queued = false;
+        }
+    };
+
+    try {
+        bool saw_loading = false;
+        while (true) {
+            auto it = mapping.find(name);
+            if (it == mapping.end()) {
+                break; // removed by another code path, nothing to wait for
+            }
+            if (stopping_models.count(name)) {
+                // a stopping instance takes no new request, the next instance serves it
+                if (!queued) {
+                    sched->join(lk, name);
+                    sched->tick(lk);
+                    queued = true;
+                }
+                if (should_stop && should_stop()) {
+                    throw std::runtime_error("request cancelled while waiting for model name=" + name);
+                }
+                cv.wait_for(lk, std::chrono::milliseconds(200));
+                continue;
+            }
+            const server_model_status status = it->second.meta.status;
+
+            if (status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING) {
+                break;
+            }
+            if (status == SERVER_MODEL_STATUS_DOWNLOADING || status == SERVER_MODEL_STATUS_DOWNLOADED) {
+                break; // do not wait on a download child
+            }
+            if (status == SERVER_MODEL_STATUS_LOADING) {
+                saw_loading = true;
+            } else if (status == SERVER_MODEL_STATUS_UNLOADED) {
+                if (did_load || saw_loading) {
+                    // a spawn happened and the instance came back down
+                    if (it->second.meta.is_failed()) {
+                        throw std::runtime_error("model name=" + name + " failed to load");
+                    }
+                    break; // unloaded by another code path, caller reports "not running"
+                }
+                if (!queued) {
+                    break; // not queued, and the load someone else started fell over
+                }
+            }
+
+            if (should_stop && should_stop()) {
+                // if a model was evicted for us, the free slot goes to the next waiter
+                throw std::runtime_error("request cancelled while waiting for model name=" + name);
+            }
+
+            // our turn: our model is at the head, and a slot really did free up
+            if (status == SERVER_MODEL_STATUS_UNLOADED && sched->try_claim(lk, name)) {
+                lk.unlock();
+                bool ok = true;
+                try {
+                    SRV_INF("slot available, loading queued model name=%s\n", name.c_str());
+                    load(name);
+                    did_load = true;
+                } catch (const std::exception & e) {
+                    // lost a race for the slot, stay in line and retry
+                    SRV_WRN("queued load of name=%s did not go through: %s\n", name.c_str(), e.what());
+                    ok = false;
+                }
+                lk.lock();
+                sched->claim_done(lk, name, ok);
+                sched->tick(lk);
+                continue;
+            }
+
+            cv.wait_for(lk, std::chrono::milliseconds(200));
+        }
+    } catch (...) {
+        leave_queue();
+        sched->tick(lk); // a slot freed for this waiter goes to the next one
+        throw;
+    }
+    leave_queue();
 
     return true;
 }
 
-server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used) {
+server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
@@ -1277,9 +1554,16 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
     }
-    if (update_last_used) {
+    {
         std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
+        if (update_last_used) {
+            mapping[name].meta.last_used = ggml_time_ms();
+        }
+        mapping[name].req_count++;
+    }
+    if (debug_fake_timing) {
+        // sleep after req_count++, so the model counts as busy while we wait here
+        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
@@ -1295,10 +1579,25 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.headers,
             req.body,
             req.files,
-            req.should_stop,
+            // a detached request belongs to a replay session
+            detached
+                ? std::function<bool()>([]() { return false; })
+                : req.should_stop,
             base_params.timeout_read,
             base_params.timeout_write
             );
+
+    proxy->cleanup = [this, name]() {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.req_count > 0) {
+            it->second.req_count--;
+            if (it->second.req_count == 0) {
+                sched->tick(lk);
+            }
+        }
+    };
+
     return proxy;
 }
 
@@ -1324,7 +1623,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
                     std::lock_guard<std::mutex> lk(mutex);
                     auto it = mapping.find(name);
                     if (it != mapping.end()) {
-                        return it->second.subproc->request_exit();
+                        return it->second.request_exit();
                     }
                 };
                 if (result == "download_finished") {
@@ -1498,7 +1797,10 @@ void server_child::notify_to_router(const std::string & state, const json & payl
     std::lock_guard<std::mutex> lk(mtx_stdout);
     common_log_pause(common_log_main());
     fflush(stdout);
-    fprintf(stdout, "%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
+    // the router matches the command on a line prefix, so the leading newline
+    // closes whatever the logger left open on the shared pipe, down to the
+    // trailing color reset that carries no newline of its own
+    fprintf(stdout, "\n%s%s\n", CMD_CHILD_TO_ROUTER_STATE, safe_json_to_str(data).c_str());
     fflush(stdout);
     common_log_resume(common_log_main());
 }
@@ -1566,13 +1868,9 @@ static bool router_validate_model(std::string & name, server_models & models, bo
     }
     // resolve alias to canonical model name
     name = meta->name;
-    if (models_autoload) {
-        models.ensure_model_ready(name);
-    } else {
-        if (!meta->is_running()) {
-            res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
-            return false;
-        }
+    if (!models_autoload && !meta->is_running()) {
+        res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
+        return false;
     }
     return true;
 }
@@ -1626,6 +1924,10 @@ static std::optional<server_model_meta> resolve_child_for_conv(
 }
 
 void server_models_routes::init_routes() {
+    if (!common_subproc::is_supported()) {
+        throw std::runtime_error("subprocess is not enabled on this build");
+    }
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
@@ -1661,6 +1963,9 @@ void server_models_routes::init_routes() {
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
         return models.proxy_request(req, method, name, false);
     };
 
@@ -1674,12 +1979,25 @@ void server_models_routes::init_routes() {
             return error_res;
         }
         // remember which child serves this conversation so the stream routes can route straight
-        // to it without polling, keyed on the exact conv id from the header
-        std::string conv_id = stream_conv_id_from_headers(req.headers);
-        if (!conv_id.empty()) {
-            models.conv_models.remember(conv_id, name);
+        // to it without polling, keyed on the exact conv id from the header. registered before
+        // the load wait so a stop issued while the model loads can erase the entry and cancel
+        // this request instead of leaving an orphan generation
+        std::string conv_id = server_stream_conv_id_from_headers(req.headers);
+        uint64_t ticket = models.conv_models.remember(conv_id, name);
+        // a dead socket must not cancel a session request, only a stop does (checked right below)
+        auto should_stop = ticket == 0 ? req.should_stop : nullptr;
+        bool waited = autoload && models.ensure_model_ready(name, should_stop);
+        if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
+            SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
+                    conv_id.c_str(), name.c_str());
+            res_err(error_res, format_error_response(
+                    "request cancelled by a stop while the model was loading", ERROR_TYPE_INVALID_REQUEST));
+            return error_res;
         }
-        return models.proxy_request(req, method, name, true); // update last usage for POST request only
+        // a session request that waited for a load detaches from the client socket: the
+        // client may have dropped during the wait (page reload) and the session buffer must
+        // still receive the generation for a later resume
+        return models.proxy_request(req, method, name, true, waited && ticket != 0); // update last usage for POST request only
     };
 
     this->post_router_models_load = [this](const server_http_req & req) {
@@ -1710,6 +2028,9 @@ void server_models_routes::init_routes() {
         auto all_models = models.get_all_meta();
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
+            if (meta.hidden) {
+                continue; // cache model deduplicated by a preset
+            }
             json status {
                 {"value",  server_model_status_to_string(meta.status)},
                 {"args",   meta.args},
@@ -1872,7 +2193,7 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_get = [this](const server_http_req & req) {
-        // GET /v1/stream/<conv_id>?from=N. resolve the owning child from the conv_id -> model
+        // GET /v1/stream?conv_id=<id>&from=N. resolve the owning child from the conv_id -> model
         // map, 404 when nothing maps
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
@@ -1882,15 +2203,26 @@ void server_models_routes::init_routes() {
         }
         std::optional<server_model_meta> owner = resolve_child_for_conv(models, conv_id);
         if (!owner.has_value()) {
-            res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
+            // a registered conv whose model is still loading earns a retry: the session appears
+            // once the load ends and the pending request reaches the child
+            auto tracked = models.conv_models.lookup(conv_id);
+            auto meta = tracked.has_value() ? models.get_meta(*tracked) : std::nullopt;
+            bool transient = meta.has_value() && (meta->status == SERVER_MODEL_STATUS_LOADING ||
+                                                  meta->status == SERVER_MODEL_STATUS_DOWNLOADING ||
+                                                  meta->status == SERVER_MODEL_STATUS_DOWNLOADED);
+            if (transient) {
+                res_err(res, format_error_response("Stream owner model is loading, retry later", ERROR_TYPE_UNAVAILABLE));
+            } else {
+                res_err(res, format_error_response("Stream not found or expired", ERROR_TYPE_NOT_FOUND));
+            }
             return res;
         }
         std::string from = req.get_param("from");
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        std::string child_path = "/v1/stream?conv_id=" + encode_qs(conv_id);
         if (!from.empty()) {
-            child_path += "?from=" + from;
+            child_path += "&from=" + from;
         }
-        SRV_INF("proxying stream resume to model %s on port %d, path=%s\n",
+        SRV_TRC("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
         auto proxy = std::make_unique<server_http_proxy>(
                 "GET",
@@ -1968,7 +2300,7 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_delete = [this](const server_http_req & req) {
-        // DELETE /v1/stream/<conv_id>. resolve the owning child via the map and forward only to
+        // DELETE /v1/stream?conv_id=<id>. resolve the owning child via the map and forward only to
         // it, evict_and_cancel is idempotent on the child
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
@@ -1976,7 +2308,7 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        std::string child_path = "/v1/stream?conv_id=" + encode_qs(conv_id);
         auto owner = resolve_child_for_conv(models, conv_id);
         if (owner.has_value()) {
             httplib::Client cli(CHILD_ADDR, owner->port);
@@ -1985,6 +2317,11 @@ void server_models_routes::init_routes() {
             cli.set_write_timeout(0, STREAM_LOOKUP_TIMEOUT_MS * 1000);
             auto resp = cli.Delete(child_path.c_str());
             (void) resp; // the child logs its own miss when the session is unknown there
+        } else if (auto tracked = models.conv_models.lookup(conv_id); tracked.has_value()) {
+            // the entry exists but its model is still loading: the forget below erases it,
+            // which cancels the request parked in proxy_post before the generation starts
+            SRV_INF("router stop for conv_id=%s while model name=%s is loading, cancelling the pending request\n",
+                    conv_id.c_str(), tracked->c_str());
         } else {
             SRV_WRN("router stop for unknown conv_id=%s, no owning child in the conv map\n",
                     conv_id.c_str());
@@ -2002,53 +2339,6 @@ void server_models_routes::init_routes() {
 //
 // server_http_proxy
 //
-
-// simple implementation of a pipe
-// used for streaming data between threads
-template<typename T>
-struct pipe_t {
-    std::mutex mutex;
-    std::condition_variable cv;
-    std::queue<T> queue;
-    std::atomic<bool> writer_closed{false};
-    std::atomic<bool> reader_closed{false};
-    void close_write() {
-        writer_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-    void close_read() {
-        reader_closed.store(true, std::memory_order_relaxed);
-        cv.notify_all();
-    }
-    bool read(T & output, const std::function<bool()> & should_stop) {
-        std::unique_lock<std::mutex> lk(mutex);
-        constexpr auto poll_interval = std::chrono::milliseconds(500);
-        while (true) {
-            if (!queue.empty()) {
-                output = std::move(queue.front());
-                queue.pop();
-                return true;
-            }
-            if (writer_closed.load()) {
-                return false; // clean EOF
-            }
-            if (should_stop()) {
-                close_read(); // signal broken pipe to writer
-                return false; // cancelled / reader no longer alive
-            }
-            cv.wait_for(lk, poll_interval);
-        }
-    }
-    bool write(T && data) {
-        std::lock_guard<std::mutex> lk(mutex);
-        if (reader_closed.load()) {
-            return false; // broken pipe
-        }
-        queue.push(std::move(data));
-        cv.notify_one();
-        return true;
-    }
-};
 
 static std::string to_lower_copy(const std::string & value) {
     std::string lowered(value.size(), '\0');
@@ -2159,7 +2449,7 @@ server_http_proxy::server_http_proxy(
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
-    auto pipe = std::make_shared<pipe_t<msg_t>>();
+    auto pipe = std::make_shared<server_pipe<msg_t>>();
 
     if (scheme == "https") {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
@@ -2175,7 +2465,7 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    this->cleanup_pipes = [pipe]() {
         pipe->close_read();
         pipe->close_write();
     };
@@ -2190,9 +2480,8 @@ server_http_proxy::server_http_proxy(
         return has_next; // false if EOF or pipe broken
     };
 
-    // wire up the HTTP client
-    // note: do NOT capture `this` pointer, as it may be destroyed before the thread ends
-    httplib::ResponseHandler response_handler = [pipe, cli](const httplib::Response & response) {
+    // build the header message forwarded to the reader thread, stripping internal proxy headers
+    auto make_header_msg = [](const httplib::Response & response) {
         msg_t msg;
         msg.status = response.status;
         for (const auto & [key, value] : response.headers) {
@@ -2206,7 +2495,17 @@ server_http_proxy::server_http_proxy(
             }
             msg.headers[key] = value;
         }
-        return pipe->write(std::move(msg)); // send headers first
+        return msg;
+    };
+
+    // true once response_handler has already forwarded the headers
+    auto headers_sent = std::make_shared<std::atomic<bool>>(false);
+
+    // wire up the HTTP client
+    // note: do NOT capture `this` pointer, as it may be destroyed before the thread ends
+    httplib::ResponseHandler response_handler = [pipe, headers_sent, make_header_msg](const httplib::Response & response) {
+        headers_sent->store(true);
+        return pipe->write(make_header_msg(response)); // send headers first
     };
     httplib::ContentReceiverWithProgress content_receiver = [pipe](const char * data, size_t data_length, size_t, size_t) {
         // send data chunks
@@ -2221,7 +2520,7 @@ server_http_proxy::server_http_proxy(
     bool has_files = !files.empty();
 
     if (has_files) {
-        json form_fields = json::parse(body, nullptr, false);
+        json form_fields = json::parse_no_throw(body);
         if (!form_fields.is_discarded()) {
             auto boundary = generate_multipart_boundary();
             effective_body = build_multipart_body(form_fields, files, boundary);
@@ -2280,13 +2579,16 @@ server_http_proxy::server_http_proxy(
 
     // start the proxy thread
     SRV_DBG("start proxy thread %s %s\n", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req]() {
+    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg]() {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
             pipe->write({{}, 500, "", ""}); // header
             pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
+        } else if (!headers_sent->load()) {
+            // httplib skips response_handler for bodyless statuses like 204, send headers here instead
+            pipe->write(make_header_msg(*result));
         }
         pipe->close_write(); // signal EOF to reader
         SRV_DBG("%s", "client request thread ended\n");

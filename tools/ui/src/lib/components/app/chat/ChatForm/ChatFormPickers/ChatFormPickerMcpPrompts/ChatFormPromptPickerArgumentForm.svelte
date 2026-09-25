@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { MCPPromptInfo } from '$lib/types';
 	import ChatFormPromptPickerArgumentInput from './ChatFormPromptPickerArgumentInput.svelte';
 	import { Button } from '$lib/components/ui/button';
+	import type { MCPPromptInfo } from '$lib/types';
 
 	interface Props {
 		prompt: MCPPromptInfo;
@@ -21,37 +21,37 @@
 	}
 
 	let {
-		prompt,
-		promptArgs,
-		suggestions,
-		loadingSuggestions,
 		activeAutocomplete,
 		autocompleteIndex,
-		promptError,
-		onArgInput,
-		onArgKeydown,
+		loadingSuggestions,
 		onArgBlur,
 		onArgFocus,
+		onArgInput,
+		onArgKeydown,
+		onCancel,
 		onSelectSuggestion,
 		onSubmit,
-		onCancel
+		prompt,
+		promptArgs,
+		promptError,
+		suggestions
 	}: Props = $props();
 </script>
 
-<form onsubmit={onSubmit} class="space-y-3 pt-4">
+<form class="space-y-3 pt-4" onsubmit={onSubmit}>
 	{#each prompt.arguments ?? [] as arg (arg.name)}
 		<ChatFormPromptPickerArgumentInput
 			argument={arg}
-			value={promptArgs[arg.name] ?? ''}
-			suggestions={suggestions[arg.name] ?? []}
-			isLoadingSuggestions={loadingSuggestions[arg.name] ?? false}
-			isAutocompleteActive={activeAutocomplete === arg.name}
 			autocompleteIndex={activeAutocomplete === arg.name ? autocompleteIndex : 0}
-			onInput={(value) => onArgInput(arg.name, value)}
-			onKeydown={(e) => onArgKeydown(e, arg.name)}
+			isAutocompleteActive={activeAutocomplete === arg.name}
+			isLoadingSuggestions={loadingSuggestions[arg.name] ?? false}
 			onBlur={() => onArgBlur(arg.name)}
 			onFocus={() => onArgFocus(arg.name)}
+			onInput={(value) => onArgInput(arg.name, value)}
+			onKeydown={(e) => onArgKeydown(e, arg.name)}
 			onSelectSuggestion={(value) => onSelectSuggestion(arg.name, value)}
+			suggestions={suggestions[arg.name] ?? []}
+			value={promptArgs[arg.name] ?? ''}
 		/>
 	{/each}
 
@@ -67,7 +67,7 @@
 	{/if}
 
 	<div class="mt-8 flex justify-end gap-2">
-		<Button type="button" size="sm" onclick={onCancel} variant="secondary">Cancel</Button>
+		<Button onclick={onCancel} size="sm" type="button" variant="secondary">Cancel</Button>
 
 		<Button size="sm" type="submit">Use Prompt</Button>
 	</div>

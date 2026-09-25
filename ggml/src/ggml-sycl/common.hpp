@@ -18,6 +18,7 @@
 #include <iostream>
 #include <string>
 
+#include "base.hpp"
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "ggml-impl.h"
@@ -26,6 +27,7 @@
 #include "type.hpp"
 #include "sycl_hw.hpp"
 #include "fattn-buffers.hpp"
+#include "memtrace.hpp"
 
 namespace syclexp = sycl::ext::oneapi::experimental;
 
@@ -59,26 +61,18 @@ void ggml_sycl_host_free(void* ptr);
 
 
 extern int g_ggml_sycl_debug;
-extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_enable_optimize;
+extern int g_ggml_sycl_enable_fusion;
+extern int g_ggml_sycl_enable_esimd;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
+extern int g_ggml_sycl_fa_onednn;
+extern int g_ggml_sycl_fa_onednn_max_kv;
+extern int g_ggml_sycl_enable_mkl_fa;
+extern int g_ggml_sycl_memtrace;
+extern int g_ggml_sycl_memtrace_step;
 
-
-#if defined(__clang__) && __has_builtin(__builtin_expect)
-// Hint the optimizer to pipeline the more likely following instruction in branches
-#    define LIKELY(expr)   __builtin_expect(expr, true)
-#    define UNLIKELY(expr) __builtin_expect(expr, false)
-#else
-#    define LIKELY(expr)   (expr)
-#    define UNLIKELY(expr) (expr)
-#endif
-
-#define GGML_SYCL_DEBUG(...)              \
-    do {                                  \
-        if (UNLIKELY(g_ggml_sycl_debug))  \
-            fprintf(stderr, __VA_ARGS__); \
-    } while (0)
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -130,6 +124,7 @@ enum ggml_sycl_backend_gpu_mode {
 enum ggml_sycl_dev2dev_memcpy_mode {
   DEV2DEV_MEMCPY_SYCL = 0,
   DEV2DEV_MEMCPY_L0 = 1,
+  DEV2DEV_MEMCPY_FORWARD = 2
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -231,6 +226,7 @@ struct sycl_device_info {
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_device_type_valid;
     bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
     size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
@@ -325,7 +321,8 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
-void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
+void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
+                               ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
@@ -404,29 +401,10 @@ struct ggml_backend_sycl_context {
     dnnl::stream stream_dnnl() {
         return stream_dnnl(device, 0);
     }
-    dnnl::memory get_scratchpad_mem(const dnnl::memory::desc & scratchpad_md,
-                                    const dnnl::engine & eng, const queue_ptr q) {
-        ggml_sycl_pool_alloc<uint8_t> * pool;
-        auto it = scratchpad_map.find(q);
-        if (it == scratchpad_map.end()) {
-            scratchpad_map[q] = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
-            pool = scratchpad_map[q].get();
-        } else {
-            pool = it->second.get();
-        }
-
-        size_t scratchpad_size = scratchpad_md.get_size();
-        if (scratchpad_size > pool->actual_size) {
-            pool->realloc(scratchpad_size);
-        }
-        void * mem_ptr = pool->get();
-        return dnnl::memory(scratchpad_md, eng, mem_ptr);
-    }
 #endif
 
     // pool
     std::unique_ptr<ggml_sycl_pool> pools[GGML_SYCL_MAX_DEVICES];
-    std::unordered_map<sycl::queue *, std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>>> scratchpad_map;
 
     std::unique_ptr<ggml_sycl_fattn_kv_buffers> fattn_bufs[GGML_SYCL_MAX_DEVICES];
 
@@ -1017,9 +995,20 @@ static T block_reduce(T val, T * shared_vals, int block_size_template) {
 }
 
 static __dpct_inline__ float ggml_sycl_ue4m3_to_fp32(uint8_t x) {
-    const uint32_t bits = x * (x != 0x7F && x != 0xFF);
-    const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
-    return static_cast<float>(xf) / 2;
+    // UE4M3 is unsigned: 4 exp bits (bias 7), 3 mantissa bits, no sign, no NaN.
+    // exp == 0xF is a valid exponent (256-448 range), not NaN.
+    if (x == 0 || x == 0x7F) {
+        return 0.0f;
+    }
+    const int exp = (x >> 3) & 0xF;
+    const int man = x & 0x7;
+    float raw;
+    if (exp == 0) {
+        raw = man * (1.0f / 8.0f) * sycl::pow(2.0f, -6.0f);
+    } else {
+        raw = (1.0f + man / 8.0f) * sycl::pow(2.0f, (float) exp - 7.0f);
+    }
+    return raw * 0.5f;
 }
 
 #endif // GGML_SYCL_COMMON_HPP

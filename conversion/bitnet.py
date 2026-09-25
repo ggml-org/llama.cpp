@@ -8,7 +8,8 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf
 
 
-@ModelBase.register("BitnetForCausalLM")
+@ModelBase.register("BitnetForCausalLM", "BitNetForCausalLM")
+@ModelBase.example("microsoft/bitnet-b1.58-2B-4T")
 class BitnetModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BITNET
 

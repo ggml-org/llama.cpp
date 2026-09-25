@@ -1,6 +1,8 @@
 find_package(OpenVINO REQUIRED COMPONENTS Runtime Threading)
 find_package(OpenCL REQUIRED)
 
+message(STATUS "Found OpenVINO: ${OpenVINO_DIR} (found version \"${OpenVINO_VERSION}\")")
+
 file(GLOB_RECURSE GGML_HEADERS_OPENVINO "*.h" "*.hpp")
 file(GLOB_RECURSE GGML_SOURCES_OPENVINO "*.cpp")
 

@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("OpenELMForCausalLM")
+@ModelBase.example("apple/OpenELM-270M")
 class OpenELMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OPENELM
 

@@ -195,6 +195,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     case GGML_TYPE_Q4_K:
                     case GGML_TYPE_Q6_K:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q5_K:
                         //case GGML_TYPE_MXFP4:
@@ -214,6 +215,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     case GGML_TYPE_Q4_K:
                     case GGML_TYPE_Q6_K:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q5_K:
                         //case GGML_TYPE_MXFP4:

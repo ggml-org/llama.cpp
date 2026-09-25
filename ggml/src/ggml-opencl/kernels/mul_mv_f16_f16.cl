@@ -64,7 +64,14 @@ kernel void kernel_mul_mat_f16_f16(
 
     global half * x = (global half *) (src0 + offset_src0);
 
-    if (ne00 < 128) {
+    // The vector path below casts the row pointers to half4, which must be 8-byte aligned.
+    // A row address is r0*nb01 + ..., and a permuted or strided src leaves nb01/nb11
+    // unconstrained -- an odd ne00, say, gives a row that is only 2-byte aligned. Every
+    // src1 row this work-item walks is src1_base + r1*nb11, so require both.
+    const ulong src1_base  = (ulong) (src1 + (i12)*nb12 + (i13)*nb13);
+    const bool  row_aligned = (((ulong) x) & 7) == 0 && (src1_base & 7) == 0 && (nb11 & 7) == 0;
+
+    if (ne00 < 128 || !row_aligned) {
         for (int row = 0; row < N_F16_F16; ++row) {
             int r1 = rb + row;
             if (r1 >= ne11) {

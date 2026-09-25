@@ -208,6 +208,77 @@ static inline void hvx_mad_f32_f16_aa_rx2(float * restrict y, const void * restr
         }
     }
 }
+static inline void hvx_mad_f32_f16_aa_vec(float * restrict y, const void * restrict x, HVX_Vector S0, uint32_t n) {
+    const HVX_Vector * restrict vx0 = (const HVX_Vector *) x;
+
+    HVX_VectorPair * restrict vy_p = (HVX_VectorPair *) y;
+    HVX_Vector * restrict vy = (HVX_Vector *) y;
+
+    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16; // leftover elements
+
+    uint32_t i = 0;
+
+    #pragma unroll(2)
+    for (i = 0; i < nvec; ++i) {
+        vy_p[i] = hvx_vec_mpyacc_f32_f16(vy_p[i], Q6_Vh_vshuff_Vh(vx0[i]), S0);
+    }
+
+    if (nloe) {
+        HVX_VectorPair xy_p = vy_p[i];
+        xy_p = hvx_vec_mpyacc_f32_f16(xy_p, Q6_Vh_vshuff_Vh(vx0[i]), S0);
+
+        HVX_Vector xy = Q6_V_lo_W(xy_p);
+        i = 2 * i;  // index for vy
+
+        if (nloe >= VLEN_FP32) {
+            vy[i] = xy;
+            nloe -= VLEN_FP32; ++i; xy = Q6_V_hi_W(xy_p);
+        }
+
+        if (nloe) {
+            hvx_vec_store_a(&vy[i], nloe * 4, xy);
+        }
+    }
+}
+
+static inline void hvx_mad_f32_f16_aa_rx2_vec(float * restrict y, const void * restrict x0, const void * restrict x1,
+                                          HVX_Vector S0, HVX_Vector S1, uint32_t n) {
+    const HVX_Vector * restrict vx0 = (const HVX_Vector *) x0;
+    const HVX_Vector * restrict vx1 = (const HVX_Vector *) x1;
+
+    HVX_VectorPair * restrict vy_p  = (HVX_VectorPair *) y;
+    HVX_Vector * restrict vy        = (HVX_Vector *) y;
+
+    uint32_t nvec = n / VLEN_FP16;  // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16;  // leftover elements
+
+    uint32_t i = 0;
+
+    #pragma unroll(2)
+    for (i = 0; i < nvec; ++i) {
+        vy_p[i] = hvx_vec_mpyacc_f32_f16(vy_p[i], Q6_Vh_vshuff_Vh(vx0[i]), S0);
+        vy_p[i] = hvx_vec_mpyacc_f32_f16(vy_p[i], Q6_Vh_vshuff_Vh(vx1[i]), S1);
+    }
+
+    if (nloe) {
+        HVX_VectorPair xy_p = vy_p[i];
+        xy_p = hvx_vec_mpyacc_f32_f16(xy_p, Q6_Vh_vshuff_Vh(vx0[i]), S0);
+        xy_p = hvx_vec_mpyacc_f32_f16(xy_p, Q6_Vh_vshuff_Vh(vx1[i]), S1);
+
+        HVX_Vector xy = Q6_V_lo_W(xy_p);
+        i = 2 * i;  // index for vy
+
+        if (nloe >= VLEN_FP32) {
+            vy[i] = xy;
+            nloe -= VLEN_FP32; ++i; xy = Q6_V_hi_W(xy_p);
+        }
+
+        if (nloe) {
+            hvx_vec_store_a(&vy[i], nloe * 4, xy);
+        }
+    }
+}
 
 static inline void hvx_scale_vec_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t n, HVX_Vector vs) {
     assert((size_t) dst % 128 == 0);

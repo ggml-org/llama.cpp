@@ -1,11 +1,12 @@
 #ifndef HTP_CTX_H
 #define HTP_CTX_H
 
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hmx-queue.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
-#include "worker-pool.h"
+#include "work-queue.h"
+#include "hex-fastdiv.h"
 
 #include <assert.h>
 #include <dspqueue.h>
@@ -16,14 +17,21 @@
 #ifndef HTP_MAX_NTHREADS
 #define HTP_MAX_NTHREADS 10
 #endif
-#define HTP_MAX_MMAPS    16
+
+#define HTP_MAX_MMAPS        64
+#define HTP_MAX_DIRTY_RANGES 64
 
 // Memory mapping
 struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t reserved;
+    uint32_t flags;
+};
+
+struct htp_dirty_range {
+    uint32_t start;
+    uint32_t end;
 };
 
 // Scratchpad state
@@ -33,6 +41,14 @@ struct htp_spad {
     uint32_t                  stride;          // stride used inside this spad
     uint32_t                  size;            // total size
     uint32_t                  size_per_thread; // size per thread
+};
+
+struct htp_mdev_group {
+    uint16_t              idx;
+    uint16_t              count;
+    struct fastdiv_values count_div;
+    uint8_t *             fence_base;
+    uint32_t              fence_seq;
 };
 
 struct htp_context;
@@ -59,17 +75,24 @@ struct htp_ops_context {
     struct htp_spad src3_spad;
     struct htp_spad dst_spad;
 
-    uint32_t n_threads;
-    uint32_t flags;
+    uint32_t              flags;
+    uint32_t              n_threads;
+    struct fastdiv_values n_threads_div;
+    int                   status;
 };
 
 // Main context for htp DSP backend
 struct htp_context {
-    dspqueue_t             queue;
-    dma_queue *            dma[HTP_MAX_NTHREADS];
+    dspqueue_t             dsp_queue;
+
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
-    worker_pool_context_t  worker_pool;
+    dma_queue_t            dma[HTP_MAX_NTHREADS];
+    struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
+    work_queue_t           work_queue;
+    hmx_queue_t            hmx_queue;
+
     uint32_t               n_threads;
+    struct fastdiv_values  n_threads_div;
 
     int                    thread_id;
     int                    thread_prio;
@@ -77,7 +100,6 @@ struct htp_context {
     bool                   hmx_enabled;
     bool                   etm;
     uint32_t               profiler;
-    struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
@@ -86,20 +108,46 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
+    struct htp_dirty_range dirty_ranges[HTP_MAX_DIRTY_RANGES];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
     size_t                 ddr_spad_size;
 
+    struct htp_mdev_group  mdev;
     struct htp_ops_context octx;
 
-    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
+    qurt_thread_t          main_thread;
+    void *                 main_stack;
+    atomic_bool            killed;
+    size_t                 footprint;
 };
+
+static inline bool htp_ops_context_set_n_threads(struct htp_ops_context * octx, uint32_t n_threads) {
+    if (n_threads == 0 || n_threads > octx->ctx->n_threads) {
+        return false;
+    }
+
+    if (n_threads != octx->n_threads) {
+        octx->n_threads = n_threads;
+        octx->n_threads_div = n_threads == octx->ctx->n_threads
+            ? octx->ctx->n_threads_div
+            : init_fastdiv_values(n_threads);
+    }
+
+    return true;
+}
+
+static inline void htp_ops_context_set_status(struct htp_ops_context * octx, int status) {
+    if (status > HTP_STATUS_OK && octx->status == HTP_STATUS_OK) {
+        octx->status = status;
+    }
+}
 
 int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
-int op_matmul_qkv(struct htp_ops_context * octx);
-int op_matmul_ffn(struct htp_ops_context * octx);
+int op_matmul_nx(struct htp_ops_context * octx);
+int op_matmul_id_nx(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
@@ -113,6 +161,7 @@ int op_get_rows(struct htp_ops_context * octx);
 int op_cpy(struct htp_ops_context * octx);
 int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
+int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
@@ -120,7 +169,9 @@ int op_concat(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
-int op_tri(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
+int op_im2col(struct htp_ops_context * octx);
+int op_allreduce(struct htp_ops_context * octx);
+int op_roll(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

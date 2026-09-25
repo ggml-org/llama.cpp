@@ -1,28 +1,13 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { beforeNavigate, afterNavigate } from '$app/navigation';
-	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
-	import { setChatActionsContext } from '$lib/contexts';
+	import LazyChatMessage from './LazyChatMessage.svelte';
+	import { ChatMessageUserPending } from '$lib/components/app';
 	import { MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import type { ChatMessageActions } from '$lib/types';
 	import {
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
-		chatClearPendingMessage,
-		chatInjectPendingMessage
-	} from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import {
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage
-	} from '$lib/stores/agentic.svelte';
-	import {
+		buildSiblingInfoMap,
 		copyToClipboard,
 		formatMessageForClipboard,
-		getMessageSiblings,
 		hasAgenticContent
 	} from '$lib/utils';
 
@@ -32,23 +17,27 @@
 		onMessagesReady?: (messageCount: number) => void;
 	}
 
-	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
+	let { messages = [], onMessagesReady, onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
-	let isVisible = $state(false);
-	let previousConversationId = $state<string | null>(null);
-	let previousRouteId = $state<string | null>(null);
 
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
-	setChatActionsContext({
-		copy: async (message: DatabaseMessage) => {
+	const chatActions: ChatMessageActions = {
+		continueAssistantMessage: async (message: DatabaseMessage) => {
+			onUserAction?.();
+			await chatStore.continueAssistantMessage(message.id);
+			refreshAllMessages();
+		},
+
+		copy: async (message: DatabaseMessage, contentOverride?: string) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
-				message.content,
+				contentOverride ?? message.content,
 				message.extra,
 				asPlainText
 			);
+
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
 
@@ -57,8 +46,15 @@
 			refreshAllMessages();
 		},
 
-		navigateToSibling: async (siblingId: string) => {
-			await conversationsStore.navigateToSibling(siblingId);
+		editUserMessagePreserveResponses: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			// in-place edit: the store already updated activeMessages and no
+			// branch is created, so sibling info stays valid without a refetch
+			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
 		},
 
 		editWithBranching: async (
@@ -78,29 +74,10 @@
 		) => {
 			onUserAction?.();
 			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
-			refreshAllMessages();
-		},
 
-		editUserMessagePreserveResponses: async (
-			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
-		) => {
-			onUserAction?.();
-			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
-		},
-
-		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
-			onUserAction?.();
-			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
-			refreshAllMessages();
-		},
-
-		continueAssistantMessage: async (message: DatabaseMessage) => {
-			onUserAction?.();
-			await chatStore.continueAssistantMessage(message.id);
-			refreshAllMessages();
+			// only a branch changes sibling info; an in-place edit already
+			// landed in activeMessages
+			if (shouldBranch) refreshAllMessages();
 		},
 
 		forkConversation: async (
@@ -108,41 +85,43 @@
 			options: { name: string; includeAttachments: boolean }
 		) => {
 			await conversationsStore.forkConversation(message.id, options);
+		},
+
+		navigateToSibling: async (siblingId: string) => {
+			await conversationsStore.navigateToSibling(siblingId);
+		},
+
+		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
+			onUserAction?.();
+			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
+			refreshAllMessages();
 		}
-	});
+	};
 
 	function refreshAllMessages() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
-			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
-				allConversationMessages = messages;
-			});
+			// reuse the array loadConversation just read, when present; branch
+			// actions fall through to a fresh fetch
+			const preloaded = conversationsStore.consumeLastLoadedMessages(conversation.id);
+
+			if (preloaded) {
+				allConversationMessages = preloaded;
+			} else {
+				conversationsStore.getConversationMessages(conversation.id).then((messages) => {
+					allConversationMessages = messages;
+				});
+			}
 		} else {
 			allConversationMessages = [];
 		}
 	}
 
-	// Track conversation changes to trigger transition even on same route
+	// Refresh messages whenever the active conversation changes
 	$effect(() => {
-		const conversation = activeConversation();
-		const currentId = conversation?.id ?? null;
-
-		if (currentId !== previousConversationId && previousConversationId !== null) {
-			// Conversation changed - trigger fade out/in
-			isVisible = false;
-			requestAnimationFrame(() => {
-				refreshAllMessages();
-				previousConversationId = currentId;
-				requestAnimationFrame(() => {
-					isVisible = true;
-				});
-			});
-		} else {
-			previousConversationId = currentId;
-			if (conversation) {
-				refreshAllMessages();
-			}
+		if (conversationsStore.activeConversation) {
+			refreshAllMessages();
 		}
 	});
 
@@ -152,22 +131,7 @@
 		onMessagesReady?.(displayMessages.length);
 	});
 
-	onMount(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
-	});
-
-	beforeNavigate((navigation) => {
-		isVisible = false;
-		previousRouteId = navigation.from?.route.id ?? null;
-	});
-
-	afterNavigate(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
-	});
+	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
 
 	let displayMessages = $derived.by(() => {
 		if (!messages.length) {
@@ -177,13 +141,14 @@
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
-
 		// Build display entries, grouping agentic sessions into single entries.
 		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
 		const result: Array<{
 			message: DatabaseMessage;
 			toolMessages: DatabaseMessage[];
 			isLastAssistantMessage: boolean;
+			isLastUserMessage: boolean;
+			nextAssistantMessage: DatabaseMessage | null;
 			siblingInfo: ChatMessageSiblingInfo;
 		}> = [];
 
@@ -194,6 +159,7 @@
 			if (msg.role === MessageRole.TOOL) continue;
 
 			const toolMessages: DatabaseMessage[] = [];
+
 			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
@@ -223,26 +189,47 @@
 				}
 			}
 
-			const siblingInfo = getMessageSiblings(allConversationMessages, msg.id);
+			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				currentIndex: 0,
+				message: msg,
+				siblingIds: [msg.id],
+				totalSiblings: 1
+			};
 
 			result.push({
-				message: msg,
-				toolMessages,
 				isLastAssistantMessage: false,
-				siblingInfo: siblingInfo || {
-					message: msg,
-					siblingIds: [msg.id],
-					currentIndex: 0,
-					totalSiblings: 1
-				}
+				isLastUserMessage: false,
+				message: msg,
+				nextAssistantMessage: null,
+				siblingInfo,
+				toolMessages
 			});
 		}
 
-		// Mark the last assistant message
+		let lastAssistantIdx = -1;
+
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
 				result[i].isLastAssistantMessage = true;
+				lastAssistantIdx = i;
+
 				break;
+			}
+		}
+
+		if (lastAssistantIdx > 0 && result[lastAssistantIdx - 1].message.role === MessageRole.USER) {
+			result[lastAssistantIdx - 1].isLastUserMessage = true;
+		}
+
+		for (let i = 0; i < result.length; i++) {
+			if (result[i].message.role !== MessageRole.USER) continue;
+
+			for (let j = i + 1; j < result.length; j++) {
+				if (result[j].message.role === MessageRole.ASSISTANT) {
+					result[i].nextAssistantMessage = result[j].message;
+
+					break;
+				}
 			}
 		}
 
@@ -250,48 +237,76 @@
 	});
 </script>
 
-<div
-	class="transition-opacity duration-500 ease-out
-		{isVisible ? 'opacity-100' : 'opacity-0'}
-		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
->
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, siblingInfo } (message.id)}
-		<ChatMessage
-			class="mx-auto mt-12 w-full max-w-3xl"
-			{message}
-			{toolMessages}
-			{isLastAssistantMessage}
-			{siblingInfo}
-		/>
-	{/each}
-
-	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
-
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={agenticPendingSteeringMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticClearSteeringMessage(convId)}
+<!-- Re-created per conversation, so the CSS fade-in below plays on every
+     navigation into a chat route. -->
+{#key conversationsStore.activeConversation?.id ?? 'new'}
+	<div class="chat-messages">
+		{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
+			<LazyChatMessage
+				{chatActions}
+				class="mx-auto mt-12 w-full max-w-3xl"
+				{isLastAssistantMessage}
+				{isLastUserMessage}
+				{message}
+				{nextAssistantMessage}
+				{siblingInfo}
+				{toolMessages}
 			/>
-		{/if}
-	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = chatPendingMessageContent(convId)}
+		{/each}
 
-		{#if pendingContent}
-			<ChatMessageUserPending
-				class="mx-auto mt-12 w-full max-w-[48rem]"
-				content={pendingContent}
-				extras={chatPendingMessageExtras(convId)}
-				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-				onDelete={() => chatClearPendingMessage(convId)}
-			/>
+		{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={agenticStore.getPendingSteeringMessageExtras(convId)}
+					onDelete={() => agenticStore.clearSteeringMessage(convId)}
+					onEdit={(newContent, extras) =>
+						agenticStore.injectSteeringMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
+		{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
+			{@const convId = conversationsStore.activeConversation!.id}
+			{@const pendingContent = chatStore.getPendingMessageContent(convId)}
+
+			{#if pendingContent}
+				<ChatMessageUserPending
+					class="mx-auto mt-12 w-full max-w-[48rem]"
+					content={pendingContent}
+					extras={chatStore.getPendingMessageExtras(convId)}
+					onDelete={() => chatStore.clearPendingMessage(convId)}
+					onEdit={(newContent, extras) =>
+						chatStore.injectPendingMessage(convId, newContent, extras)}
+					onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
+				/>
+			{/if}
 		{/if}
-	{/if}
-</div>
+	</div>
+{/key}
+
+<style>
+	/* Compositor-friendly opacity fade; the keyed block re-creates the list per
+	 * conversation, so the animation plays on every navigation into a chat. */
+	.chat-messages {
+		animation: chat-messages-fade-in 150ms ease-out;
+	}
+
+	@keyframes chat-messages-fade-in {
+		from {
+			opacity: 0;
+		}
+		to {
+			opacity: 1;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.chat-messages {
+			animation: none;
+		}
+	}
+</style>

@@ -1,0 +1,42 @@
+import { tryParseToolResultObject } from '$lib/utils';
+import { describe, expect, it } from 'vitest';
+
+describe('tryParseToolResultObject', () => {
+	it('returns null when no result is provided', () => {
+		expect(tryParseToolResultObject(undefined)).toBeNull();
+		expect(tryParseToolResultObject('')).toBeNull();
+	});
+
+	it('returns the parsed object when the result is JSON', () => {
+		expect(tryParseToolResultObject('{"result":"ok","bytes":42}')).toEqual({
+			bytes: 42,
+			result: 'ok'
+		});
+	});
+
+	it('returns null for JSON arrays (only objects are useful to callers)', () => {
+		expect(tryParseToolResultObject('[1,2,3]')).toBeNull();
+	});
+
+	it('returns null for JSON primitives', () => {
+		expect(tryParseToolResultObject('"raw string"')).toBeNull();
+		expect(tryParseToolResultObject('42')).toBeNull();
+	});
+
+	it('returns null for invalid JSON', () => {
+		expect(tryParseToolResultObject('not json')).toBeNull();
+		expect(tryParseToolResultObject('{bad')).toBeNull();
+	});
+});
+
+describe('tryParseToolResultObject gating', () => {
+	it('parses JSON objects that start after leading whitespace', () => {
+		expect(tryParseToolResultObject('\n  {"result":"ok"}')).toEqual({ result: 'ok' });
+	});
+
+	it('skips the parse for large plain-text results', () => {
+		// most tool results are file contents or stdout; the gate avoids a
+		// doomed JSON.parse over the whole blob
+		expect(tryParseToolResultObject(`${'stdout line\n'.repeat(2000)}`)).toBeNull();
+	});
+});

@@ -11,23 +11,15 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
-        case LLM_ARCH_PLAMO3:
-        case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
-        case LLM_ARCH_COHERE2:
-        case LLM_ARCH_COHERE2MOE:
-        case LLM_ARCH_OLMO2:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
-        case LLM_ARCH_EXAONE_MOE:
-        case LLM_ARCH_AFMOE:
         case LLM_ARCH_APERTUS:
-        case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
-        case LLM_ARCH_MELLUM:
             return false;
         default:
             return true;
@@ -54,6 +46,10 @@ void llama_model_saver::add_kv(const enum llm_kv key, const uint32_t value) {
 
 void llama_model_saver::add_kv(const enum llm_kv key, const int32_t value) {
     gguf_set_val_i32(gguf_ctx, llm_kv(key).c_str(), value);
+}
+
+void llama_model_saver::add_kv(const enum llm_kv key, const uint64_t value) {
+    gguf_set_val_u64(gguf_ctx, llm_kv(key).c_str(), value);
 }
 
 void llama_model_saver::add_kv(const enum llm_kv key, const float value) {
@@ -109,6 +105,8 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_BOOL, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, int32_t>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_INT32, value.data(), n_values);
+    } else if (std::is_same<typename Container::value_type, uint64_t>::value) {
+        gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_UINT64, value.data(), n_values);
     } else if (std::is_same<typename Container::value_type, float>::value) {
         gguf_set_arr_data(gguf_ctx, llm_kv(key).c_str(), GGUF_TYPE_FLOAT32, value.data(), n_values);
     } else if (std::is_same<Container, std::string>::value) {
@@ -119,6 +117,8 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
 }
 // instantiate for external usage:
 template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
+template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
+template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -193,6 +193,19 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,     ???);
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
+
+    if (!model->prec_policy.prec_src1.empty()) {
+        std::vector<std::string> tensor_names;
+        std::vector<int8_t> values;
+        tensor_names.reserve(model->prec_policy.prec_src1.size());
+        values.reserve(model->prec_policy.prec_src1.size());
+        for (const auto & [w, prec] : model->prec_policy.prec_src1) {
+            tensor_names.push_back(ggml_get_name(w));
+            values.push_back(prec == GGML_PREC_Q8 ? 0 : 1);
+        }
+        add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
     // add_kv(LLM_KV_GENERAL_URL,                       ???);
@@ -210,15 +223,18 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_BLOCK_COUNT,                       hparams.n_layer_all);
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
-    add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp());
+    add_kv(LLM_KV_EXPERT_LATENT_LENGTH,              hparams.n_expert_latent);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
-    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_chexp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
+    add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(
+            hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + hparams.n_layer_all));
+    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(
+            hparams.swiglu_clamp_shexp.begin(), hparams.swiglu_clamp_shexp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
-    add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used);
+    add_kv(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used());
     add_kv(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared);
     add_kv(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups);
     add_kv(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used);
@@ -244,6 +260,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
     add_kv(LLM_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
+    add_kv(LLM_KV_HRM_LAYERS_PER_STACK,              hparams.n_hrm_layers_per_stack);
+    add_kv(LLM_KV_HRM_H_CYCLES,                      hparams.n_hrm_h_cycles);
+    add_kv(LLM_KV_HRM_L_CYCLES,                      hparams.n_hrm_l_cycles);
+    add_kv(LLM_KV_HRM_PREFIX_LM,                     hparams.hrm_prefix_lm);
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
@@ -266,8 +286,13 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_RESIDUAL_MIX_LORA_RANK, hparams.n_lora_value_res_mix);
     add_kv(LLM_KV_ATTENTION_GATE_LORA_RANK,          hparams.n_lora_gate);
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
+    add_kv(LLM_KV_ATTENTION_ROPE_PATTERN,            hparams.rope_pattern, true);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
-    // add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  ???);
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+        // never collapsed to a scalar: the loaders read a scalar as a period
+        add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>(
+                hparams.is_swa_impl.begin(), hparams.is_swa_impl.begin() + hparams.n_layer_all));
+    }
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
     add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
@@ -277,10 +302,58 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla_impl);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
+    add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,      hparams.n_embd_head_k_mla_swa);
+    add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA,    hparams.n_embd_head_v_mla_swa);
+    add_kv(LLM_KV_ATTENTION_KV_LORA_RANK_SWA,        hparams.n_lora_kv_swa);
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
+    add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,      hparams.indexer_block_size);
+    add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
+    add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
+    add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,      hparams.dsv4_o_group_count);
+    add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,        hparams.dsv4_o_lora_rank);
+    add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, hparams.dsv4_compress_rope_base);
+    if (model->arch == LLM_ARCH_DEEPSEEK4 || hparams.dsv4_hc_mult > 0) {
+        // the loader requires one compress ratio per layer, including nextn layers
+        const std::vector<uint32_t> compress_ratios(
+                hparams.dsv4_compress_ratios.begin(), hparams.dsv4_compress_ratios.begin() + hparams.n_layer_all);
+        add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         compress_ratios);
+    } else {
+        add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, true);
+    }
+    add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
+    add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+    add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+    add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE,           hparams.hc_magnitude);
+    add_kv(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
+    add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK,             hparams.hc_low_rank);
+
+    // the PLE group only means anything whole: write all of it or none
+    if (hparams.ple_n_heads > 0) {
+        std::vector<uint32_t> ple_layers;
+        for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+            if (hparams.is_ple_impl[il]) {
+                ple_layers.push_back(il);
+            }
+        }
+        add_kv(LLM_KV_PLE_LAYERS,            ple_layers);
+        add_kv(LLM_KV_PLE_NGRAM_SIZE,        hparams.ple_ngram_size);
+        add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,   hparams.ple_heads_per_ngram);
+        add_kv(LLM_KV_PLE_CONV_KERNEL,       hparams.ple_conv_kernel);
+        add_kv(LLM_KV_PLE_EOS_TOKEN_ID,      hparams.ple_eos_token_id);
+        add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.ple_head_dim);
+        add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, std::vector<uint64_t>(
+                hparams.ple_layer_multipliers.begin(),
+                hparams.ple_layer_multipliers.begin() + hparams.ple_ngram_size));
+        add_kv(LLM_KV_PLE_HEAD_OFFSETS,      std::vector<uint64_t>(
+                hparams.ple_head_offsets.begin(),
+                hparams.ple_head_offsets.begin() + hparams.ple_n_heads));
+        add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,  std::vector<uint64_t>(
+                hparams.ple_head_vocab_sizes.begin(),
+                hparams.ple_head_vocab_sizes.begin() + hparams.ple_n_heads));
+    }
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
 
@@ -314,6 +387,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
+    add_kv(LLM_KV_KDA_SAFE_GATE,                     hparams.kda_safe_gate);
+    add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,              hparams.kda_gate_lower_bound);
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
@@ -325,13 +400,13 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TOKENIZER_SCORES,                  scores);
     add_kv(LLM_KV_TOKENIZER_MERGES,                  vocab.get_bpe_merges());
     // FIXME llama_token is type i32 but when reading in a GGUF file u32 is expected, not an issue for writing though
-    add_kv(LLM_KV_TOKENIZER_BOS_ID,                  uint32_t(vocab.token_bos()));
-    add_kv(LLM_KV_TOKENIZER_EOS_ID,                  uint32_t(vocab.token_eos()));
-    add_kv(LLM_KV_TOKENIZER_EOT_ID,                  uint32_t(vocab.token_eot()));
-    add_kv(LLM_KV_TOKENIZER_EOM_ID,                  uint32_t(vocab.token_eom()));
-    add_kv(LLM_KV_TOKENIZER_UNK_ID,                  uint32_t(vocab.token_unk()));
-    add_kv(LLM_KV_TOKENIZER_SEP_ID,                  uint32_t(vocab.token_sep()));
-    add_kv(LLM_KV_TOKENIZER_PAD_ID,                  uint32_t(vocab.token_pad()));
+    if (vocab.token_bos()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_BOS_ID, uint32_t(vocab.token_bos()));  }
+    if (vocab.token_eos()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOS_ID, uint32_t(vocab.token_eos()));  }
+    if (vocab.token_eot()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOT_ID, uint32_t(vocab.token_eot()));  }
+    if (vocab.token_eom()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_EOM_ID, uint32_t(vocab.token_eom()));  }
+    if (vocab.token_unk()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_UNK_ID, uint32_t(vocab.token_unk()));  }
+    if (vocab.token_sep()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_SEP_ID, uint32_t(vocab.token_sep()));  }
+    if (vocab.token_pad()  != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_PAD_ID, uint32_t(vocab.token_pad()));  }
     // add_kv(LLM_KV_TOKENIZER_CLS_ID,                  uint32_t(vocab.token_bos())); // deprecated
     // add_kv(LLM_KV_TOKENIZER_MASK_ID,                 ???);
     add_kv(LLM_KV_TOKENIZER_ADD_BOS,                 vocab.get_add_bos());
@@ -342,12 +417,12 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,    vocab.get_precompiled_charsmap());
     // add_kv(LLM_KV_TOKENIZER_HF_JSON,                 ???);
     // add_kv(LLM_KV_TOKENIZER_RWKV,                    ???);
-    add_kv(LLM_KV_TOKENIZER_FIM_PRE_ID,              uint32_t(vocab.token_fim_pre()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SUF_ID,              uint32_t(vocab.token_fim_suf()));
-    add_kv(LLM_KV_TOKENIZER_FIM_MID_ID,              uint32_t(vocab.token_fim_mid()));
-    add_kv(LLM_KV_TOKENIZER_FIM_PAD_ID,              uint32_t(vocab.token_fim_pad()));
-    add_kv(LLM_KV_TOKENIZER_FIM_REP_ID,              uint32_t(vocab.token_fim_rep()));
-    add_kv(LLM_KV_TOKENIZER_FIM_SEP_ID,              uint32_t(vocab.token_fim_sep()));
+    if (vocab.token_fim_pre() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_PRE_ID, uint32_t(vocab.token_fim_pre())); }
+    if (vocab.token_fim_suf() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_SUF_ID, uint32_t(vocab.token_fim_suf())); }
+    if (vocab.token_fim_mid() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_MID_ID, uint32_t(vocab.token_fim_mid())); }
+    if (vocab.token_fim_pad() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_PAD_ID, uint32_t(vocab.token_fim_pad())); }
+    if (vocab.token_fim_rep() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_REP_ID, uint32_t(vocab.token_fim_rep())); }
+    if (vocab.token_fim_sep() != LLAMA_TOKEN_NULL) { add_kv(LLM_KV_TOKENIZER_FIM_SEP_ID, uint32_t(vocab.token_fim_sep())); }
 
     // TODO: implement LoRA support
     // add_kv(LLM_KV_ADAPTER_TYPE,                      ???);
@@ -370,6 +445,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_XIELU_ALPHA_P,                     hparams.xielu_alpha_p);
     add_kv(LLM_KV_XIELU_BETA,                        hparams.xielu_beta);
     add_kv(LLM_KV_XIELU_EPS,                         hparams.xielu_eps);
+
+    add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,               hparams.attn_res_block_size);
+    add_kv(LLM_KV_ACTIVATION_SITU_BETA,              hparams.situ_beta);
+    add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       hparams.situ_linear_beta);
 
     // deprecated
     // add_kv(LLM_KV_TOKENIZER_PREFIX_ID,               ???);
@@ -398,15 +477,34 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output_norm_enc);
     add_tensor(model->output_s);
     add_tensor(model->output_in_s);
+    add_tensor(model->output_res_score);
+    add_tensor(model->nextn_proj_pre);
+    add_tensor(model->nextn_proj_post);
     add_tensor(model->cls);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);
     add_tensor(model->cls_out_b);
     add_tensor(model->cls_norm);
+    add_tensor(model->hrm_z_l_init);
+    add_tensor(model->hc_head_fn);
+    add_tensor(model->hc_head_base);
+    add_tensor(model->hc_head_scale);
+    add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->hc_head_norm);
+    add_tensor(model->hc_head_down);
+    add_tensor(model->hc_head_up);
+
+    // looped architectures alias physical tensors across cache slots; save each
+    // tensor once. a different tensor with an existing name still asserts below
+    std::unordered_set<const struct ggml_tensor *> seen;
 
     for (const struct llama_layer & layer : model->layers) {
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {
-            add_tensor(reinterpret_cast<const struct ggml_tensor * const *>(&layer)[i]);
+            const struct ggml_tensor * tensor = reinterpret_cast<const struct ggml_tensor * const *>(&layer)[i];
+            if (tensor == nullptr || !seen.insert(tensor).second) {
+                continue;
+            }
+            add_tensor(tensor);
         }
     }
 }

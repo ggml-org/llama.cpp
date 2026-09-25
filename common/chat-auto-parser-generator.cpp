@@ -5,23 +5,13 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
+#include "parsers/parsers.h"
 #include "peg-parser.h"
 
 #include <stdexcept>
 #include <string>
 
-using json = nlohmann::ordered_json;
-
-// Helper to iterate over tools/functions
-static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
-        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-            continue;
-        }
-        fn(tool);
-    }
-}
+using json = common_json;
 
 namespace autoparser {
 
@@ -47,6 +37,8 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = autoparser.preserved_tokens;
+    data.additional_stops.insert(data.additional_stops.end(),
+        autoparser.additional_stops.begin(), autoparser.additional_stops.end());
 
     std::string parser_generation_prompt = data.generation_prompt;
 
@@ -86,15 +78,6 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
@@ -147,7 +130,8 @@ common_peg_arena autoparser::build_parser(const generation_params & inputs, cons
         } else {
             parser = content.build_parser(ctx);
         }
-        return pure_content ? p.prefix(generation_prompt, reasoning.start) + parser : p.prefix(generation_prompt, reasoning.start) << parser;
+        const std::string reasoning_start = trim_whitespace(reasoning.start);
+        return pure_content ? p.prefix(generation_prompt, reasoning_start) + parser : p.prefix(generation_prompt, reasoning_start) << parser;
     });
 }
 
@@ -261,6 +245,10 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
     bool              matched_atomic = false;
     common_peg_parser func_parser    = p.eps();
 
+    if (!function.args_separator.empty()) {
+        open = open + p.space() + p.literal(function.args_separator);
+    }
+
     if (!function.name_suffix.empty()) {
         func_parser    = open + call_id_section + p.space() + args;
         matched_atomic = true;
@@ -281,7 +269,13 @@ common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, 
         // we only emit tool_close when we can actually see the closing marker. This prevents
         // premature closing during partial parsing when we've seen e.g. "</" which could be
         // either "</tool_call>" (end) or "<arg_key>" prefix that failed to match.
-        func_parser = func_parser + p.tool_close(p.peek(p.literal(format.per_call_end)));
+        // Laguna (v4): the model may emit whitespace between the last </arg_value> and
+        // </tool_call> even though the template renders them tight. Tolerate optional
+        // leading space in the close lookahead so the tool call still closes.
+        auto close_peek = arguments.tolerate_intertag_whitespace
+                              ? p.peek(p.space() + p.literal(format.per_call_end))
+                              : p.peek(p.literal(format.per_call_end));
+        func_parser = func_parser + p.tool_close(close_peek);
     } else {
         func_parser = func_parser + p.tool_close(p.space());  // force this to process tool closing callbacks in mapper
     }
@@ -300,7 +294,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
-        const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
+        const auto   schema = common_chat_tool_parameters(func);
 
         // Build call_id parser based on position (if supported)
         bool have_call_id = false;
@@ -371,43 +365,31 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     common_peg_parser tool_choice = p.choice();
 
     foreach_function(inputs.tools, [&](const json & tool) {
-        const auto &          func       = tool.at("function");
-        std::string           name       = func.at("name");
-        auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
-        const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
-
-        std::set<std::string> required;
-        if (params.contains("required")) {
-            params.at("required").get_to(required);
-        }
-
-        auto schema_info = common_schema_info();
-        schema_info.resolve_refs(params);
+        const auto & func = tool.at("function");
+        std::string  name = func.at("name");
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        for (const auto & [param_name, param_schema] : properties.items()) {
-            bool is_required = required.find(param_name) != required.end();
-
+        foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
-                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (schema_info.resolves_to_string(param_schema) ?
+                           (param.schema->may_be_string() ?
                                 p.ac(p.tool_arg_string_value(until_suffix) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
+                                    p.json(), "tool-" + name + "-arg-" + param.name + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
-            auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-            if (is_required) {
+            auto named_arg = p.rule("tool-" + name + "-arg-" + param.name, arg);
+            if (param.required) {
                 required_parsers.push_back(named_arg);
             } else {
                 optional_parsers.push_back(named_arg);
             }
-        }
+        });
 
         // Build required arg sequence in definition order
         common_peg_parser args_seq = p.eps();

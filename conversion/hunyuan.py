@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pathlib import Path
 from typing import Callable, Iterable, TYPE_CHECKING
@@ -16,6 +17,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-A13B-Instruct")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
@@ -153,35 +155,18 @@ class HunYuanMoEModel(TextModel):
 
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-4B-Instruct")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
-    def _get_eod_token_id(self) -> int | None:
-        """Get the actual end-of-generation token from config (eod_token_id)."""
-        return self.hparams.get("eod_token_id")
-
-    def _get_eot_token_id(self) -> int | None:
-        """Get the end-of-turn token from generation_config.json.
-        This is the first entry in eos_token_id when it's a list."""
-        gen_cfg_path = self.dir_model / "generation_config.json"
-        if gen_cfg_path.is_file():
-            with open(gen_cfg_path, encoding="utf-8") as f:
-                gen_cfg = json.load(f)
-            eos = gen_cfg.get("eos_token_id")
-            if isinstance(eos, list) and len(eos) >= 2:
-                return eos[0]
-        return None
-
-    def _fix_special_tokens(self):
-        """Fix EOS/EOT tokens that are incorrect in upstream configs."""
-        eod_id = self._get_eod_token_id()
-        if eod_id is not None:
-            self.gguf_writer.add_eos_token_id(eod_id)
-        eot_id = self._get_eot_token_id()
-        if eot_id is not None:
-            self.gguf_writer.add_eot_token_id(eot_id)
-
     def set_vocab(self):
+        # Also called by draft models (e.g. DFlash), with dir_model pointing at
+        # the target model.
+        config = ModelBase.load_hparams(self.dir_model, self.is_mistral_format)
+        config = {**config, **config.get("text_config", {})}
+        self.hparams["pad_token_id"] = config.get("pad_token_id")
+        self.hparams["eod_token_id"] = config.get("eod_token_id")
+
         if (self.dir_model / "tokenizer.json").is_file():
             tokens, toktypes, tokpre = self.get_vocab_base()
             self.gguf_writer.add_tokenizer_model("gpt2")
@@ -196,7 +181,6 @@ class HunYuanModel(TextModel):
                 token_types = ('bos', 'eos', 'unk', 'sep', 'cls', 'mask')
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True, special_token_types=token_types)
             special_vocab.add_to_gguf(self.gguf_writer)
-            self._fix_special_tokens()
         else:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -248,7 +232,18 @@ class HunYuanModel(TextModel):
             # FIX for BOS token: Overwrite incorrect id read from config.json
             if self.hparams['hidden_size'] == 4096:
                 self.gguf_writer.add_bos_token_id(127958) # only for 7b dense, fix <|bos|> token
-            self._fix_special_tokens()
+
+        # Fix EOS/EOT tokens that are incorrect in upstream configs.
+        eod_id = self.hparams.get("eod_token_id")
+        if eod_id is not None:
+            self.gguf_writer.add_eos_token_id(eod_id)
+
+        gen_cfg = self.dir_model / "generation_config.json"
+        if gen_cfg.is_file():
+            with open(gen_cfg, encoding="utf-8") as f:
+                eos = json.load(f).get("eos_token_id")
+            if isinstance(eos, list) and len(eos) >= 2:
+                self.gguf_writer.add_eot_token_id(eos[0])
 
     def set_gguf_parameters(self):
         # Some HunYuanVL variants set num_experts=1 (not real MoE);
@@ -289,6 +284,7 @@ class HunYuanModel(TextModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -332,11 +328,18 @@ class HunyuanVLVisionModel(MmprojModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLTextModel(HunYuanModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
 
     def __init__(self, dir_model: Path, *args, **kwargs):
         super().__init__(dir_model, *args, **kwargs)
+        # transformers 5.13.0 encodes HunyuanVL XD-RoPE as dynamic + mrope_section.
+        # Normalize it to avoid the HunYuan dynamic-RoPE context assertion.
+        if self.rope_parameters.get("rope_type") == "dynamic" and "mrope_section" in self.rope_parameters:
+            self.rope_parameters["rope_type"] = "xdrope"
+            self.rope_parameters["type"] = "xdrope"
+            self.rope_parameters["xdrope_section"] = list(self.rope_parameters["mrope_section"])
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -355,3 +358,107 @@ class HunyuanVLTextModel(HunYuanModel):
         self.gguf_writer.add_context_length(ctx_len)
 
         self.gguf_writer.add_rope_dimension_sections(list(self.rope_parameters["xdrope_section"]))
+
+
+@ModelBase.register("HYV3ForCausalLM")
+@ModelBase.example("tencent/Hy3")
+class HYV3Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.HY_V3
+    supports_mtp_export = True
+
+    # Trunk layer count, stashed before indexing so the classmethod
+    # filter_tensors can identify the appended MTP block(s) (mirrors
+    # Step35Model).
+    _n_main_layers: int | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NextN/MTP layers are appended past num_hidden_layers; extend the
+        # tensor map so the MTP block's tensors resolve to blk.<n>.* names.
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        if n_nextn > 0 and not self.no_mtp:
+            self.block_count += n_nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(
+            self.hparams["moe_intermediate_size"] * self.hparams.get("num_shared_experts", 1)
+        )
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("route_norm", True))
+        self.gguf_writer.add_expert_weights_scale(float(self.hparams.get("router_scaling_factor", 1.0)))
+        # sigmoid router with expert selection bias
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        if n_nextn > 0 and not self.no_mtp:
+            self.gguf_writer.add_nextn_predict_layers(n_nextn)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # HY V3 appends the MTP block(s) past num_hidden_layers.
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended MTP block(s) entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY MTP-block tensors plus the shared embeddings/norm/
+        # lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        # The MTP block's trailing final_layernorm (applied after the decoder
+        # block, before the shared LM head) maps to nextn.shared_head_norm.
+        if is_mtp:
+            name = name.replace(".final_layernorm.", ".shared_head.norm.")
+
+        return name, gen
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # merge the per-expert tensors into stacked 3d tensors
+        if name.startswith("model.layers.") and ".mlp.experts." in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                for w_name in ("down_proj", "gate_proj", "up_proj"):
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    merged = torch.stack(datas, dim=0)
+                    yield from super().modify_tensors(merged, f"model.layers.{bid}.mlp.experts.{w_name}.weight", bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if experts:
+                raise ValueError(f"Unprocessed experts: {experts}")

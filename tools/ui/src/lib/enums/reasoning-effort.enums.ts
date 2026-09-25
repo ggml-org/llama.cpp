@@ -3,8 +3,10 @@
  * These values are sent to the server and mapped to token budgets.
  */
 export enum ReasoningEffort {
-	LOW = 'low',
-	MEDIUM = 'medium',
+	DEFAULT = 'default',
 	HIGH = 'high',
-	MAX = 'max'
+	LOW = 'low',
+	MAX = 'max',
+	MEDIUM = 'medium',
+	OFF = 'off'
 }

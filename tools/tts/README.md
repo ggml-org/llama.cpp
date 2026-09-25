@@ -1,117 +1,59 @@
-# llama.cpp/example/tts
-This example demonstrates the Text To Speech feature. It uses a
-[model](https://www.outeai.com/blog/outetts-0.2-500m) from
-[outeai](https://www.outeai.com/).
+# llama.cpp TTS
 
-## Quickstart
-If you have built llama.cpp with SSL support you can simply run the
-following command and the required models will be downloaded automatically:
-```console
-$ build/bin/llama-tts --tts-oute-default -p "Hello world" && aplay output.wav
-```
-For details about the models and how to convert them to the required format
-see the following sections.
+This is a tool to demonstrate audio generation capability in llama.cpp via `libmtmd`. It was added via PR [#26254](https://github.com/ggml-org/llama.cpp/pull/26254)
 
-### Model conversion
-Checkout or download the model that contains the LLM model:
-```console
-$ pushd models
-$ git clone --branch main --single-branch --depth 1 https://huggingface.co/OuteAI/OuteTTS-0.2-500M
-$ cd OuteTTS-0.2-500M && git lfs install && git lfs pull
-$ popd
-```
-Convert the model to .gguf format:
-```console
-(venv) python convert_hf_to_gguf.py models/OuteTTS-0.2-500M \
-    --outfile models/outetts-0.2-0.5B-f16.gguf --outtype f16
-```
-The generated model will be `models/outetts-0.2-0.5B-f16.gguf`.
+Note: this tool used to serve as a demo for OuteTTS, but it was converted to a more model-agnostic tool.
 
-We can optionally quantize this to Q8_0 using the following command:
-```console
-$ build/bin/llama-quantize models/outetts-0.2-0.5B-f16.gguf \
-    models/outetts-0.2-0.5B-q8_0.gguf q8_0
-```
-The quantized model will be `models/outetts-0.2-0.5B-q8_0.gguf`.
+## Common usage
 
-Next we do something similar for the audio decoder. First download or checkout
-the model for the voice decoder:
-```console
-$ pushd models
-$ git clone --branch main --single-branch --depth 1 https://huggingface.co/novateur/WavTokenizer-large-speech-75token
-$ cd WavTokenizer-large-speech-75token && git lfs install && git lfs pull
-$ popd
-```
-This model file is a PyTorch checkpoint (.ckpt) and we first need to convert it to
-huggingface format:
-```console
-(venv) python tools/tts/convert_pt_to_hf.py \
-    models/WavTokenizer-large-speech-75token/wavtokenizer_large_speech_320_24k.ckpt
-...
-Model has been successfully converted and saved to models/WavTokenizer-large-speech-75token/model.safetensors
-Metadata has been saved to models/WavTokenizer-large-speech-75token/index.json
-Config has been saved to models/WavTokenizer-large-speech-75tokenconfig.json
-```
-Then we can convert the huggingface format to gguf:
-```console
-(venv) python convert_hf_to_gguf.py models/WavTokenizer-large-speech-75token \
-    --outfile models/wavtokenizer-large-75-f16.gguf --outtype f16
-...
-INFO:hf-to-gguf:Model successfully exported to models/wavtokenizer-large-75-f16.gguf
+Simple usage:
+
+```sh
+llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF -p "Hello world" --output out.wav
 ```
 
-### Running the example
+Common params:
+- Sampling params such as `--top-k`, `--top-p`, `--temp`, etc.
+- `-n <number_of_frames>` limits the output length, e.g. `-n 500`. Note that how many milliseconds each frame represents varies by model
+- Core inference params such as `-ngl`, `-b`, `-ub`, etc.
 
-With both of the models generated, the LLM model and the voice decoder model,
-we can run the example:
-```console
-$ build/bin/llama-tts -m  ./models/outetts-0.2-0.5B-q8_0.gguf \
-    -mv ./models/wavtokenizer-large-75-f16.gguf \
-    -p "Hello world"
-...
-main: audio written to file 'output.wav'
-```
-The output.wav file will contain the audio of the prompt. This can be heard
-by playing the file with a media player. On Linux the following command will
-play the audio:
-```console
-$ aplay output.wav
-```
+## Qwen3-TTS
 
-### Running the example with llama-server
-Running this example with `llama-server` is also possible and requires two
-server instances to be started. One will serve the LLM model and the other
-will serve the voice decoder model.
+Available params:
+- `--tts-lang` can be `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, `ru` (default: `en`)
+- `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3)
 
-The LLM model server can be started with the following command:
-```console
-$ ./build/bin/llama-server -m ./models/outetts-0.2-0.5B-q8_0.gguf --port 8020
+Example usage:
+
+```sh
+llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
+    -p "Hello world" \
+    --tts-lang english \
+    --tts-speaker-file speaker.mp3 \
+    --output out.wav
 ```
 
-And the voice decoder model server can be started using:
-```console
-./build/bin/llama-server -m ./models/wavtokenizer-large-75-f16.gguf --port 8021 --embeddings --pooling none
+## Pocket TTS
+
+Available params:
+- `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3). It is required, the model produces almost no audio without it
+- Note: `lang` is not used, the language is a property of the weights
+
+Example usage:
+
+```sh
+llama-tts -m pocket-tts.gguf \
+    -mm mmproj-pocket-tts.gguf \
+    -p "Hello world" \
+    --tts-speaker-file speaker.mp3 \
+    --output out.wav
 ```
 
-Then we can run [tts-outetts.py](tts-outetts.py) to generate the audio.
+**Note for GGUF conversion:**
 
-First create a virtual environment for python and install the required
-dependencies (this in only required to be done once):
-```console
-$ python3 -m venv venv
-$ source venv/bin/activate
-(venv) pip install requests numpy
-```
+The [upstream repository](https://huggingface.co/kyutai/pocket-tts) holds one complete model per language under `languages/`, next to a set of shared files at the root. Convert one of the `languages/<name>` directories, **not** the root directory:
 
-And then run the python script using:
-```conole
-(venv) python ./tools/tts/tts-outetts.py http://localhost:8020 http://localhost:8021 "Hello world"
-spectrogram generated: n_codes: 90, n_embd: 1282
-converting to audio ...
-audio generated: 28800 samples
-audio written to file "output.wav"
-```
-And to play the audio we can again use aplay or any other media player:
-```console
-$ aplay output.wav
+```sh
+python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --outfile pocket-tts.gguf
+python convert_hf_to_gguf.py path/to/pocket-tts/languages/english --mmproj --outfile mmproj-pocket-tts.gguf
 ```

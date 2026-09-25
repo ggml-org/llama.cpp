@@ -11,6 +11,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("JanusForConditionalGeneration")
+@ModelBase.example("deepseek-community/Janus-Pro-1B")
 class JanusProModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA  # reuse Llama arch
 
@@ -34,6 +35,7 @@ class JanusProModel(LlamaModel):
 
 
 @ModelBase.register("JanusForConditionalGeneration")
+@ModelBase.example("deepseek-community/Janus-Pro-1B")
 class JanusProVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

@@ -66,6 +66,8 @@ def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_promp
             assert server.n_predict is not None
             assert data["generation_settings"]["n_predict"] == min(n_predict, server.n_predict)
             assert data["generation_settings"]["seed"] == server.seed
+            assert "adaptive_target" in data["generation_settings"]
+            assert "adaptive_decay" in data["generation_settings"]
             assert match_regex(re_content, content)
         else:
             assert len(data["tokens"]) > 0
@@ -392,7 +394,12 @@ def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
     results = parallel_function_calls(tasks)
     for res, n_predict, expect_ok in zip(results, n_predict_vals, expected_success):
         if expect_ok:
-            assert res.status_code == 200
+            # the pool is aborted as a whole, so a request that fits on its own
+            # is still dropped when the slots overlap, and it says so explicitly
+            assert res.status_code == 200 or (
+                res.status_code == 500
+                and "context size has been exceeded" in res.body["error"]["message"].lower()
+            )
 
         # note: https://github.com/ggml-org/llama.cpp/pull/18700#issuecomment-3728695581
         if res.status_code == 200:

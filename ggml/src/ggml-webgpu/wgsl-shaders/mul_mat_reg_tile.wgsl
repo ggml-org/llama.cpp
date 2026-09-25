@@ -1,8 +1,12 @@
 enable f16;
 
 #define DECLARE_BYTE_LOADERS_SRC0
-#include "common_decls.tmpl"
 
+#ifdef SRC_OVERLAP
+#define SRC0 merged_src
+#define SRC1 merged_src
+#endif
+#include "common_decls.tmpl"
 #include "mul_mat_decls.tmpl"
 
 #ifdef VEC
@@ -36,11 +40,17 @@ struct MulMatParams {
     broadcast3: u32
 };
 
+#ifdef SRC_OVERLAP
+@group(0) @binding(0) var<storage, read_write> merged_src: array<SRC0_TYPE>;
+#define DST_BINDING 1
+#else
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // M rows, K columns
 @group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // K rows, N columns (transposed)
-@group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
+#define DST_BINDING 2
+#endif
 
-@group(0) @binding(3) var<uniform> params: MulMatParams;
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<DST_TYPE>; // M rows, N columns (transposed)
+@group(0) @binding(DST_BINDING + 1) var<uniform> params: MulMatParams;
 
 fn get_local_n(thread_id: u32) -> u32 {
     return thread_id / WORKGROUP_SIZE_M;

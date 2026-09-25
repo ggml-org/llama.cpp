@@ -11,6 +11,7 @@ from .qwen import Qwen2MoeModel
 
 
 @ModelBase.register("Dots1ForCausalLM")
+@ModelBase.example("rednote-hilab/dots.llm1.inst")
 class Dots1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.DOTS1
 

@@ -36,3 +36,7 @@ static/favicon*
 *storybook.log
 storybook-static
 *.code-workspace
+
+# Vitest browser mode failure artifacts
+.vitest-attachments/
+tests/**/__screenshots__/

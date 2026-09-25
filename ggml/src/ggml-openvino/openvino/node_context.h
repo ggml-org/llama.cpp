@@ -143,6 +143,10 @@ public:
 
     bool has_input(const std::string & name) const { return m_tensor_map->find(name) != m_tensor_map->end(); }
 
+    void put_shared(const std::string & name, const Output<Node> & value) const {
+        m_tensor_map->insert({name, value});
+    }
+
     const std::string & get_name() const override { return m_decoder->get_op_name(m_node_idx); }
 
     ov::Any get_attribute_as_any(const std::string & name) const override { return m_decoder->get_attribute(name); }
@@ -152,6 +156,8 @@ public:
     bool is_static() const { return m_decoder->is_static(); }
 
     bool is_stateful() const { return m_decoder->is_stateful(); }
+
+    int get_ssm_state_size() const { return m_decoder->get_ssm_state_size(); }
 
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;

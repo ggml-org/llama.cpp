@@ -5,17 +5,16 @@
 //
 // cache line
 //
-
-#if defined(__cpp_lib_hardware_interference_size)
-#define CACHE_LINE_SIZE std::hardware_destructive_interference_size
-#else
+// TODO: rework CACHE_LINE_SIZE so std::hardware_destructive_interference_size
+// can be used consistently between C and C++ TUs; the previous macro form
+// diverged based on include order and undersized the work buffer.
+// ref: https://github.com/ggml-org/llama.cpp/pull/28882
 #if defined(__POWER9_VECTOR__)
 #define CACHE_LINE_SIZE 128
 #elif defined(__VXE__) || defined(__VXE2__)
 #define CACHE_LINE_SIZE 256
 #else
 #define CACHE_LINE_SIZE 64
-#endif
 #endif
 
 static const size_t CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE/sizeof(float);
@@ -105,6 +104,10 @@ void ggml_compute_forward_rwkv_wkv7(const struct ggml_compute_params * params, s
 void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_gla(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_gated_delta_net(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_lightning_indexer(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_comb(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_pre(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_dsv4_hc_post(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_map_custom1(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_map_custom2(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_map_custom3(const struct ggml_compute_params * params, struct ggml_tensor * dst);

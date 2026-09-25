@@ -47,6 +47,7 @@ The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adren
 | Adreno GPU                            | Status  |
 |:-------------------------------------:|:-------:|
 | Adreno 750 (Snapdragon 8 Gen 3)       | Support |
+| Adreno 810 (Snapdragon 7s Gen 3)      | Support |
 | Adreno 830 (Snapdragon 8 Elite)       | Support |
 | Adreno 840 (Snapdragon 8 Elite Gen 5) | Support |
 | Adreno X1-85 (Snapdragon X Elite)     | Support |
@@ -96,6 +97,24 @@ The OpenCL backend has the following CMake options that control the behavior of 
 | `GGML_OPENCL_EMBED_KERNELS`          | `ON`           | Embed OpenCL kernels into the executable. |
 | `GGML_OPENCL_USE_ADRENO_KERNELS`     | `ON`           | Use kernels optimized for Adreno.         |
 | `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` | `OFF`          | Allow using binary kernel lib for Adreno. |
+
+## Program Binary Cache
+
+Compiled `cl_program` binaries are cached on disk, so subsequent runs skip the expensive
+compile-from-source step when nothing relevant has changed (kernel source, compile options,
+device, driver, or platform version).
+
+The cache is controlled with the `GGML_OPENCL_KERNEL_CACHE_DIR` environment variable:
+
+| Value                                  | Behavior                                       |
+|:---------------------------------------|:-----------------------------------------------|
+| unset / empty / `1` / `default`        | Enabled in the platform default cache directory: `%LOCALAPPDATA%\llama.cpp\cl-cache` (Windows), `~/Library/Caches/llama.cpp/cl-cache` (macOS), `<temp dir>/llama.cpp/cl-cache` elsewhere. |
+| `0` / `off` / `none` / `disable(d)`    | Disabled.                                      |
+| any other value                        | Used verbatim as the cache directory path.     |
+
+If the chosen directory cannot be created or used, the cache disables itself for the process
+and kernels are compiled from source as usual. Set `GGML_OPENCL_KERNEL_CACHE_DEBUG=1` to
+print a HIT/MISS/SAVE trace to stderr.
 
 ## Android
 

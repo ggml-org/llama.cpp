@@ -5,21 +5,16 @@ export interface AttachmentModalityFlags {
 	hasVisionModality: boolean;
 	hasAudioModality: boolean;
 	hasVideoModality: boolean;
-	hasMcpPromptsSupport: boolean;
-	hasMcpResourcesSupport: boolean;
 }
 
 export interface AttachmentActionCallbacks {
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
-	onMcpResourcesClick?: () => void;
 }
 
 export interface UseAttachmentMenuReturn {
 	readonly callbacks: Record<string, () => void>;
 	isItemEnabled(enabledWhen: string | undefined): boolean;
-	isItemVisible(visibleWhen: string | undefined): boolean;
 	getSystemMessageTooltip(): string;
 }
 
@@ -40,29 +35,23 @@ export function useAttachmentMenu(
 	close: () => void
 ): UseAttachmentMenuReturn {
 	const modalityFlags = $derived(getFlags());
-
 	const callbacks = $derived.by(() => {
 		const cbs = getCallbacks();
 		const wrap = (fn?: () => void) => () => {
 			close();
 			fn?.();
 		};
+
 		return {
 			[AttachmentAction.FILE_UPLOAD]: wrap(cbs.onFileUpload),
-			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick),
-			[AttachmentAction.MCP_PROMPT_CLICK]: wrap(cbs.onMcpPromptClick),
-			[AttachmentAction.MCP_RESOURCES_CLICK]: wrap(cbs.onMcpResourcesClick)
+			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick)
 		};
 	});
 
 	function isItemEnabled(enabledWhen: string | undefined): boolean {
 		if (!enabledWhen || enabledWhen === 'always') return true;
-		return !!modalityFlags[enabledWhen as keyof AttachmentModalityFlags];
-	}
 
-	function isItemVisible(visibleWhen: string | undefined): boolean {
-		if (!visibleWhen) return true;
-		return !!modalityFlags[visibleWhen as keyof AttachmentModalityFlags];
+		return !!modalityFlags[enabledWhen as keyof AttachmentModalityFlags];
 	}
 
 	function getSystemMessageTooltip(): string {
@@ -75,8 +64,7 @@ export function useAttachmentMenu(
 		get callbacks() {
 			return callbacks;
 		},
-		isItemEnabled,
-		isItemVisible,
-		getSystemMessageTooltip
+		getSystemMessageTooltip,
+		isItemEnabled
 	};
 }
