@@ -8,7 +8,7 @@
 
 import { API_MODELS, LOCAL_BACKEND_ID } from '$lib/constants';
 import { ModelsService } from '$lib/services/models.service';
-import type { ApiModelsListResponse, Backend, ModelOption } from '$lib/types';
+import type { ApiModelsListResponse, Backend, BackendProtocol, ModelOption } from '$lib/types';
 import { isAbortError } from '$lib/utils/abort';
 import { apiUrl } from '$lib/utils/api-base';
 import { getAuthHeadersForBackend } from '$lib/utils/api-headers';
@@ -39,6 +39,31 @@ export class BackendsService {
 	 * @param backend - Backend to query. Does not need to be registered yet.
 	 * @param signal - Optional abort signal for a cancelled request.
 	 */
+	static async detectProtocol(backend: Backend): Promise<BackendProtocol> {
+		const base = backend.baseUrl.trim().replace(/\/+$/, '');
+
+		if (!base) return 'openai';
+
+		try {
+			// llama-server answers /props with its build and generation defaults; a
+			// plain OpenAI-compatible endpoint answers 404 there, or not at all
+			const response = await fetch(`${base}/props`, {
+				headers: getAuthHeadersForBackend(backend),
+				signal: AbortSignal.timeout(5000)
+			});
+
+			if (!response.ok) return 'openai';
+
+			const body = (await response.json()) as Record<string, unknown>;
+			const isLlamaCpp =
+				'default_generation_settings' in body || 'build_info' in body || body.role === 'router';
+
+			return isLlamaCpp ? 'llama.cpp' : 'openai';
+		} catch {
+			return 'openai';
+		}
+	}
+
 	static async listModels(backend: Backend, signal?: AbortSignal): Promise<BackendModelsResult> {
 		// the local backend has no base URL; its models endpoint is base relative
 		const url = backend.baseUrl.trim()

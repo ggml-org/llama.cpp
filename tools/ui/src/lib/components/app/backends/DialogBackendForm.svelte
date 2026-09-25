@@ -2,15 +2,21 @@
 	import BackendForm from './BackendForm.svelte';
 	import BackendPresetCard from './BackendPresetCard.svelte';
 	import { CheckCircle2, Loader2, XCircle } from '@lucide/svelte';
+	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
-	import { BACKEND_ID_PREFIX, BACKEND_PRESETS, BACKEND_PROTOCOLS } from '$lib/constants';
+	import {
+		BACKEND_ID_PREFIX,
+		BACKEND_PRESETS,
+		DISMISSED_RECOMMENDED_BACKENDS_LOCALSTORAGE_KEY
+	} from '$lib/constants';
+	import { BooleanString } from '$lib/enums';
 	import { BackendsService } from '$lib/services';
 	import type { BackendTestResult } from '$lib/services/backends.service';
 	import { backendsStore } from '$lib/stores';
 	import type { Backend, BackendPreset, BackendProtocol } from '$lib/types';
 	import { findBackendPreset, uuid } from '$lib/utils';
+	import { untrack } from 'svelte';
 
 	interface Props {
 		backend?: Backend | null;
@@ -29,18 +35,11 @@
 	}: Props = $props();
 
 	let draft = $state<Backend>(createBackend());
-
-	// the caller seeds the protocol, the picker overrides it while adding
-	let protocolPick = $state<string | undefined>(undefined);
-	let protocol = $derived(
-		BACKEND_PROTOCOLS.includes(protocolPick as BackendProtocol)
-			? (protocolPick as BackendProtocol)
-			: (backend?.protocol ?? defaultProtocol)
-	);
-	// presets offered for the protocol being added
-	let presets = $derived(BACKEND_PRESETS.filter((preset) => preset.protocol === protocol));
 	let testResult = $state<BackendTestResult | null>(null);
 	let testing = $state(false);
+	let detected = $state<BackendProtocol | null>(null);
+	let detecting = $state(false);
+	let detectRun = 0;
 
 	// the card follows the URL, so editing any field deselects it
 	let selectedPresetId = $derived(findBackendPreset(draft.baseUrl)?.id ?? null);
@@ -49,6 +48,9 @@
 		backendsStore.external
 			.map((backend) => findBackendPreset(backend.baseUrl)?.id)
 			.filter((id) => id !== undefined)
+	);
+	let unconfiguredPresets = $derived(
+		BACKEND_PRESETS.filter((preset) => !addedPresetIds.includes(preset.id))
 	);
 
 	let isEdit = $derived(backend !== null);
@@ -67,6 +69,42 @@
 	});
 	let canSave = $derived(!urlError && draft.name.trim().length > 0);
 
+	// Backward-compatible read: older versions stored a JSON array of dismissed ids.
+	function readRecommendationsDismissed(): boolean {
+		if (!browser) return false;
+
+		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_BACKENDS_LOCALSTORAGE_KEY);
+
+		if (!raw) return false;
+
+		if (raw === BooleanString.TRUE) return true;
+
+		if (raw === BooleanString.FALSE) return false;
+
+		try {
+			const parsed = JSON.parse(raw);
+
+			return Array.isArray(parsed) && parsed.length > 0;
+		} catch {
+			return false;
+		}
+	}
+
+	function writeRecommendationsDismissed(dismissed: boolean) {
+		recommendationsDismissed = dismissed;
+
+		if (browser) {
+			localStorage.setItem(
+				DISMISSED_RECOMMENDED_BACKENDS_LOCALSTORAGE_KEY,
+				dismissed ? BooleanString.TRUE : BooleanString.FALSE
+			);
+		}
+	}
+
+	let recommendationsDismissed = $state<boolean>(readRecommendationsDismissed());
+
+	let presetsToShow = $derived(recommendationsDismissed ? [] : unconfiguredPresets);
+
 	// reset the draft each time the dialog opens
 	$effect(() => {
 		if (!open) return;
@@ -74,6 +112,39 @@
 		draft = backend ? { ...backend } : createBackend();
 		testResult = null;
 		testing = false;
+		detected = null;
+	});
+
+	// Once the URL settles, ask the endpoint what it speaks, the way the MCP dialog
+	// previews a server. A preset already knows, and the answer is applied only when
+	// it differs, so this cannot feed itself.
+	$effect(() => {
+		const url = draft.baseUrl.trim();
+
+		if (!open || isEdit || urlError || !url) {
+			detected = null;
+			detecting = false;
+
+			return;
+		}
+
+		const run = ++detectRun;
+		const timer = setTimeout(async () => {
+			detecting = true;
+
+			const result = await BackendsService.detectProtocol({ ...draft, baseUrl: url });
+
+			if (run !== detectRun) return;
+
+			detecting = false;
+			detected = result;
+
+			untrack(() => {
+				if (result !== draft.protocol) handleChange({ protocol: result });
+			});
+		}, 600);
+
+		return () => clearTimeout(timer);
 	});
 
 	function createBackend(): Backend {
@@ -97,6 +168,7 @@
 			protocol: preset.protocol
 		};
 		testResult = null;
+		detected = null;
 	}
 
 	function handleChange(patch: Partial<Backend>) {
@@ -154,40 +226,31 @@
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content class="max-w-2xl!">
 		<Dialog.Header>
-			<Dialog.Title>{isEdit ? 'Edit backend' : 'Add backend'}</Dialog.Title>
+			<Dialog.Title class="select-none">
+				{isEdit ? 'Edit Provider' : 'Add New Provider'}
+			</Dialog.Title>
 
 			<Dialog.Description>
-				{protocol === 'llama.cpp'
-					? 'Point at another llama-server.'
-					: 'Connect an OpenAI-compatible endpoint.'}
+				Point at another llama-server, or connect an OpenAI-compatible endpoint.
 			</Dialog.Description>
 		</Dialog.Header>
 
-		{#if !isEdit}
+		{#if !isEdit && presetsToShow.length > 0}
 			<div class="space-y-3 pt-2">
-				<h3 class="text-sm font-medium">Protocol</h3>
+				<div class="flex items-center justify-between gap-3">
+					<h3 class="text-sm font-medium">Recommended providers</h3>
 
-				<ToggleGroup.Root bind:value={protocolPick} type="single" variant="outline">
-					{#each BACKEND_PROTOCOLS as option (option)}
-						<ToggleGroup.Item value={option}>
-							{option === 'llama.cpp' ? 'Llama-compatible' : 'OpenAI-compatible'}
-						</ToggleGroup.Item>
-					{/each}
-				</ToggleGroup.Root>
-			</div>
-		{/if}
-
-		{#if !isEdit && presets.length > 0}
-			<div class="space-y-3 pt-2">
-				<h3 class="text-sm font-medium">Recommended providers</h3>
-
-				<!-- TODO: a "pair by QR code" entry point belongs in this grid, next
-				     to the provider cards. -->
+					<Button
+						class="text-muted-foreground"
+						onclick={() => writeRecommendationsDismissed(true)}
+						size="sm"
+						variant="ghost">Dismiss</Button
+					>
+				</div>
 
 				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-					{#each presets as preset (preset.id)}
+					{#each presetsToShow as preset (preset.id)}
 						<BackendPresetCard
-							added={addedPresetIds.includes(preset.id)}
 							dimmed={Boolean(selectedPresetId) && selectedPresetId !== preset.id}
 							onClick={() => applyPreset(preset)}
 							{preset}
@@ -199,8 +262,15 @@
 		{/if}
 
 		<form class="contents" onsubmit={handleSubmit}>
-			<div class="py-4">
-				<BackendForm backend={draft} id="backend" onChange={handleChange} {urlError} />
+			<div class="space-y-4 py-4">
+				<BackendForm
+					backend={draft}
+					{detected}
+					{detecting}
+					id="backend"
+					onChange={handleChange}
+					{urlError}
+				/>
 			</div>
 
 			{#if testing || testResult}
