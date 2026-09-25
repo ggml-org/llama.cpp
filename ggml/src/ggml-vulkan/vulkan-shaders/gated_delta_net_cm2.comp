@@ -28,6 +28,8 @@
 #define NSUB 8         // subgroups per workgroup
 #define WGS (NSUB * 32)
 #define KT 32          // K-tile width for deep (K=D) matmuls
+#define PAD 8          // shared padding to break COL-load bank conflicts (keep LDP*2 a multiple of 16B)
+#define LDP (D + PAD)  // padded leading dim for q/k [CxD] and state mirror [DxV]
 
 #define STATE_TILES ((D / TM) * (V / TN))
 #define PER_WARP    (STATE_TILES / NSUB)
@@ -60,9 +62,9 @@ layout(binding = 4) readonly  buffer BetaBuf  { float data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { float data_state[]; };
 layout(binding = 6)           buffer DstBuf   { float data_dst[];   };
 
-shared OPD sh_qh[C * D], sh_ql[C * D];   // q*scale hi/lo
-shared OPD sh_kh[C * D], sh_kl[C * D];   // k hi/lo
-shared OPD sh_sh[D * V], sh_sl[D * V];   // state mirror [D x V] column-major
+shared OPD sh_qh[C * LDP], sh_ql[C * LDP];   // q*scale hi/lo (D padded)
+shared OPD sh_kh[C * LDP], sh_kl[C * LDP];   // k hi/lo (D padded)
+shared OPD sh_sh[LDP * V], sh_sl[LDP * V];   // state mirror [D x V] column-major (D padded)
 shared OPD sh_dh[C * V], sh_dl[C * V];   // delta (pre-inv) / delta2 [C x V] row-major
 shared OPD sh_soh[C * V], sh_sol[C * V]; // solved [C x V] row-major
 shared OPD sh_ph[C * C], sh_pl[C * C];   // decayed P
@@ -182,18 +184,19 @@ void main() {
         }
         [[unroll]] for (uint j = 0; j < C * D / WGS; j++) {
             const uint i = tid + j * WGS;
-            const OPD qh = OPD(qreg[j]); sh_qh[i] = qh; sh_ql[i] = OPD(qreg[j] - float(qh));
-            const OPD kh = OPD(kreg[j]); sh_kh[i] = kh; sh_kl[i] = OPD(kreg[j] - float(kh));
+            const uint pi = (i / D) * LDP + (i % D);
+            const OPD qh = OPD(qreg[j]); sh_qh[pi] = qh; sh_ql[pi] = OPD(qreg[j] - float(qh));
+            const OPD kh = OPD(kreg[j]); sh_kh[pi] = kh; sh_kl[pi] = OPD(kreg[j] - float(kh));
         }
         // mirror register state to shared as bf16 hi/lo
         [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
             const uint ti = sg + j * NSUB;
-            const uint off = TILE_C(ti) * D + TILE_R(ti);
+            const uint off = TILE_C(ti) * LDP + TILE_R(ti);
             const coopmat<OPD, SG, TM, TN, MACC> hi = coopmat<OPD, SG, TM, TN, MACC>(state[j]);
             const coopmat<float, SG, TM, TN, MACC> hf = coopmat<float, SG, TM, TN, MACC>(hi);
             const coopmat<OPD, SG, TM, TN, MACC> lo = coopmat<OPD, SG, TM, TN, MACC>(state[j] - hf);
-            coopMatStore(hi, sh_sh, off, D, COL);
-            coopMatStore(lo, sh_sl, off, D, COL);
+            coopMatStore(hi, sh_sh, off, LDP, COL);
+            coopMatStore(lo, sh_sl, off, LDP, COL);
         }
         barrier();
 
@@ -218,15 +221,15 @@ void main() {
             [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
                 coopmat<OPD, SG, C, KT, MUA> ah, al;
                 if (gram) {
-                    coopMatLoad(ah, sh_kh, kk, D, ROW);
-                    coopMatLoad(al, sh_kl, kk, D, ROW);
+                    coopMatLoad(ah, sh_kh, kk, LDP, ROW);
+                    coopMatLoad(al, sh_kl, kk, LDP, ROW);
                 } else {
-                    coopMatLoad(ah, sh_qh, kk, D, ROW);
-                    coopMatLoad(al, sh_ql, kk, D, ROW);
+                    coopMatLoad(ah, sh_qh, kk, LDP, ROW);
+                    coopMatLoad(al, sh_ql, kk, LDP, ROW);
                 }
                 coopmat<OPD, SG, KT, TN, MUB> bh, bl;
-                coopMatLoad(bh, sh_kh, c_o * D + kk, D, COL);
-                coopMatLoad(bl, sh_kl, c_o * D + kk, D, COL);
+                coopMatLoad(bh, sh_kh, c_o * LDP + kk, LDP, COL);
+                coopMatLoad(bl, sh_kl, c_o * LDP + kk, LDP, COL);
                 PRODUCT(x, ah, al, bh, bl);
             }
             if (gram) {
@@ -241,13 +244,13 @@ void main() {
             coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
             [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
                 coopmat<OPD, SG, C, KT, MUA> qh, ql, kh, kl;
-                coopMatLoad(qh, sh_qh, kk, D, ROW);
-                coopMatLoad(ql, sh_ql, kk, D, ROW);
-                coopMatLoad(kh, sh_kh, kk, D, ROW);
-                coopMatLoad(kl, sh_kl, kk, D, ROW);
+                coopMatLoad(qh, sh_qh, kk, LDP, ROW);
+                coopMatLoad(ql, sh_ql, kk, LDP, ROW);
+                coopMatLoad(kh, sh_kh, kk, LDP, ROW);
+                coopMatLoad(kl, sh_kl, kk, LDP, ROW);
                 coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
-                coopMatLoad(sbh, sh_sh, c_o * D + kk, D, COL);
-                coopMatLoad(sbl, sh_sl, c_o * D + kk, D, COL);
+                coopMatLoad(sbh, sh_sh, c_o * LDP + kk, LDP, COL);
+                coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
                 PRODUCT(qs, qh, ql, sbh, sbl);
                 PRODUCT(ks, kh, kl, sbh, sbl);
             }
@@ -332,8 +335,8 @@ void main() {
         [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
             const uint ti = sg + j * NSUB;
             coopmat<OPD, SG, TM, C, MUA> kth, ktl;
-            coopMatLoad(kth, sh_kh, TILE_R(ti), D, COL);
-            coopMatLoad(ktl, sh_kl, TILE_R(ti), D, COL);
+            coopMatLoad(kth, sh_kh, TILE_R(ti), LDP, COL);
+            coopMatLoad(ktl, sh_kl, TILE_R(ti), LDP, COL);
             coopmat<OPD, SG, C, TN, MUB> dh, dl;
             coopMatLoad(dh, sh_dh, TILE_C(ti), V, ROW);
             coopMatLoad(dl, sh_dl, TILE_C(ti), V, ROW);
