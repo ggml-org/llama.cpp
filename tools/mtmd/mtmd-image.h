@@ -83,15 +83,13 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst) const;
 
 protected:
-    // images are aligned to a multiple of this so that an integer number of
-    // merger output tokens fits in one slice
+    // align slices to a multiple of the merger factor (integer merger tokens per slice)
     virtual int get_slice_align() const {
         const int merge = hparams.n_merge > 0 ? hparams.n_merge : 1;
         return hparams.patch_size * merge;
     }
 
-    // rounding used when snapping a length to a multiple of the align size.
-    // defaults to std::round (half away from zero)
+    // rounding for snapping a length to a multiple of the align size
     virtual int align_round(double v) const {
         return static_cast<int>(std::round(v));
     }
@@ -164,19 +162,13 @@ struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
     slice_instructions get_slice_instructions(const clip_image_size & original_size) const override;
 
 protected:
-    // The HF MiniCPM-V image processors always align to patch_size * 4
-    // (see MiniCPMV4_6ImageProcessorPil.find_best_resize), independent of
-    // downsample_mode: even the 4x mode keeps the 2x2 vit_merger slot in the
-    // alignment so the patch grid stays divisible by 4. Deriving the alignment
-    // from n_merge instead would use patch_size * 2 for 4x and produce a
-    // different patch grid than the reference implementation.
+    // the reference always aligns to patch_size * 4, independent of downsample_mode:
+    // even 4x keeps the 2x2 vit_merger slot so the patch grid stays divisible by 4
     int get_slice_align() const override {
         return hparams.patch_size * 4;
     }
 
-    // The reference implementation calls Python's round(), which rounds halves to
-    // even. std::round would round halves away from zero, so a length landing
-    // exactly on a half multiple (e.g. 364/56 = 6.5) snaps to a different size.
+    // Python's round() breaks ties to even, unlike std::round
     int align_round(double v) const override {
         const double fl = std::floor(v);
         const double diff = v - fl;

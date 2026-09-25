@@ -501,7 +501,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) const {
     mtmd_image_preprocessor_llava_uhd::slice_instructions res;
-    // align slices by the model's merge factor so an integer number of merger output tokens fits per slice
+    // align by the model's merge factor
     const int patch_size      = get_slice_align();
     const int slice_size      = hparams.image_size;
     const int original_width  = original_size.width;
@@ -561,8 +561,7 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
     res.overview_size = best_size;
 
     {
-        // slice cap comes from the model (clip.vision.max_slice_nums); the reference
-        // image processor cuts at most this many slices
+        // slice cap from the model; the reference processor cuts at most this many slices
         const int max_slice_nums = hparams.max_slice_nums > 0 ? hparams.max_slice_nums : 9;
         const float log_ratio = log((float)original_width / original_height);
         const float ratio = (float)original_width * original_height / (slice_size * slice_size);
@@ -819,11 +818,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
 //
 
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) const {
-    // The reference image processor decides whether to slice from the image area
-    // (MiniCPMV4_6ImageProcessorPil.get_sliced_grid returns no grid when
-    // ceil(area / scale_resolution^2) <= 1). The generic llava-uhd path instead
-    // slices as soon as one side exceeds scale_resolution, which would add slices
-    // that the reference implementation does not produce for e.g. 384x512.
+    // the reference returns the overview only for small images; the generic llava-uhd
+    // path would slice as soon as one side exceeds the scale resolution
     const int   slice_size = hparams.image_size;
     const float ratio      = (float) original_size.width * original_size.height / (slice_size * slice_size);
     if (ratio <= 1.0f) {

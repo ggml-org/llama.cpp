@@ -208,10 +208,8 @@ enum mtmd_pos_type {
     MTMD_POS_TYPE_COUNT,     // for validation
 };
 
-// MiniCPM-V 4.7 lays the tiles of one image out on a shared 2D "canvas": the
-// thumbnail is stretched over the whole canvas and each slice occupies a
-// sub-rectangle of it. All decoder positions are expressed against the canvas
-// origin, so every tile must know where it sits in that shared space.
+// MiniCPM-V 4.7 lays the tiles of one image on a shared 2D canvas: the overview is
+// stretched over it, each slice fills a sub-rectangle, all positioned from the origin
 struct mtmd_canvas_layout {
     uint32_t grid_h       = 0; // this tile's token grid
     uint32_t grid_w       = 0;
@@ -733,8 +731,7 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    // both the 4.6 and the 4.7 processor prepend <image_id>N</image_id>
-                    // (use_image_id defaults to true)
+                    // the 4.6/4.7 processors prepend <image_id>N</image_id> by default
                     use_image_id      = true;
                     image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                 } break;
@@ -1163,8 +1160,7 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
     return output;
 }
 
-// MiniCPM-V 4.7: the decoder sees each tile as a grid of (grid_h x grid_w) tokens
-// obtained by merging patch_size x patch_size patches n_merge times per side.
+// grid of decoder tokens for one tile: patch_size x patch_size patches merged n_merge times per side
 static void mtmd_tile_grid(const clip_ctx * ctx_v, const clip_image_f32 & img, uint32_t & grid_h, uint32_t & grid_w) {
     const clip_hparams * hp = clip_get_hparams(ctx_v);
     const int merge = hp->n_merge > 0 ? hp->n_merge : 1;
@@ -1254,8 +1250,7 @@ struct mtmd_tokenizer {
         expand_lazy_bitmaps();
     }
 
-    // total positions consumed by the chunks emitted so far; used to work out how
-    // far a tile sits from its image group's origin
+    // total positions consumed so far, used to locate a tile relative to its group origin
     llama_pos cur_n_pos() const {
         llama_pos n = 0;
         for (const auto & c : cur.entries) {
@@ -1478,8 +1473,7 @@ struct mtmd_tokenizer {
                 const int n_col = preproc_out.grid_x;
                 const int n_row = preproc_out.grid_y;
 
-                // MiniCPM-V 4.7 lays all tiles of the image on a shared canvas; gather the
-                // geometry before split_batch_to_chunk() moves the images out of preproc_out
+                // gather the canvas geometry before split_batch_to_chunk() moves the images out
                 const bool use_canvas = ctx->proj_type_v() == PROJECTOR_TYPE_MINICPMV4_7
                                      && ctx->ov_img_first;
                 uint32_t ov_gh = 0, ov_gw = 0;
@@ -1514,9 +1508,7 @@ struct mtmd_tokenizer {
                 auto ov_chunk = std::move(chunks.front());
                 chunks.erase(chunks.begin());
 
-                // origin of the canvas: the position of the <image> token. The id tag
-                // (when present) is emitted first, so this is filled in below, right
-                // before the <image> token itself.
+                // canvas origin is the position of the <image> token, which is emitted below
                 llama_pos canvas_origin = 0;
 
                 auto mark_canvas_tile = [&](mtmd_input_chunk & chunk, bool is_overview,
@@ -2591,9 +2583,8 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
-// maps a tile coordinate onto the canvas grid the way the reference implementation
-// does: round(linspace(0, canvas - 1, grid)). Python's round() breaks ties to even,
-// so std::round (half away from zero) would not always agree.
+// map a tile coordinate onto the canvas grid the way the reference does:
+// round(linspace(0, canvas - 1, grid)); note Python's round() breaks ties to even
 static uint32_t canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
     if (grid <= 1 || canvas <= 1) {
         return 0;
@@ -2624,16 +2615,14 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
             } break;
         case MTMD_POS_TYPE_CANVAS:
             {
-                // All tiles of one image share the canvas origin, which sits at the
-                // <image> token; group_offset says how far this chunk starts from it.
+                // every tile shares the <image> token's position as origin
                 const mtmd_canvas_layout & c = image_tokens->canvas;
                 const uint32_t idx = (uint32_t) i;
                 uint32_t h = 0;
                 uint32_t w = 0;
                 if (c.grid_w > 0 && c.grid_h > 0) {
                     if (c.is_overview) {
-                        // stretched over the whole canvas, matching the reference
-                        // linspace(0, canvas - 1, grid) rounding
+                        // stretched over the whole canvas, matching the reference linspace rounding
                         h = canvas_scale(idx / c.grid_w, c.grid_h, c.canvas_h);
                         w = canvas_scale(idx % c.grid_w, c.grid_w, c.canvas_w);
                     } else {
@@ -2642,8 +2631,7 @@ mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * ima
                     }
                 }
                 const llama_pos base = pos_0 - (llama_pos) c.group_offset;
-                // slot 0 stays a strictly increasing cache/attention key, the time
-                // component (2D positions) is derived from the canvas origin
+                // slot 0 stays a strictly increasing cache key, the time component is pos.z
                 pos.t = pos_0;
                 pos.y = (uint32_t) (base + (llama_pos) h);
                 pos.x = (uint32_t) (base + (llama_pos) w);
@@ -2709,9 +2697,7 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
             // (includes BOI/EOI and row newline tokens), not by max(nx, ny)
             return image_tokens->n_tokens();
         case MTMD_POS_TYPE_CANVAS:
-            // the whole image group shares one latent position on the canvas, so a tile
-            // only advances the sequential position by one (has to stay positive: the
-            // server rejects chunks with n_pos <= 0)
+            // the whole image group shares one position, so a tile only advances it by one
             return 1;
         default:
             GGML_ABORT("invalid position type");

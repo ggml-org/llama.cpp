@@ -142,10 +142,8 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
             ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
         } else {
             if (mrope_time_slot >= 0 && n_pos_per_embd == 4) {
-                // the caller fills 4 slots per token as [key, height, width, time]; the time
-                // component is the one that feeds RoPE section 0 here, so the first slot stays
-                // a strictly increasing cache / attention key. Load-time checks keep the slot
-                // inside the section that RoPE does not use.
+                // the caller fills 4 slots per token as [key, height, width, time]: move the
+                // time slot into section 0 so the first slot stays a strictly increasing key
                 const int64_t t = mrope_time_slot;
                 std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
                 for (int i = 0; i < n_tokens; ++i) {

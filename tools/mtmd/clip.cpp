@@ -1003,7 +1003,6 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
             {
-                // 4.7 keeps the 4.6 unified-merger vision tower
                 builder = std::make_unique<clip_graph_minicpmv4_6>(ctx, img);
             } break;
         case PROJECTOR_TYPE_INTERNVL:
@@ -1456,11 +1455,8 @@ struct clip_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
                         GGML_ASSERT(hparams.n_merge == 2 || hparams.n_merge == 4);
 
-                        // The reference image processor stretches both the overview and the
-                        // refined image straight to the target size (PIL resize). The
-                        // llava-uhd default pads the refined image instead, which rescales
-                        // it to a different size and adds black bands, so every slice would
-                        // be built from the wrong pixels.
+                        // the reference stretches the refined image to the target size instead of
+                        // padding it, so padding would build every slice from the wrong pixels
                         hparams.image_pad_ov = PAD_NONE;
                         hparams.image_pad_rf = PAD_NONE;
 

@@ -179,8 +179,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(
             2 if self.downsample_mode == "4x" else 4)
 
-        # llava-uhd slice cap: the reference image processor decides how many slices to
-        # cut from this value, so it has to travel with the model
+        # slice cap read by the reference image processor, so it has to travel with the model
         max_slice_nums = self.preprocessor_config.get("max_slice_nums")
         if max_slice_nums is not None:
             self.gguf_writer.add_vision_max_slice_nums(int(max_slice_nums))
@@ -206,10 +205,8 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         return super().filter_tensors(item)
 
 
-# MiniCPM-V 4.7 shares the MiniCPM-V 4.6 stack: a Qwen3.5 text tower wrapped under
-# `model.language_model.*` and the same SigLIP + vit_merger + merger vision tower.
-# The text tower swaps to the MoE variant when the checkpoint says so, and the
-# vision tower keeps the v4.6 graph but reports its own projector type.
+# MiniCPM-V 4.7 shares the v4.6 stack: the same Qwen3.5 text tower (MoE variant when the
+# checkpoint says so) and the same SigLIP + vit_merger + merger vision tower.
 
 @ModelBase.register("MiniCPMV4_7ForConditionalGeneration")
 @ModelBase.example("openbmb/MiniCPM-V-4.7")
@@ -218,9 +215,8 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        # Canvas M-RoPE keeps the time component constant across an image group while the
-        # cache/attention key has to stay strictly increasing, so the time component is
-        # carried by the 4th position slot, which RoPE does not use (sections [11, 11, 10, 0]).
+        # canvas M-RoPE: the time component is constant across an image, so carry it in the
+        # 4th position slot (RoPE sections are [11, 11, 10, 0]) and keep slot 0 increasing
         self.gguf_writer.add_rope_mrope_time_slot(3)
 
     def __init__(self, dir_model, ftype, fname_out, *, hparams: dict | None = None, **kwargs):
@@ -248,13 +244,11 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
 @ModelBase.example("openbmb/MiniCPM-V-4.7")
 class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
     projector_type = gguf.VisionProjectorType.MINICPMV4_7
-    # MiniCPMV4_7ImageProcessorPil default; some 4.7 checkpoints ship no
-    # `scale_resolution` (and no `patch_size`) in their preprocessor config
+    # MiniCPMV4_7ImageProcessorPil default; 4.7 checkpoints may omit it (and patch_size)
     default_scale_resolution = 448
 
     def get_downsample_mode(self) -> str:
-        # 4.7 moved downsample_mode from the preprocessor config to the model config;
-        # an explicit preprocessor value still wins so that a copy of the model dir
-        # can export the 4x variant
+        # 4.7 moved downsample_mode to the model config; an explicit preprocessor value
+        # still wins so that a copy of the model dir can export the 4x variant
         return self.preprocessor_config.get(
             "downsample_mode", self.global_config.get("downsample_mode", "16x"))

@@ -1422,8 +1422,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
 
     hparams.rope_type = llama_model_rope_type(this);
 
-    // M-RoPE can take the time component from a slot that RoPE does not use, so the slot has
-    // to be in range and its dimension section has to be empty
+    // the time slot must be in range and its dimension section empty
     if (hparams.rope_mrope_time_slot >= 0) {
         GGML_ASSERT(hparams.rope_mrope_time_slot < 4);
         GGML_ASSERT(hparams.rope_sections[hparams.rope_mrope_time_slot] == 0);
