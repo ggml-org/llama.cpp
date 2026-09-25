@@ -180,23 +180,65 @@
 		return ordered;
 	});
 	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
-	// the pane keeps a width of its own and stays in the DOM, so opening it slides a
-	// fixed panel in rather than reflowing one into place. Each open remounts the
-	// content, which is what reset the tabs when the pane used to unmount.
-	let paneOption = $state<ModelOption | null>(null);
-	let paneSession = $state(0);
+	// The pane is laid out before it is ever opened, so the first open only slides a
+	// finished panel in. It renders the selection, else the model it last showed, else
+	// the first model in the list.
+	let lastPicked = $state<ModelOption | null>(null);
+	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
+	let shownId = $state<string | null>(null);
+	let isSwapping = $state(false);
+	let fade = $state<'open' | 'swap'>('open');
+	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
 
 	$effect(() => {
 		const id = selectedId;
 
 		if (!id) return;
 
-		// untracked: this effect writes the session counter, and reading it back here
-		// would make the effect invalidate itself
+		// untracked: the effect must not track the state it writes
 		untrack(() => {
-			paneOption = allModels.find((option) => option.id === id) ?? null;
-			paneSession += 1;
+			lastPicked = allModels.find((option) => option.id === id) ?? null;
 		});
+	});
+
+	// Another model fades the panel out, swaps it, then fades it back in. Reopening the
+	// same one only fades it, so the panel keeps its tab.
+	$effect(() => {
+		const next = target?.id ?? null;
+		const isOpen = selected !== null;
+
+		if (!next) return;
+
+		if (shownId === null) {
+			untrack(() => (shownId = next));
+
+			return;
+		}
+
+		if (next === shownId) {
+			if (isOpen) {
+				untrack(() => {
+					isSwapping = false;
+					fade = 'open';
+				});
+			}
+
+			return;
+		}
+
+		untrack(() => {
+			isSwapping = true;
+			fade = 'swap';
+		});
+
+		const timer = setTimeout(() => {
+			untrack(() => {
+				shownId = next;
+				isSwapping = false;
+			});
+		}, SWAP_FADE_MS);
+
+		return () => clearTimeout(timer);
 	});
 
 	// a caller can ask for one model to be revealed, the download rows do
@@ -211,6 +253,9 @@
 
 		uiStore.manageModelFocus = null;
 	});
+
+	/** How long the panel takes to fade out before it swaps to another model. */
+	const SWAP_FADE_MS = 150;
 
 	async function toggleLoad(option: ModelOption): Promise<void> {
 		if (modelsStore.isModelLoaded(option.model)) {
@@ -282,22 +327,20 @@
 	<div class="pane-drawer shrink-0" data-open={selected !== null}>
 		<!-- the content box keeps the open width, so it never reflows with the drawer -->
 		<div
-			class="flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 transition-opacity ease-[cubic-bezier(0.23,1,0.32,1)] {selected
-				? 'opacity-100 delay-100 duration-200'
-				: 'opacity-0 delay-0 duration-150'}"
+			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40"
+			data-fade={fade}
+			data-visible={selected !== null && !isSwapping}
 		>
-			{#if paneOption}
-				{@const shown = paneOption}
-
-				{#key paneSession}
+			{#if shownOption}
+				{#key shownId}
 					<ModelsManagerModelConfiguration
-						isCustomized={isCustomized(overrides[shown.id])}
+						isCustomized={isCustomized(overrides[shownOption.id])}
 						onClose={() => (selectedId = null)}
-						onSave={(override) => saveOverride(shown, override)}
-						onToggleLoad={() => void toggleLoad(shown)}
-						onUseInNewChat={() => void useInNewChat(shown)}
-						option={shown}
-						override={overrides[shown.id]}
+						onSave={(override) => saveOverride(shownOption, override)}
+						onToggleLoad={() => void toggleLoad(shownOption)}
+						onUseInNewChat={() => void useInNewChat(shownOption)}
+						option={shownOption}
+						override={overrides[shownOption.id]}
 					/>
 				{/key}
 			{/if}
@@ -329,11 +372,35 @@
 			visibility 250ms;
 	}
 
-	/* reduced motion keeps the fade and drops the slide */
+	.pane-content {
+		opacity: 0;
+		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+
+	.pane-content[data-visible='true'] {
+		opacity: 1;
+	}
+
+	/* opening: the fade waits for the drawer to move */
+	.pane-content[data-visible='true'][data-fade='open'] {
+		transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 100ms;
+	}
+
+	/* swapping models: out, then in, with no pause */
+	.pane-content[data-visible='true'][data-fade='swap'] {
+		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+
+	/* reduced motion keeps the fades and drops the slide */
 	@media (prefers-reduced-motion: reduce) {
 		.pane-drawer,
 		.pane-drawer[data-open='true'] {
 			transition: visibility 150ms;
+		}
+
+		.pane-content,
+		.pane-content[data-visible='true'][data-fade='open'] {
+			transition: opacity 100ms;
 		}
 	}
 </style>
