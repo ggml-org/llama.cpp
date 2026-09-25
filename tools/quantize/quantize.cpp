@@ -122,7 +122,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file]\n");
-    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size]\n");
+    printf("       [--prune-layers] [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size] [--verify]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -164,7 +164,15 @@ static void usage(const char * executable) {
     printf("                                      example: llama-quantize --dry-run model-f32.gguf Q4_K\n");
     printf("  --max-buffer-size MiB\n");
     printf("                                      max amount of tensor rows kept in memory while quantizing one tensor (default: 8192)\n");
-    printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n\n");
+    printf("                                      lower it to quantize models with very large tensors on a machine with little RAM\n");
+    printf("  --verify\n");
+    printf("                                      dequantize the output model and report per-tensor quantization error as JSON\n");
+    printf("                                      prints one JSON object with max_abs_error, rms_error and error histogram per tensor\n");
+    printf("                                      exit 0 on success, exit 1 on structural failure (missing tensor, bad read),\n");
+    printf("                                      exit 2 when a tensor max_abs_error exceeds --verify-max-error (default 1.0)\n");
+    printf("  --verify-max-error float\n");
+    printf("                                      fail --verify with exit 2 when any tensor max_abs_error exceeds this value\n");
+    printf("                                      (default 1.0; must be > 0)\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
@@ -389,6 +397,243 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
     return true;
 }
 
+constexpr size_t VERIFY_HISTOGRAM_BUCKETS = 150;
+constexpr double VERIFY_HISTOGRAM_RANGE = 0.03;
+// threshold for the --verify error gate. measured healthy Q8_0 max errors are ~0.004 and Q4_K_M ~0.03,
+// while a 1 KB corruption produced 710996. 1.0 is far above any sane quantization error for typical
+// weight magnitudes and far below real corruption. weights with much larger magnitudes can exceed it,
+// so the flag --verify-max-error exists to raise it.
+constexpr double VERIFY_DEFAULT_MAX_ERROR = 1.0;
+
+// JSON schema printed by --verify (one object on stdout):
+// { "input": "<path>", "output": "<path>", "tensors": [
+//   { "name": "<tensor>", "type": "<ggml type>", "nelements": N,
+//     "max_abs_error": E, "rms_error": R, "histogram": [c0 .. c149] } ] }
+// histogram[i] counts |diff| in [i*RANGE/BUCKETS, (i+1)*RANGE/BUCKETS); the last bucket clamps.
+// output tensors that were not quantized report zero error. a tensor missing from the output is a hard error.
+// after the JSON is printed, a tensor with max_abs_error above the gate (default 1.0, see --verify-max-error)
+// fails with exit code 2.
+
+static void json_escape_append(std::string & out, const char * s) {
+    for (; *s; ++s) {
+        switch (*s) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\t': out += "\\t"; break;
+            default:
+                if ((unsigned char) *s < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", (unsigned char) *s);
+                    out += buf;
+                } else {
+                    out += *s;
+                }
+        }
+    }
+}
+
+static void json_append_double(std::string & out, double v) {
+    if (!std::isfinite(v)) {
+        // corrupt tensors can dequantize to inf/nan; never emit invalid JSON
+        out += "null";
+        return;
+    }
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.10g", v);
+    out += buf;
+}
+
+// convert raw tensor bytes to float; handles f32, f16, bf16 directly and any quantized type via to_float
+static bool tensor_to_float(const uint8_t * data, ggml_type type, int64_t nelements, std::vector<float> & out) {
+    out.resize(nelements);
+    switch (type) {
+        case GGML_TYPE_F32:
+            memcpy(out.data(), data, nelements * sizeof(float));
+            return true;
+        case GGML_TYPE_F16:
+            ggml_fp16_to_fp32_row((const ggml_fp16_t *) data, out.data(), nelements);
+            return true;
+        case GGML_TYPE_BF16:
+            ggml_bf16_to_fp32_row((const ggml_bf16_t *) data, out.data(), nelements);
+            return true;
+        default:
+            break;
+    }
+    const ggml_type_traits * traits = ggml_get_type_traits(type);
+    if (!traits || !traits->to_float) {
+        return false;
+    }
+    traits->to_float(data, out.data(), nelements);
+    return true;
+}
+
+// dequantize every output tensor and compare against the input; print one JSON object on stdout
+// returns 0 on success, 1 on structural failure (missing tensor, bad read), 2 when a tensor
+// max_abs_error exceeds max_error. the JSON is always printed before a gate failure so the data is kept.
+// non-finite max_abs_error (inf/nan from corrupt scales) also fails the gate.
+static int verify_quantization(const char * fname_inp, const char * fname_out, double max_error) {
+    struct ggml_context * meta_in = NULL;
+    struct ggml_context * meta_out = NULL;
+
+    struct gguf_init_params gparams = { true, &meta_in };
+    struct gguf_context * ctx_in = gguf_init_from_file(fname_inp, gparams);
+    if (!ctx_in) {
+        fprintf(stderr, "%s: failed to open '%s'\n", __func__, fname_inp);
+        return 1;
+    }
+    gparams.ctx = &meta_out;
+    struct gguf_context * ctx_out = gguf_init_from_file(fname_out, gparams);
+    if (!ctx_out) {
+        fprintf(stderr, "%s: failed to open '%s'\n", __func__, fname_out);
+        gguf_free(ctx_in);
+        return 1;
+    }
+
+    std::ifstream fin_in(fname_inp, std::ios::binary);
+    std::ifstream fin_out(fname_out, std::ios::binary);
+    if (!fin_in.is_open() || !fin_out.is_open()) {
+        fprintf(stderr, "%s: failed to reopen model files for reading\n", __func__);
+        gguf_free(ctx_in);
+        gguf_free(ctx_out);
+        return 1;
+    }
+
+    const size_t data_off_in  = gguf_get_data_offset(ctx_in);
+    const size_t data_off_out = gguf_get_data_offset(ctx_out);
+
+    std::vector<uint8_t> buf_in, buf_out;
+    std::vector<float> f_in, f_out;
+    std::string json = "{ \"input\": \"";
+    json_escape_append(json, fname_inp);
+    json += "\", \"output\": \"";
+    json_escape_append(json, fname_out);
+    json += "\", \"tensors\": [";
+
+    int rc = 0;
+    const int64_t n_tensors = gguf_get_n_tensors(ctx_in);
+    std::string worst_tensor;
+    double worst_error = 0.0;
+    for (int64_t i = 0; i < n_tensors && rc == 0; ++i) {
+        const char * name = gguf_get_tensor_name(ctx_in, i);
+        const int64_t j = gguf_find_tensor(ctx_out, name);
+        if (j < 0) {
+            fprintf(stderr, "%s: tensor '%s' missing from output\n", __func__, name);
+            rc = 1;
+            break;
+        }
+
+        struct ggml_tensor * t_in  = ggml_get_tensor(meta_in, name);
+        struct ggml_tensor * t_out = ggml_get_tensor(meta_out, name);
+        const int64_t nelements = ggml_nelements(t_in);
+        if (nelements != ggml_nelements(t_out)) {
+            fprintf(stderr, "%s: tensor '%s' changed shape\n", __func__, name);
+            rc = 1;
+            break;
+        }
+
+        const ggml_type type_in  = gguf_get_tensor_type(ctx_in, i);
+        const ggml_type type_out = gguf_get_tensor_type(ctx_out, j);
+
+        buf_in.resize(ggml_nbytes(t_in));
+        fin_in.seekg(data_off_in + gguf_get_tensor_offset(ctx_in, i));
+        fin_in.read((char *) buf_in.data(), buf_in.size());
+        buf_out.resize(ggml_nbytes(t_out));
+        fin_out.seekg(data_off_out + gguf_get_tensor_offset(ctx_out, j));
+        fin_out.read((char *) buf_out.data(), buf_out.size());
+        if (!fin_in || !fin_out) {
+            fprintf(stderr, "%s: failed reading tensor '%s'\n", __func__, name);
+            rc = 1;
+            break;
+        }
+
+        if (!tensor_to_float(buf_in.data(), type_in, nelements, f_in)) {
+            fprintf(stderr, "%s: cannot decode input tensor '%s' of type %s\n", __func__, name, ggml_type_name(type_in));
+            rc = 1;
+            break;
+        }
+
+        double max_abs = 0.0;
+        double sum_sq = 0.0;
+        uint64_t hist[VERIFY_HISTOGRAM_BUCKETS] = {};
+
+        if (ggml_is_quantized(type_out)) {
+            if (nelements % ggml_blck_size(type_out) != 0) {
+                fprintf(stderr, "%s: tensor '%s' size is not a multiple of block size\n", __func__, name);
+                rc = 1;
+                break;
+            }
+            if (!tensor_to_float(buf_out.data(), type_out, nelements, f_out)) {
+                fprintf(stderr, "%s: cannot decode output tensor '%s' of type %s\n", __func__, name, ggml_type_name(type_out));
+                rc = 1;
+                break;
+            }
+            for (int64_t k = 0; k < nelements; ++k) {
+                const double diff = (double) f_in[k] - (double) f_out[k];
+                const double adiff = fabs(diff);
+                sum_sq += diff * diff;
+                if (adiff > max_abs) {
+                    max_abs = adiff;
+                }
+                size_t b = (size_t) (adiff / VERIFY_HISTOGRAM_RANGE * VERIFY_HISTOGRAM_BUCKETS);
+                if (b >= VERIFY_HISTOGRAM_BUCKETS) {
+                    b = VERIFY_HISTOGRAM_BUCKETS - 1;
+                }
+                hist[b]++;
+            }
+        }
+
+        if (i > 0) {
+            json += ",";
+        }
+        json += "\n    { \"name\": \"";
+        json_escape_append(json, name);
+        json += "\", \"type\": \"";
+        json += ggml_type_name(type_out);
+        json += "\", \"nelements\": ";
+        json += std::to_string(nelements);
+        json += ", \"max_abs_error\": ";
+        json_append_double(json, max_abs);
+        json += ", \"rms_error\": ";
+        json_append_double(json, nelements > 0 ? sqrt(sum_sq / (double) nelements) : 0.0);
+        json += ", \"histogram\": [";
+        for (size_t b = 0; b < VERIFY_HISTOGRAM_BUCKETS; ++b) {
+            if (b > 0) {
+                json += ",";
+            }
+            json += std::to_string(hist[b]);
+        }
+        json += "] }";
+
+        // NaN max_abs_error (corrupt scales dequantize to inf/nan) must also fail the gate;
+        // !(x <= limit) is false for NaN, so this catches it.
+        if (!(max_abs <= max_error)) {
+            if (worst_tensor.empty() || !(max_abs <= worst_error)) {
+                worst_tensor = name;
+                worst_error = max_abs;
+            }
+        }
+    }
+
+    gguf_free(ctx_in);
+    gguf_free(ctx_out);
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    json += "\n] }\n";
+    printf("%s", json.c_str());
+
+    if (!worst_tensor.empty()) {
+        fprintf(stderr, "%s: tensor '%s' max_abs_error %.10g exceeds limit %.10g\n",
+                __func__, worst_tensor.c_str(), worst_error, max_error);
+        return 2;
+    }
+
+    return 0;
+}
+
 // satisfies -Wmissing-declarations
 int llama_quantize(int argc, char ** argv);
 
@@ -406,6 +651,8 @@ int llama_quantize(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    bool verify = false;
+    double verify_max_error = VERIFY_DEFAULT_MAX_ERROR;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -446,6 +693,17 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--dry-run") == 0) {
             params.dry_run = true;
+        } else if (strcmp(argv[arg_idx], "--verify") == 0) {
+            verify = true;
+        } else if (strcmp(argv[arg_idx], "--verify-max-error") == 0) {
+            if (arg_idx == argc-1) {
+                usage(argv[0]);
+            }
+            verify_max_error = atof(argv[++arg_idx]);
+            if (!(verify_max_error > 0.0)) {
+                fprintf(stderr, "%s: invalid --verify-max-error '%s'\n", __func__, argv[arg_idx]);
+                return 1;
+            }
         } else if (strcmp(argv[arg_idx], "--allow-requantize") == 0) {
             params.allow_requantize = true;
         } else if (strcmp(argv[arg_idx], "--pure") == 0) {
@@ -491,6 +749,16 @@ int llama_quantize(int argc, char ** argv) {
     }
     if (!included_weights.empty() && !excluded_weights.empty()) {
         usage(argv[0]);
+    }
+    if (verify) {
+        if (params.dry_run) {
+            fprintf(stderr, "%s: --verify requires an actual quantization, not --dry-run\n", __func__);
+            return 1;
+        }
+        if (params.keep_split) {
+            fprintf(stderr, "%s: --verify is not supported with --keep-split\n", __func__);
+            return 1;
+        }
     }
 
     std::vector<std::string> imatrix_datasets;
@@ -660,6 +928,14 @@ int llama_quantize(int argc, char ** argv) {
         printf("\n");
         printf("%s: quantize time = %8.2f ms\n", __func__, t_quantize_us/1000.0);
         printf("%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0);
+    }
+
+    if (verify) {
+        const int vrc = verify_quantization(fname_inp.c_str(), fname_out.c_str(), verify_max_error);
+        if (vrc) {
+            fprintf(stderr, "%s: verification failed\n", __func__);
+            return vrc;
+        }
     }
 
     llama_backend_free();
