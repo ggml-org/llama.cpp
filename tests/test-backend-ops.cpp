@@ -6975,7 +6975,7 @@ struct test_moe_reduce : public test_case {
     }
 };
 
-struct test_mul_mat_vec_fusion : public test_case {
+struct test_mul_mat_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
     const int64_t m;
@@ -6989,24 +6989,27 @@ struct test_mul_mat_vec_fusion : public test_case {
     const bool with_gate;
     const bool with_lane_scale;
     std::array<int64_t, 2> batch_dims;
+    const bool broadcast_weights;
 
-    test_mul_mat_vec_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
+    test_mul_mat_fusion(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k,
                         bool use_id = false, int n_mats = 1, int n_used = 1, bool b = false, bool with_bias = false, bool with_gate = true,
-                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2})
+                        bool with_lane_scale = false, std::array<int64_t, 2> batch_dims = {4, 2}, bool broadcast_weights = false)
     : type(type), glu_op(op), m(m), n(n), k(k), use_id(use_id), n_mats(n_mats), n_used(n_used), b(b), with_bias(with_bias),
-        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims) {
+        with_gate(with_gate), with_lane_scale(with_lane_scale), batch_dims(batch_dims), broadcast_weights(broadcast_weights) {
         if (use_id) {
             GGML_ASSERT(n_used <= n_mats);
         }
+        GGML_ASSERT(!broadcast_weights || !use_id);
     }
 
     std::string vars() override {
-        return VARS_TO_STR13(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale, batch_dims);
+        return VARS_TO_STR14(type, glu_op, m, n, k, use_id, n_mats, n_used, b, with_bias, with_gate, with_lane_scale,
+            batch_dims, broadcast_weights);
     }
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_VEC_FUSION";
+        return "MUL_MAT_FUSION";
     }
 
     bool run_whole_graph() override { return true; }
@@ -7053,7 +7056,7 @@ struct test_mul_mat_vec_fusion : public test_case {
             const int              channels = batch_dims[0];
             const int              samples  = batch_dims[1];
             std::array<int64_t, 4> ne       = { k, m, channels, samples };
-            std::array<int64_t, 4> ne0      = { k, n, channels, samples };
+            std::array<int64_t, 4> ne0      = { k, n, broadcast_weights ? 1 : channels, broadcast_weights ? 1 : samples };
 
             ggml_tensor * cur  = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
             ggml_tensor * gate = with_gate ? ggml_new_tensor(ctx, type, 4, ne0.data()) : nullptr;
@@ -7153,6 +7156,90 @@ struct test_mul_mat_vec_fusion : public test_case {
             }
         } else {
             init_mul_mat_id_tensors(ctx, n_mats);
+        }
+    }
+
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+};
+
+// Dense FFN graph: fused gate/up + GLU feeding a quantized down projection.
+struct test_mul_mat_fusion_down : public test_case {
+    const ggml_type type_gate_up;
+    const ggml_type type_down;
+    const int64_t n_tokens;
+    const int64_t n_embd;
+    const int64_t n_ff;
+    const int64_t n_out;
+    const int64_t channels;
+    const int64_t samples;
+    const std::array<int64_t, 2> gate_up_batch_dims;
+    const std::array<int64_t, 2> down_batch_dims;
+    const bool zero_activation;
+    const bool wide_activation;
+
+    test_mul_mat_fusion_down(ggml_type type_gate_up, ggml_type type_down, int64_t n_tokens, int64_t n_embd, int64_t n_ff, int64_t n_out,
+            int64_t channels = 1, int64_t samples = 1,
+            std::array<int64_t, 2> gate_up_batch_dims = { 1, 1 },
+            std::array<int64_t, 2> down_batch_dims = { 1, 1 },
+            bool zero_activation = false, bool wide_activation = false)
+        : type_gate_up(type_gate_up), type_down(type_down), n_tokens(n_tokens), n_embd(n_embd), n_ff(n_ff), n_out(n_out),
+          channels(channels), samples(samples), gate_up_batch_dims(gate_up_batch_dims), down_batch_dims(down_batch_dims),
+          zero_activation(zero_activation), wide_activation(wide_activation) {
+        GGML_ASSERT(channels % gate_up_batch_dims[0] == 0 && samples % gate_up_batch_dims[1] == 0);
+        GGML_ASSERT(channels % down_batch_dims[0] == 0 && samples % down_batch_dims[1] == 0);
+        GGML_ASSERT(!zero_activation || !wide_activation);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR12(type_gate_up, type_down, n_tokens, n_embd, n_ff, n_out, channels, samples,
+            gate_up_batch_dims, down_batch_dims, zero_activation, wide_activation);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_FUSION_DOWN";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cur  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd, n_tokens, channels, samples);
+        ggml_tensor * gate = ggml_new_tensor_4d(
+            ctx, type_gate_up, n_embd, n_ff, gate_up_batch_dims[0], gate_up_batch_dims[1]);
+        ggml_tensor * up = ggml_new_tensor_4d(
+            ctx, type_gate_up, n_embd, n_ff, gate_up_batch_dims[0], gate_up_batch_dims[1]);
+        ggml_tensor * down = ggml_new_tensor_4d(
+            ctx, type_down, n_ff, n_out, down_batch_dims[0], down_batch_dims[1]);
+        ggml_set_name(cur, "cur");
+
+        ggml_tensor * ffn_gate = ggml_mul_mat(ctx, gate, cur);
+        ggml_tensor * ffn_up   = ggml_mul_mat(ctx, up, cur);
+        ggml_tensor * out      = ggml_glu_split(ctx, ffn_gate, ffn_up, GGML_GLU_OP_SWIGLU);
+        out = ggml_mul_mat(ctx, down, out);
+
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "cur") != 0 || (!zero_activation && !wide_activation)) {
+                init_tensor_uniform(t);
+                continue;
+            }
+
+            std::vector<float> data(ggml_nelements(t), 0.0f);
+            if (wide_activation) {
+                static constexpr float pattern[] = {
+                    -2.0f, -0.5f, -0.0078125f, 0.0f, 0.0078125f, 0.5f, 2.0f,
+                };
+                for (size_t i = 0; i < data.size(); ++i) {
+                    data[i] = pattern[i % (sizeof(pattern) / sizeof(pattern[0]))];
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
         }
     }
 
@@ -10972,13 +11059,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 if (with_lane_scale && type != GGML_TYPE_NVFP4) {
                                     continue;
                                 }
-                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, 1, 32, 256,
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale));
-                                test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
+                                test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, 1, 32, 256,
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
                                 // multi-token batches (spec decoding)
                                 for (int64_t m_batch : { 2, 4, 8 }) {
-                                    test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, m_batch, 32, 256,
+                                    test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, m_batch, 32, 256,
                                         use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
                                 }
                             }
@@ -10990,7 +11077,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (bool b : {false, true}) {
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_IQ2_S, GGML_GLU_OP_SWIGLU_CLAMP, 1, 32, 256,
+        test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_IQ2_S, GGML_GLU_OP_SWIGLU_CLAMP, 1, 32, 256,
             true, 16, 8, b, false, true, false));
     }
 
@@ -10999,7 +11086,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     //for (ggml_glu_op glu_op : { GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU }) {
     //    for (int64_t m_batch : { 2, 3, 4 }) {
     //        for (int64_t rows : { 1, 2, 3 }) {
-    //            test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, glu_op, m_batch, rows, 256,
+    //            test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, glu_op, m_batch, rows, 256,
     //                false, 16, 8, false, false, true, false, { 1, 1 }));
     //        }
     //    }
@@ -11007,9 +11094,51 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // Both sides of the same row-count boundary as above, on the fused path.
     for (int64_t rows : {6271, 6272, 6273}) {
-        test_cases.emplace_back(new test_mul_mat_vec_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 2, rows, 256,
+        test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 2, rows, 256,
             false, 16, 8, false, false, true, false, { 1, 1 }));
     }
+
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 8, 128, 256,
+        false, 1, 1, false, false, true, false, { 1, 1 }));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 9, 127, 256,
+        false, 1, 1, false, false, true, false, { 1, 1 }));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 33, 257, 512,
+        false, 1, 1, false, false, true, false, { 2, 3 }));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 65, 129, 512,
+        false, 1, 1, false, false, true, false, { 1, 1 }));
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, GGML_GLU_OP_SWIGLU, 33, 129, 512,
+        false, 1, 1, false, false, true, false, { 2, 3 }, true));
+
+    // Fused gate/up + GLU at MMQ batch sizes.
+    for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS }) {
+        test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, 17, 129, 512,
+            false, 1, 1, false, false, true, false, { 1, 1 }));
+    }
+    for (ggml_glu_op glu_op : { GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI, GGML_GLU_OP_SWIGLU_CLAMP }) {
+        test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, glu_op, 17, 129, 512,
+            false, 1, 1, false, false, true, false, { 1, 1 }));
+    }
+
+    {
+        const ggml_type type = GGML_TYPE_Q4_K;
+        test_cases.emplace_back(new test_mul_mat_fusion_down(type, GGML_TYPE_Q4_K, 2, 256, 256, 257));
+        // Smallest batch size that uses MMQ for Q4_K.
+        test_cases.emplace_back(new test_mul_mat_fusion_down(type, GGML_TYPE_Q4_K, 6, 256, 256, 257));
+        test_cases.emplace_back(new test_mul_mat_fusion_down(type, GGML_TYPE_Q4_K, 9, 256, 256, 257));
+        test_cases.emplace_back(new test_mul_mat_fusion_down(type, GGML_TYPE_Q4_K, 17, 512, 512, 257));
+        // n_ff < MATRIX_ROW_PADDING exercises the padded Q8_1 scratch stride between channels.
+        test_cases.emplace_back(new test_mul_mat_fusion_down(
+            type, GGML_TYPE_Q4_K, 33, 512, 256, 257, 2, 3, { 2, 3 }, { 2, 3 }));
+        test_cases.emplace_back(new test_mul_mat_fusion_down(
+            type, GGML_TYPE_Q6_K, 17, 512, 256, 257, 2, 3, { 2, 1 }, { 1, 3 }));
+        test_cases.emplace_back(new test_mul_mat_fusion_down(
+            type, GGML_TYPE_Q4_K, 17, 512, 512, 257, 1, 1, { 1, 1 }, { 1, 1 }, true, false));
+        test_cases.emplace_back(new test_mul_mat_fusion_down(
+            type, GGML_TYPE_Q4_K, 17, 512, 512, 257, 1, 1, { 1, 1 }, { 1, 1 }, false, true));
+    }
+    test_cases.emplace_back(new test_mul_mat_fusion_down(GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, 17, 512, 256, 257));
+    test_cases.emplace_back(new test_mul_mat_fusion_down(
+        GGML_TYPE_IQ4_XS, GGML_TYPE_Q4_K, 33, 512, 256, 257, 2, 3, { 2, 3 }, { 2, 3 }));
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
