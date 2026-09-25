@@ -95,7 +95,7 @@
 	{/each}
 
 	<div
-		class="flex w-full flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-4"
+		class="flex w-full flex-col items-center justify-center gap-4 rounded-xl border border-dashed p-6"
 	>
 		<Button onclick={handleAdd} size="sm">
 			<Plus />
