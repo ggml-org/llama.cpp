@@ -8225,6 +8225,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             const uint32_t split_p_size = 32;
             const size_t max_dim = (nek1 + split_p_size - 1) / split_p_size;
             const size_t p_dim = max_dim * split_p_size;
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
             auto& pipelines = ctx->device->pipeline_xe_fa_decode_dual_phases;
             auto it = pipelines.find({ (uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1 });
             if (it != pipelines.end()) {
@@ -8232,7 +8233,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             } else {
                 pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
             }
-
+#endif
             if (xe_fa_pipeline_dual_phases.first == nullptr || xe_fa_pipeline_dual_phases.second == nullptr) {
                 xe_fa_opt = false;
                 fa_copy_qstate = false;
