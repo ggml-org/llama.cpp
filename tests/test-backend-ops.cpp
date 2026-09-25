@@ -9768,6 +9768,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 32, 1, 32)); // too small (N<64)
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 1024, 1, 1024)); // too big (N>512)
 
+    // F16/BF16 -> F32 cuBLAS conversion chunking.
+    // With GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE=1 these cover all three GEMM paths.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16,  GGML_TYPE_F32, 1024, 128, 128, {4, 4}, {1, 1})); // strided batched
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 1024, 128, 128, {4, 4}, {1, 1}));
+
+    // Single GEMM with a non-divisible final chunk (rows=1020 + tail=36).
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16,  GGML_TYPE_F32, 1056, 64, 257, {1, 1}, {1, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 1056, 64, 257, {1, 1}, {1, 1}));
+
+    // Broadcasted batched GEMM with convert_nc and a non-divisible final chunk
+    // (rows=1016 + tail=40, r2=3), matching the non-FA attention path more closely.
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16,  GGML_TYPE_F32, 1056, 64, 129, {2, 1}, {3, 1}));
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 1056, 64, 129, {2, 1}, {3, 1}));
+
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F16,  900000,  3, 2592, {1, 1}, {1, 1}));

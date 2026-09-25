@@ -676,6 +676,24 @@ function gg_run_test_backend_ops {
         (time timeout 3600 ./bin/test-backend-ops ${args_extra}       ) 2>&1 | tee -a $OUT/${ci}-test-backend-ops.log
     fi
 
+    # Exercise the opt-in F16/BF16 -> F32 conversion chunking path on GPU CI.
+    # Keep this separate from the main backend-ops run so the production default remains disabled.
+    chunk_backend=""
+    if [ ! -z "${GG_BUILD_CUDA}" ]; then
+        chunk_backend="CUDA0"
+    elif [ ! -z "${GG_BUILD_ROCM}" ]; then
+        chunk_backend="ROCm0"
+    fi
+
+    if [ ! -z "${chunk_backend}" ]; then
+        (time timeout 300 env \
+            GGML_CUDA_CUBLAS_COMPUTE_TYPE=f32 \
+            GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE=1 \
+            ./bin/test-backend-ops test -b "${chunk_backend}" -o MUL_MAT \
+            -p 'type_a=(f16|bf16),type_b=f32,(m=1024,n=128,k=128,bs=\[4,4\],nr=\[1,1\]|m=1056,n=64,k=257,bs=\[1,1\],nr=\[1,1\]|m=1056,n=64,k=129,bs=\[2,1\],nr=\[3,1\])') \
+            2>&1 | tee -a $OUT/${ci}-test-backend-ops-chunked-convert.log
+    fi
+
     set +e
 }
 
