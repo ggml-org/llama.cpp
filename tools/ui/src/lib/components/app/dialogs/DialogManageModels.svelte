@@ -106,17 +106,22 @@
 			{#if shownView === 'manage'}
 				<ModelsManager class="h-full">
 					{#snippet toolbarEnd()}
-						<Button class="gap-1.5" onclick={() => (view = 'discover')} size="sm" variant="outline">
+						<Button
+							class="gap-1.5"
+							onclick={() => (view = 'discover')}
+							size="sm"
+							variant="secondary"
+						>
 							<Compass class="h-3.5 w-3.5" />
 
-							Discover models
+							Discover Models
 						</Button>
 
 						<Button
 							class="gap-1.5"
 							onclick={() => (view = 'providers')}
 							size="sm"
-							variant="outline"
+							variant="secondary"
 						>
 							<Server class="h-3.5 w-3.5" />
 
