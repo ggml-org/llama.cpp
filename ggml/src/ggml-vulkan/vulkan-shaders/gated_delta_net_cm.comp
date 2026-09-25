@@ -9,7 +9,11 @@
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #extension GL_KHR_cooperative_matrix : enable
+#ifdef COOPMAT2
 #extension GL_NV_cooperative_matrix2 : enable
+#else
+#extension GL_EXT_cooperative_matrix_maintenance1 : enable
+#endif
 
 // Chunked gated-delta-net prefill (non-KDA, S_v == D == 128, K == 1).
 // Faithful port of the CUDA MMA kernel (PR 29353): one workgroup owns one
@@ -19,6 +23,13 @@
 // phase splits its 6 output tiles one per subgroup (sg0 gram, sg1 pmat,
 // sg2-3 qs=Q@S, sg4-5 ks=K@S) so no subgroup does two matmuls back to back.
 // bf16 hi/lo 3x product for ~fp32 accuracy.
+//
+// One source, two coopmat backends selected by preproc:
+//   COOPMAT2  -> GL_NV_cooperative_matrix2 (flexible dims, coopMatPerElementNV)
+//   else      -> GL_KHR_cooperative_matrix + GL_EXT_cooperative_matrix_maintenance1
+//                (m16n16k16 only, coopMatPerElementEXT). BF16ACC keeps the bf16
+//                hi/lo split as accumulators; without it they are A-matrices via
+//                the maintenance1 accumulator<->A/B relaxed conversion.
 #define OPD bfloat16_t
 
 #define C  16          // chunk size (tokens per step)
@@ -27,8 +38,15 @@
 #define TN 16          // tile cols (bf16 cm has only m16n16k16; n8 would pad)
 #define V  32          // value columns per workgroup block
 #define NSUB 8         // subgroups per workgroup
-#define WGS (NSUB * 32)
-#define KT 32          // K-tile width for deep (K=D) matmuls
+#ifndef SUBGROUP_SIZE
+#define SUBGROUP_SIZE 32   // lanes per subgroup (32 = NVIDIA/wave32; 64 = RDNA wave64)
+#endif
+#define WGS (NSUB * SUBGROUP_SIZE)
+#ifdef COOPMAT2
+#define KT 32          // K-tile width for deep (K=D) matmuls (flexible dims)
+#else
+#define KT 16          // coopmat1: m16n16k16 only
+#endif
 #define PAD 8          // shared padding to break COL-load bank conflicts (keep LDP*2 a multiple of 16B)
 #define LDP (D + PAD)  // padded leading dim for q/k [CxD] and state mirror [DxV]
 
@@ -80,6 +98,21 @@ shared float sh_prefix[C], sh_beta[C], sh_ep[C], sh_carry[C];
 #define MACC gl_MatrixUseAccumulator
 #define ROW  gl_CooperativeMatrixLayoutRowMajor
 #define COL  gl_CooperativeMatrixLayoutColumnMajor
+
+#ifdef COOPMAT2
+#define coopMatPerElement coopMatPerElementNV
+#else
+#define coopMatPerElement coopMatPerElementEXT
+#endif
+
+// Use for the bf16 hi/lo split: accumulator when a bf16 accumulator type is
+// available, otherwise an A-matrix reached through the maintenance1 relaxed
+// accumulator<->A/B conversion (stored to shared, reloaded as A/B).
+#if defined(COOPMAT2) || defined(BF16ACC)
+#define ACCB MACC
+#else
+#define ACCB MUA
+#endif
 
 // 3x bf16 product accumulated into acc (hi/lo split for ~fp32 accuracy).
 #define PRODUCT(acc, ah, al, bh, bl) \
@@ -193,9 +226,9 @@ void main() {
         [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
             const uint ti = sg + j * NSUB;
             const uint off = TILE_C(ti) * LDP + TILE_R(ti);
-            const coopmat<OPD, SG, TM, TN, MACC> hi = coopmat<OPD, SG, TM, TN, MACC>(state[j]);
+            const coopmat<OPD, SG, TM, TN, ACCB> hi = coopmat<OPD, SG, TM, TN, ACCB>(state[j]);
             const coopmat<float, SG, TM, TN, MACC> hf = coopmat<float, SG, TM, TN, MACC>(hi);
-            const coopmat<OPD, SG, TM, TN, MACC> lo = coopmat<OPD, SG, TM, TN, MACC>(state[j] - hf);
+            const coopmat<OPD, SG, TM, TN, ACCB> lo = coopmat<OPD, SG, TM, TN, ACCB>(state[j] - hf);
             coopMatStore(hi, sh_sh, off, LDP, COL);
             coopMatStore(lo, sh_sl, off, LDP, COL);
         }
@@ -234,9 +267,9 @@ void main() {
                 PRODUCT(x, ah, al, bh, bl);
             }
             if (gram) {
-                coopMatPerElementNV(x, x, StoreLower, c_o);
+                coopMatPerElement(x, x, StoreLower, c_o);
             } else {
-                coopMatPerElementNV(x, x, StorePmat, c_o);
+                coopMatPerElement(x, x, StorePmat, c_o);
             }
         } else if (sg - 2 * CT < VT) {
             const uint ti  = sg - 2 * CT;
@@ -251,7 +284,7 @@ void main() {
                 coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
                 PRODUCT(qs, qh, ql, sbh, sbl);
             }
-            coopMatPerElementNV(base_r, qs, ApplyExpPrefix);
+            coopMatPerElement(base_r, qs, ApplyExpPrefix);
         } else if (sg - 2 * CT - VT < VT) {
             const uint ti  = sg - 2 * CT - VT;
             const uint c_o = ti * TN;
@@ -267,10 +300,10 @@ void main() {
             }
             const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
             coopmat<float, SG, C, TN, MACC> delta;
-            coopMatPerElementNV(delta, ks, ComputeDelta, v_base, p.sv2, valid);
-            const coopmat<OPD, SG, C, TN, MACC> dh = coopmat<OPD, SG, C, TN, MACC>(delta);
+            coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+            const coopmat<OPD, SG, C, TN, ACCB> dh = coopmat<OPD, SG, C, TN, ACCB>(delta);
             const coopmat<float, SG, C, TN, MACC> df = coopmat<float, SG, C, TN, MACC>(dh);
-            const coopmat<OPD, SG, C, TN, MACC> dl = coopmat<OPD, SG, C, TN, MACC>(delta - df);
+            const coopmat<OPD, SG, C, TN, ACCB> dl = coopmat<OPD, SG, C, TN, ACCB>(delta - df);
             coopMatStore(dh, sh_dh, c_o, V, ROW);
             coopMatStore(dl, sh_dl, c_o, V, ROW);
         }
@@ -307,9 +340,9 @@ void main() {
             coopMatLoad(dh, sh_dh, c_o, V, ROW);
             coopMatLoad(dl, sh_dl, c_o, V, ROW);
             PRODUCT(solved, ih, il, dh, dl);
-            const coopmat<OPD, SG, C, TN, MACC> sh = coopmat<OPD, SG, C, TN, MACC>(solved);
+            const coopmat<OPD, SG, C, TN, ACCB> sh = coopmat<OPD, SG, C, TN, ACCB>(solved);
             const coopmat<float, SG, C, TN, MACC> sf = coopmat<float, SG, C, TN, MACC>(sh);
-            const coopmat<OPD, SG, C, TN, MACC> sl = coopmat<OPD, SG, C, TN, MACC>(solved - sf);
+            const coopmat<OPD, SG, C, TN, ACCB> sl = coopmat<OPD, SG, C, TN, ACCB>(solved - sf);
             coopMatStore(sh, sh_soh, c_o, V, ROW);
             coopMatStore(sl, sh_sol, c_o, V, ROW);
         }
@@ -328,7 +361,7 @@ void main() {
             coopMatLoad(svl, sh_sol, c_o, V, ROW);
             PRODUCT(O, ph, pl, svh, svl);
             const uint out_base = (seq_id * p.n_tokens * p.H + head_id) * D + v0 + c_o + t0 * (D * p.H);
-            coopMatPerElementNV(O, O, StoreOut, out_base, valid);
+            coopMatPerElement(O, O, StoreOut, out_base, valid);
         }
         // delta2 = solved * carry -> sh_dh/dl (all threads)
         for (uint i = tid; i < C * V; i += WGS) {
@@ -358,7 +391,7 @@ void main() {
 
     [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
         const uint ti = sg + j * NSUB;
-        coopMatPerElementNV(state[j], state[j], StoreState,
+        coopMatPerElement(state[j], state[j], StoreState,
                             p.s_off + state_base + (v0 + TILE_C(ti)) * D + TILE_R(ti));
     }
 }
