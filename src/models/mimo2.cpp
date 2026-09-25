@@ -25,8 +25,10 @@ void llama_model_mimo2::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_mimo2::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
+    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
     const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
     const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
+    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
     int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
 
     if (!ml.load_mtp) {
@@ -46,7 +48,7 @@ void llama_model_mimo2::load_arch_tensors(llama_model_loader & ml) {
         uint32_t n_head = hparams.n_head(i);
 
         const bool is_nextn = i >= n_layer;
-        const int  flags    = is_nextn ? mtp_flags : 0;
+        const int  flags    = is_nextn ? mtp_flags : trunk_flags;
 
         create_tensor_qkv(layer, i, n_embd, n_embd_head_k * n_head, n_embd_k_gqa, n_embd_v_gqa, flags);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_v * n_head, n_embd }, flags);
