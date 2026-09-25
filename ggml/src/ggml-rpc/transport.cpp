@@ -69,6 +69,11 @@ struct rdma_conn {
     struct ibv_mr * rx_mr  = nullptr;
     int             rx_head = 0;
 
+    // received slot that is only partly consumed, so recv sizes need not match send sizes
+    int             rx_cur  = -1;
+    size_t          rx_off  = 0;
+    size_t          rx_len  = 0;
+
     uint32_t        max_inline = 0;
 
     uint8_t * rx_slot(int i) const {
@@ -458,14 +463,24 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
     uint8_t * dst = (uint8_t *)data;
     size_t rem = size;
     while (rem > 0) {
-        struct ibv_wc wc;
-        if (!rdma_poll(c->rcq, &wc)) return false;
+        if (c->rx_cur < 0) {
+            struct ibv_wc wc;
+            if (!rdma_poll(c->rcq, &wc)) return false;
 
-        int slot = (int)wc.wr_id;
-        size_t got = wc.byte_len;
-        memcpy(dst, c->rx_slot(slot), got);
+            c->rx_cur = (int)wc.wr_id;
+            c->rx_off = 0;
+            c->rx_len = wc.byte_len;
+        }
 
-        if (!c->post_rx(slot)) return false;
+        size_t got = std::min(rem, c->rx_len - c->rx_off);
+        memcpy(dst, c->rx_slot(c->rx_cur) + c->rx_off, got);
+        c->rx_off += got;
+
+        // repost the slot only once it is fully consumed
+        if (c->rx_off == c->rx_len) {
+            if (!c->post_rx(c->rx_cur)) return false;
+            c->rx_cur = -1;
+        }
 
         dst += got;
         rem -= got;
