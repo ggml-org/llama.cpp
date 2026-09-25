@@ -959,6 +959,15 @@ private:
                 // note: for sleeping == false, event is emitted by load_model()
             }
             SRV_INF("%s", "server is entering sleeping state\n");
+
+            if (prompt_cache) {
+                for (auto & slot : slots) {
+                    if (slot.prompt_save(*prompt_cache)) {
+                        prompt_cache->update();
+                    }
+                }
+            }
+
             destroy();
         } else {
             SRV_INF("%s", "server is exiting sleeping state\n");
@@ -1356,8 +1365,15 @@ private:
             }
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+            if (!is_resume || !prompt_cache) {
+                prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+            } else {
+                prompt_cache->limit_size   = 1024ull * 1024ull * (params_base.cache_ram_mib < 0 ? 0 : params_base.cache_ram_mib);
+                prompt_cache->limit_tokens = n_ctx;
+                prompt_cache->update();
+            }
         } else {
+            prompt_cache.reset();
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
