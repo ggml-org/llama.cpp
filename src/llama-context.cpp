@@ -1498,6 +1498,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     }
 
     // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
+    const int64_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always output all tokens and skip position continuity checks (output_all=true)
     if (!balloc->init(batch_inp, model.vocab, true)) {
@@ -1581,11 +1582,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits.data != nullptr);
 
-        // encoder architectures with inserted blank tokens (e.g. CTC models) have an
-        // output dimension that does not match n_vocab from the tokenizer - use the
-        // tensor's actual dimension to avoid reading past the buffer end
-        const int64_t n_vocab_out = t_logits->ne[0];
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs_enc*n_vocab_out*sizeof(float));
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs_enc*n_vocab*sizeof(float));
     }
 
     // extract embeddings
