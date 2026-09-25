@@ -251,7 +251,10 @@
 								]}
 								disabled={disabled || ms.updating}
 							>
-								<ModelsSelectorTriggerIcon class="size-3.5 shrink-0 mr-0.375" option={selectedOption} />
+								<ModelsSelectorTriggerIcon
+									class="size-3.5 shrink-0 mr-0.375"
+									option={selectedOption}
+								/>
 
 								<span class="flex min-w-0 items-center gap-0.5">
 									{#if selectedOption}
@@ -410,7 +413,10 @@
 							onclick={() => ms.handleOpenChange(true)}
 							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 						>
-							<ModelsSelectorTriggerIcon class="size-3.5 shrink-0 mr-0.375" option={selectedOption} />
+							<ModelsSelectorTriggerIcon
+								class="size-3.5 shrink-0 mr-0.375"
+								option={selectedOption}
+							/>
 
 							{#if selectedOption}
 								<ModelId
