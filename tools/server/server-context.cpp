@@ -441,6 +441,12 @@ struct server_slot {
     bool can_split() const {
         GGML_ASSERT(task);
 
+        // encoder-only tasks need logits without incremental sampling (e.g. CTC transcription),
+        // so context must run in the single non-causal encode() pass
+        if (task->need_logits() && !task->need_sampling() && !llama_get_memory(ctx_tgt)) {
+            return false;
+        }
+
         return
             !task->need_embd() ||
             (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
@@ -2225,6 +2231,23 @@ private:
         queue_results.send(std::move(res));
     }
 
+    void send_transcription(const server_slot & slot) {
+        auto res = std::make_unique<server_task_result_transcribe>();
+        res->id       = slot.task->id;
+        res->index    = slot.task->index;
+        res->n_tokens = slot.task->n_tokens();
+        res->res_type = slot.task->params.res_type;
+
+        // use llama_n_outputs to get the accurate output count, including any
+        // time subsampling
+        const int32_t n_outputs = llama_n_outputs(slot.ctx_tgt);
+        res->text = common_ctc_greedy_decode(vocab, slot.ctx_tgt, n_outputs);
+
+        SLT_DBG(slot, "%s", "sending transcription\n");
+
+        queue_results.send(std::move(res));
+    }
+
     //
     // Functions to process the task
     //
@@ -2384,6 +2407,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_TRANSCRIBE:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -3174,9 +3198,12 @@ private:
                             return;
                         }
 
-                        // TODO: support memory-less logits computation
-                        if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
-                            send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
+                        // memory-less contexts can only produce logits via a single-shot, non-causal
+                        // encode() pass (see llama_context::encode()) - incompatible with incremental
+                        // sampling/generation, but fine for encoder-only tasks (e.g. CTC transcription)
+                        // that don't need sampling
+                        if (slot.task->need_logits() && slot.task->need_sampling() && !llama_get_memory(ctx_tgt)) {
+                            send_error(slot, "the current context does not support logits computation for generation. skipping", ERROR_TYPE_SERVER);
                             slot.release();
                             return;
                         }
@@ -3517,6 +3544,15 @@ private:
                         has_mtmd = true;
                     }
 
+                    // a transcription prompt is entirely media chunk(s), with
+                    // no trailing text, so the result is ready right now.
+                    if (slot.task->type == SERVER_TASK_TYPE_TRANSCRIBE && slot.prompt.n_tokens() == slot.task->n_tokens()) {
+                        slot.state = SLOT_STATE_DONE_PROMPT;
+                        send_transcription(slot);
+                        slot.release();
+                        return;
+                    }
+
                     const auto & spans = slot.task->params.message_spans;
                     const auto last_user_pos = spans.last_user_message_pos();
 
@@ -3826,6 +3862,13 @@ private:
 
                 if (slot.task->type == SERVER_TASK_TYPE_RERANK) {
                     send_rerank(slot, batch_view);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return;
+                }
+
+                if (slot.task->type == SERVER_TASK_TYPE_TRANSCRIBE) {
+                    send_transcription(slot);
                     slot.release();
                     slot.i_batch = -1;
                     return;
@@ -4196,6 +4239,7 @@ server_context_meta server_context::get_meta() const {
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
         /* has_inp_video          */ impl->chat_params.allow_video,
+        /* has_decoder            */ llama_model_has_decoder(impl->model_tgt),
         /* json_ui_settings       */ impl->json_ui_settings,
         /* slot_n_ctx             */ impl->n_ctx_slot(),
         /* pooling_type           */ llama_pooling_type(impl->ctx_tgt),
@@ -5014,6 +5058,11 @@ void server_routes::init_routes() {
             return res;
         }
 
+        // encoder-only (e.g. CTC transcription) model
+        if (!meta->has_decoder) {
+            return handle_transcriptions_impl(req, TASK_RESPONSE_TYPE_OAI_ASR);
+        }
+
         std::vector<raw_buffer> files;
         json body = convert_transcriptions_to_chatcmpl(
             json::parse(req.body),
@@ -5482,6 +5531,62 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         ? format_embeddings_response_oaicompat(body, meta->model_name, responses, use_base64)
         : json(responses);
     res->ok(root);
+    return res;
+}
+
+// direct transcription path for encoder-only models (e.g. CTC transcription)
+std::unique_ptr<server_res_generator> server_routes::handle_transcriptions_impl(const server_http_req & req, task_response_type res_type) {
+    auto res = create_response();
+
+    auto it = req.files.find("file");
+    if (it == req.files.end()) {
+        res->error(format_error_response("No input file found for transcription", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const json body = json::parse(req.body);
+
+    const std::string response_format = json_value(body, "response_format", std::string("json"));
+    if (response_format != "json") {
+        res->error(format_error_response("Only 'json' response_format is supported for transcription", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    const std::string stream = json_value(body, "stream", std::string("false"));
+    if (stream == "true") {
+        res->error(format_error_response("Streaming is not supported for this model", ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
+    std::vector<raw_buffer> files{ it->second.data };
+    server_tokens tokens = process_mtmd_prompt(ctx_server.mctx, get_media_marker(), files, ctx_server.init_opt);
+
+    auto & rd = res->rd;
+    {
+        std::vector<server_task> tasks;
+        server_task task = server_task(SERVER_TASK_TYPE_TRANSCRIBE);
+
+        task.id     = rd.get_new_id();
+        task.tokens = std::move(tokens);
+
+        task.params.res_type = res_type;
+
+        tasks.push_back(std::move(task));
+        rd.post_tasks(std::move(tasks));
+    }
+
+    auto all_results = rd.wait_for_all(req.should_stop);
+
+    if (all_results.is_terminated) {
+        return res; // connection is closed
+    } else if (all_results.error) {
+        res->error(all_results.error->to_json());
+        return res;
+    }
+
+    GGML_ASSERT(all_results.results.size() == 1);
+    GGML_ASSERT(dynamic_cast<server_task_result_transcribe*>(all_results.results[0].get()) != nullptr);
+    res->ok(all_results.results[0]->to_json());
     return res;
 }
 
