@@ -13,6 +13,8 @@
 
 	interface Props {
 		backend: Backend;
+		/** The endpoint refused the probe for want of a key. */
+		apiKeyRequired?: boolean;
 		/** Protocol the endpoint reported, once it has been probed. */
 		detected?: BackendProtocol | null;
 		detecting?: boolean;
@@ -22,6 +24,7 @@
 	}
 
 	let {
+		apiKeyRequired = false,
 		backend,
 		detected = null,
 		detecting = false,
@@ -38,7 +41,11 @@
 	let detectionLabel = $derived.by(() => {
 		if (detecting) return 'Checking what the endpoint speaks...';
 
-		if (detected === 'llama.cpp') return 'llama.cpp server detected.';
+		if (detected === 'llama.cpp') {
+			return apiKeyRequired
+				? 'llama.cpp server detected. It asks for an API key.'
+				: 'llama.cpp server detected.';
+		}
 
 		if (detected === 'openai') return 'OpenAI-compatible endpoint detected.';
 
@@ -85,7 +92,7 @@
 
 		<div>
 			<label class="mb-2 block text-xs font-medium select-none" for="backend-key-{id}">
-				API key
+				API key{#if apiKeyRequired}<span class="text-destructive"> *</span>{/if}
 			</label>
 
 			<Input
@@ -97,7 +104,13 @@
 				value={backend.apiKey ?? ''}
 			/>
 
-			<p class="mt-1.5 text-xs text-muted-foreground">Sent as a Bearer token.</p>
+			<p class="mt-1.5 text-xs text-muted-foreground">
+				{#if apiKeyRequired}
+					Required by this endpoint.
+				{:else}
+					Sent as a Bearer token.
+				{/if}
+			</p>
 		</div>
 	</div>
 

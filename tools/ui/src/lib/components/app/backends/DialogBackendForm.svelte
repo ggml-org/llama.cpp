@@ -39,6 +39,7 @@
 	let testing = $state(false);
 	let detected = $state<BackendProtocol | null>(null);
 	let detecting = $state(false);
+	let apiKeyRequired = $state(false);
 	let detectRun = 0;
 
 	// the card follows the URL, so editing any field deselects it
@@ -67,7 +68,9 @@
 			return 'Invalid URL format';
 		}
 	});
-	let canSave = $derived(!urlError && draft.name.trim().length > 0);
+	let canSave = $derived(
+		!urlError && draft.name.trim().length > 0 && (!apiKeyRequired || Boolean(draft.apiKey?.trim()))
+	);
 
 	// Backward-compatible read: older versions stored a JSON array of dismissed ids.
 	function readRecommendationsDismissed(): boolean {
@@ -113,6 +116,7 @@
 		testResult = null;
 		testing = false;
 		detected = null;
+		apiKeyRequired = false;
 	});
 
 	// Once the URL settles, ask the endpoint what it speaks, the way the MCP dialog
@@ -120,10 +124,13 @@
 	// it differs, so this cannot feed itself.
 	$effect(() => {
 		const url = draft.baseUrl.trim();
+		// the key is a dependency: a refused probe is retried once one is typed
+		const apiKey = draft.apiKey?.trim();
 
 		if (!open || isEdit || urlError || !url) {
 			detected = null;
 			detecting = false;
+			apiKeyRequired = false;
 
 			return;
 		}
@@ -132,15 +139,20 @@
 		const timer = setTimeout(async () => {
 			detecting = true;
 
-			const result = await BackendsService.detectProtocol({ ...draft, baseUrl: url });
+			const probe = await BackendsService.detectProtocol({
+				...draft,
+				apiKey,
+				baseUrl: url
+			});
 
 			if (run !== detectRun) return;
 
 			detecting = false;
-			detected = result;
+			detected = probe.protocol;
+			apiKeyRequired = probe.authRequired;
 
 			untrack(() => {
-				if (result !== draft.protocol) handleChange({ protocol: result });
+				if (probe.protocol !== draft.protocol) handleChange({ protocol: probe.protocol });
 			});
 		}, 600);
 
@@ -169,6 +181,7 @@
 		};
 		testResult = null;
 		detected = null;
+		apiKeyRequired = false;
 	}
 
 	function handleChange(patch: Partial<Backend>) {
@@ -264,6 +277,7 @@
 		<form class="contents" onsubmit={handleSubmit}>
 			<div class="space-y-4 py-4">
 				<BackendForm
+					{apiKeyRequired}
 					backend={draft}
 					{detected}
 					{detecting}

@@ -24,6 +24,13 @@ export interface BackendModelsResult {
 	raw?: ApiModelsListResponse;
 }
 
+/** What probing a backend's endpoint said about it. */
+export interface BackendProbe {
+	/** The endpoint refused the request for want of a key, so it wants one. */
+	authRequired: boolean;
+	protocol: BackendProtocol;
+}
+
 /** Outcome of a backend connectivity check. */
 export interface BackendTestResult {
 	error?: string;
@@ -39,10 +46,10 @@ export class BackendsService {
 	 * @param backend - Backend to query. Does not need to be registered yet.
 	 * @param signal - Optional abort signal for a cancelled request.
 	 */
-	static async detectProtocol(backend: Backend): Promise<BackendProtocol> {
+	static async detectProtocol(backend: Backend): Promise<BackendProbe> {
 		const base = backend.baseUrl.trim().replace(/\/+$/, '');
 
-		if (!base) return 'openai';
+		if (!base) return { authRequired: false, protocol: 'openai' };
 
 		try {
 			// llama-server answers /props with its build and generation defaults; a
@@ -52,15 +59,24 @@ export class BackendsService {
 				signal: AbortSignal.timeout(5000)
 			});
 
-			if (!response.ok) return 'openai';
+			// a llama-server behind a key refuses before it says anything else, while
+			// an OpenAI-compatible endpoint has no /props to guard in the first place
+			if (response.status === 401) {
+				return { authRequired: true, protocol: 'llama.cpp' };
+			}
+
+			if (!response.ok) return { authRequired: false, protocol: 'openai' };
 
 			const body = (await response.json()) as Record<string, unknown>;
 			const isLlamaCpp =
 				'default_generation_settings' in body || 'build_info' in body || body.role === 'router';
 
-			return isLlamaCpp ? 'llama.cpp' : 'openai';
+			return {
+				authRequired: false,
+				protocol: isLlamaCpp ? 'llama.cpp' : 'openai'
+			};
 		} catch {
-			return 'openai';
+			return { authRequired: false, protocol: 'openai' };
 		}
 	}
 
