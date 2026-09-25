@@ -59,6 +59,7 @@ export const SETTINGS_KEYS = {
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
+	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
 	SHOW_MODEL_ORG_NAME: 'showModelOrgName',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',

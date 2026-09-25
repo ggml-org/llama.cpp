@@ -8,8 +8,9 @@
 		ModelLoadControl,
 		ModelRowActions
 	} from '$lib/components/app';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 	import { getBackend } from '$lib/utils/api-base';
@@ -64,6 +65,9 @@
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
+	let showCapabilities = $derived(
+		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR] ?? false
+	);
 	// Avatar: with showBaseModelAvatar the original base model's org is the main
 	// image and the repo (quantizer) org the corner badge, as in the discover
 	// list. Loaded models usually carry the `base_model` tag on the option; GGUF
@@ -107,7 +111,9 @@
 		title={option.model}
 	/>
 
-	<ModelCapabilities {option} />
+	{#if showCapabilities}
+		<ModelCapabilities {option} />
+	{/if}
 
 	<div class="flex shrink-0 items-center gap-1">
 		<ModelRowActions {isFav} {option} />

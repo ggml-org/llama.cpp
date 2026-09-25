@@ -293,6 +293,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: false,
+				help: 'Show the modality and capability icons (vision, audio, reasoning, tools) on the models selector rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR,
+				label: 'Show model modalities & capabilities in models selector',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: true,
 				help: 'Display the organization name alongside model names in the model selector, in the trigger and in the model rows.',
 				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME,
