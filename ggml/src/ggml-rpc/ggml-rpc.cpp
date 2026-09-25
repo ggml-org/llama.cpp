@@ -860,6 +860,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
 
         // the reported size must never be below ggml_nbytes: rpc_tensor stores nb[] as uint32_t,
         // so a stride over 4 GiB is truncated on the wire and the remote size comes back too small
+        // TODO: change rpc_tensor nb to 64-bit int
         const size_t min_size = ggml_nbytes(tensor);
 
         // Cache key for calls to read the alloc_size.
