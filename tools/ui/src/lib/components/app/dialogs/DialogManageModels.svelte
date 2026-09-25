@@ -76,7 +76,8 @@
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
 		<Dialog.Header class="flex flex-row items-center justify-between p-2 pr-8">
-			<Dialog.Title class="flex items-center gap-2">
+			<!-- min-h keeps the back button from growing the header and shifting the body -->
+			<Dialog.Title class="flex min-h-7 items-center gap-2">
 				{#if view !== 'manage'}
 					<Button
 						aria-label="Back to models"

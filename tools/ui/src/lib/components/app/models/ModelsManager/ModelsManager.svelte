@@ -263,18 +263,30 @@
 	// The calls to action leave first, then the panel takes the space they gave up.
 	// Closing runs the same order backwards.
 	let ctasVisible = $state(true);
+	// once faded the row leaves the flow, so the filters keep the room it was holding
+	let ctasGone = $state(false);
 	let paneOpen = $state(false);
 
 	$effect(() => {
 		if (selected !== null) {
 			untrack(() => (ctasVisible = false));
 
-			const timer = setTimeout(() => untrack(() => (paneOpen = true)), CTA_LEAVE_MS);
+			const timer = setTimeout(
+				() =>
+					untrack(() => {
+						ctasGone = true;
+						paneOpen = true;
+					}),
+				CTA_LEAVE_MS
+			);
 
 			return () => clearTimeout(timer);
 		}
 
-		untrack(() => (paneOpen = false));
+		untrack(() => {
+			paneOpen = false;
+			ctasGone = false;
+		});
 
 		const timer = setTimeout(() => untrack(() => (ctasVisible = true)), PANE_LEAVE_MS);
 
@@ -321,9 +333,9 @@
 {#snippet toolbarEndRegion()}
 	<!-- the calls to action fade in place; the pane waits for them to be gone -->
 	<div
-		class="flex items-center gap-2 transition-[opacity,visibility] duration-[120ms] ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
-			? 'visible opacity-100'
-			: 'invisible opacity-0'}"
+		class="transition-[opacity,visibility] duration-[120ms] ease-[cubic-bezier(0.23,1,0.32,1)] {ctasGone
+			? 'hidden'
+			: 'flex items-center gap-2'} {ctasVisible ? 'visible opacity-100' : 'invisible opacity-0'}"
 	>
 		{@render toolbarEnd?.()}
 	</div>
