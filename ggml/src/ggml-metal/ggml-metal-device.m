@@ -110,7 +110,21 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 //   X(suffix, name): name is both the kernels/<name>.metal basename and the
 //   ggml_metallib_<name>_{start,end} embed-symbol stem.
 #define GGML_METAL_LIBS \
-    X(FA,              fa)             \
+    X(FA_AUX,          fa_aux)         \
+    X(FA_F16,          fa_f16)         \
+    X(FA_F32,          fa_f32)         \
+    X(FA_Q4_0,         fa_q4_0)        \
+    X(FA_Q4_1,         fa_q4_1)        \
+    X(FA_Q5_0,         fa_q5_0)        \
+    X(FA_Q5_1,         fa_q5_1)        \
+    X(FA_Q8_0,         fa_q8_0)        \
+    X(FA_VEC_F16,      fa_vec_f16)     \
+    X(FA_VEC_F32,      fa_vec_f32)     \
+    X(FA_VEC_Q4_0,     fa_vec_q4_0)    \
+    X(FA_VEC_Q4_1,     fa_vec_q4_1)    \
+    X(FA_VEC_Q5_0,     fa_vec_q5_0)    \
+    X(FA_VEC_Q5_1,     fa_vec_q5_1)    \
+    X(FA_VEC_Q8_0,     fa_vec_q8_0)    \
     X(MUL_MV,          mul_mv)         \
     X(MUL_MM,          mul_mm)         \
     X(QUANTIZE,        quantize)       \

@@ -17,7 +17,7 @@ constexpr int FA_VEC_NE01_BUCKETS[] = { 2, 3, 4, 5 };
 int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
-// NE baked into each (dk,dv) baseline instantiation in kernels/fa.metal.
+// NE baked into each (dk,dv) baseline instantiation in kernels/fa_vec_*.metal.
 // Hand-maintained mirror; keep in sync with those instantiations.
 // The Metal test slice covers every legal config for dk=128 and dk=576.
 int fa_vec_baseline_ne(int dk, int dv);
