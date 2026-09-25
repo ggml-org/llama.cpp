@@ -75,28 +75,54 @@
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onOpenAutoFocus={(event) => event.preventDefault()}
 	>
-		<Dialog.Header class="flex flex-row items-center justify-between p-2 pr-8">
-			<!-- min-h keeps the back button from growing the header and shifting the body -->
-			<Dialog.Title class="flex min-h-7 items-center gap-2">
-				{#if view !== 'manage'}
-					<Button
-						aria-label="Back to models"
-						class="-ml-1 h-7 w-7"
-						onclick={() => (view = 'manage')}
-						size="icon"
-						variant="ghost"
-					>
-						<ArrowLeft class="h-4 w-4" />
-					</Button>
-				{/if}
+		<Dialog.Header class="relative flex flex-row items-center justify-between p-2 pr-8">
+			<!--
+				The arrow is out of the flow and the title slides, so entering a sub-view
+				moves the title with a transform instead of reflowing the header. min-h
+				keeps the header's height fixed either way.
+			-->
+			<Button
+				aria-label="Back to models"
+				class="absolute top-1/2 left-1 h-7 w-7 -translate-y-1/2 transition-[opacity,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {view ===
+				'manage'
+					? 'invisible opacity-0'
+					: 'visible opacity-100'}"
+				onclick={() => (view = 'manage')}
+				size="icon"
+				variant="ghost"
+			>
+				<ArrowLeft class="h-4 w-4" />
+			</Button>
 
-				{#if view === 'manage'}
-					<Box class="h-5 w-5" />
-				{:else if view === 'discover'}
-					<Compass class="h-5 w-5" />
-				{:else}
-					<Server class="h-5 w-5" />
-				{/if}
+			<Dialog.Title
+				class="flex min-h-7 items-center gap-2 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {view ===
+				'manage'
+					? 'translate-x-0'
+					: 'translate-x-8'}"
+			>
+				<!-- the marks cross-fade in one grid cell, so the title never shifts -->
+				<span class="grid h-5 w-5 shrink-0 place-items-center">
+					<Box
+						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
+						'manage'
+							? 'opacity-100'
+							: 'opacity-0'}"
+					/>
+
+					<Compass
+						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
+						'discover'
+							? 'opacity-100'
+							: 'opacity-0'}"
+					/>
+
+					<Server
+						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
+						'providers'
+							? 'opacity-100'
+							: 'opacity-0'}"
+					/>
+				</span>
 
 				<span>{title}</span>
 			</Dialog.Title>
