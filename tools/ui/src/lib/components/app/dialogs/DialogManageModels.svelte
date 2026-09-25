@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { Box, Compass, Server } from '@lucide/svelte';
+	import { ArrowLeft, Box, Compass, Server } from '@lucide/svelte';
 	import ModelsDiscover from '$lib/components/app/models/discover/ModelsDiscover.svelte';
 	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
 	import ModelsManagerModelProviders from '$lib/components/app/models/ModelsManager/ModelsManagerModelProviders.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import * as Tabs from '$lib/components/ui/tabs';
 	import { uiStore } from '$lib/stores';
 
 	interface Props {
@@ -14,14 +14,20 @@
 
 	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
-	let tab = $state('manage');
+	type View = 'discover' | 'manage' | 'providers';
 
-	// the sidebar's Discover entry opens this dialog on its Discover tab
+	let view = $state<View>('manage');
+
+	let title = $derived(
+		view === 'discover' ? 'Discover' : view === 'providers' ? 'Providers' : 'Models'
+	);
+
+	// the sidebar's Discover entry opens this dialog on its Discover view
 	$effect(() => {
 		if (!uiStore.discoverModelsOpen) return;
 
 		uiStore.discoverModelsOpen = false;
-		tab = 'discover';
+		view = 'discover';
 		handleOpenChange(true);
 	});
 
@@ -39,48 +45,61 @@
 	>
 		<Dialog.Header class="flex flex-row items-center justify-between p-2 pr-8">
 			<Dialog.Title class="flex items-center gap-2">
-				<Box class="h-5 w-5" />
+				{#if view !== 'manage'}
+					<Button
+						aria-label="Back to models"
+						class="-ml-1 h-7 w-7"
+						onclick={() => (view = 'manage')}
+						size="icon"
+						variant="ghost"
+					>
+						<ArrowLeft class="h-4 w-4" />
+					</Button>
+				{/if}
 
-				<span>Models</span>
+				{#if view === 'manage'}
+					<Box class="h-5 w-5" />
+				{:else if view === 'discover'}
+					<Compass class="h-5 w-5" />
+				{:else}
+					<Server class="h-5 w-5" />
+				{/if}
+
+				<span>{title}</span>
 			</Dialog.Title>
 		</Dialog.Header>
 
-		<Tabs.Root bind:value={tab} class="min-h-0 flex-1 gap-0">
-			<!-- <div class="px-2"> -->
-			<Tabs.List>
-				<Tabs.Trigger value="manage">
-					<Box class="h-3.5 w-3.5" />
+		<div class="min-h-0 flex-1 pt-2">
+			{#if view === 'manage'}
+				<ModelsManager class="h-full">
+					{#snippet toolbarEnd()}
+						<Button class="gap-1.5" onclick={() => (view = 'discover')} size="sm" variant="outline">
+							<Compass class="h-3.5 w-3.5" />
 
-					Manage
-				</Tabs.Trigger>
+							Discover models
+						</Button>
 
-				<Tabs.Trigger value="discover">
-					<Compass class="h-3.5 w-3.5" />
+						<Button
+							class="gap-1.5"
+							onclick={() => (view = 'providers')}
+							size="sm"
+							variant="outline"
+						>
+							<Server class="h-3.5 w-3.5" />
 
-					Discover
-				</Tabs.Trigger>
-
-				<Tabs.Trigger value="providers">
-					<Server class="h-3.5 w-3.5" />
-
-					Providers
-				</Tabs.Trigger>
-			</Tabs.List>
-			<!-- </div> -->
-
-			<Tabs.Content class="flex min-h-0 flex-1 flex-col pt-6" value="manage">
-				<ModelsManager />
-			</Tabs.Content>
-
-			<Tabs.Content class="min-h-0 flex-1 overflow-hidden pt-6" value="discover">
-				<div class="grid h-full min-h-0 gap-0" style="grid-template-columns: auto 1fr;">
+							Manage Providers
+						</Button>
+					{/snippet}
+				</ModelsManager>
+			{:else if view === 'discover'}
+				<div class="grid h-full overflow-hidden" style="grid-template-columns: auto 1fr;">
 					<ModelsDiscover />
 				</div>
-			</Tabs.Content>
-
-			<Tabs.Content class="min-h-0 flex-1 overflow-y-auto pt-6" value="providers">
-				<ModelsManagerModelProviders />
-			</Tabs.Content>
-		</Tabs.Root>
+			{:else}
+				<div class="h-full overflow-y-auto">
+					<ModelsManagerModelProviders />
+				</div>
+			{/if}
+		</div>
 	</Dialog.Content>
 </Dialog.Root>

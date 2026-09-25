@@ -54,6 +54,7 @@
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
+	import type { Snippet } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -72,7 +73,8 @@
 		/** Called when a row is set as the draft of the selected model. */
 		onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
 		selectedId: string | null;
-		summary: string;
+		/** Rendered at the toolbar's right end, past the filters. */
+		toolbarEnd?: Snippet;
 	}
 
 	let {
@@ -86,7 +88,7 @@
 		overrides,
 		providers = $bindable<string[]>([]),
 		selectedId,
-		summary
+		toolbarEnd
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
@@ -646,8 +648,6 @@
 			backends={backendsStore.enabled}
 		/>
 
-		<span class="ml-auto text-xs text-muted-foreground">{summary}</span>
-
 		{#if hasFilters}
 			<Button
 				class="gap-1.5 text-muted-foreground"
@@ -664,6 +664,10 @@
 				Clear filters
 			</Button>
 		{/if}
+
+		<div class="ml-auto flex items-center gap-2">
+			{@render toolbarEnd?.()}
+		</div>
 	</div>
 
 	<div

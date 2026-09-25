@@ -4,7 +4,6 @@
 	import {
 		groupModelQuants,
 		isCustomized,
-		isLocalOption,
 		loadExtraArgs,
 		loadOverrides,
 		type ModalityKey,
@@ -26,16 +25,18 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
-	import { formatFileSize } from '$lib/utils/formatters';
+	import type { Snippet } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		class?: string;
 		onClose?: () => void;
+		/** Forwarded to the table's toolbar right end. */
+		toolbarEnd?: Snippet;
 	}
 
-	let { class: className, onClose }: Props = $props();
+	let { class: className, onClose, toolbarEnd }: Props = $props();
 
 	let filter = $state('');
 	let providerFilter = $state<string[]>([]);
@@ -229,26 +230,7 @@
 
 		return ordered;
 	});
-	let matches = $derived(entries.flatMap((entry) => entry.quants));
-
 	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
-	let summary = $derived.by(() => {
-		const local = matches.filter(isLocalOption);
-		const bytes = local.reduce((total, option) => {
-			const size = option.meta?.size;
-
-			return typeof size === 'number' ? total + size : total;
-		}, 0);
-		const loaded = matches.filter((option) => modelsStore.isModelLoaded(option.model)).length;
-
-		return [
-			`${local.length} local`,
-			bytes > 0 ? `${formatFileSize(bytes)} on disk` : null,
-			`${loaded} loaded`
-		]
-			.filter(Boolean)
-			.join(' · ');
-	});
 
 	// a caller can ask for one model to be revealed, the download rows do
 	$effect(() => {
@@ -316,7 +298,7 @@
 			onUseAsDraft={useAsDraft}
 			{overrides}
 			{selectedId}
-			{summary}
+			{toolbarEnd}
 		/>
 	</div>
 
