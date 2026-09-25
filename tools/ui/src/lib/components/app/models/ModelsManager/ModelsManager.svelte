@@ -256,6 +256,31 @@
 
 	/** How long the panel takes to fade out before it swaps to another model. */
 	const SWAP_FADE_MS = 150;
+	/** How long the calls to action take to leave the toolbar, matching their collapse. */
+	const CTA_LEAVE_MS = 200;
+	/** How long the panel takes to slide out before the calls to action come back. */
+	const PANE_LEAVE_MS = 150;
+
+	// The calls to action leave first, then the panel takes the space they gave up.
+	// Closing runs the same order backwards.
+	let ctasVisible = $state(true);
+	let paneOpen = $state(false);
+
+	$effect(() => {
+		if (selected !== null) {
+			untrack(() => (ctasVisible = false));
+
+			const timer = setTimeout(() => untrack(() => (paneOpen = true)), CTA_LEAVE_MS);
+
+			return () => clearTimeout(timer);
+		}
+
+		untrack(() => (paneOpen = false));
+
+		const timer = setTimeout(() => untrack(() => (ctasVisible = true)), PANE_LEAVE_MS);
+
+		return () => clearTimeout(timer);
+	});
 
 	async function toggleLoad(option: ModelOption): Promise<void> {
 		if (modelsStore.isModelLoaded(option.model)) {
@@ -295,12 +320,12 @@
 </script>
 
 {#snippet toolbarEndRegion()}
-	<!-- the pane takes the toolbar's width, so the calls to action leave with it -->
-	<CollapsibleRegion axis="width" open={!selected}>
+	<!-- the calls to action leave before the pane takes their space -->
+	<CollapsibleRegion axis="width" open={ctasVisible}>
 		<div
-			class="flex items-center gap-2 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {selected
-				? 'opacity-0'
-				: 'opacity-100'}"
+			class="flex items-center gap-2 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
+				? 'opacity-100'
+				: 'opacity-0'}"
 		>
 			{@render toolbarEnd?.()}
 		</div>
@@ -324,12 +349,12 @@
 		/>
 	</div>
 
-	<div class="pane-drawer shrink-0" data-open={selected !== null}>
+	<div class="pane-drawer shrink-0" data-open={paneOpen}>
 		<!-- the content box keeps the open width, so it never reflows with the drawer -->
 		<div
 			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40"
 			data-fade={fade}
-			data-visible={selected !== null && !isSwapping}
+			data-visible={paneOpen && !isSwapping}
 		>
 			{#if shownOption}
 				{#key shownId}
