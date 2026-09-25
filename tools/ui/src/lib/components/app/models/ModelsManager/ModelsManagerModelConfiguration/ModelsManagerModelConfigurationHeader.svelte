@@ -7,6 +7,7 @@
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 
 	interface Props {
 		isCustomized: boolean;
@@ -24,7 +25,16 @@
 
 	let supportsToolUse = $derived(option.capabilities.includes(ModelCapability.TOOL_USE));
 	let supportsThinking = $derived(option.capabilities.includes(ModelCapability.REASONING));
-	let backendName = $derived(getBackend(option.backendId)?.name ?? null);
+	let backend = $derived(getBackend(option.backendId));
+	let backendName = $derived(backend?.name ?? null);
+	let capabilities = $derived(getBackendCapabilities(backend));
+	// what the provider speaks decides which server endpoints the pane can read
+	let compatLabel = $derived(backend?.protocol === 'llama.cpp' ? 'Llama-compat' : 'OAI-compat');
+	let compatTitle = $derived(
+		capabilities.props
+			? 'llama.cpp server: reads /props and /slots'
+			: 'OpenAI-compatible: no /props, /slots, load or unload'
+	);
 
 	// the listing usually carries the size; a local repo falls back to its tree
 	let size = $state<string | null>(null);
@@ -134,6 +144,10 @@
 				{backendName}
 			</span>
 		{/if}
+
+		<Badge class="h-5 shrink-0 px-1.5 text-[10px]" title={compatTitle} variant="secondary">
+			{compatLabel}
+		</Badge>
 	</div>
 
 	<div class="flex gap-2">
@@ -143,16 +157,18 @@
 			Start a new chat
 		</Button>
 
-		<Button class="flex-1 gap-1.5" onclick={onToggleLoad} variant="outline">
-			{#if isLoaded}
-				<Eject class="h-3.5 w-3.5" />
+		{#if capabilities.loadUnload}
+			<Button class="flex-1 gap-1.5" onclick={onToggleLoad} variant="outline">
+				{#if isLoaded}
+					<Eject class="h-3.5 w-3.5" />
 
-				Unload model
-			{:else}
-				<Power class="h-3.5 w-3.5" />
+					Unload model
+				{:else}
+					<Power class="h-3.5 w-3.5" />
 
-				Load model
-			{/if}
-		</Button>
+					Load model
+				{/if}
+			</Button>
+		{/if}
 	</div>
 </header>

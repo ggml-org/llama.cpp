@@ -17,6 +17,8 @@
 	import type { ApiLlamaCppServerProps } from '$lib/types/api';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils/formatters';
 
 	interface Props {
@@ -68,17 +70,32 @@
 	let activeDraft = $derived(drafts.find((draft) => draft.active) ?? null);
 	let idleDrafts = $derived(drafts.filter((draft) => !draft.active));
 	let meta = $derived(option.meta);
+	// a plain OpenAI-compatible endpoint has no /props or /slots to read
+	let reportsServerInfo = $derived(getBackendCapabilities(getBackend(option.backendId)).props);
 	// the server reports these once the model is loaded; the Hub knows them anyway
 	let gguf = $derived(hub?.gguf ?? null);
-	let modalities = $derived(modelsStore.props.getModelModalitiesArray(option.id));
+	let modalities = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return modelsStore.props.getModelModalitiesArray(option.id);
+	});
 	let rows = $derived([
-		{ isCopyable: true, isMono: true, label: 'File Path', value: serverProps?.model_path ?? null },
+		...(reportsServerInfo
+			? [
+					{
+						isCopyable: true,
+						isMono: true,
+						label: 'File Path',
+						value: serverProps?.model_path ?? null
+					}
+				]
+			: []),
 		{
 			label: 'Context Size',
 			// the server reports the context it runs with once the model is loaded; until then
 			// the listing, or the Hub, still says what the model can take
 			value: serverProps
-				? `${formatNumber(serverProps.default_generation_settings.n_ctx)} tokens`
+				? `${formatNumber(serverProps.default_generation_settings?.n_ctx ?? 0)} tokens`
 				: (contextLabel ?? null)
 		},
 		{ label: 'Training Context', value: contextLabel },
@@ -121,8 +138,15 @@
 			label: 'Other sidecars',
 			value: idleDrafts.length > 0 ? idleDrafts.map((draft) => draft.kind).join(', ') : null
 		},
-		{ label: 'Parallel Slots', value: serverProps ? String(serverProps.total_slots) : null },
-		{ isMono: true, label: 'Build Info', value: serverProps?.build_info ?? null }
+		...(reportsServerInfo
+			? [
+					{
+						label: 'Parallel Slots',
+						value: serverProps?.total_slots != null ? String(serverProps.total_slots) : null
+					},
+					{ isMono: true, label: 'Build Info', value: serverProps?.build_info ?? null }
+				]
+			: [])
 	] satisfies Array<{
 		isBadge?: boolean;
 		isCapitalized?: boolean;
@@ -202,9 +226,15 @@
 	{/if}
 </div>
 
-{#if hub}
+{#if !reportsServerInfo}
 	<p class="pt-2 text-xs text-muted-foreground">
-		Some values come from the Hugging Face Hub. Load the model to read them from the server.
+		OpenAI-compatible provider: there is no /props or /slots, so only what the listing and the
+		model's repo report is shown.
+	</p>
+{:else if !serverProps}
+	<p class="pt-2 text-xs text-muted-foreground">
+		/props values - file path, slots, build info - appear once the model is loaded. Reading this
+		page never loads a model.
 	</p>
 {/if}
 
@@ -220,15 +250,17 @@
 				'Not reported by the server.'}</pre>
 	</CollapsibleSection>
 
-	<CollapsibleSection triggerClass={sectionTrigger}>
-		{#snippet trigger()}
-			<span class="text-sm font-medium">Source File</span>
-		{/snippet}
+	{#if reportsServerInfo}
+		<CollapsibleSection triggerClass={sectionTrigger}>
+			{#snippet trigger()}
+				<span class="text-sm font-medium">Source File</span>
+			{/snippet}
 
-		<div class="space-y-2 pt-1">
-			<p class="text-xs break-all text-muted-foreground">
-				{serverProps?.model_path ?? 'Path is reported once the model is loaded.'}
-			</p>
-		</div>
-	</CollapsibleSection>
+			<div class="space-y-2 pt-1">
+				<p class="text-xs break-all text-muted-foreground">
+					{serverProps?.model_path ?? 'Path is reported once the model is loaded.'}
+				</p>
+			</div>
+		</CollapsibleSection>
+	{/if}
 </div>

@@ -30,7 +30,12 @@
 	let edits = $state<ModelOverride | null>(null);
 	let draft = $derived(edits ?? override ?? {});
 
-	let serverProps = $derived(modelsStore.props.getModelProps(option.model));
+	// the props cache is a plain Map, so the read has to name its version to stay reactive
+	let serverProps = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return modelsStore.props.getModelProps(option.model);
+	});
 	let status = $derived.by(() => {
 		const model = modelsStore.routerModels.find((m) => m.id === option.model);
 
