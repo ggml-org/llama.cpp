@@ -311,8 +311,7 @@ struct common_chat_parser_params {
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
-    std::string             generation_prompt;
-    common_chat_input       generation_prompt_input; // generation_prompt with its tokens, when a vocab is available
+    common_chat_input       generation_prompt;
     bool                    parse_tool_calls     = true;
     bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
@@ -321,7 +320,7 @@ struct common_chat_parser_params {
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
         format  = chat_params.format;
-        generation_prompt = chat_params.generation_prompt;
+        generation_prompt = common_chat_input(chat_params.generation_prompt);
     }
 };
 
@@ -361,9 +360,7 @@ std::string common_chat_format_example(const struct common_chat_templates *     
 
 const char *    common_chat_format_name(common_chat_format format);
 common_chat_msg common_chat_parse(const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
-common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & params);
 common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
-common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const std::string & input, bool is_partial, const common_chat_parser_params & params);
 
 // used by arg and server
 const char *            common_reasoning_format_name(common_reasoning_format format);

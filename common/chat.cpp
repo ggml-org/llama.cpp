@@ -1474,19 +1474,6 @@ common_chat_msg common_chat_parse(const common_chat_input &          input,
     return common_chat_peg_parse(params.parser, input, is_partial, params);
 }
 
-common_chat_msg common_chat_parse(const std::string &               input,
-                                  bool                              is_partial,
-                                  const common_chat_parser_params & params) {
-    return common_chat_parse(common_chat_input(input), is_partial, params);
-}
-
-common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
-                                      const std::string &               input,
-                                      bool                              is_partial,
-                                      const common_chat_parser_params & params) {
-    return common_chat_peg_parse(src_parser, common_chat_input(input), is_partial, params);
-}
-
 common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
                                       const common_chat_input &          input,
                                       bool                              is_partial,
@@ -1500,11 +1487,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     }
 
     common_chat_input effective_input = input;
-    if (!params.generation_prompt_input.text.empty()) {
-        effective_input.prepend(params.generation_prompt_input);
-    } else {
-        effective_input.prepend(params.generation_prompt);
-    }
+    effective_input.prepend(params.generation_prompt);
 
     //LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(params.format), effective_input.text.c_str());
 

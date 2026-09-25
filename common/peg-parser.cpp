@@ -1780,7 +1780,7 @@ static std::string gbnf_including_grammar(const common_grammar_builder &   build
             std::vector<std::string> alts;
             gbnf_ac_symbols terminating; // symbols that complete a pattern with no rest
             for (const auto & [d, symbols] : completing_to) {
-                bool terminal;
+                bool terminal = false;
                 auto rest = rests_at(d, terminal);
                 if (!rest.empty()) {
                     for (auto & alt : symbols.alternatives(rest.size() == 1 ? rest[0] : "(" + string_join(rest, " | ") + ")")) {

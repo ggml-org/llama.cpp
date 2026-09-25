@@ -311,19 +311,24 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Generation prompt appended to the chat template output")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             std::string s = data.at("generation_prompt").get<std::string>();
-            ctx.params.chat_parser_params.generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
 
-            if (ctx.vocab != nullptr) {
-                common_chat_input input;
-                for (auto tok : common_tokenize(ctx.vocab, s, false, true)) {
-                    input.append(common_token_to_piece(ctx.vocab, tok, true), tok);
-                }
-                // only use the tokens if they render back to the same text
-                if (input.text == s) {
-                    ctx.params.chat_parser_params.generation_prompt_input = std::move(input);
-                }
+            if (ctx.vocab == nullptr) {
+                ctx.params.chat_parser_params.generation_prompt = common_chat_input(s);
+                return;
             }
+
+            common_chat_input input;
+            auto tokens = common_tokenize(ctx.vocab, s, false, true);
+            for (size_t i = 0; i < tokens.size(); i++) {
+                std::string piece = common_token_to_piece(ctx.vocab, tokens[i], true);
+                if (i == 0 && !piece.empty() && std::isspace((unsigned char) piece[0]) && !std::isspace((unsigned char) s[0])) {
+                    // Some tokenizers will add a space before the first special token, need to exclude
+                    continue;
+                }
+                input.append(piece, tokens[i]);
+            }
+            ctx.params.chat_parser_params.generation_prompt = std::move(input);
         }));
 
     add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))
