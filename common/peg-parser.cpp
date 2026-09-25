@@ -301,6 +301,25 @@ static void build_delimiter_matcher(const common_peg_arena & arena, T & parser) 
     }
 }
 
+static void build_branch_matcher(const common_peg_arena & arena, common_peg_ac_parser & parser) {
+    parser.delimiters.clear();
+    parser.matcher = common_trie();
+    parser.pattern_branches.clear();
+    for (size_t b = 0; b < parser.branches.size(); b++) {
+        for (auto & d : expand_delimiter(arena, parser.branches[b].delimiter)) {
+            if (d.symbols.empty()) {
+                throw std::invalid_argument("delimiter must not match the empty string");
+            }
+            auto pattern = (size_t) parser.matcher.insert(d.symbols);
+            if (parser.pattern_branches.size() <= pattern) {
+                parser.pattern_branches.resize(pattern + 1);
+            }
+            parser.pattern_branches[pattern].push_back(b);
+            parser.delimiters.push_back(std::move(d.text));
+        }
+    }
+}
+
 void common_peg_input::append(const std::string & piece, llama_token token) {
     if (piece.empty()) {
         return;
@@ -1028,9 +1047,16 @@ void common_peg_arena::resolve_refs() {
                                  std::is_same_v<T, common_peg_not_parser> ||
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
-                                 std::is_same_v<T, common_peg_gbnf_parser> ||
-                                 std::is_same_v<T, common_peg_ac_parser>) {
+                                 std::is_same_v<T, common_peg_gbnf_parser>) {
                 p.child = resolve_ref(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
+                p.child = resolve_ref(p.child);
+                for (auto & branch : p.branches) {
+                    branch.delimiter = resolve_ref(branch.delimiter);
+                    if (branch.rest != COMMON_PEG_INVALID_PARSER_ID) {
+                        branch.rest = resolve_ref(branch.rest);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 p.child = resolve_ref(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
@@ -1359,15 +1385,6 @@ common_peg_parser common_peg_parser_builder::rule(const std::string & name, cons
     return ref(clean_name);
 }
 
-common_peg_parser common_peg_parser_builder::trigger_rule(const std::string & name, const common_peg_parser & trigger, const common_peg_parser & rest) {
-    auto clean_name = rule_name(name);
-    common_peg_rule_parser rule{clean_name, (trigger + rest).id(), true};
-    rule.trigger_parser = trigger.id();
-    rule.trigger_rest   = rest.id();
-    arena_.add_rule(clean_name, arena_.add_parser(rule));
-    return ref(clean_name);
-}
-
 void common_peg_parser_builder::set_root(const common_peg_parser & p) {
     arena_.set_root(p.id());
 }
@@ -1565,23 +1582,24 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
     });
 }
 
-common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const std::vector<std::string> & delimiters) {
-    if (delimiters.empty()) {
-        throw std::runtime_error("ac parser requires at least one delimiter");
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const std::vector<common_peg_ac_branch> & branches, bool optional) {
+    if (branches.empty()) {
+        throw std::runtime_error("ac parser requires at least one branch");
     }
     common_peg_ac_parser ac;
-    ac.child      = p.id();
-    ac.delimiters = delimiters;
-    ac.matcher    = common_trie(delimiters);
+    ac.child    = p.id();
+    ac.branches = branches;
+    ac.optional = optional;
+    build_branch_matcher(arena_, ac);
     return add(std::move(ac));
 }
 
-common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const common_peg_parser & delimiter) {
-    common_peg_ac_parser ac;
-    ac.child            = p.id();
-    ac.delimiter_parser = delimiter.id();
-    build_delimiter_matcher(arena_, ac);
-    return add(std::move(ac));
+common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, const std::vector<std::string> & delimiters) {
+    std::vector<common_peg_ac_branch> branches;
+    for (const auto & d : delimiters) {
+        branches.push_back({ literal(d).id() });
+    }
+    return ac(p, branches);
 }
 
 static std::string gbnf_escape_char_class(uint32_t c) {
@@ -1781,53 +1799,38 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
         });
 }
 
-// GBNF grammar matching everything up to and including the first occurrence of
-// any string in `strings`. Emits the Aho-Corasick automaton DFA and returns
-// the start state rule name.
-static std::string gbnf_including_grammar(const common_grammar_builder & builder,
-                                          const std::string &            prefix,
-                                          const common_trie &            trie) {
-    return gbnf_ac_grammar(builder, prefix, trie,
-        [](const gbnf_ac_symbols & completing,
-           const std::map<size_t, gbnf_ac_symbols> & /*completing_to*/,
-           const std::map<size_t, gbnf_ac_symbols> & buckets,
-           const std::string & fallback,
-           const std::function<std::string(size_t)> & state_name) {
-            std::vector<std::string> alts = completing.alternatives(); // terminate on match
-            for (const auto & [d, symbols] : buckets) {
-                for (auto & alt : symbols.alternatives(state_name(d))) {
-                    alts.push_back(std::move(alt));
-                }
-            }
-            // every other symbol keeps scanning from the start state
-            alts.push_back(fallback);
-            return string_join(alts, " | ");
-        });
-}
-
-// GBNF grammar for the free text before a trigger. Every state may end, and completing a delimiter
-// continues with the rests of the patterns that end there, so the grammar stops at the first complete
-// match like the until parser does. rests holds the rest expressions of each pattern index.
-static std::string gbnf_gate_grammar(const common_grammar_builder &                builder,
-                                     const std::string &                           prefix,
-                                     const common_trie &                           trie,
-                                     const std::vector<std::vector<std::string>> & rests) {
+// GBNF grammar matching everything up to and including the first occurrence of any pattern in the
+// trie, followed by the rest of the branch the pattern belongs to. rests holds the rest rule names
+// per pattern index, empty when nothing follows. With optional every state may end, so the grammar
+// also accepts text without any match. Emits the Aho-Corasick automaton DFA and returns the start
+// state rule name.
+static std::string gbnf_including_grammar(const common_grammar_builder &                builder,
+                                          const std::string &                           prefix,
+                                          const common_trie &                           trie,
+                                          const std::vector<std::vector<std::string>> & rests,
+                                          bool                                          optional) {
     common_aho_corasick ac(trie);
 
     // every pattern ending at a match state, the longest and the ones reached by suffix links
-    auto rest_at = [&](size_t s) {
+    auto rests_at = [&](size_t s, bool & terminal) {
         std::vector<std::string> alts;
+        terminal = false;
         for (; s != 0; s = ac.fail[s]) {
             auto pattern = ac.t.nodes[s].pattern;
-            if (pattern >= 0) {
-                for (const auto & r : rests.at(pattern)) {
-                    if (std::find(alts.begin(), alts.end(), r) == alts.end()) {
-                        alts.push_back(r);
-                    }
+            if (pattern < 0) {
+                continue;
+            }
+            if (rests[pattern].empty()) {
+                terminal = true;
+                continue;
+            }
+            for (const auto & r : rests[pattern]) {
+                if (std::find(alts.begin(), alts.end(), r) == alts.end()) {
+                    alts.push_back(r);
                 }
             }
         }
-        return alts.size() == 1 ? alts[0] : "(" + string_join(alts, " | ") + ")";
+        return alts;
     };
 
     return gbnf_ac_grammar(builder, prefix, trie,
@@ -1836,19 +1839,32 @@ static std::string gbnf_gate_grammar(const common_grammar_builder &             
             const std::map<size_t, gbnf_ac_symbols> & buckets,
             const std::string & fallback,
             const std::function<std::string(size_t)> & state_name) {
-            std::string rhs = "|";
+            std::vector<std::string> alts;
+            gbnf_ac_symbols terminating; // symbols that complete a pattern with no rest
             for (const auto & [d, symbols] : completing_to) {
-                for (const auto & alt : symbols.alternatives(rest_at(d))) {
-                    rhs += " " + alt + " |";
+                bool terminal;
+                auto rest = rests_at(d, terminal);
+                if (!rest.empty()) {
+                    for (auto & alt : symbols.alternatives(rest.size() == 1 ? rest[0] : "(" + string_join(rest, " | ") + ")")) {
+                        alts.push_back(std::move(alt));
+                    }
                 }
+                if (terminal) {
+                    terminating.chars.insert(terminating.chars.end(), symbols.chars.begin(), symbols.chars.end());
+                    terminating.tokens.insert(terminating.tokens.end(), symbols.tokens.begin(), symbols.tokens.end());
+                }
+            }
+            for (auto & alt : terminating.alternatives()) {
+                alts.push_back(std::move(alt));
             }
             for (const auto & [d, symbols] : buckets) {
-                for (const auto & alt : symbols.alternatives(state_name(d))) {
-                    rhs += " " + alt + " |";
+                for (auto & alt : symbols.alternatives(state_name(d))) {
+                    alts.push_back(std::move(alt));
                 }
             }
-            rhs += " " + fallback;
-            return rhs;
+            // every other symbol keeps scanning from the start state
+            alts.push_back(fallback);
+            return (optional ? "| " : "") + string_join(alts, " | ");
         });
 }
 
@@ -1890,9 +1906,15 @@ static std::set<std::string> collect_reachable_rules(
                                  std::is_same_v<T, common_peg_tag_parser> ||
                                  std::is_same_v<T, common_peg_atomic_parser> ||
                                  std::is_same_v<T, common_peg_gbnf_parser> ||
-                                 std::is_same_v<T, common_peg_ac_parser> ||
                                  std::is_same_v<T, common_peg_schema_parser>) {
                 visit(p.child);
+            } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
+                visit(p.child);
+                for (const auto & branch : p.branches) {
+                    if (branch.rest != COMMON_PEG_INVALID_PARSER_ID) {
+                        visit(branch.rest);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
                     visited.insert(p.name);
@@ -2067,14 +2089,28 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
                 return p.grammar;
             } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-                return gbnf_including_grammar(builder, "ac-" + std::to_string(id), p.matcher);
+                auto prefix = "ac-" + std::to_string(id);
+                std::vector<std::string> branch_rests;
+                for (size_t b = 0; b < p.branches.size(); b++) {
+                    auto rest = p.branches[b].rest;
+                    branch_rests.push_back(rest == COMMON_PEG_INVALID_PARSER_ID ? "" : builder.add_rule(prefix + "-rest-" + std::to_string(b), to_gbnf(rest)));
+                }
+                std::vector<std::vector<std::string>> rests(p.pattern_branches.size());
+                for (size_t pattern = 0; pattern < p.pattern_branches.size(); pattern++) {
+                    for (auto b : p.pattern_branches[pattern]) {
+                        if (!branch_rests[b].empty()) {
+                            rests[pattern].push_back(branch_rests[b]);
+                        }
+                    }
+                }
+                return gbnf_including_grammar(builder, prefix, p.matcher, rests, p.optional);
             } else {
                 static_assert(is_always_false_v<T>);
             }
         }, parser);
     };
 
-    // Trigger rules, sorted for a predictable order. The grammar is gated when every one has a trigger.
+    // Trigger rules, sorted for a predictable order
     std::vector<const common_peg_rule_parser *> trigger_rules;
     for (const auto & [name, id] : rules_) {
         if (auto rule = std::get_if<common_peg_rule_parser>(&parsers_.at(id))) {
@@ -2085,21 +2121,10 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
     std::sort(trigger_rules.begin(), trigger_rules.end(), [](const auto * a, const auto * b) { return a->name < b->name; });
 
-    bool gated = lazy && !trigger_rules.empty();
-    for (const auto * rule : trigger_rules) {
-        gated = gated && rule->trigger_parser != COMMON_PEG_INVALID_PARSER_ID;
-    }
-
     // Collect reachable rules
     std::set<std::string> reachable_rules;
 
-    if (gated) {
-        // Only the rests follow a trigger, the triggers themselves are matched by the gate
-        for (const auto * rule : trigger_rules) {
-            auto add_rules = collect_reachable_rules(*this, rule->trigger_rest);
-            reachable_rules.insert(add_rules.begin(), add_rules.end());
-        }
-    } else if (lazy) {
+    if (lazy) {
         // Collect rules reachable from trigger rules
         for (const auto * rule : trigger_rules) {
             reachable_rules.insert(rule->name);
@@ -2123,25 +2148,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         }
     }
 
-    if (gated) {
-        // Anything goes until the first trigger completes, and then only the rest of its rule may follow
-        common_trie                           matcher;
-        std::vector<std::vector<std::string>> rests;
-        for (const auto * rule : trigger_rules) {
-            auto rest = builder.add_rule(rule->name + "-rest", to_gbnf(rule->trigger_rest));
-            for (const auto & d : expand_delimiter(*this, rule->trigger_parser)) {
-                if (d.symbols.empty()) {
-                    throw std::invalid_argument("trigger must not match the empty string");
-                }
-                auto pattern = (size_t) matcher.insert(d.symbols);
-                if (rests.size() <= pattern) {
-                    rests.resize(pattern + 1);
-                }
-                rests[pattern].push_back(rest);
-            }
-        }
-        builder.add_rule("root", gbnf_gate_grammar(builder, "trigger-gate", matcher, rests));
-    } else if (lazy) {
+    if (lazy) {
         // Generate root rule from trigger rules only
         std::vector<std::string> trigger_names;
         for (const auto * rule : trigger_rules) {
@@ -2221,9 +2228,7 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
                 {"type", "rule"},
                 {"name", p.name},
                 {"child", p.child},
-                {"trigger", p.trigger},
-                {"trigger_parser", p.trigger_parser},
-                {"trigger_rest", p.trigger_rest}
+                {"trigger", p.trigger}
             };
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             return json{{"type", "ref"}, {"name", p.name}};
@@ -2238,11 +2243,15 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
         } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
             return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
         } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
-            json j{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
-            if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
-                j["delimiter_parser"] = p.delimiter_parser;
+            auto branches = json::array();
+            for (const auto & branch : p.branches) {
+                json b{{"delimiter", branch.delimiter}};
+                if (branch.rest != COMMON_PEG_INVALID_PARSER_ID) {
+                    b["rest"] = branch.rest;
+                }
+                branches.push_back(std::move(b));
             }
-            return j;
+            return json{{"type", "ac"}, {"child", p.child}, {"branches", branches}, {"optional", p.optional}};
         }
     }, variant);
 }
@@ -2396,12 +2405,6 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             j["child"].get<common_peg_parser_id>(),
             j["trigger"].get<bool>()
         };
-        if (j.contains("trigger_parser")) {
-            parser.trigger_parser = j["trigger_parser"].get<common_peg_parser_id>();
-        }
-        if (j.contains("trigger_rest")) {
-            parser.trigger_rest = j["trigger_rest"].get<common_peg_parser_id>();
-        }
         return parser;
     }
     if (type == "ref") {
@@ -2439,14 +2442,22 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
     }
 
     if (type == "ac") {
-        if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
-            throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
+        if (!j.contains("child") || !j.contains("branches") || !j["branches"].is_array() || j["branches"].empty()) {
+            throw std::runtime_error("ac parser requires 'child' and a non-empty 'branches' array");
         }
         common_peg_ac_parser parser;
-        parser.child      = j["child"].get<common_peg_parser_id>();
-        parser.delimiters = j["delimiters"].get<std::vector<std::string>>();
-        if (j.contains("delimiter_parser")) {
-            parser.delimiter_parser = j["delimiter_parser"].get<common_peg_parser_id>();
+        parser.child    = j["child"].get<common_peg_parser_id>();
+        parser.optional = j.value("optional", false);
+        for (const auto & b : j["branches"]) {
+            if (!b.contains("delimiter")) {
+                throw std::runtime_error("ac branch requires 'delimiter'");
+            }
+            common_peg_ac_branch branch;
+            branch.delimiter = b["delimiter"].get<common_peg_parser_id>();
+            if (b.contains("rest")) {
+                branch.rest = b["rest"].get<common_peg_parser_id>();
+            }
+            parser.branches.push_back(branch);
         }
         return parser;
     }
@@ -2486,7 +2497,12 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
         if (auto * until = std::get_if<common_peg_until_parser>(&parser)) {
             rebuild_matcher(*until);
         } else if (auto * ac = std::get_if<common_peg_ac_parser>(&parser)) {
-            rebuild_matcher(*ac);
+            for (const auto & branch : ac->branches) {
+                if (branch.delimiter >= arena.parsers_.size()) {
+                    throw std::runtime_error("ac branch references invalid parser ID: " + std::to_string(branch.delimiter));
+                }
+            }
+            build_branch_matcher(arena, *ac);
         }
     }
 

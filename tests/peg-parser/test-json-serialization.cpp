@@ -1,5 +1,7 @@
 #include "tests.h"
 
+#include "json-schema-to-grammar.h"
+
 void test_json_serialization(testing &t) {
     auto original = build_peg_parser([](common_peg_parser_builder & p) {
         return "<tool_call>" + p.json() + "</tool_call>";
@@ -20,6 +22,20 @@ void test_json_serialization(testing &t) {
 
         t.assert_equal("both_succeed", result1.success(), result2.success());
         t.assert_equal("same_end_pos", result1.end, result2.end);
+    });
+
+    t.test("ac branches rebuild the same grammar", [](testing &t) {
+        auto original = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.ac(p.until("</tag>") + p.literal("</tag>") + p.literal("x"), std::vector<common_peg_ac_branch>{ { p.literal("</tag>"), p.literal("x") } }, true);
+        });
+        auto deserialized = common_peg_arena::from_json(common_json::parse(original.to_json().dump()));
+
+        auto grammar = [](const common_peg_arena & arena) {
+            return build_grammar([&](const common_grammar_builder & builder) {
+                arena.build_grammar(builder);
+            });
+        };
+        t.assert_equal("same_grammar", grammar(original), grammar(deserialized));
     });
 
     t.bench("deserialize", [&]() {

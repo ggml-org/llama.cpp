@@ -322,8 +322,6 @@ struct common_peg_rule_parser {
     std::string name;
     common_peg_parser_id child;
     bool trigger;
-    common_peg_parser_id trigger_parser = COMMON_PEG_INVALID_PARSER_ID;
-    common_peg_parser_id trigger_rest   = COMMON_PEG_INVALID_PARSER_ID;
 };
 
 struct common_peg_ref_parser {
@@ -344,11 +342,19 @@ struct common_peg_gbnf_parser {
     std::string grammar;
 };
 
+// A delimiter the ac grammar scans for and the parser that follows once it completes, if any
+struct common_peg_ac_branch {
+    common_peg_parser_id delimiter;
+    common_peg_parser_id rest = COMMON_PEG_INVALID_PARSER_ID;
+};
+
 struct common_peg_ac_parser {
-    common_peg_parser_id              child;
-    std::vector<std::string>          delimiters;
-    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID; // set when the delimiters were given as a parser
-    common_trie                       matcher;
+    common_peg_parser_id                child;
+    std::vector<common_peg_ac_branch>   branches;
+    bool                                optional = false; // the grammar may end before any delimiter completes
+    std::vector<std::string>            delimiters;       // expanded delimiter text, for dumps
+    common_trie                         matcher;
+    std::vector<std::vector<size_t>>    pattern_branches; // branches per matcher pattern
 };
 
 // Variant holding all parser types
@@ -595,11 +601,6 @@ class common_peg_parser_builder {
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
 
-    // Creates a trigger rule that matches trigger followed by rest, for a gated grammar. The grammar lets
-    // anything through until the first trigger completes, and from there only rest may follow. The trigger
-    // may only contain sequences, choices, literals, tokens, tags, and atomics.
-    common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & trigger, const common_peg_parser & rest);
-
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
     // intended for situations where partial output is undesirable.
@@ -613,13 +614,16 @@ class common_peg_parser_builder {
     // the child's grammar. Parsing delegates entirely to the child.
     common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
 
-    // Wraps a child parser but emits a GBNF grammar built from the Aho-Corasick
-    // automaton of `delimiters`, matching everything up to and including the
-    // first delimiter. Parsing delegates entirely to the child, which is
-    // responsible for consuming the delimiter (e.g. until(D) + literal(D)).
+    // Wraps a child parser but emits a GBNF grammar built from the Aho-Corasick automaton of the
+    // branch delimiters. The grammar lets anything through until the first delimiter completes, and
+    // from there only the rest of its branch may follow, or nothing when the branch has no rest. With
+    // optional the grammar may also end before any delimiter completes. Parsing delegates entirely to
+    // the child, which is responsible for consuming the delimiter and rest (e.g. until(D) + literal(D) + R).
+    // Delimiters may only contain sequences, choices, literals, tokens, tags, and atomics.
+    common_peg_parser ac(const common_peg_parser & p, const std::vector<common_peg_ac_branch> & branches, bool optional = false);
     common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);
     common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
-    common_peg_parser ac(const common_peg_parser & p, const common_peg_parser & delimiter);
+    common_peg_parser ac(const common_peg_parser & p, const common_peg_parser & delimiter) { return ac(p, std::vector<common_peg_ac_branch>{ { delimiter } }); }
 
     void set_root(const common_peg_parser & p);
 
