@@ -1,0 +1,8 @@
+#version 460
+
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_cooperative_matrix_maintenance1 : require
+
+void main()
+{
+}
