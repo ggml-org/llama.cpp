@@ -81664,7 +81664,7 @@ MA_PRIVATE ma_bool32 ma_dr_wav_init__internal(ma_dr_wav* pWav, ma_dr_wav_chunk_p
             }
         }
     }
-    if (pWav->onSeek != NULL && ma_dr_wav__seek_from_start(pWav->onSeek, pWav->dataChunkDataPos, pWav->pUserData) == MA_FALSE) {
+    if (ma_dr_wav__seek_from_start(pWav->onSeek, pWav->dataChunkDataPos, pWav->pUserData) == MA_FALSE) {
         ma_dr_wav_free(pWav->pMetadata, &pWav->allocationCallbacks);
         return MA_FALSE;
     }
