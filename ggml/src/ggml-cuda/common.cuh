@@ -111,9 +111,9 @@
 #define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_PH1)
 #define GGML_CUDA_CC_IS_PH1(cc)      (cc >= GGML_CUDA_CC_PH1)
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#if !defined(GGML_USE_HIP) && (defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070)
 #    define GGML_CUDA_USE_CUB
-#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#endif  // !defined(GGML_USE_HIP) && (defined(GGML_USE_MUSA) || CUDART_VERSION >= 11070)
 
 // PDL host-side support (cudaLaunchKernelEx) requires CUDART >= 11.8.
 // However, this has been bugged in CTK < 12.3 for MSVC builds, see
@@ -237,7 +237,7 @@ static const char * cu_get_error_str(CUresult err) {
 #define CU_CHECK(err) CUDA_CHECK_GEN(err, CUDA_SUCCESS, cu_get_error_str)
 #endif
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#if !defined(GGML_USE_HIP)
 #    define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes)                                                       \
         do {                                                                                                   \
             static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = { false };                         \
@@ -252,7 +252,7 @@ static const char * cu_get_error_str(CUresult err) {
         do {                                             \
             GGML_UNUSED(nbytes);                         \
         } while (0)
-#endif // !(defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#endif // !defined(GGML_USE_HIP)
 
 #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA)
 #define GGML_CUDA_ASSUME(x) __builtin_assume(x)
@@ -397,7 +397,7 @@ static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 
 // Maximum number of bytes that can be copied in a single instruction.
 static constexpr __device__ int ggml_cuda_get_max_cpy_bytes() {
-#ifdef GGML_USE_HIP
+#if defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
     return 16;
 #else
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
@@ -405,7 +405,7 @@ static constexpr __device__ int ggml_cuda_get_max_cpy_bytes() {
 #else
     return 8;
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-#endif // GGML_USE_HIP
+#endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
 
@@ -424,10 +424,6 @@ static __device__ void no_device_code(
     __trap();
 
     GGML_UNUSED(no_device_code); // suppress unused function warning
-
-#if defined(GGML_USE_MUSA)
-    __builtin_unreachable();
-#endif // defined(GGML_USE_MUSA)
 }
 
 #ifdef __CUDA_ARCH__
@@ -696,16 +692,11 @@ static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const hal
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
-#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || defined(GGML_USE_HIP)
 #pragma unroll
    for (int offset = width/2; offset > 0; offset >>= 1) {
        x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, width));
    }
    return x;
-#else
-   GGML_UNUSED(x);
-   NO_DEVICE_CODE;
-#endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || defined(GGML_USE_HIP)
 }
 
 #if (defined(CUDART_VERSION) && CUDART_VERSION < CUDART_HMASK) || defined(GGML_USE_HIP) || \

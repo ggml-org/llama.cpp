@@ -310,13 +310,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].smpb       = prop.sharedMemPerBlock;
         info.devices[id].warp_size  = prop.warpSize;
 
-#ifndef GGML_USE_MUSA
         int supports_coop_launch = 0;
         CUDA_CHECK(cudaDeviceGetAttribute(&supports_coop_launch, cudaDevAttrCooperativeLaunch, physical_id));
         info.devices[id].supports_cooperative_launch = !!supports_coop_launch;
-#else
-        info.devices[id].supports_cooperative_launch = false;
-#endif // !(GGML_USE_MUSA)
 
 #if defined(GGML_USE_HIP)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
@@ -337,8 +333,6 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       device_vmm ? "yes" : "no", prop.warpSize,
                       device_vram_mib);
 #elif defined(GGML_USE_MUSA)
-        // FIXME: Ensure compatibility with varying warp sizes across different MUSA archs.
-        info.devices[id].warp_size = 32;
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
         info.devices[id].cc = GGML_CUDA_CC_OFFSET_MTHREADS + prop.major * 0x100;
         info.devices[id].cc += prop.minor * 0x10;
@@ -5581,12 +5575,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            //TODO: enable once MUSA compiler is solved https://github.com/ggml-org/llama.cpp/pull/19504#issuecomment-4018634327
-#ifdef GGML_USE_MUSA
-            return false;
-#else
             return true;
-#endif // GGML_USE_MUSA
         case GGML_OP_DSV4_HC_COMB:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
                 op->src[2]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
