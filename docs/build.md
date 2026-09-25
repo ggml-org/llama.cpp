@@ -282,6 +282,14 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 Override default, speed-optimized compute types for cuBLAS matrix multiplications.
 Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
+#### GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE
+
+Set the maximum temporary buffer size, in MiB, used when converting large F16 or BF16 cuBLAS inputs to F32. The default is `0`, which disables chunking and preserves the fastest path.
+
+For example, `GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE=512` caps the temporary F32 conversion buffer to approximately 512 MiB. The allocation can exceed the requested size when a single logical matrix row is larger than the configured chunk. This can substantially reduce peak VRAM use on workloads that fall back to F32 matrix multiplication, at the cost of splitting the operation into multiple GEMMs. Smaller values reduce temporary VRAM further but may reduce performance.
+
+This setting also applies to backends, that shares the cuBLAS/hipBLAS matrix-multiplication implementation. It can be useful on GPUs where F16 or BF16 inputs are converted to F32, which use more VRAM that native BF16/FP16.
+
 ### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.

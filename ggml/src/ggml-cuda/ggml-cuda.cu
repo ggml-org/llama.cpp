@@ -1405,6 +1405,28 @@ struct batched_mul_mat_traits<GGML_TYPE_F16> {
     static inline auto convert_nc(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
 
+static size_t ggml_cuda_cublas_convert_chunk_size() {
+    static const size_t chunk_size = []() {
+        constexpr size_t default_size = 0;
+
+        const char * env = getenv("GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE");
+        if (env == nullptr) {
+            return default_size;
+        }
+
+        char * end = nullptr;
+        const unsigned long long size_mib = std::strtoull(env, &end, 10);
+        if (*env == '\0' || *end != '\0' || size_mib > SIZE_MAX / (1024ull * 1024)) {
+            GGML_LOG_WARN("invalid GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE: %s, disabling chunking\n", env);
+            return default_size;
+        }
+
+        return (size_t) size_mib * 1024 * 1024;
+    }();
+
+    return chunk_size;
+}
+
 template<ggml_type compute_type>
 static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     using traits = batched_mul_mat_traits<compute_type>;
@@ -1444,8 +1466,42 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
     bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
+    const size_t src0_convert_chunk_size = ggml_cuda_cublas_convert_chunk_size();
+    const size_t src0_f32_size = ggml_nelements(src0) * sizeof(float);
+    const bool src0_f32_convert = compute_type == GGML_TYPE_F32 &&
+        (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    if (src0_f32_convert && src0_convert_chunk_size == 0 && src0_f32_size > 512ull * 1024 * 1024) {
+        static std::atomic<uint32_t> logged_conversion_types{0};
+        const uint32_t type_bit = src0->type == GGML_TYPE_F16 ? 1u : 2u;
+        if ((logged_conversion_types.fetch_or(type_bit) & type_bit) == 0) {
+            GGML_LOG_DEBUG(
+                "%s: large %s -> F32 BLAS conversion requires %.2f MiB of temporary VRAM; "
+                "set GGML_CUDA_CUBLAS_CONVERT_CHUNK_SIZE=512 (MiB), or lower, to cap the conversion buffer "
+                "if VRAM is constrained (smaller chunks may reduce performance)\n",
+                __func__, ggml_type_name(src0->type), src0_f32_size / (1024.0 * 1024.0));
+        }
+    }
+    const bool chunk_src0 = src0_convert_chunk_size != 0 && src0_f32_convert &&
+        ne00 > 0 && ne02 > 0 && ne03 > 0 && src0_f32_size > src0_convert_chunk_size;
+    int64_t src0_chunk_rows = 0;
+
     if (src0->type == compute_type) {
         src0_ptr = (const cuda_t *) src0->data;
+    } else if (chunk_src0) {
+        src0_chunk_rows = std::max<int64_t>(1, (int64_t) (src0_convert_chunk_size / sizeof(cuda_t) / ne00 / ne02 / ne03));
+        src0_chunk_rows = std::min(src0_chunk_rows, ne01);
+        src0_alloc.alloc(ne00 * src0_chunk_rows * ne02 * ne03);
+
+        static std::atomic<uint32_t> logged_chunk_types{0};
+        const uint32_t type_bit = src0->type == GGML_TYPE_F16 ? 1u : 2u;
+        if ((logged_chunk_types.fetch_or(type_bit) & type_bit) == 0) {
+            GGML_LOG_DEBUG(
+                "%s: chunking %s -> F32 BLAS conversion: full %.2f MiB, buffer %.2f MiB, rows=%" PRId64
+                ", chunks=%" PRId64 "\n",
+                __func__, ggml_type_name(src0->type), src0_f32_size / (1024.0 * 1024.0),
+                (ne00 * src0_chunk_rows * ne02 * ne03 * sizeof(cuda_t)) / (1024.0 * 1024.0),
+                src0_chunk_rows, (ne01 + src0_chunk_rows - 1) / src0_chunk_rows);
+        }
     } else {
         src0_alloc.alloc(ggml_nelements(src0));
 
@@ -1536,6 +1592,93 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     // broadcast factors
     const int64_t r2 = ne12/ne02;
     const int64_t r3 = ne13/ne03;
+
+    if (chunk_src0) {
+        const auto convert_func = traits::convert(src0->type);
+        const auto convert_func_nc = traits::convert_nc(src0->type);
+        GGML_ASSERT(convert_func != nullptr);
+        GGML_ASSERT(convert_func_nc != nullptr);
+
+        const bool use_strided_batched = (ne12 > 1 || ne13 > 1) && r2 == 1 && r3 == 1 && is_src1_cont_2;
+        const bool use_batched = (ne12 > 1 || ne13 > 1) && !use_strided_batched;
+        const int64_t ne23 = ne12*ne13;
+
+        ggml_cuda_pool_alloc<const void *> ptrs_src(ctx.pool());
+        ggml_cuda_pool_alloc<      void *> ptrs_dst(ctx.pool());
+        if (use_batched) {
+            ptrs_src.alloc(2*ne23);
+            ptrs_dst.alloc(ne23);
+        }
+
+        for (int64_t i01 = 0; i01 < ne01; i01 += src0_chunk_rows) {
+            const int64_t rows = std::min(src0_chunk_rows, ne01 - i01);
+            const char * src0_chunk = (const char *) src0->data + i01*nb01;
+
+            if (ne02 == 1 && ne03 == 1 && ggml_is_contiguously_allocated(src0)) {
+                convert_func(src0_chunk, src0_alloc.get(), ne00*rows, main_stream);
+            } else {
+                convert_func_nc(src0_chunk, src0_alloc.get(), ne00, rows, ne02, ne03, s01, s02, s03, main_stream);
+            }
+
+            const int64_t chunk_s01 = ne00;
+            const int64_t chunk_s02 = rows*chunk_s01;
+            const int64_t chunk_s03 = ne02*chunk_s02;
+            char * dst_chunk = dst_ptr + i01*sizeof(float);
+
+            if (ne12 == 1 && ne13 == 1) {
+                CUBLAS_CHECK(
+                    cublasSgemm(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                            rows, ne11, ne10,
+                            (const float *) alpha, (const float *) src0_alloc.get(), chunk_s01,
+                                                   (const float *) src1_ptr, s11,
+                            (const float *) beta,  (float *) dst_chunk, ne0));
+            } else if (use_strided_batched) {
+                const int64_t sma = ne02 == 1 ? chunk_s03 : chunk_s02;
+                const int64_t smb = ne12 == 1 ? s13 : s12;
+
+                CUBLAS_CHECK(
+                    cublasGemmStridedBatchedEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                            rows, ne11, ne10,
+                            alpha, src0_alloc.get(), cu_data_type_a, chunk_s01, sma,
+                                   src1_ptr,         cu_data_type_b, s11,        smb,
+                            beta,  dst_chunk,        cu_data_type,   ne0,        ne1*ne0,
+                            ne23,
+                            cu_compute_type,
+                            CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            } else {
+                const int threads_x = 16;
+                const int threads_y = 16;
+                const dim3 block_dims(threads_x, threads_y);
+                const dim3 grid_dims(
+                    (ne13 + threads_x - 1) / threads_x,
+                    (ne12 + threads_y - 1) / threads_y
+                );
+
+                k_compute_batched_ptrs<<<grid_dims, block_dims, 0, main_stream>>>(
+                        src0_alloc.get(), src1_ptr, dst_chunk,
+                        ptrs_src.get(), ptrs_dst.get(),
+                        ne12, ne13,
+                        ne23,
+                        chunk_s02*sizeof(cuda_t), chunk_s03*sizeof(cuda_t),
+                        s12*sizeof(cuda_t), s13*sizeof(cuda_t),
+                        nbd2, nbd3,
+                        r2, r3);
+
+                CUDA_CHECK(cudaGetLastError());
+
+                CUBLAS_CHECK(
+                    cublasGemmBatchedEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                            rows, ne11, ne10,
+                            alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, chunk_s01,
+                                   (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
+                            beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
+                            ne23,
+                            cu_compute_type,
+                            CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            }
+        }
+        return;
+    }
 
     // Theoretically cublasGemmStridedBatchedEx would always work, even for a single matrix.
     // However, for some old NVIDIA and AMD GPUs the strided/Ex GEMM is much slower,
