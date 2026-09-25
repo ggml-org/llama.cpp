@@ -258,7 +258,7 @@ struct server_slot {
     bool spec_is_replay = false;
     std::mt19937 spec_synth_rng;
 
-    // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
+    // TODO: move members that belong to the task (such as `generated`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
     std::unique_ptr<const server_task> task;
     std::unique_ptr<const server_task> task_prev; // used for debugging
@@ -276,10 +276,9 @@ struct server_slot {
 
     size_t last_nl_pos = 0;
 
-    std::string  generated_text;
+    common_chat_input generated;
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
-    std::vector<llama_token> generated_token_map; // token whose piece starts at each byte of generated_text, LLAMA_TOKEN_NULL elsewhere
     size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
 
     std::vector<completion_token_output> generated_token_probs;
@@ -373,7 +372,7 @@ struct server_slot {
         spec_is_replay = false;
 
         last_nl_pos    = 0;
-        generated_text = "";
+        generated      = {};
         has_new_line   = false;
         truncated      = false;
         stop           = STOP_TYPE_NONE;
@@ -386,7 +385,6 @@ struct server_slot {
             spec_ckpt.clear();
         }
         generated_tokens.clear();
-        generated_token_map.clear();
         generated_token_probs.clear();
         json_schema = json();
 
@@ -714,7 +712,7 @@ struct server_slot {
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx_tgt, true);
-                res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
+                res["generated"] = generated.empty() ? debug_generated_text : generated.text;
             }
         }
 
@@ -1837,33 +1835,26 @@ private:
         const std::string token_str = result.text_to_send;
         slot.sampled = result.tok;
 
-        if (!token_str.empty()) {
-            slot.generated_token_map.push_back(result.tok);
-            slot.generated_token_map.resize(slot.generated_token_map.size() + token_str.size() - 1, LLAMA_TOKEN_NULL);
-        }
-        slot.generated_text += token_str;
+        slot.generated.append(token_str, result.tok);
         if (slot.task->params.return_tokens) {
             slot.generated_tokens.push_back(result.tok);
         }
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
-        bool incomplete = validate_utf8(slot.generated_text) < slot.generated_text.size();
+        bool incomplete = validate_utf8(slot.generated.text) < slot.generated.text.size();
 
         // search stop word and delete it
         if (!incomplete) {
-            size_t pos = std::min(slot.n_sent_text, slot.generated_text.size());
+            size_t pos = std::min(slot.n_sent_text, slot.generated.text.size());
 
-            const std::string str_test = slot.generated_text.substr(pos);
+            const std::string str_test = slot.generated.text.substr(pos);
             bool send_text = true;
 
             size_t stop_pos = slot.find_stopping_strings(str_test, token_str.size(), true);
             if (stop_pos != std::string::npos) {
-                slot.generated_text.erase(
-                    slot.generated_text.begin() + pos + stop_pos,
-                    slot.generated_text.end());
-                slot.generated_token_map.resize(slot.generated_text.size());
-                pos = std::min(slot.n_sent_text, slot.generated_text.size());
+                slot.generated.truncate(pos + stop_pos);
+                pos = std::min(slot.n_sent_text, slot.generated.text.size());
             } else if (slot.has_next_token && !llama_vocab_is_eog(vocab, result.tok) ) {
                 stop_pos = slot.find_stopping_strings(str_test, token_str.size(), false);
                 send_text = stop_pos == std::string::npos;
@@ -1872,7 +1863,7 @@ private:
             // check if there is any token to predict
             if (send_text) {
                 // no send the stop word in the response
-                result.text_to_send = slot.generated_text.substr(pos, std::string::npos);
+                result.text_to_send = slot.generated.text.substr(pos, std::string::npos);
                 slot.n_sent_text += result.text_to_send.size();
                 // add the token to slot queue and cache
             } else {
@@ -1916,18 +1907,17 @@ private:
                     size_t pos = slot.last_nl_pos;
 
                     int n_indent = 0;
-                    while (pos < slot.generated_text.size() && (slot.generated_text[pos] == ' ' || slot.generated_text[pos] == '\t')) {
+                    while (pos < slot.generated.text.size() && (slot.generated.text[pos] == ' ' || slot.generated.text[pos] == '\t')) {
                         n_indent++;
                         pos++;
                     }
 
-                    if (pos < slot.generated_text.size() && n_indent < slot.task->params.n_indent) {
+                    if (pos < slot.generated.text.size() && n_indent < slot.task->params.n_indent) {
                         slot.stop           = STOP_TYPE_LIMIT;
                         slot.has_next_token = false;
 
                         // cut the last line
-                        slot.generated_text.erase(pos, std::string::npos);
-                        slot.generated_token_map.resize(slot.generated_text.size());
+                        slot.generated.truncate(pos);
 
                         SLT_DBG(slot, "stopped by indentation limit, n_gen = %d, n_indent = %d\n", (int) slot.stats.n_gen, n_indent);
                     }
@@ -1935,7 +1925,7 @@ private:
 
                 // find the next new line
                 {
-                    const size_t pos = slot.generated_text.find('\n', slot.last_nl_pos);
+                    const size_t pos = slot.generated.text.find('\n', slot.last_nl_pos);
 
                     if (pos != std::string::npos) {
                         slot.last_nl_pos = pos + 1;
@@ -2067,12 +2057,8 @@ private:
         if (is_begin) {
             res->is_begin = true;
         } else {
-            res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
-
-            // the content is the last text released for sending
-            const auto start = slot.generated_token_map.begin() + (slot.n_sent_text - tkn.text_to_send.size());
-            res->token_map.assign(start, start + tkn.text_to_send.size());
+            res->content = slot.generated.substr(slot.n_sent_text - tkn.text_to_send.size(), tkn.text_to_send.size());
+            res->tokens.assign(1, tkn.tok);
         }
 
         res->n_decoded             = slot.stats.n_gen;
@@ -2108,17 +2094,16 @@ private:
 
         // keep copy of last generated text for debugging purposes
         if (slots_debug) {
-            slot.debug_generated_text = slot.generated_text;
+            slot.debug_generated_text = slot.generated.text;
         }
 
         // in stream mode, content and tokens are already in last partial chunk
         if (slot.task->params.stream) {
-            res->content     = "";
+            res->content     = {};
             res->tokens      = llama_tokens{};
         } else {
-            res->content     = std::move(slot.generated_text);
+            res->content     = std::move(slot.generated);
             res->tokens      = std::move(slot.generated_tokens);
-            res->token_map   = std::move(slot.generated_token_map);
         }
         res->stats           = slot.stats;
         res->prompt          = slot.task->tokens.detokenize(ctx_tgt, true);

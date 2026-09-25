@@ -1452,10 +1452,23 @@ void common_chat_input::append(const std::string & piece, llama_token token) {
     text += piece;
 }
 
-void common_chat_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_map) {
-    GGML_ASSERT(chunk.size() == chunk_map.size());
-    token_map.insert(token_map.end(), chunk_map.begin(), chunk_map.end());
-    text += chunk;
+void common_chat_input::append(const common_chat_input & chunk) {
+    token_map.insert(token_map.end(), chunk.token_map.begin(), chunk.token_map.end());
+    text += chunk.text;
+}
+
+void common_chat_input::truncate(size_t pos) {
+    if (pos < text.size()) {
+        text.erase(pos);
+        token_map.resize(pos);
+    }
+}
+
+common_chat_input common_chat_input::substr(size_t pos, size_t n) const {
+    common_chat_input out;
+    out.text = text.substr(pos, n);
+    out.token_map.assign(token_map.begin() + pos, token_map.begin() + pos + out.size());
+    return out;
 }
 
 void common_chat_input::prepend(const std::string & prefix) {

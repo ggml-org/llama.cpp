@@ -4615,7 +4615,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
             // generation_prompt is non-empty for thinking models, so result.end
             // will be offset by generation_prompt.size() into effective_input space.
-            assert(!pp.generation_prompt.text.empty());
+            assert(!pp.generation_prompt.empty());
 
             std::string bad_input =
                 "Thinking.\n"

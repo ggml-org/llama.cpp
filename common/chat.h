@@ -292,16 +292,25 @@ struct common_chat_input {
     // plain text, with no tokens
     explicit common_chat_input(std::string text) : text(std::move(text)), token_map(this->text.size(), LLAMA_TOKEN_NULL) {}
 
+    size_t size() const { return text.size(); }
+    bool empty() const { return text.empty(); }
+
     void append(const std::string & piece, llama_token token);
 
-    // append a chunk of text with its token map
-    void append(const std::string & chunk, const std::vector<llama_token> & chunk_map);
+    // append another input and its tokens
+    void append(const common_chat_input & chunk);
 
     // prefix plain text, shifting the tokens after it
     void prepend(const std::string & prefix);
 
     // prefix another input and its tokens, shifting the tokens after it
     void prepend(const common_chat_input & prefix);
+
+    // drop the text from pos on and the tokens with it
+    void truncate(size_t pos);
+
+    // copy of the text from pos with its tokens
+    common_chat_input substr(size_t pos, size_t n = std::string::npos) const;
 };
 
 // per-message parsing syntax
