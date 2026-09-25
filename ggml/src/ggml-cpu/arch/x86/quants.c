@@ -101,7 +101,8 @@ static inline __m256i mul_add_epi8(const __m256i x, const __m256i y) {
         const __m256i p2 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(xh),                   _mm256_cvtepi8_epi16(yh));                       // bytes 16-23
         const __m256i p3 = _mm256_madd_epi16(_mm256_cvtepi8_epi16(_mm_srli_si128(xh, 8)), _mm256_cvtepi8_epi16(_mm_srli_si128(yh, 8)));  // bytes 24-31
         // repack the int32 pair sums to int16 in maddubs lane order
-        // (all callers have |pair sum| < 2^15, so the saturating pack is exact)
+        // (the guard only fires for y = -128; no caller can pass x = -128 here,
+        // so |pair sum| <= 2 * 127 * 128 < 2^15 and the saturating pack is exact)
         const __m256i a = _mm256_set_m128i(_mm256_castsi256_si128(p2), _mm256_castsi256_si128(p0));
         const __m256i b = _mm256_set_m128i(_mm256_castsi256_si128(p3), _mm256_castsi256_si128(p1));
         return _mm256_packs_epi32(a, b);
@@ -255,7 +256,9 @@ static inline __m128i mul_add_epi8_sse(const __m128i x, const __m128i y) {
         const __m128i p0 = _mm_madd_epi16(_mm_cvtepi8_epi16(x),                     _mm_cvtepi8_epi16(y));                     // bytes 0-7
         const __m128i p1 = _mm_madd_epi16(_mm_cvtepi8_epi16(_mm_srli_si128(x, 8)), _mm_cvtepi8_epi16(_mm_srli_si128(y, 8))); // bytes 8-15
         // repack the int32 pair sums to int16 in maddubs lane order
-        // (all callers have |pair sum| < 2^15, so the saturating pack is exact)
+        // (the guard only fires for y = -128; q8_0's full-range x diverts to
+        // int32 in mul_sum_i8_quad_float, so every remaining caller has
+        // |pair sum| <= 2 * 127 * 128 < 2^15 and the pack is exact)
         return _mm_packs_epi32(p0, p1);
     }
     const __m128i ax = _mm_sign_epi8(x, x);
@@ -342,20 +345,14 @@ static inline __m256 mul_sum_i8_pairs_float(const __m256i x, const __m256i y) {
 // larger version of mul_sum_i8_pairs_float where x and y are each represented by four 128-bit vectors
 static inline __m256 mul_sum_i8_quad_float(const __m128i x_1_0, const __m128i x_1_1, const __m128i x_2_0, const __m128i x_2_1,
                                            const __m128i y_1_0, const __m128i y_1_1, const __m128i y_2_0, const __m128i y_2_1) {
-    // note: no -128 guard needed here - the mul_add_epi8_sse calls below each
-    // detect -128 themselves and widen to int16/int32 (exact, see mul_sum_i8_pairs)
-    const __m128i mone = _mm_set1_epi16(1);
-
-    const __m128i p16_1_0 = mul_add_epi8_sse(x_1_0, y_1_0);
-    const __m128i p16_1_1 = mul_add_epi8_sse(x_1_1, y_1_1);
-    const __m128i p16_2_0 = mul_add_epi8_sse(x_2_0, y_2_0);
-    const __m128i p16_2_1 = mul_add_epi8_sse(x_2_1, y_2_1);
-    const __m128i p_1_0 = _mm_madd_epi16(p16_1_0, mone);
-    const __m128i p_1_1 = _mm_madd_epi16(p16_1_1, mone);
-    const __m128i p_2_0 = _mm_madd_epi16(p16_2_0, mone);
-    const __m128i p_2_1 = _mm_madd_epi16(p16_2_1, mone);
-    const __m128i p_1 = _mm_add_epi32(p_1_0, p_1_1);
-    const __m128i p_2 = _mm_add_epi32(p_2_0, p_2_1);
+    // mul_sum_i8_pairs widens y = -128 halves to int32 itself, which is required
+    // for correctness here: two (-128) * (-128) products sum to 32768, and the
+    // int16 lanes of the mul_add_epi8_sse path would saturate that to 32767
+    // (reachable because q8_0 has full-range x). Its lane layout (4 products per
+    // int32) matches what madd(ones, p16) produced before, and it checks each
+    // half internally, so a clean fast path pays only its own single scan.
+    const __m128i p_1 = _mm_add_epi32(mul_sum_i8_pairs(x_1_0, y_1_0), mul_sum_i8_pairs(x_1_1, y_1_1));
+    const __m128i p_2 = _mm_add_epi32(mul_sum_i8_pairs(x_2_0, y_2_0), mul_sum_i8_pairs(x_2_1, y_2_1));
     return _mm256_cvtepi32_ps(MM256_SET_M128I(p_2, p_1));
 }
 
