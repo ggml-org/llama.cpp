@@ -336,7 +336,10 @@ class SpecialVocab:
         for typ in self.special_token_types:
             add_entry = tokenizer_config.get(f'add_{typ}_token')
             if isinstance(add_entry, bool):
-                self.add_special_token[typ] = add_entry
+                if typ not in self.add_special_token:
+                    self.add_special_token[typ] = add_entry
+                elif self.add_special_token[typ] != add_entry:
+                    logger.warning(f'Mismatch between tokenizer_config add_{typ}_token({add_entry}) and TemplateProcessing<{typ}>({self.add_special_token[typ]}) - opting for the latter')
             entry = tokenizer_config.get(f'{typ}_token')
             if isinstance(entry, str):
                 tc_content = entry
