@@ -711,7 +711,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                  }
                  if (!ok) {
                      GGML_LOG_ERROR("%s: incorrect shape for a tensor '%s' may cause overflow errors: "
-                         "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= INT64_MAX (%)" PRIi64 "\n",
+                         "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= INT64_MAX (%" PRIi64 ")\n",
                          __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3], INT64_MAX);
                      break;
                  }
