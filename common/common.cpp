@@ -1890,8 +1890,9 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
 // CTC utils
 //
 
-std::string common_ctc_greedy_decode(const struct llama_vocab * vocab, struct llama_context * ctx, int32_t n_outputs) {
+std::string common_ctc_greedy_decode(const struct llama_vocab * vocab, struct llama_context * ctx) {
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const int32_t n_outputs = llama_n_outputs(ctx);
 
     std::vector<llama_token> collapsed;
     collapsed.reserve(n_outputs);

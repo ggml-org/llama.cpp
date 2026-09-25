@@ -2240,8 +2240,7 @@ private:
 
         // use llama_n_outputs to get the accurate output count, including any
         // time subsampling
-        const int32_t n_outputs = llama_n_outputs(slot.ctx_tgt);
-        res->text = common_ctc_greedy_decode(vocab, slot.ctx_tgt, n_outputs);
+        res->text = common_ctc_greedy_decode(vocab, slot.ctx_tgt);
 
         SLT_DBG(slot, "%s", "sending transcription\n");
 
