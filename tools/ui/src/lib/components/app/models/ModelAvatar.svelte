@@ -8,9 +8,12 @@
 	import { orgOf } from '$lib/utils';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
+		/** Rendered when the model has neither an org avatar nor a provider mark. */
+		fallback?: Snippet;
 		option: ModelOption;
 		quantPositionClass?: string;
 		quantSize?: string;
@@ -28,6 +31,7 @@
 
 	let {
 		class: className = '',
+		fallback,
 		option,
 		quantPositionClass = '-bottom-1 -right-1',
 		quantSize = 'h-3 w-3',
@@ -130,4 +134,6 @@
 			{size}
 		/>
 	</span>
+{:else}
+	{@render fallback?.()}
 {/if}

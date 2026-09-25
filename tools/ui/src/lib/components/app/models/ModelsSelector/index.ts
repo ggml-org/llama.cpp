@@ -104,8 +104,8 @@ export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
 /**
  * **ModelsSelectorTriggerIcon** - Icon for the selector trigger button
  *
- * Shows the selected model's provider mark (preset logo or favicon) and falls
- * back to the generic model icon when the provider has none. The bundled local
- * server falls back to the llama.cpp logo.
+ * Shows the selected model's own org avatar (the same mark the option rows
+ * use) and falls back to the generic model icon when the model has neither an
+ * org nor a provider mark.
  */
 export { default as ModelsSelectorTriggerIcon } from './ModelsSelectorTriggerIcon.svelte';
