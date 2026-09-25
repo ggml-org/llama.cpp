@@ -19,7 +19,7 @@
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
-	import type { Snippet } from 'svelte';
+	import { type Snippet, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 
@@ -180,6 +180,24 @@
 		return ordered;
 	});
 	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
+	// the pane keeps a width of its own and stays in the DOM, so opening it slides a
+	// fixed panel in rather than reflowing one into place. Each open remounts the
+	// content, which is what reset the tabs when the pane used to unmount.
+	let paneOption = $state<ModelOption | null>(null);
+	let paneSession = $state(0);
+
+	$effect(() => {
+		const id = selectedId;
+
+		if (!id) return;
+
+		// untracked: this effect writes the session counter, and reading it back here
+		// would make the effect invalidate itself
+		untrack(() => {
+			paneOption = allModels.find((option) => option.id === id) ?? null;
+			paneSession += 1;
+		});
+	});
 
 	// a caller can ask for one model to be revealed, the download rows do
 	$effect(() => {
@@ -234,17 +252,18 @@
 {#snippet toolbarEndRegion()}
 	<!-- the pane takes the toolbar's width, so the calls to action leave with it -->
 	<CollapsibleRegion axis="width" open={!selected}>
-		<div class="flex items-center gap-2">
+		<div
+			class="flex items-center gap-2 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {selected
+				? 'opacity-0'
+				: 'opacity-100'}"
+		>
 			{@render toolbarEnd?.()}
 		</div>
 	</CollapsibleRegion>
 {/snippet}
 
-<div
-	class={['grid min-h-0 flex-1', className]}
-	style="grid-template-columns: minmax(0, 1fr){selected ? ' 30rem' : ''};"
->
-	<div class="min-h-0">
+<div class={['flex min-h-0 flex-1', className]}>
+	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
 			bind:contextLimit
 			bind:filter
@@ -260,19 +279,31 @@
 		/>
 	</div>
 
-	{#if selected}
-		<div class="min-h-0 overflow-hidden border-l border-border/40">
-			{#key selected.id}
-				<ModelsManagerModelConfiguration
-					isCustomized={isCustomized(overrides[selected.id])}
-					onClose={() => (selectedId = null)}
-					onSave={(override) => saveOverride(selected, override)}
-					onToggleLoad={() => void toggleLoad(selected)}
-					onUseInNewChat={() => void useInNewChat(selected)}
-					option={selected}
-					override={overrides[selected.id]}
-				/>
-			{/key}
+	<div
+		class="invisible w-0 shrink-0 overflow-clip transition-[width,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] data-[open=true]:visible data-[open=true]:w-[30rem]"
+		data-open={selected !== null}
+	>
+		<!-- the content box keeps the open width, so it never reflows with the drawer -->
+		<div
+			class="flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {selected
+				? 'opacity-100'
+				: 'opacity-0'}"
+		>
+			{#if paneOption}
+				{@const shown = paneOption}
+
+				{#key paneSession}
+					<ModelsManagerModelConfiguration
+						isCustomized={isCustomized(overrides[shown.id])}
+						onClose={() => (selectedId = null)}
+						onSave={(override) => saveOverride(shown, override)}
+						onToggleLoad={() => void toggleLoad(shown)}
+						onUseInNewChat={() => void useInNewChat(shown)}
+						option={shown}
+						override={overrides[shown.id]}
+					/>
+				{/key}
+			{/if}
 		</div>
-	{/if}
+	</div>
 </div>
