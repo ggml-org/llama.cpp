@@ -1,11 +1,5 @@
 <script lang="ts">
-	import {
-		isLocalOption,
-		modelDraftsFor,
-		modelQuantLabel,
-		modelSizeLabel,
-		resolveModelSize
-	} from '../utils';
+	import { modelDraftsFor, modelQuantLabel, modelSizeLabel, resolveModelSize } from '../utils';
 	import {
 		ActionIconCopyToClipboard,
 		BadgesModality,
@@ -98,7 +92,6 @@
 				? `${formatNumber(serverProps.default_generation_settings?.n_ctx ?? 0)} tokens`
 				: (contextLabel ?? null)
 		},
-		{ label: 'Training Context', value: contextLabel },
 		{
 			label: 'Model Size',
 			value: meta?.size ? formatFileSize(meta.size) : (resolvedSize ?? size)
@@ -114,14 +107,12 @@
 			label: 'Vocabulary Size',
 			value: meta?.n_vocab ? `${formatNumber(meta.n_vocab)} tokens` : null
 		},
-		{ isCapitalized: true, label: 'Vocabulary Type', value: (meta?.vocab_type as string) ?? null },
 		{ isBadge: true, label: 'Quantization', value: quant },
 		{
 			isBadge: true,
 			label: 'Architecture',
 			value: (option.meta?.architecture as string) ?? gguf?.architecture ?? null
 		},
-		{ label: 'Format', value: isLocalOption(option) ? 'GGUF' : null },
 		...(activeDraft
 			? [
 					{ isBadge: true, label: 'Draft sidecar', value: activeDraft.kind },
@@ -149,7 +140,6 @@
 			: [])
 	] satisfies Array<{
 		isBadge?: boolean;
-		isCapitalized?: boolean;
 		isCopyable?: boolean;
 		isMono?: boolean;
 		label: string;
@@ -167,8 +157,10 @@
 	<div class="flex items-center gap-3 border-b border-border/30 py-2.5">
 		<span class="text-sm text-muted-foreground">Model</span>
 
-		<span class="ml-auto flex min-w-0 items-center gap-2">
-			<span class="min-w-0 truncate font-mono text-xs">{option.model}</span>
+		<span class="ml-auto flex min-w-0 flex-1 items-center gap-2">
+			<span class="min-w-0 flex-1 overflow-x-auto font-mono text-xs whitespace-nowrap">
+				{option.model}
+			</span>
 
 			<ActionIconCopyToClipboard
 				ariaLabel="Copy model name to clipboard"
@@ -182,15 +174,16 @@
 		<div class="flex items-center gap-3 border-b border-border/30 py-2.5 last:border-b-0">
 			<span class="text-sm text-muted-foreground">{row.label}</span>
 
-			<span class="ml-auto flex min-w-0 items-center gap-2">
+			<span class="ml-auto flex min-w-0 items-center gap-2 {row.isCopyable ? 'flex-1' : ''}">
 				{#if row.value === null}
 					<span class="text-muted-foreground">—</span>
 				{:else}
 					<span
 						class={[
-							'min-w-0 truncate',
+							'min-w-0',
+							// a copyable value scrolls instead of clipping, the icon stays put
+							row.isCopyable ? 'flex-1 overflow-x-auto whitespace-nowrap' : 'truncate',
 							row.isBadge ? '' : 'text-sm',
-							row.isCapitalized ? 'capitalize' : '',
 							row.isMono ? 'font-mono text-xs' : ''
 						]}
 					>
@@ -249,18 +242,4 @@
 				gguf?.chat_template ??
 				'Not reported by the server.'}</pre>
 	</CollapsibleSection>
-
-	{#if reportsServerInfo}
-		<CollapsibleSection triggerClass={sectionTrigger}>
-			{#snippet trigger()}
-				<span class="text-sm font-medium">Source File</span>
-			{/snippet}
-
-			<div class="space-y-2 pt-1">
-				<p class="text-xs break-all text-muted-foreground">
-					{serverProps?.model_path ?? 'Path is reported once the model is loaded.'}
-				</p>
-			</div>
-		</CollapsibleSection>
-	{/if}
 </div>
