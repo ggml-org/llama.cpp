@@ -26,6 +26,10 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
+        # Per-tensor extra options (tensor name array + parallel option arrays, e.g. prec_a4).
+        TENSOR_EXTRA_NAME          = "general.tensor_extra.name"
+        TENSOR_EXTRA_PREC_A4       = "general.tensor_extra.prec_a4"
+
         # Recommended Sampler Parameters
         SAMPLING_SEQUENCE           = "general.sampling.sequence"
         SAMPLING_TOP_K              = "general.sampling.top_k"
@@ -650,6 +654,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GEMMA3N   = auto()
     GEMMA3    = auto()
     QWEN3VL   = auto()
+    LING3VL   = auto()
     STEP3VL   = auto()
     COGVLM    = auto()
 
@@ -1407,6 +1412,7 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
     VISION_PROJECTOR_TYPE.MERGER:    "qwen2vl_merger",
     VISION_PROJECTOR_TYPE.GEMMA3:    "gemma3",
     VISION_PROJECTOR_TYPE.QWEN3VL:   "qwen3vl_merger",
+    VISION_PROJECTOR_TYPE.LING3VL:   "ling3vl",
     VISION_PROJECTOR_TYPE.STEP3VL:   "step3vl",
 }
 
@@ -5207,6 +5213,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.D2T,
     ],
     MODEL_ARCH.DFLASH: [
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.LAYER_OUT_SCALE,
+        MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -5825,6 +5835,7 @@ class VisionProjectorType:
     QWEN25VL = "qwen2.5vl_merger"
     EXAONE4_5 = "exaone4_5"
     QWEN3VL = "qwen3vl_merger"
+    LING3VL = "ling3vl"
     STEP3VL = "step3vl"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"

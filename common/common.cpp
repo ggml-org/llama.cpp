@@ -900,7 +900,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
 
 
 #ifdef _WIN32
-static std::wstring utf8_to_wstring(const std::string & str) {
+std::wstring utf8_to_wstring(const std::string & str) {
     if (str.empty()) {
         return std::wstring();
     }
@@ -916,7 +916,30 @@ static std::wstring utf8_to_wstring(const std::string & str) {
 
     return wstr;
 }
+
+std::string wstring_to_utf8(const std::wstring & str) {
+    if (str.empty()) {
+        return std::string();
+    }
+
+    int size = WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0, NULL, NULL);
+
+    if (size <= 0) {
+        return std::string();
+    }
+
+    std::string utf8(size, 0);
+    WideCharToMultiByte(CP_UTF8, 0, str.c_str(), (int)str.size(), &utf8[0], size, NULL, NULL);
+
+    return utf8;
+}
 #endif
+
+// returns the path as a UTF-8 string, preserving its separators
+std::string fs_path_to_utf8(const std::filesystem::path & path) {
+    const auto value = path.u8string();
+    return std::string(value.begin(), value.end());
+}
 
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
@@ -2198,9 +2221,28 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
     return true;
 }
 
+llama_batch_ext_ptr common_batch_ext_get_one(llama_context * ctx, const llama_tokens & tokens) {
+    llama_batch_ext_ptr batch(llama_batch_ext_init(ctx));
+
+    auto mem = llama_get_memory(ctx);
+    llama_pos pos = mem ? llama_memory_seq_pos_max(mem, 0) + 1 : 0;
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const int32_t idx = llama_batch_ext_add_token(batch.get(), 0, tokens[i]);
+        llama_batch_ext_set_pos(batch.get(), idx, &pos);
+        pos++;
+    }
+
+    if (!tokens.empty()) {
+        llama_batch_ext_set_output_logits(batch.get(), (int32_t) tokens.size() - 1, true);
+    }
+
+    return batch;
+}
+
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
-    const std::vector<llama_token> & all_tokens,
+                const llama_tokens & all_tokens,
                                int   n_new,
                                int & n_past,
                                int   n_batch,
@@ -2221,7 +2263,9 @@ bool common_prompt_batch_decode(
         // Memory implementations in recurrent/hybrid models don't support removing tokens from their
         // memory, so we can't just remove the last token from the memory and replay the last token which
         // is the reason for this logic.
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens_before_last))) {
+        llama_tokens prefix_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_tokens_before_last);
+        llama_batch_ext_ptr batch_prefix = common_batch_ext_get_one(ctx, prefix_tokens);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_prefix.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;
         }
@@ -2231,17 +2275,19 @@ bool common_prompt_batch_decode(
         COM_INF("saved session before last token to %s, n_new = %zu\n", state_path.data(), all_tokens.size());
 
         llama_token last_token = all_tokens.back();
-        llama_batch batch = llama_batch_get_one(&last_token, 1);
-        int32_t pos = n_past;
-        batch.pos = &pos;
+        llama_batch_ext_ptr batch_last = common_batch_ext_get_one(ctx, { last_token });
+        llama_pos pos = n_past;
+        llama_batch_ext_set_pos(batch_last.get(), 0, &pos);
 
-        if (llama_decode(ctx, batch)) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch_last.get())) {
             COM_ERR("%s", "failed to eval last token\n");
             return false;
         }
         n_past++;
     } else {
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new))) {
+        llama_tokens new_tokens(all_tokens.begin() + offset, all_tokens.begin() + offset + n_new);
+        llama_batch_ext_ptr batch = common_batch_ext_get_one(ctx, new_tokens);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             COM_ERR("%s", "failed to eval\n");
             return false;
         }

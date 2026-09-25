@@ -450,6 +450,11 @@ value unary_expression::execute_impl(context & ctx) const {
         } else {
             throw std::runtime_error("Unary - operator requires numeric operand");
         }
+    } else if (op.value == "+") {
+        if (is_val<value_int>(operand_val) || is_val<value_float>(operand_val)) {
+            return operand_val;
+        }
+        throw std::runtime_error("Unary + operator requires numeric operand");
     }
 
     throw std::runtime_error("Unknown unary operator '" + op.value + "'");

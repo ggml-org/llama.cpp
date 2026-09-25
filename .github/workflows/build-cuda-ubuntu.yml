@@ -145,7 +145,7 @@ jobs:
 
   musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.3.0-devel-ubuntu22.04-amd64
+    container: registry.mthreads.com/mcconline/inference/pytorch:2.9.1.post1-py3.10-musa5.2.0-mp31-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -156,7 +156,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libssl-dev jq
+          apt-get install -y build-essential git cmake libssl-dev jq python3-venv
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -178,8 +178,8 @@ jobs:
         run: |
           cmake -B build -S . \
             -DGGML_MUSA=ON \
-            -DMUSA_ARCHITECTURES=21
-          time cmake --build build --config Release -j $(nproc)
+            -DMUSA_ARCHITECTURES=31
+          cmake --build build --config Release -j $(nproc)
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
