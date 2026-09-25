@@ -187,7 +187,17 @@ public:
         for (size_t i = 0; i < bar; i += 2) {
             std::cout << (i + 1 < pos ? "─" : (i < pos ? "╴" : " "));
         }
-        std::cout << std::setw(4) << pct << "%\033[K";
+        std::cout << std::setw(4) << pct << "% ["
+            << std::fixed << std::setprecision(2)
+            << (p.downloaded / (1024.0 * 1024.0 * 1024.0))
+            << " / "
+            << (p.total / (1024.0 * 1024.0 * 1024.0))
+            << " GB]"
+            << std::defaultfloat
+            << "\033[K";
+
+
+
 
         if (lines_up > 0) {
             std::cout << "\033[" << lines_up << "B";
