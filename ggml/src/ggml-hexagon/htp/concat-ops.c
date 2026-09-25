@@ -247,6 +247,61 @@ static void concat_generic(unsigned int nth, unsigned int ith, void * data) {
     }
 }
 
+static bool concat_dim1_contiguous_dma(struct htp_ops_context * octx, int dim, uint32_t type_size) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * src1 = octx->src[1];
+    const struct htp_tensor * dst  = octx->dst;
+
+    if (dim != 1 || octx->ctx->mdev.count > 1 ||
+        (dst->type != HTP_TYPE_F32 && dst->type != HTP_TYPE_F16 && dst->type != HTP_TYPE_I32) ||
+        src0->type != dst->type || src1->type != dst->type ||
+        src0->ne[0] != dst->ne[0] || src1->ne[0] != dst->ne[0] ||
+        src0->ne[2] != dst->ne[2] || src1->ne[2] != dst->ne[2] ||
+        src0->ne[3] != dst->ne[3] || src1->ne[3] != dst->ne[3] ||
+        dst->ne[1] != src0->ne[1] + src1->ne[1] ||
+        !htp_tensor_is_contiguous(src0, type_size) ||
+        !htp_tensor_is_contiguous(src1, type_size) ||
+        !htp_tensor_is_contiguous(dst, type_size)) {
+        return false;
+    }
+
+    const uint32_t src0_row_size = src0->ne[0] * type_size;
+    const uint32_t src1_row_size = src1->ne[0] * type_size;
+
+    // v75+ dma_queue_push() writes a 2D descriptor directly and does not split overflow.
+#if __HVX_ARCH__ >= 75
+    if (src0_row_size > 0xffffffu || src1_row_size > 0xffffffu ||
+        src0->nb[1] > 0xffffffu || src1->nb[1] > 0xffffffu || dst->nb[1] > 0xffffffu ||
+        src0->ne[1] > UINT16_MAX || src1->ne[1] > UINT16_MAX) {
+        return false;
+    }
+#endif
+
+    dma_queue * q = octx->ctx->dma[0];
+
+    for (uint32_t i3 = 0; i3 < dst->ne[3]; ++i3) {
+        for (uint32_t i2 = 0; i2 < dst->ne[2]; ++i2) {
+            dma_addr_t dst_addr  = dst->data  + i3 * dst->nb[3]  + i2 * dst->nb[2];
+            dma_addr_t src0_addr = src0->data + i3 * src0->nb[3] + i2 * src0->nb[2];
+            dma_addr_t src1_addr = src1->data + i3 * src1->nb[3] + i2 * src1->nb[2];
+
+            if (!dma_queue_push(q, dma_make_data(dst_addr, src0_addr), dst->nb[1], src0->nb[1], src0_row_size, src0->ne[1])) {
+                dma_queue_flush(q);
+                dma_queue_push(q, dma_make_data(dst_addr, src0_addr), dst->nb[1], src0->nb[1], src0_row_size, src0->ne[1]);
+            }
+
+            dst_addr += src0->ne[1] * dst->nb[1];
+            if (!dma_queue_push(q, dma_make_data(dst_addr, src1_addr), dst->nb[1], src1->nb[1], src1_row_size, src1->ne[1])) {
+                dma_queue_flush(q);
+                dma_queue_push(q, dma_make_data(dst_addr, src1_addr), dst->nb[1], src1->nb[1], src1_row_size, src1->ne[1]);
+            }
+        }
+    }
+
+    dma_queue_flush(q);
+    return true;
+}
+
 int op_concat(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * src1 = octx->src[1];
@@ -257,6 +312,10 @@ int op_concat(struct htp_ops_context * octx) {
     const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
     bool is_src1_transposed  = (src1->nb[0] > src1->nb[1]);
     bool is_src0_transposed  = (src0->nb[0] > src0->nb[1]);
+
+    if (concat_dim1_contiguous_dma(octx, dim, type_size)) {
+        return HTP_STATUS_OK;
+    }
 
     uint32_t n_threads = octx->n_threads;
     struct htp_concat_context cctx;
