@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { uiStore } from '$lib/stores';
+	import { untrack } from 'svelte';
 
 	interface Props {
 		open?: boolean;
@@ -16,7 +17,38 @@
 
 	type View = 'discover' | 'manage' | 'providers';
 
+	/** How long a view takes to fade out before the next one fades in. */
+	const VIEW_FADE_MS = 150;
+
+	// what the user asked for, and what is actually rendered: a view change fades the
+	// current one out, swaps, then fades the next one in
 	let view = $state<View>('manage');
+	let shownView = $state<View>('manage');
+	let isSwapping = $state(false);
+
+	$effect(() => {
+		const next = view;
+
+		if (next === shownView) return;
+
+		// nothing to fade while the dialog is closed, so the view is set before it opens
+		if (!open) {
+			untrack(() => (shownView = next));
+
+			return;
+		}
+
+		untrack(() => (isSwapping = true));
+
+		const timer = setTimeout(() => {
+			untrack(() => {
+				shownView = next;
+				isSwapping = false;
+			});
+		}, VIEW_FADE_MS);
+
+		return () => clearTimeout(timer);
+	});
 
 	let title = $derived(
 		view === 'discover' ? 'Discover' : view === 'providers' ? 'Providers' : 'Models'
@@ -69,8 +101,8 @@
 			</Dialog.Title>
 		</Dialog.Header>
 
-		<div class="min-h-0 flex-1 pt-2">
-			{#if view === 'manage'}
+		<div class="dialog-view min-h-0 flex-1 pt-2" data-visible={!isSwapping}>
+			{#if shownView === 'manage'}
 				<ModelsManager class="h-full">
 					{#snippet toolbarEnd()}
 						<Button class="gap-1.5" onclick={() => (view = 'discover')} size="sm" variant="outline">
@@ -91,7 +123,7 @@
 						</Button>
 					{/snippet}
 				</ModelsManager>
-			{:else if view === 'discover'}
+			{:else if shownView === 'discover'}
 				<div class="grid h-full overflow-hidden" style="grid-template-columns: auto 1fr;">
 					<ModelsDiscover />
 				</div>
@@ -103,3 +135,21 @@
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
+
+<style>
+	/* a view change reads as one surface swapping, not as content teleporting */
+	.dialog-view {
+		opacity: 0;
+		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+
+	.dialog-view[data-visible='true'] {
+		opacity: 1;
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.dialog-view {
+			transition-duration: 100ms;
+		}
+	}
+</style>
