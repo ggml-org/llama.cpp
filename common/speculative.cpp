@@ -2571,8 +2571,13 @@ common_speculative_init_result::common_speculative_init_result(
         pimpl->model.reset(model_dft);
 
         const uint32_t n_ctx_train_dft = llama_model_n_ctx_train(model_dft);
-        if (n_ctx_train_dft > 0 && cparams.n_ctx > n_ctx_train_dft) {
-            cparams.n_ctx = n_ctx_train_dft;
+        if (n_ctx_train_dft > 0) {
+            const uint32_t n_ctx_dft_limit = cparams.kv_unified
+                ? n_ctx_train_dft
+                : (n_ctx_train_dft * cparams.n_seq_max);
+            if (cparams.n_ctx > n_ctx_dft_limit) {
+                cparams.n_ctx = n_ctx_dft_limit;
+            }
         }
 
         llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
