@@ -46,7 +46,6 @@
 #include <io.h>
 #else
 #include <sys/ioctl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -943,78 +942,9 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
 
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
-#ifdef _WIN32
-    std::wstring wpath = utf8_to_wstring(path);
-
-    // if the path already exists, check whether it's a directory
-    const DWORD attributes = GetFileAttributesW(wpath.c_str());
-    if ((attributes != INVALID_FILE_ATTRIBUTES) && (attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-        return true;
-    }
-
-    size_t pos_slash = 0;
-
-    // process path from front to back, procedurally creating directories
-    while ((pos_slash = path.find('\\', pos_slash)) != std::string::npos) {
-        const std::wstring subpath = wpath.substr(0, pos_slash);
-
-        pos_slash += 1;
-
-        // skip the drive letter, in some systems it can return an access denied error
-        if (subpath.length() == 2 && subpath[1] == ':') {
-            continue;
-        }
-
-        const bool success = CreateDirectoryW(subpath.c_str(), NULL);
-
-        if (!success) {
-            const DWORD error = GetLastError();
-
-            // if the path already exists, ensure that it's a directory
-            if (error == ERROR_ALREADY_EXISTS) {
-                const DWORD attributes = GetFileAttributesW(subpath.c_str());
-                if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-    }
-
-    return true;
-#else
-    // if the path already exists, check whether it's a directory
-    struct stat info;
-    if (stat(path.c_str(), &info) == 0) {
-        return S_ISDIR(info.st_mode);
-    }
-
-    size_t pos_slash = 1; // skip leading slashes for directory creation
-
-    // process path from front to back, procedurally creating directories
-    while ((pos_slash = path.find('/', pos_slash)) != std::string::npos) {
-        const std::string subpath = path.substr(0, pos_slash);
-        struct stat info;
-
-        // if the path already exists, ensure that it's a directory
-        if (stat(subpath.c_str(), &info) == 0) {
-            if (!S_ISDIR(info.st_mode)) {
-                return false;
-            }
-        } else {
-            // create parent directories
-            const int ret = mkdir(subpath.c_str(), 0755);
-            if (ret != 0) {
-                return false;
-            }
-        }
-
-        pos_slash += 1;
-    }
-
-    return true;
-#endif // _WIN32
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::u8path(path), ec);
+    return !ec;
 }
 
 bool fs_is_directory(const std::string & path) {
