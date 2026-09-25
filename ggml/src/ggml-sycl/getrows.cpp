@@ -15,8 +15,37 @@
 #include "dequantize.hpp"
 #include "getrows.hpp"
 
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum dequantize_tag {
+    DEQUANT_Q1_0,
+    DEQUANT_MXFP4,
+    DEQUANT_NVFP4,
+    DEQUANT_IQ2_XXS,
+    DEQUANT_IQ2_XS,
+    DEQUANT_IQ2_S,
+    DEQUANT_IQ3_XXS,
+    DEQUANT_IQ1_S,
+    DEQUANT_IQ1_M,
+    DEQUANT_IQ3_S,
+    DEQUANT_IQ4_NL,
+    DEQUANT_IQ4_XS,
+    DEQUANT_Q3_K,
+    DEQUANT_Q4_0,
+    DEQUANT_Q4_1,
+    DEQUANT_Q5_0,
+    DEQUANT_Q5_1,
+    DEQUANT_Q6_K,
+    DEQUANT_Q8_0,
+};
 
-template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
+enum dequantize_f32_tag {
+    DEQUANT_Q2_K_F32,
+    DEQUANT_Q4_K_F32,
+    DEQUANT_Q5_K_F32,
+};
+
+template<int qk, int qr, dequantize_tag deq, typename dst_t>
 static void k_get_rows(
             const void * src0, const int32_t * src1, dst_t * dst,
             int64_t ne00, /*int64_t ne01, int64_t ne02, int64_t ne03,*/
@@ -54,13 +83,33 @@ static void k_get_rows(
 
     // dequantize
     dfloat2 v;
-    dequantize_kernel(src0_row, ib, iqs, v);
+    switch (deq) {
+        case DEQUANT_Q1_0:    dequantize_q1_0(src0_row, ib, iqs, v); break;
+        case DEQUANT_MXFP4:   dequantize_mxfp4(src0_row, ib, iqs, v); break;
+        case DEQUANT_NVFP4:   dequantize_nvfp4(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ2_XXS: dequantize_iq2_xxs(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ2_XS:  dequantize_iq2_xs(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ2_S:   dequantize_iq2_s(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ3_XXS: dequantize_iq3_xxs(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ1_S:   dequantize_iq1_s(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ1_M:   dequantize_iq1_m(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ3_S:   dequantize_iq3_s(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ4_NL:  dequantize_iq4_nl(src0_row, ib, iqs, v); break;
+        case DEQUANT_IQ4_XS:  dequantize_iq4_xs(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q3_K:    dequantize_q3_K(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q4_0:    dequantize_q4_0(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q4_1:    dequantize_q4_1(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q5_0:    dequantize_q5_0(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q5_1:    dequantize_q5_1(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q6_K:    dequantize_q6_K(src0_row, ib, iqs, v); break;
+        case DEQUANT_Q8_0:    dequantize_q8_0(src0_row, ib, iqs, v); break;
+    }
 
     dst_row[iybs + iqs + 0] = v.x();
     dst_row[iybs + iqs + y_offset] = v.y();
 }
 
-template<int qk, int qr, dequantize_kernel_f32_t dequantize_kernel, typename dst_t>
+template<int qk, int qr, dequantize_f32_tag deq, typename dst_t>
 static void k_get_rows_f32(
             const void * src0, const int32_t * src1, dst_t * dst,
             int64_t ne00,
@@ -98,7 +147,11 @@ static void k_get_rows_f32(
 
     float v0;
     float v1;
-    dequantize_kernel(src0_row, ib, iqs, v0, v1);
+    switch (deq) {
+        case DEQUANT_Q2_K_F32: dequantize_q2_K_f32(src0_row, ib, iqs, v0, v1); break;
+        case DEQUANT_Q4_K_F32: dequantize_q4_K_f32(src0_row, ib, iqs, v0, v1); break;
+        case DEQUANT_Q5_K_F32: dequantize_q5_K_f32(src0_row, ib, iqs, v0, v1); break;
+    }
 
     dst_row[iybs + iqs + 0] = (dst_t) v0;
     dst_row[iybs + iqs + y_offset] = (dst_t) v1;
@@ -137,7 +190,7 @@ static void k_get_rows_float(
     dst_row[i00] = src0_row[i00];
 }
 
-template <int qk, int qr, dequantize_kernel_t dq>
+template <int qk, int qr, dequantize_tag dq>
 static void get_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
                           ggml_tensor *dst, const void *src0_dd,
                           const int32_t *src1_dd, float *dst_dd,
@@ -173,7 +226,7 @@ static void get_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor *sr
     GGML_UNUSED(ctx);
 }
 
-template <int qk, int qr, dequantize_kernel_f32_t dq>
+template <int qk, int qr, dequantize_f32_tag dq>
 static void get_rows_sycl_f32(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
                               ggml_tensor *dst, const void *src0_dd,
                               const int32_t *src1_dd, float *dst_dd,
@@ -351,91 +404,91 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (int32_t *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q1_0:
-            get_rows_sycl<QK1_0, 1, dequantize_q1_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK1_0, 1, DEQUANT_Q1_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_MXFP4:
-            get_rows_sycl<QK_MXFP4, 2, dequantize_mxfp4>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_MXFP4, 2, DEQUANT_MXFP4>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_NVFP4:
-            get_rows_sycl<QK_NVFP4, 1, dequantize_nvfp4>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_NVFP4, 1, DEQUANT_NVFP4>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ2_XXS:
-            get_rows_sycl<QK_K, 1, dequantize_iq2_xxs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ2_XXS>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ2_XS:
-            get_rows_sycl<QK_K, 1, dequantize_iq2_xs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ2_XS>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ2_S:
-            get_rows_sycl<QK_K, 1, dequantize_iq2_s>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ2_S>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ3_XXS:
-            get_rows_sycl<QK_K, 1, dequantize_iq3_xxs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ3_XXS>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ1_S:
-            get_rows_sycl<QK_K, 1, dequantize_iq1_s>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ1_S>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ1_M:
-            get_rows_sycl<QK_K, 1, dequantize_iq1_m>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ1_M>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ3_S:
-            get_rows_sycl<QK_K, 1, dequantize_iq3_s>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ3_S>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ4_NL:
-            get_rows_sycl<QK4_NL, 1, dequantize_iq4_nl>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK4_NL, 1, DEQUANT_IQ4_NL>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ4_XS:
-            get_rows_sycl<QK_K, 1, dequantize_iq4_xs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_IQ4_XS>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q2_K:
-            get_rows_sycl_f32<QK_K, 1, dequantize_q2_K_f32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl_f32<QK_K, 1, DEQUANT_Q2_K_F32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q3_K:
-            get_rows_sycl<QK_K, 1, dequantize_q3_K>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_Q3_K>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q4_0:
-            get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK4_0, QR4_0, DEQUANT_Q4_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q4_1:
-            get_rows_sycl<QK4_1, QR4_1, dequantize_q4_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK4_1, QR4_1, DEQUANT_Q4_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q4_K:
-            get_rows_sycl_f32<QK_K, 1, dequantize_q4_K_f32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl_f32<QK_K, 1, DEQUANT_Q4_K_F32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q5_0:
-            get_rows_sycl<QK5_0, QR5_0, dequantize_q5_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK5_0, QR5_0, DEQUANT_Q5_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q5_1:
-            get_rows_sycl<QK5_1, QR5_1, dequantize_q5_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK5_1, QR5_1, DEQUANT_Q5_1>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q5_K:
-            get_rows_sycl_f32<QK_K, 1, dequantize_q5_K_f32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl_f32<QK_K, 1, DEQUANT_Q5_K_F32>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q6_K:
-            get_rows_sycl<QK_K, 1, dequantize_q6_K>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK_K, 1, DEQUANT_Q6_K>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_Q8_0:
-            get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
+            get_rows_sycl<QK8_0, QR8_0, DEQUANT_Q8_0>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         default:
