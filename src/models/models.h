@@ -1791,9 +1791,6 @@ struct llama_model_granite_speech_5 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    // Output dim without (n_vocab without inserted blanks)
-    uint32_t output_dim;
-
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
     };

@@ -45,11 +45,6 @@ void llama_model_granite_speech_5::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_CTC_CONV_KERNEL,           hparams.ctc.conv_kernel);
     ml.get_key(LLM_KV_CTC_CONV_EXPANSION_FACTOR, hparams.ctc.conv_expansion_factor);
     ml.get_arr(LLM_KV_CTC_SUBSAMPLE_LAYERS,      hparams.subsample_factor_impl, false);
-
-    // The output_dim is the model's native vocab size without blanks inserted.
-    // This is held in the GGUF as vocab_size, but doesn't match n_vocab in the
-    // vocab due to the inserted blanks.
-    ml.get_key(LLM_KV_VOCAB_SIZE, output_dim);
 }
 
 void llama_model_granite_speech_5::load_arch_tensors(llama_model_loader &) {
@@ -112,11 +107,11 @@ void llama_model_granite_speech_5::load_arch_tensors(llama_model_loader &) {
     }
 
     // terminal CTC head; the same weight is also applied mid-stack for self-conditioning
-    output   = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, output_dim}, 0);
-    output_b = create_tensor(tn(LLM_TENSOR_OUTPUT, "bias"),   {output_dim}, 0);
+    output   = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, 0);
+    output_b = create_tensor(tn(LLM_TENSOR_OUTPUT, "bias"),   {n_vocab}, 0);
 
     // mid-stack self-conditioning back-projection (softmax(mid ctc logits) -> hidden_dim)
-    ctc_out_mid   = create_tensor(tn(LLM_TENSOR_CTC_OUT_MID, "weight"), {output_dim, n_embd}, 0);
+    ctc_out_mid   = create_tensor(tn(LLM_TENSOR_CTC_OUT_MID, "weight"), {n_vocab, n_embd}, 0);
     ctc_out_mid_b = create_tensor(tn(LLM_TENSOR_CTC_OUT_MID, "bias"),   {n_embd}, 0);
 }
 
