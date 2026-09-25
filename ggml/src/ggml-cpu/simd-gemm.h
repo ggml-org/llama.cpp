@@ -78,6 +78,21 @@ static inline void simd_gemm_ukernel_tail(
     for (int64_t i = 0; i < RM; i++) {
         _mm512_mask_storeu_ps(C + i * N, mask, acc[i]);
     }
+#elif defined(__AVX2__)
+    const __m256i mask = _mm256_cmpgt_epi32(_mm256_set1_epi32(cols), _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7));
+    __m256 acc[RM];
+    for (int64_t i = 0; i < RM; i++) {
+        acc[i] = _mm256_maskload_ps(C + i * N, mask);
+    }
+    for (int64_t kk = 0; kk < K; kk++) {
+        const __m256 b = _mm256_maskload_ps(B + kk * N, mask);
+        for (int64_t i = 0; i < RM; i++) {
+            acc[i] = GGML_F32_VEC_FMA(acc[i], b, _mm256_set1_ps(A[i * K + kk]));
+        }
+    }
+    for (int64_t i = 0; i < RM; i++) {
+        _mm256_maskstore_ps(C + i * N, mask, acc[i]);
+    }
 #else
     for (int64_t j = 0; j < cols; j++) {
         for (int64_t i = 0; i < RM; i++) {
