@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Cog, Heart, HeartOff } from '@lucide/svelte';
+	import { Heart, HeartOff, Info } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import { modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -27,7 +27,7 @@
 >
 	<ActionIcon
 		class="h-5 w-5 hover:text-foreground"
-		icon={Cog}
+		icon={Info}
 		iconSize="h-4 w-4"
 		onclick={() => uiStore.openModelsManager(option.id)}
 		tooltip="Manage model"

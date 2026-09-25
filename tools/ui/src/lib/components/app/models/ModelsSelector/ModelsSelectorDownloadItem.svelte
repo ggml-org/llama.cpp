@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverDownloadProgressBar from '../discover/ModelsDiscoverDownloadProgressBar.svelte';
-	import { Cog, Loader2, Pause, Play, X } from '@lucide/svelte';
+	import { Info, Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore, uiStore } from '$lib/stores';
@@ -72,7 +72,6 @@
 	>
 		{#if orgName}
 			<ModelsDiscoverAvatar
-				class="mt-0"
 				org={fetchedBaseModelOrg ?? orgName}
 				quantOrg={orgName}
 				quantPositionClass="-bottom-1 -right-1"
@@ -114,7 +113,7 @@
 		onclick={() => uiStore.openModelsManager(entry.repoWithTag)}
 		type="button"
 	>
-		<Cog class="h-4 w-4" />
+		<Info class="h-4 w-4" />
 	</button>
 
 	<button
