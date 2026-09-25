@@ -2060,7 +2060,7 @@ private:
             res->is_begin = true;
         } else {
             res->content = tkn.text_to_send;
-            res->tokens  = { tkn.tok };
+            res->tokens.assign(1, tkn.tok);
         }
 
         res->n_decoded             = slot.stats.n_gen;

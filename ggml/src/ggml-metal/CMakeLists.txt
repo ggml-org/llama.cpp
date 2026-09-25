@@ -29,9 +29,29 @@ set(METALLIB_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/../ggml-common.h")
 set(METALLIB_KERNELS_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/common.h")
 set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.h")
 set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
+set(METALLIB_KERNELS_FA_COMMON     "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_common.metal")
+set(METALLIB_KERNELS_FA_VEC_COMMON "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fa_vec_common.metal")
+set(METALLIB_KERNELS_FA_SHARED
+    ${METALLIB_KERNELS_FA_COMMON}
+    ${METALLIB_KERNELS_FA_VEC_COMMON}
+)
 
 set(METALLIB_KERNEL_SOURCES
-    kernels/fa.metal
+    kernels/fa_aux.metal
+    kernels/fa_f16.metal
+    kernels/fa_f32.metal
+    kernels/fa_q4_0.metal
+    kernels/fa_q4_1.metal
+    kernels/fa_q5_0.metal
+    kernels/fa_q5_1.metal
+    kernels/fa_q8_0.metal
+    kernels/fa_vec_f16.metal
+    kernels/fa_vec_f32.metal
+    kernels/fa_vec_q4_0.metal
+    kernels/fa_vec_q4_1.metal
+    kernels/fa_vec_q5_0.metal
+    kernels/fa_vec_q5_1.metal
+    kernels/fa_vec_q8_0.metal
     kernels/mul_mv.metal
     kernels/mul_mm.metal
     kernels/quantize.metal
@@ -82,13 +102,21 @@ if (GGML_METAL_EMBED_LIBRARY)
         if(_has_quantize)
             list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_QUANTIZE})
         endif()
+        file(STRINGS ${SRC} _has_fa_common REGEX "#include \"fa_common\\.metal\"")
+        file(STRINGS ${SRC} _has_fa_vec_common REGEX "#include \"fa_vec_common\\.metal\"")
+        if(_has_fa_common)
+            list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_COMMON})
+        endif()
+        if(_has_fa_vec_common)
+            list(APPEND HEADERS_FOR_SRC ${METALLIB_KERNELS_FA_VEC_COMMON})
+        endif()
 
         add_custom_command(
             OUTPUT "${ASM}"
             # Step 1: concatenate shared headers + this kernel source
             COMMAND cat ${HEADERS_FOR_SRC} ${SRC} > "${EMBED}.tmp1"
             # Step 2: remove internal #include and #pragma once
-            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
+            COMMAND sed -e "/\#include \"common.h\"/d" -e "/\#include \"dequantize.h\"/d" -e "/\#include \"quantize.h\"/d" -e "/\#include \"fa_common.metal\"/d" -e "/\#include \"fa_vec_common.metal\"/d" -e "/\#pragma once/d" < "${EMBED}.tmp1" > "${EMBED}.tmp2"
             # Step 3: inline ggml-common.h (replacing __embed_ggml-common.h__ sentinel)
             COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}" -e "/__embed_ggml-common.h__/d" < "${EMBED}.tmp2" > "${EMBED}.tmp3"
             # Step 4: inline ggml-metal-impl.h
@@ -103,8 +131,7 @@ if (GGML_METAL_EMBED_LIBRARY)
             COMMAND echo .incbin "\"${EMBED}\""                                  >> "${ASM}"
             COMMAND echo ".globl _ggml_metallib_${kind_sym}_end"                 >> "${ASM}"
             COMMAND echo "_ggml_metallib_${kind_sym}_end:"                       >> "${ASM}"
-            DEPENDS ../ggml-common.h ggml-metal-impl.h
-                    kernels/common.h kernels/dequantize.h kernels/quantize.h
+            DEPENDS ${HEADERS_FOR_SRC} ../ggml-common.h ggml-metal-impl.h
                     kernels/${kind}.metal
             COMMENT "Generate embedded Metal library for ${kind}"
             VERBATIM
@@ -123,6 +150,10 @@ else()
     configure_file(kernels/common.h     ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/common.h     COPYONLY)
     configure_file(kernels/dequantize.h ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/dequantize.h COPYONLY)
     configure_file(kernels/quantize.h   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/quantize.h   COPYONLY)
+    foreach(hdr ${METALLIB_KERNELS_FA_SHARED})
+        get_filename_component(hdr_name ${hdr} NAME)
+        configure_file(${hdr} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/${hdr_name} COPYONLY)
+    endforeach()
 
     foreach(src ${METALLIB_KERNEL_SOURCES})
         configure_file(${src} ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} COPYONLY)
@@ -180,7 +211,7 @@ else()
         add_custom_command(
             OUTPUT ${AIR}
             COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS} -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${src} -o ${AIR}
-            DEPENDS ${src} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            DEPENDS ${src} ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h kernels/quantize.h ${METALLIB_COMMON} ggml-metal-impl.h
             COMMENT "Compiling ${src}"
             VERBATIM
         )

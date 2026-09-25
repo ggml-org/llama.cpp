@@ -6,7 +6,7 @@ cd $SCRIPT_DIR
 
 set -eu
 
-WORKERS="${PYTEST_WORKERS:-auto}"
+WORKERS="${PYTEST_WORKERS:-4}"
 
 if [ $# -lt 1 ]
 then

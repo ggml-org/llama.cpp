@@ -14,6 +14,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         bool amd_shader_core_properties = false;
         bool integer_dot_product = false;
         bool subgroup_size_control = false;
+        bool shader_float8 = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
@@ -22,6 +23,8 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 integer_dot_product = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 subgroup_size_control = true;
+            } else if (strcmp("VK_EXT_shader_float8", properties.extensionName) == 0) {
+                shader_float8 = true;
             }
         }
 
@@ -47,6 +50,9 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // RDNA
             if (shader_core_props_amd.wavefrontsPerSimd == 20) {
                 return vk_device_architecture::AMD_RDNA1;
+            }
+            if (shader_float8) {
+                return vk_device_architecture::AMD_RDNA4;
             }
             if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
@@ -120,6 +126,23 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             if (sm_props.shaderWarpsPerSM == 32) {
                 return vk_device_architecture::NVIDIA_TURING;
             }
+        }
+    } else if(props.vendorID == VK_VENDOR_ID_QUALCOMM){
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool cooperative_matrix = false;
+        bool cooperative_matrix_conversion = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0) {
+                cooperative_matrix = true;
+            } else if (strcmp("VK_QCOM_cooperative_matrix_conversion", properties.extensionName) == 0) {
+                cooperative_matrix_conversion = true;
+            }
+        }
+
+        if (cooperative_matrix && cooperative_matrix_conversion) {
+            return vk_device_architecture::QUALCOMM_ADRENO;
         }
     }
     return vk_device_architecture::OTHER;
@@ -1480,6 +1503,8 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
         case GGML_TYPE_Q8_0:    block_a_size = std430_size({{32, 4}, {fp_size,  fp_align}});                  break; // qs[8] + dm
         case GGML_TYPE_IQ4_XS:  block_a_size = std430_size({{32, 4}, {fp_size,  fp_align}});                  break; // qs[8] + d
         case GGML_TYPE_MXFP4:   block_a_size = std430_size({{32, 4}, {fp_size,  fp_align}});                  break; // qs[8] + d
+        case GGML_TYPE_IQ4_NL:  block_a_size = std430_size({{32, 4}, {fp_size,  fp_align}});                  break; // qs[8] + d
+        case GGML_TYPE_NVFP4:   block_a_size = std430_size({{32, 4}, {fp2_size, fp2_align}});                 break; // qs[8] + d_scales(vec2)
         case GGML_TYPE_Q2_K:    block_a_size = std430_size({{ 8, 4}, {2, 2}, {fp2_size, fp2_align}});         break; // qs[2] + scales(u8vec2) + dm(vec2)
         case GGML_TYPE_Q3_K:    block_a_size = std430_size({{16, 4}, {fp2_size, fp2_align}});                 break; // qs[4] + d_scales(vec2)
         case GGML_TYPE_Q4_K:    block_a_size = std430_size({{16, 4}, {fp2_size, fp2_align}});                 break; // qs[4] + dm(vec2)
@@ -1513,6 +1538,66 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
 
     VK_LOG_DEBUG("ggml_vk_matmul_int_shmem_support(warptile=(" << warptile[0] << "," << warptile[1] << "," << warptile[2] << "), "
                  "mul_mat_id=" << mul_mat_id << ", src0_type=" << ggml_type_name(src0_type) << ", total=" << total_size << ", supported=" << supported);
+
+    return supported;
+}
+
+static bool ggml_vk_matmul_cm1_int_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
+
+    bool kscales2 = false;    // two scale sets per block
+    bool has_dm   = false;    // d+m as vec2 + b-side sum
+    bool has_kvalues = false;
+    switch (src0_type) {
+        case GGML_TYPE_Q4_0: case GGML_TYPE_Q5_0: case GGML_TYPE_Q8_0:
+            break;
+        case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K:
+            has_dm = true;                          break;
+        case GGML_TYPE_IQ4_NL: case GGML_TYPE_IQ4_XS: case GGML_TYPE_MXFP4:
+            has_kvalues = true;                     break;
+        case GGML_TYPE_Q3_K: case GGML_TYPE_Q6_K:
+            kscales2 = true;                        break;
+        case GGML_TYPE_NVFP4:
+            kscales2 = true; has_kvalues = true;    break;
+        default:
+            return false;
+    }
+
+    const uint32_t BLOCK_SIZE = warptile[0];
+    const uint32_t BM         = warptile[1];
+    const uint32_t BN         = warptile[2];
+    const uint32_t WARP       = warptile[10];
+
+    const uint32_t BK      = 32;
+    const uint32_t BK_STEP = mul_mat_id ? 2u : 4u;
+    const uint32_t QPITCH  = BK_STEP * (BK / 4u) + 4u;
+    const uint32_t KSCALES = kscales2 ? 2u : 1u;
+
+    uint32_t total = 0;
+    total += BM * QPITCH * (uint32_t)sizeof(uint32_t);   // buf_a_qs
+    total += BN * QPITCH * (uint32_t)sizeof(uint32_t);   // buf_b_qs
+    total += has_dm ? (BM * BK_STEP * 2u * (uint32_t)sizeof(float))   // buf_a_dm (vec2)
+                    : (BM * BK_STEP * KSCALES * (uint32_t)sizeof(float)); // buf_a_d
+    total += BN * BK_STEP * (uint32_t)sizeof(float);     // buf_b_d
+    if (has_dm) {
+        total += BN * BK_STEP * (uint32_t)sizeof(float); // buf_b_s
+    }
+    if (has_kvalues) {
+        total += 16u * (uint32_t)sizeof(int8_t);         // cm1_kvalues[16]
+    }
+    if (src0_type == GGML_TYPE_NVFP4 && !device->ocp_fp4) {
+        total += 128u * (uint32_t)sizeof(float);         // ue4m3_fp32_lut[128]
+    }
+    if (mul_mat_id) {
+        total += BN * 2u * (uint32_t)sizeof(uint16_t);   // row_ids[BN] (u16vec2)
+        const uint32_t num_warps = BLOCK_SIZE / std::max(WARP, 1u);
+        total += num_warps * 4u * (uint32_t)sizeof(uint32_t); // ballots_sh[NUM_WARPS] (uvec4)
+    }
+
+    const bool supported = total <= device->properties.limits.maxComputeSharedMemorySize;
+
+    VK_LOG_DEBUG("ggml_vk_matmul_cm1_int_shmem_support(warptile=(" << warptile[0] << "," << warptile[1] << "," << warptile[2] << "), "
+                 "mul_mat_id=" << mul_mat_id << ", src0_type=" << ggml_type_name(src0_type) << ", total=" << total << ", supported=" << supported);
 
     return supported;
 }
@@ -1620,6 +1705,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                           l_warptile_id, m_warptile_id, s_warptile_id,
                           l_warptile_mmq, m_warptile_mmq, s_warptile_mmq,
                           l_warptile_mmq_int, m_warptile_mmq_int, s_warptile_mmq_int,
+                          l_warptile_mmq_cm1_int, m_warptile_mmq_cm1_int, s_warptile_mmq_cm1_int,
+                          l_warptile_mmq_cm1_int_k, m_warptile_mmq_cm1_int_k, s_warptile_mmq_cm1_int_k,
                           l_warptile_mmq_int_k, m_warptile_mmq_int_k, s_warptile_mmq_int_k,
                           l_warptile_mmq_k, m_warptile_mmq_k, s_warptile_mmq_k,
                           l_warptile_mmqid, m_warptile_mmqid, s_warptile_mmqid,
@@ -1628,9 +1715,16 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     std::array<uint32_t, 3> l_wg_denoms, m_wg_denoms, s_wg_denoms,
                             l_mmq_wg_denoms, m_mmq_wg_denoms, s_mmq_wg_denoms,
                             l_mmq_wg_denoms_k, m_mmq_wg_denoms_k, s_mmq_wg_denoms_k,
+                            l_mmq_cm1_wg_denoms_k, m_mmq_cm1_wg_denoms_k, s_mmq_cm1_wg_denoms_k,
                             l_mmqid_wg_denoms, m_mmqid_wg_denoms, s_mmqid_wg_denoms;
 
     uint32_t l_align, m_align, s_align;
+
+    // RDNA3.5 preferred wave32 here
+    const bool cm1_use_wave32 = device->vendor_id == VK_VENDOR_ID_AMD &&
+                                device->subgroup_size_control &&
+                                device->subgroup_min_size <= 32 && device->subgroup_max_size >= 32;
+    const uint32_t cm1_sg = cm1_use_wave32 ? 32 : device->subgroup_size;
 
     vk_pipeline wait_pipeline;
     CompileTask claimed_task {};
@@ -1689,6 +1783,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         const uint32_t tk_m = device->coopmat_support ? device->coopmat_k : 1;
         const uint32_t tk_s = device->coopmat_support ? device->coopmat_k : 1;
 
+        const uint32_t itm = device->coopmat_int_m;
+        const uint32_t itn = device->coopmat_int_n;
+        const uint32_t itk = device->coopmat_int_k;
+
         const uint32_t s_warptile_wm = device->subgroup_size == 8 ? 8 : 32;
 
         l_warptile = { 128,             128, 128, 16, mm_warp_8 * 2, 64, 2, tm_l, tn_l, tk_l, mm_warp_8 };
@@ -1703,6 +1801,22 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         l_warptile_mmq_int = { 128,             128, 128, 32, mm_warp_8 * 2, 64, 2, 4, 4, 1, mm_warp_8 };
         m_warptile_mmq_int = { 128,              64,  64, 32, mm_warp_8,     32, 2, 2, 2, 1, mm_warp_8 };
         s_warptile_mmq_int = { subgroup_size_32, 32,  32, 32, s_warptile_wm, 32, 2, 2, 1, 1, subgroup_size_8 };
+
+        const auto cm1_bs = [cm1_sg](uint32_t bm, uint32_t bn) {
+            return cm1_sg * (bm / std::min(cm1_sg, bm)) * (bn / 32);
+        };
+
+        l_warptile_mmq_cm1_int = { cm1_bs(128, 128), 128, 128, 32, std::min(cm1_sg, 128u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+        m_warptile_mmq_cm1_int = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+        s_warptile_mmq_cm1_int = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+
+        l_warptile_mmq_cm1_int_k = { cm1_bs( 64, 128),  64, 128, 32, std::min(cm1_sg,  64u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+        m_warptile_mmq_cm1_int_k = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+        s_warptile_mmq_cm1_int_k = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm, itn, itk, cm1_sg, (uint32_t)device->architecture };
+
+        l_mmq_cm1_wg_denoms_k = { l_warptile_mmq_cm1_int_k[1], l_warptile_mmq_cm1_int_k[2], 1 };
+        m_mmq_cm1_wg_denoms_k = { m_warptile_mmq_cm1_int_k[1], m_warptile_mmq_cm1_int_k[2], 1 };
+        s_mmq_cm1_wg_denoms_k = { s_warptile_mmq_cm1_int_k[1], s_warptile_mmq_cm1_int_k[2], 1 };
 
         // K-quants use even more registers, mitigate by setting WMITER to 1
         l_warptile_mmq_int_k = { 128,               128, 128, 32, mm_warp_8 * 2, 64, 1, 4, 4, 1, mm_warp_8 };
@@ -1734,6 +1848,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, mm_warp_8, 64, 2, tm_m, tn_m, tk_m, mm_warp_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, mm_warp_16, 64, 1, 4, 2, 1, mm_warp_16 };
+        } else if (device->vendor_id == VK_VENDOR_ID_QUALCOMM && device->coopmat_support) {
+            m_warptile     = { 64, 64, 64, 16, 64, 64, 1, tm_l, tn_l, tk_l, 64 };
+            m_warptile_mmq = { 64, 64, 64, 32, 64, 64, 1, tm_m, tn_m, tk_m, 64 };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -1756,6 +1873,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 l_align         = 32;  //set as BK
             }
         }
+
+        const bool use_cm1_int = device->coopmat_int_support &&
+                                 (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4);
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
@@ -1786,35 +1906,50 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
             // The q8_1 mmq path has its own (larger) shmem layout, check it separately.
             // K-quants and IQ3_S use the _int_k warptiles, others use _int.
+            // cm1 splits k-tiles on the KSCALES==2 types and shares tiles between dense/id.
             const bool is_k_quant = (t == GGML_TYPE_Q2_K || t == GGML_TYPE_Q3_K ||
                                      t == GGML_TYPE_Q4_K || t == GGML_TYPE_Q5_K ||
                                      t == GGML_TYPE_Q6_K || t == GGML_TYPE_IQ3_S);
-            const auto & s_int   = is_k_quant ? s_warptile_mmq_int_k   : s_warptile_mmq_int;
-            const auto & m_int   = is_k_quant ? m_warptile_mmq_int_k   : m_warptile_mmq_int;
-            const auto & l_int   = is_k_quant ? l_warptile_mmq_int_k   : l_warptile_mmq_int;
-            const auto & s_intid = is_k_quant ? s_warptile_mmqid_int_k : s_warptile_mmqid_int;
-            const auto & m_intid = is_k_quant ? m_warptile_mmqid_int_k : m_warptile_mmqid_int;
-            const auto & l_intid = is_k_quant ? l_warptile_mmqid_int_k : l_warptile_mmqid_int;
+            const bool cm1_k_tile = (t == GGML_TYPE_Q3_K || t == GGML_TYPE_Q6_K ||
+                                     t == GGML_TYPE_NVFP4);
 
-            if (!ggml_vk_matmul_int_shmem_support(device, s_int, false, t)) {
+            const auto & s_int   = use_cm1_int ? (cm1_k_tile ? s_warptile_mmq_cm1_int_k : s_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? s_warptile_mmq_int_k     : s_warptile_mmq_int);
+            const auto & m_int   = use_cm1_int ? (cm1_k_tile ? m_warptile_mmq_cm1_int_k : m_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? m_warptile_mmq_int_k     : m_warptile_mmq_int);
+            const auto & l_int   = use_cm1_int ? (cm1_k_tile ? l_warptile_mmq_cm1_int_k : l_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? l_warptile_mmq_int_k     : l_warptile_mmq_int);
+            const auto & s_intid = use_cm1_int ? (cm1_k_tile ? s_warptile_mmq_cm1_int_k : s_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? s_warptile_mmqid_int_k   : s_warptile_mmqid_int);
+            const auto & m_intid = use_cm1_int ? (cm1_k_tile ? m_warptile_mmq_cm1_int_k : m_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? m_warptile_mmqid_int_k   : m_warptile_mmqid_int);
+            const auto & l_intid = use_cm1_int ? (cm1_k_tile ? l_warptile_mmq_cm1_int_k : l_warptile_mmq_cm1_int)
+                                               : (is_k_quant  ? l_warptile_mmqid_int_k   : l_warptile_mmqid_int);
+
+            const auto int_shmem_support = [&](const std::vector<uint32_t>& wt, bool id) {
+                return use_cm1_int ? ggml_vk_matmul_cm1_int_shmem_support(device, wt, id, t)
+                                   : ggml_vk_matmul_int_shmem_support(device, wt, id, t);
+            };
+
+            if (!int_shmem_support(s_int, false)) {
                 device->mul_mat_s_int[i] = false;
                 device->mul_mat_m_int[i] = false;
                 device->mul_mat_l_int[i] = false;
-            } else if (!ggml_vk_matmul_int_shmem_support(device, m_int, false, t)) {
+            } else if (!int_shmem_support(m_int, false)) {
                 device->mul_mat_m_int[i] = false;
                 device->mul_mat_l_int[i] = false;
-            } else if (!ggml_vk_matmul_int_shmem_support(device, l_int, false, t)) {
+            } else if (!int_shmem_support(l_int, false)) {
                 device->mul_mat_l_int[i] = false;
             }
 
-            if (!ggml_vk_matmul_int_shmem_support(device, s_intid, true, t)) {
+            if (!int_shmem_support(s_intid, true)) {
                 device->mul_mat_id_s_int[i] = false;
                 device->mul_mat_id_m_int[i] = false;
                 device->mul_mat_id_l_int[i] = false;
-            } else if (!ggml_vk_matmul_int_shmem_support(device, m_intid, true, t)) {
+            } else if (!int_shmem_support(m_intid, true)) {
                 device->mul_mat_id_m_int[i] = false;
                 device->mul_mat_id_l_int[i] = false;
-            } else if (!ggml_vk_matmul_int_shmem_support(device, l_intid, true, t)) {
+            } else if (!int_shmem_support(l_intid, true)) {
                 device->mul_mat_id_l_int[i] = false;
             }
         }
@@ -2263,6 +2398,29 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             auto tc = filter_tc(tc_base, key.type_a, key.mul_mat_id);
             if (!tc.empty()) create_mm_pipelines(key, tc, name, len, data, pc_size, pc, qs, false, true, 0, true, cm1_pin);
         };
+        // int8 MMQ helper: per-type cm1 shader, warptile passed as-is (carries DEVICE_ARCH in
+        // spec constant WARP_SIZE_IDX+1), subgroup size pinned to the warptile WARP element, no aligned variant.
+        auto cm1_create_mmq = [&](vk_matmul_pipeline_key key, const std::vector<vk_tile_config>& tc_base,
+                                  const std::string& name, size_t len, const void* data, uint32_t pc_size, uint32_t pc) {
+            spec_fn_t identity = [](const std::vector<uint32_t>& wt, bool) { return wt; };
+            auto tc = filter_tc(tc_base, key.type_a, key.mul_mat_id, true);
+            if (!tc.empty()) create_mm_pipelines(key, tc, name, len, data, pc_size, pc, identity, false, false, 0, false, true);
+        };
+
+        std::vector<vk_tile_config> tc_mmq_cm1_int = {
+            {s_warptile_mmq_cm1_int, s_mmq_wg_denoms, s_align},
+            {m_warptile_mmq_cm1_int, m_mmq_wg_denoms, m_align},
+            {l_warptile_mmq_cm1_int, l_mmq_wg_denoms, l_align},
+        };
+        std::vector<vk_tile_config> tc_mmq_cm1_int_k = {
+            {s_warptile_mmq_cm1_int_k, s_mmq_cm1_wg_denoms_k, s_align},
+            {m_warptile_mmq_cm1_int_k, m_mmq_cm1_wg_denoms_k, m_align},
+            {l_warptile_mmq_cm1_int_k, l_mmq_cm1_wg_denoms_k, l_align},
+        };
+
+        // Some quants are not performant on RDNA4, those fall back to FP16 matmul
+        const bool rdna3 = device->architecture == AMD_RDNA3;
+        const bool rdna4 = device->architecture == AMD_RDNA4;
 
         cm1_create({GGML_TYPE_F32, GGML_TYPE_F32, false, false}, tc_mm, "matmul_f32_f32",     matmul_f32_f32_cm1_len,     matmul_f32_f32_cm1_data,     sizeof(vk_mat_mat_push_constants), 3);
         cm1_create({GGML_TYPE_F32, GGML_TYPE_F16, false, false}, tc_mm, "matmul_f32_f16",     matmul_f32_f16_cm1_len,     matmul_f32_f16_cm1_data,     sizeof(vk_mat_mat_push_constants), 3);
@@ -2320,6 +2478,22 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 #undef X_CM1
 
+        if (device->coopmat_int_support && (rdna3 || rdna4)) {
+            cm1_create_mmq({GGML_TYPE_Q4_0,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q4_0_q8_1",   matmul_q4_0_q8_1_cm1_len,   matmul_q4_0_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q4_1, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q4_1_q8_1",   matmul_q4_1_q8_1_cm1_len,   matmul_q4_1_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
+            cm1_create_mmq({GGML_TYPE_Q5_0,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q5_0_q8_1",   matmul_q5_0_q8_1_cm1_len,   matmul_q5_0_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q5_1, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q5_1_q8_1",   matmul_q5_1_q8_1_cm1_len,   matmul_q5_1_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
+            cm1_create_mmq({GGML_TYPE_Q8_0,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q8_0_q8_1",   matmul_q8_0_q8_1_cm1_len,   matmul_q8_0_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
+            cm1_create_mmq({GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_iq4_nl_q8_1", matmul_iq4_nl_q8_1_cm1_len, matmul_iq4_nl_q8_1_cm1_data, sizeof(vk_mat_mat_push_constants), 3);
+            cm1_create_mmq({GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_iq4_xs_q8_1", matmul_iq4_xs_q8_1_cm1_len, matmul_iq4_xs_q8_1_cm1_data, sizeof(vk_mat_mat_push_constants), 3);
+            cm1_create_mmq({GGML_TYPE_MXFP4,  GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_mxfp4_q8_1",  matmul_mxfp4_q8_1_cm1_len,  matmul_mxfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_push_constants), 3);
+            cm1_create_mmq({GGML_TYPE_Q3_K,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int_k, "matmul_q3_k_q8_1",   matmul_q3_k_q8_1_cm1_len,   matmul_q3_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q4_K, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q4_k_q8_1",   matmul_q4_k_q8_1_cm1_len,   matmul_q4_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_Q5_K, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int,   "matmul_q5_k_q8_1",   matmul_q5_k_q8_1_cm1_len,   matmul_q5_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3); }
+            cm1_create_mmq({GGML_TYPE_Q6_K,   GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int_k, "matmul_q6_k_q8_1",   matmul_q6_k_q8_1_cm1_len,   matmul_q6_k_q8_1_cm1_data,   sizeof(vk_mat_mat_push_constants), 3);
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_NVFP4, GGML_TYPE_Q8_1, false, false}, tc_mmq_cm1_int_k, "matmul_nvfp4_q8_1",  matmul_nvfp4_q8_1_cm1_len,  matmul_nvfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_push_constants), 3); }
+        }
+
         GGML_ASSERT(device->subgroup_ballot);
 
         cm1_create({GGML_TYPE_F32, GGML_TYPE_F32, true, false}, tc_mm, "matmul_id_subgroup_f32_f32", matmul_id_subgroup_f32_f32_cm1_len, matmul_id_subgroup_f32_f32_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
@@ -2376,6 +2550,22 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             FOR_EACH_LUT_FP4_TYPE(X_CM1_ID)
         }
 #undef X_CM1_ID
+
+        if (device->coopmat_int_support && (rdna3 || rdna4)) {
+            cm1_create_mmq({GGML_TYPE_Q4_0,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q4_0_q8_1",   matmul_id_subgroup_q4_0_q8_1_cm1_len,   matmul_id_subgroup_q4_0_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q4_1,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q4_1_q8_1",   matmul_id_subgroup_q4_1_q8_1_cm1_len,   matmul_id_subgroup_q4_1_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q5_0,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q5_0_q8_1",   matmul_id_subgroup_q5_0_q8_1_cm1_len,   matmul_id_subgroup_q5_0_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q5_1,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q5_1_q8_1",   matmul_id_subgroup_q5_1_q8_1_cm1_len,   matmul_id_subgroup_q5_1_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q8_0,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q8_0_q8_1",   matmul_id_subgroup_q8_0_q8_1_cm1_len,   matmul_id_subgroup_q8_0_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_IQ4_NL, GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_iq4_nl_q8_1", matmul_id_subgroup_iq4_nl_q8_1_cm1_len, matmul_id_subgroup_iq4_nl_q8_1_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_iq4_xs_q8_1", matmul_id_subgroup_iq4_xs_q8_1_cm1_len, matmul_id_subgroup_iq4_xs_q8_1_cm1_data, sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_MXFP4,  GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_mxfp4_q8_1",  matmul_id_subgroup_mxfp4_q8_1_cm1_len,  matmul_id_subgroup_mxfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q3_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int_k, "matmul_id_subgroup_q3_k_q8_1",   matmul_id_subgroup_q3_k_q8_1_cm1_len,   matmul_id_subgroup_q3_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q4_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q4_k_q8_1",   matmul_id_subgroup_q4_k_q8_1_cm1_len,   matmul_id_subgroup_q4_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q5_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int,   "matmul_id_subgroup_q5_k_q8_1",   matmul_id_subgroup_q5_k_q8_1_cm1_len,   matmul_id_subgroup_q5_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            cm1_create_mmq({GGML_TYPE_Q6_K,   GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int_k, "matmul_id_subgroup_q6_k_q8_1",   matmul_id_subgroup_q6_k_q8_1_cm1_len,   matmul_id_subgroup_q6_k_q8_1_cm1_data,   sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count);
+            if (!rdna4) { cm1_create_mmq({GGML_TYPE_NVFP4, GGML_TYPE_Q8_1, true, false}, tc_mmq_cm1_int_k, "matmul_id_subgroup_nvfp4_q8_1",  matmul_id_subgroup_nvfp4_q8_1_cm1_len,  matmul_id_subgroup_nvfp4_q8_1_cm1_data,  sizeof(vk_mat_mat_id_push_constants), mul_mat_id_param_count); }
+        }
     } else
 #endif  // defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     {
@@ -2980,6 +3170,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     if (device->vendor_id == VK_VENDOR_ID_INTEL && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->coopmat_support && device->uma))) {
         auto upper_power_of_2 = [&](uint32_t in) {
             GGML_ASSERT(in != 0);
@@ -3019,6 +3210,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_fa_xe_opt_push_constants), { 1, 1, 1 }, { group_sz_ph2, gqa_ratio, head_dim_pv, out_per_wg_ph2, xe_native_sub_group_size, split_p_per_iter_ph2, split_p_chunk, out_dim_per_wg }, 1, false, true, xe_native_sub_group_size);
         }
     }
+#endif
 
     for (auto &it : device->pipeline_fa_mask_opt) {
         auto BrBc = it.first;
@@ -4606,10 +4798,10 @@ vk_device ggml_vk_get_device(size_t idx) {
             case VK_VENDOR_ID_QUALCOMM:
                 device->mul_mat_l[i] = false;
                 device->mul_mat_m[i] = true;
-                device->mul_mat_s[i] = true;
+                device->mul_mat_s[i] = !device->coopmat_support;
                 device->mul_mat_id_l[i] = false;
                 device->mul_mat_id_m[i] = true;
-                device->mul_mat_id_s[i] = true;
+                device->mul_mat_id_s[i] = !device->coopmat_support;
                 break;
 #endif
             default:
@@ -6094,27 +6286,34 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     // Reformat and convert to fp16 if non-contiguous, or for coopmat2 for better perf
     const bool x_non_contig = (ctx->device->coopmat2 && src0->type == GGML_TYPE_F32) ||
                               !ggml_vk_dim01_contiguous(src0);
+    // If src0 is BF16, try to use a BF16 x BF16 multiply
+    ggml_type f16_type = src0->type == GGML_TYPE_BF16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
+
+    // Prefer the int8 MMQ path (quantize src1 to q8_1) whenever a matching pipeline exists.
+    // The pipeline lookup returns nullptr for types without a q8_1 pipeline (e.g. RDNA4-skipped
+    // quants), in which case coopmat1 falls back to the f16 B-type quant matmul below.
+    bool quantize_y = (ctx->device->integer_dot_product || ctx->device->coopmat_int_support) &&
+                      src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0;
+
+    // Check for mmq first
+    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
+    if (mmp_map == nullptr) {
+        quantize_y = false;
+    }
+
     const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
-                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is used.
-                              (ctx->device->coopmat_support && !ctx->device->coopmat2 &&
+                              // coopmat1: force f32->f16 conversion so the f16 B-type quant pipeline is
+                              // used, but only when the int8 MMQ path above is not taken.
+                              (ctx->device->coopmat_support && !ctx->device->coopmat2 && !quantize_y &&
                                ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32) ||
                               (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
                               !ggml_vk_dim01_contiguous(src1);
 
-    // If src0 is BF16, try to use a BF16 x BF16 multiply
-    ggml_type f16_type = src0->type == GGML_TYPE_BF16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
-
     const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
-
-    bool quantize_y = ctx->device->integer_dot_product && src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && !y_non_contig && (ne11 * ne10) % 4 == 0;
-
-    // Check for mmq first
-    const std::vector<vk_matmul_pipeline_pair>* mmp_map = quantize_y ? ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_Q8_1, (ggml_prec)dst->op_params[0]) : nullptr;
 
     if (mmp_map == nullptr) {
         // Fall back to f16 dequant mul mat
         mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, y_non_contig ? f16_type : src1->type, (ggml_prec)dst->op_params[0]);
-        quantize_y = false;
     }
 
     const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;
@@ -6393,6 +6592,8 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         default:
             return true;
         }
+    case VK_VENDOR_ID_QUALCOMM:
+        return false;
     default:
         return true;
     }
@@ -8020,10 +8221,11 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         split_k = CEIL_DIV(KV, split_kv);
         xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
         if (xe_fa_opt) {
-            std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
             const uint32_t split_p_size = 32;
             const size_t max_dim = (nek1 + split_p_size - 1) / split_p_size;
             const size_t p_dim = max_dim * split_p_size;
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+            std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
             auto& pipelines = ctx->device->pipeline_xe_fa_decode_dual_phases;
             auto it = pipelines.find({ (uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1 });
             if (it != pipelines.end()) {
@@ -8031,18 +8233,23 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             } else {
                 pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
             }
+#endif
+            if (xe_fa_pipeline_dual_phases.first == nullptr || xe_fa_pipeline_dual_phases.second == nullptr) {
+                xe_fa_opt = false;
+                fa_copy_qstate = false;
+            } else {
+                size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
+                size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
+                size_t temp_size = ggml_nelements(q) * sizeof(ggml_fp16_t) + size_p + size_group_max;
+                fa_copy_qstate = true;
+                if (ctx->prealloc_size_x < temp_size) {
+                    ctx->prealloc_size_x = temp_size;
+                    ggml_vk_preallocate_buffers(ctx, subctx);
+                }
 
-            size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
-            size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
-            size_t temp_size = ggml_nelements(q) * sizeof(ggml_fp16_t) + size_p + size_group_max;
-            fa_copy_qstate = true;
-            if (ctx->prealloc_size_x < temp_size) {
-                ctx->prealloc_size_x = temp_size;
-                ggml_vk_preallocate_buffers(ctx, subctx);
-            }
-
-            if (ctx->prealloc_x_need_sync) {
-                ggml_vk_sync_buffers(ctx, subctx);
+                if (ctx->prealloc_x_need_sync) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                }
             }
         }
     }
@@ -15953,9 +16160,12 @@ bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& 
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
-            return arch == vk_device_architecture::AMD_RDNA3;
+            return arch == vk_device_architecture::AMD_RDNA3 || arch == vk_device_architecture::AMD_RDNA4;
         }
         return true;
+    case VK_VENDOR_ID_QUALCOMM:
+        // Only allow Adreno GPUs with hardware matrix cores (Gen 6+).
+        return arch == vk_device_architecture::QUALCOMM_ADRENO;
     default:
         return true;
     }

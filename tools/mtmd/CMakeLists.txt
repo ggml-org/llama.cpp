@@ -55,6 +55,7 @@ add_library(mtmd
             models/qwen2vl.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
