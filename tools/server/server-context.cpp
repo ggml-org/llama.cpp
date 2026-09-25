@@ -3067,7 +3067,7 @@ private:
                 }
             }
 
-            if (!draft.empty()) {
+            if (!draft.empty() && ctx_dft) {
                 const bool use_ckpt_tgt =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() > llama_n_rs_seq(ctx_tgt));
