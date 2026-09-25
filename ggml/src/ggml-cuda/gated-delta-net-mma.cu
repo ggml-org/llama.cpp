@@ -394,7 +394,9 @@ static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a
     return gdn_path::ar;
 #else
     // Enable only architectures benchmarked for this schedule. MMA support alone does not imply a speedup.
-    if (!ampere_mma_available(info.cc) || (info.cc != GGML_CUDA_CC_BLACKWELL && info.cc != GGML_CUDA_CC_DGX_SPARK)) {
+    if (!ampere_mma_available(info.cc) ||
+        (info.cc != GGML_CUDA_CC_AMPERE_GA10X && info.cc != GGML_CUDA_CC_ADA_LOVELACE &&
+         info.cc != GGML_CUDA_CC_BLACKWELL && info.cc != GGML_CUDA_CC_DGX_SPARK)) {
         return gdn_path::ar;
     }
     // Value splitting pays off when whole heads leave at least half the SMs idle.
