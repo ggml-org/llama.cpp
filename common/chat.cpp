@@ -1443,7 +1443,32 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
                               common_chat_templates_apply_legacy(tmpls, inputs);
 }
 
-common_chat_msg common_chat_parse(const common_peg_input &          input,
+void common_chat_input::append(const std::string & piece, llama_token token) {
+    if (piece.empty()) {
+        return;
+    }
+    token_map.push_back(token);
+    token_map.resize(token_map.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
+    text += piece;
+}
+
+void common_chat_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_map) {
+    GGML_ASSERT(chunk.size() == chunk_map.size());
+    token_map.insert(token_map.end(), chunk_map.begin(), chunk_map.end());
+    text += chunk;
+}
+
+void common_chat_input::prepend(const std::string & prefix) {
+    token_map.insert(token_map.begin(), prefix.size(), LLAMA_TOKEN_NULL);
+    text = prefix + text;
+}
+
+void common_chat_input::prepend(const common_chat_input & prefix) {
+    token_map.insert(token_map.begin(), prefix.token_map.begin(), prefix.token_map.end());
+    text = prefix.text + text;
+}
+
+common_chat_msg common_chat_parse(const common_chat_input &          input,
                                   bool                              is_partial,
                                   const common_chat_parser_params & params) {
     return common_chat_peg_parse(params.parser, input, is_partial, params);
@@ -1452,18 +1477,18 @@ common_chat_msg common_chat_parse(const common_peg_input &          input,
 common_chat_msg common_chat_parse(const std::string &               input,
                                   bool                              is_partial,
                                   const common_chat_parser_params & params) {
-    return common_chat_parse(common_peg_input(input), is_partial, params);
+    return common_chat_parse(common_chat_input(input), is_partial, params);
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
                                       const std::string &               input,
                                       bool                              is_partial,
                                       const common_chat_parser_params & params) {
-    return common_chat_peg_parse(src_parser, common_peg_input(input), is_partial, params);
+    return common_chat_peg_parse(src_parser, common_chat_input(input), is_partial, params);
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
-                                      const common_peg_input &          input,
+                                      const common_chat_input &          input,
                                       bool                              is_partial,
                                       const common_chat_parser_params & params) {
     const common_peg_arena & parser = src_parser.empty() ?
@@ -1474,7 +1499,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         LOG_DBG("No parser definition detected, assuming pure content parser.");
     }
 
-    common_peg_input effective_input = input;
+    common_chat_input effective_input = input;
     if (!params.generation_prompt_input.text.empty()) {
         effective_input.prepend(params.generation_prompt_input);
     } else {
@@ -1488,7 +1513,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
 
-    common_peg_parse_context ctx(std::move(effective_input), flags);
+    common_peg_parse_context ctx(std::move(effective_input.text), std::move(effective_input.token_map), flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
@@ -1514,8 +1539,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             }
             return msg;
         }
-        LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), ctx.input.text.substr(result.end).c_str());
-        LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), ctx.input.text.c_str());
+        LOG_WRN("%s: unparsed %s output: %s\n", __func__, common_chat_format_name(params.format), ctx.input.substr(result.end).c_str());
+        LOG_DBG("%s: full %s output triggering error:\n=== BEGIN ===\n%s\n=== END ===\n", __func__, common_chat_format_name(params.format), ctx.input.c_str());
         throw std::runtime_error(std::string("The model produced output that does not match the expected ") + common_chat_format_name(params.format) + " format");
     }
 

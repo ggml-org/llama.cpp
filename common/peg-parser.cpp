@@ -288,31 +288,6 @@ static void build_branch_matcher(const common_peg_arena & arena, common_peg_ac_p
     }
 }
 
-void common_peg_input::append(const std::string & piece, llama_token token) {
-    if (piece.empty()) {
-        return;
-    }
-    token_map.push_back(token);
-    token_map.resize(token_map.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
-    text += piece;
-}
-
-void common_peg_input::append(const std::string & chunk, const std::vector<llama_token> & chunk_map) {
-    GGML_ASSERT(chunk.size() == chunk_map.size());
-    token_map.insert(token_map.end(), chunk_map.begin(), chunk_map.end());
-    text += chunk;
-}
-
-void common_peg_input::prepend(const std::string & prefix) {
-    token_map.insert(token_map.begin(), prefix.size(), LLAMA_TOKEN_NULL);
-    text = prefix + text;
-}
-
-void common_peg_input::prepend(const common_peg_input & prefix) {
-    token_map.insert(token_map.begin(), prefix.token_map.begin(), prefix.token_map.end());
-    text = prefix.text + text;
-}
-
 struct parser_executor;
 
 common_peg_parser_id common_peg_arena::add_parser(common_peg_parser_variant parser) {
@@ -344,10 +319,10 @@ struct parser_executor {
     std::string debug_indent() const { return std::string(ctx.parse_depth * 2, ' '); }
 
     std::string debug_input_snippet(size_t pos, size_t len = 60) const {
-        if (pos >= ctx.input.text.size()) {
+        if (pos >= ctx.input.size()) {
             return "<EOF>";
         }
-        auto        snippet = ctx.input.text.substr(pos, len);
+        auto        snippet = ctx.input.substr(pos, len);
         // Escape newlines for display
         std::string result;
         for (char c : snippet) {
@@ -361,7 +336,7 @@ struct parser_executor {
                 result += c;
             }
         }
-        if (pos + len < ctx.input.text.size()) {
+        if (pos + len < ctx.input.size()) {
             result += "...";
         }
         return result;
@@ -380,7 +355,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_end_parser & /* p */) const {
         return common_peg_parse_result(
-            start_pos >= ctx.input.text.size() ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
+            start_pos >= ctx.input.size() ? COMMON_PEG_PARSE_RESULT_SUCCESS : COMMON_PEG_PARSE_RESULT_FAIL,
             start_pos
         );
     }
@@ -388,13 +363,13 @@ struct parser_executor {
     common_peg_parse_result operator()(const common_peg_literal_parser & p) {
         auto pos = start_pos;
         for (auto i = 0u; i < p.literal.size(); ++i) {
-            if (pos >= ctx.input.text.size()) {
+            if (pos >= ctx.input.size()) {
                 if (!ctx.is_lenient()) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
-            if (ctx.input.text[pos] != p.literal[i]) {
+            if (ctx.input[pos] != p.literal[i]) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
             ++pos;
@@ -404,22 +379,20 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_token_parser & p) {
-        const auto & input = ctx.input;
-
-        if (start_pos >= input.text.size()) {
+        if (start_pos >= ctx.input.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
 
-        if (input.token_map[start_pos] != p.token) {
+        if (start_pos >= ctx.token_map.size() || ctx.token_map[start_pos] != p.token) {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
         }
 
         // Skip the rest of the piece, up to the next token or the end of the input
         auto pos = start_pos + 1;
-        while (pos < input.text.size() && input.token_map[pos] == LLAMA_TOKEN_NULL) {
+        while (pos < ctx.input.size() && ctx.token_map[pos] == LLAMA_TOKEN_NULL) {
             ++pos;
         }
 
@@ -529,7 +502,7 @@ struct parser_executor {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
-            if (pos >= ctx.input.text.size()) {
+            if (pos >= ctx.input.size()) {
                 if (ctx.is_debug()) {
                     fprintf(stderr, "%sREPEAT: at end of input, count=%d\n", debug_indent().c_str(), match_count);
                 }
@@ -587,7 +560,7 @@ struct parser_executor {
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
             ctx.parse_depth--;
-            if (pos >= ctx.input.text.size() && ctx.is_lenient()) {
+            if (pos >= ctx.input.size() && ctx.is_lenient()) {
                 if (ctx.is_debug()) {
                     fprintf(stderr, "%sREPEAT -> NEED_MORE (not enough matches: %d < %d)\n", debug_indent().c_str(),
                             match_count, p.min_count);
@@ -634,7 +607,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_any_parser & /* p */) const {
         // Parse a single UTF-8 codepoint (not just a single byte)
-        auto result = common_parse_utf8_codepoint(ctx.input.text, start_pos);
+        auto result = common_parse_utf8_codepoint(ctx.input, start_pos);
 
         if (result.status == utf8_parse_result::INCOMPLETE) {
             if (!ctx.is_lenient()) {
@@ -650,8 +623,8 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_space_parser & /* p */) {
         auto pos = start_pos;
-        while (pos < ctx.input.text.size()) {
-            auto c = static_cast<unsigned char>(ctx.input.text[pos]);
+        while (pos < ctx.input.size()) {
+            auto c = static_cast<unsigned char>(ctx.input[pos]);
             if (std::isspace(c)) {
                 ++pos;
             } else {
@@ -668,7 +641,7 @@ struct parser_executor {
 
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
-            auto result = common_parse_utf8_codepoint(ctx.input.text, pos);
+            auto result = common_parse_utf8_codepoint(ctx.input, pos);
 
             if (result.status == utf8_parse_result::INCOMPLETE) {
                 if (match_count >= p.min_count) {
@@ -717,7 +690,7 @@ struct parser_executor {
 
         // Check if we got enough matches
         if (match_count < p.min_count) {
-            if (pos >= ctx.input.text.size() && ctx.is_lenient()) {
+            if (pos >= ctx.input.size() && ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
@@ -730,7 +703,7 @@ struct parser_executor {
         auto save = pos;
 
         ++pos; // consume '\'
-        if (pos >= ctx.input.text.size()) {
+        if (pos >= ctx.input.size()) {
             if (!ctx.is_lenient()) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
@@ -738,7 +711,7 @@ struct parser_executor {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
         }
 
-        char c = ctx.input.text[pos];
+        char c = ctx.input[pos];
 
         if (c == delimiter || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't') {
             ++pos;
@@ -760,13 +733,13 @@ struct parser_executor {
     static common_peg_parse_result handle_unicode_escape(common_peg_parse_context & ctx, size_t start, size_t & pos) {
         ++pos; // consume 'u'
         for (int i = 0; i < 4; ++i) {
-            if (pos >= ctx.input.text.size()) {
+            if (pos >= ctx.input.size()) {
                 if (!ctx.is_lenient()) {
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start, pos);
             }
-            if (!is_hex_digit(ctx.input.text[pos])) {
+            if (!is_hex_digit(ctx.input[pos])) {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start);
             }
             ++pos;
@@ -778,8 +751,8 @@ struct parser_executor {
         auto pos = start_pos;
 
         // Parse string content (without quotes)
-        while (pos < ctx.input.text.size()) {
-            char c = ctx.input.text[pos];
+        while (pos < ctx.input.size()) {
+            char c = ctx.input[pos];
 
             if (c == p.delimiter) {
                 // Found closing delimiter - success (don't consume it)
@@ -792,7 +765,7 @@ struct parser_executor {
                     return result;
                 }
             } else {
-                auto utf8_result = common_parse_utf8_codepoint(ctx.input.text, pos);
+                auto utf8_result = common_parse_utf8_codepoint(ctx.input, pos);
 
                 if (utf8_result.status == utf8_parse_result::INCOMPLETE) {
                     if (!ctx.is_lenient()) {
@@ -824,8 +797,8 @@ struct parser_executor {
         size_t last_valid_pos = start_pos;
         std::vector<common_peg_invalid_utf8> invalid_utf8;
 
-        while (pos < ctx.input.text.size()) {
-            auto step = matcher.next_symbol(ctx.input.text, ctx.input.token_map, pos);
+        while (pos < ctx.input.size()) {
+            auto step = matcher.next_symbol(ctx.input, ctx.token_map, pos);
 
             if (step.status == utf8_parse_result::INCOMPLETE && ctx.is_lenient()) {
                 // The rest of the sequence may still arrive, return what we have so far
@@ -842,7 +815,7 @@ struct parser_executor {
             }
 
             // Check if a delimiter starts at this position
-            auto match = matcher.check_at(ctx.input.text, ctx.input.token_map, pos);
+            auto match = matcher.check_at(ctx.input, ctx.token_map, pos);
 
             if (match == common_trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
@@ -858,7 +831,7 @@ struct parser_executor {
             last_valid_pos = pos;
         }
 
-        if (last_valid_pos == ctx.input.text.size() && ctx.is_lenient()) {
+        if (last_valid_pos == ctx.input.size() && ctx.is_lenient()) {
             // Reached the end of a partial stream, there might still be more input that we need to consume.
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, last_valid_pos, {}, std::move(invalid_utf8));
         }
@@ -875,8 +848,8 @@ struct parser_executor {
 
         if (!result.fail()) {
             std::string_view text;
-            if (result.start < ctx.input.text.size()) {
-                text = std::string_view(ctx.input.text).substr(result.start, result.end - result.start);
+            if (result.start < ctx.input.size()) {
+                text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
             }
 
             auto node_id = ctx.ast.add_node(
@@ -905,8 +878,8 @@ struct parser_executor {
 
         if (!result.fail()) {
             std::string_view text;
-            if (result.start < ctx.input.text.size()) {
-                text = std::string_view(ctx.input.text).substr(result.start, result.end - result.start);
+            if (result.start < ctx.input.size()) {
+                text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
             }
 
             auto node_id = ctx.ast.add_node(

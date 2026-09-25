@@ -315,7 +315,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.sampling.generation_prompt = s;
 
             if (ctx.vocab != nullptr) {
-                common_peg_input input;
+                common_chat_input input;
                 for (auto tok : common_tokenize(ctx.vocab, s, false, true)) {
                     input.append(common_token_to_piece(ctx.vocab, tok, true), tok);
                 }

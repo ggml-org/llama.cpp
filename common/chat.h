@@ -282,6 +282,28 @@ struct common_chat_params {
     common_chat_msg_delimiters          message_delimiters;
 };
 
+// Generated text with the token that starts at each byte, LLAMA_TOKEN_NULL inside a token piece
+struct common_chat_input {
+    std::string              text;
+    std::vector<llama_token> token_map;
+
+    common_chat_input() = default;
+
+    // plain text, with no tokens
+    explicit common_chat_input(std::string text) : text(std::move(text)), token_map(this->text.size(), LLAMA_TOKEN_NULL) {}
+
+    void append(const std::string & piece, llama_token token);
+
+    // append a chunk of text with its token map
+    void append(const std::string & chunk, const std::vector<llama_token> & chunk_map);
+
+    // prefix plain text, shifting the tokens after it
+    void prepend(const std::string & prefix);
+
+    // prefix another input and its tokens, shifting the tokens after it
+    void prepend(const common_chat_input & prefix);
+};
+
 // per-message parsing syntax
 // should be derived from common_chat_params
 struct common_chat_parser_params {
@@ -290,7 +312,7 @@ struct common_chat_parser_params {
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
     bool                    reasoning_in_content = false;
     std::string             generation_prompt;
-    common_peg_input        generation_prompt_input; // generation_prompt with its tokens, when a vocab is available
+    common_chat_input       generation_prompt_input; // generation_prompt with its tokens, when a vocab is available
     bool                    parse_tool_calls     = true;
     bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
@@ -338,9 +360,9 @@ std::string common_chat_format_example(const struct common_chat_templates *     
                                        const std::map<std::string, std::string> & chat_template_kwargs);
 
 const char *    common_chat_format_name(common_chat_format format);
-common_chat_msg common_chat_parse(const common_peg_input & input, bool is_partial, const common_chat_parser_params & params);
+common_chat_msg common_chat_parse(const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_parser_params & params);
-common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_peg_input & input, bool is_partial, const common_chat_parser_params & params);
+common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const common_chat_input & input, bool is_partial, const common_chat_parser_params & params);
 common_chat_msg common_chat_peg_parse(const common_peg_arena & src_parser, const std::string & input, bool is_partial, const common_chat_parser_params & params);
 
 // used by arg and server

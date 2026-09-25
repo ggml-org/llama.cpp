@@ -199,29 +199,11 @@ struct common_peg_token_table {
     llama_token token_id(const std::string & text) const;
 };
 
-struct common_peg_input {
-    std::string              text;
-    std::vector<llama_token> token_map;
-
-    common_peg_input() = default;
-
-    // plain text, with no tokens
-    explicit common_peg_input(std::string text) : text(std::move(text)), token_map(this->text.size(), LLAMA_TOKEN_NULL) {}
-
-    void append(const std::string & piece, llama_token token);
-
-    // append a chunk of text with its token map
-    void append(const std::string & chunk, const std::vector<llama_token> & chunk_map);
-
-    // prefix plain text, shifting the tokens after it
-    void prepend(const std::string & prefix);
-
-    // prefix another input and its tokens, shifting the tokens after it
-    void prepend(const common_peg_input & prefix);
-};
-
 struct common_peg_parse_context {
-    common_peg_input input;
+    std::string input;
+    // The token that starts at each byte of input, LLAMA_TOKEN_NULL inside a token piece. Empty when the
+    // input has no tokens.
+    std::vector<llama_token> token_map;
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
@@ -230,11 +212,13 @@ struct common_peg_parse_context {
     common_peg_parse_context(common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(common_peg_input input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
-        : input(std::move(input)), flags(flags), parse_depth(0) {}
-
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
-        : input(common_peg_input(input)), flags(flags), parse_depth(0) {}
+        : input(input), flags(flags), parse_depth(0) {}
+
+    common_peg_parse_context(std::string input, std::vector<llama_token> token_map, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), token_map(std::move(token_map)), flags(flags), parse_depth(0) {
+        GGML_ASSERT(this->token_map.empty() || this->token_map.size() == this->input.size());
+    }
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }
     bool is_debug() const { return flags & COMMON_PEG_PARSE_FLAG_DEBUG; }
