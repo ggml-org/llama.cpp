@@ -1574,6 +1574,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
             case LLAMA_POOLING_TYPE_MEAN:
             case LLAMA_POOLING_TYPE_CLS:
             case LLAMA_POOLING_TYPE_LAST:
+            case LLAMA_POOLING_TYPE_MAX:
                 {
                     // extract sequence embeddings
                     auto & embd_seq_out = embd_seq;
@@ -1963,6 +1964,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 case LLAMA_POOLING_TYPE_MEAN:
                 case LLAMA_POOLING_TYPE_CLS:
                 case LLAMA_POOLING_TYPE_LAST:
+                case LLAMA_POOLING_TYPE_MAX:
                     {
                         // extract sequence embeddings (cleared before processing each batch)
                         auto & embd_seq_out = embd_seq;
