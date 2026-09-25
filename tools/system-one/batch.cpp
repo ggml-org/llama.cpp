@@ -34,7 +34,10 @@
 #include <thread>
 #include <vector>
 
-using json = nlohmann::json;
+// ordered_json, not json: nlohmann's object is a std::map, so plain `json` would sort the
+// request's keys alphabetically -- silently reordering both the questions and a choice's
+// criteria. The order of options is part of the question.
+using json = nlohmann::ordered_json;
 using clk  = std::chrono::steady_clock;
 
 static double ms_since(clk::time_point t0) {
@@ -228,14 +231,16 @@ static int run(int argc, char ** argv) {
 
     // Every plan is built before the context, because the context has to be sized for the
     // largest of them -- a bidirectional sequence cannot be split across a micro-batch.
-    struct item { std::string id; system_one_plan plan; std::vector<std::string> keys;
+    // the id is echoed back exactly as it came in -- a number stays a number, so a caller
+    // can index by it rather than by string
+    struct item { json id; system_one_plan plan; std::vector<std::string> keys;
                   std::vector<system_one_question> qs; };
     std::vector<item> items;
     items.reserve(reqs.size());
     size_t max_tok = 0, max_seq = 1;
     for (size_t i = 0; i < reqs.size(); i++) {
         item it;
-        it.id = reqs[i].contains("id") ? reqs[i]["id"].dump() : std::to_string(i);
+        it.id = reqs[i].contains("id") ? reqs[i]["id"] : json((int64_t) i);
         const json & st = reqs[i].at("state");
         const std::string state = st.is_string() ? st.get<std::string>() : st.dump();
         for (const auto & e : reqs[i].at("questions").items()) {
