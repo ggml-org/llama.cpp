@@ -13,7 +13,6 @@
 		type ModelsTableGroup,
 		saveOverrides
 	} from './utils';
-	import { CollapsibleRegion } from '$lib/components/app';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import { backendsStore, conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -320,16 +319,14 @@
 </script>
 
 {#snippet toolbarEndRegion()}
-	<!-- the calls to action leave before the pane takes their space -->
-	<CollapsibleRegion axis="width" open={ctasVisible}>
-		<div
-			class="flex items-center gap-2 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
-				? 'opacity-100'
-				: 'opacity-0'}"
-		>
-			{@render toolbarEnd?.()}
-		</div>
-	</CollapsibleRegion>
+	<!-- the calls to action fade in place; the pane waits for them to be gone -->
+	<div
+		class="flex items-center gap-2 transition-[opacity,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
+			? 'visible opacity-100'
+			: 'invisible opacity-0'}"
+	>
+		{@render toolbarEnd?.()}
+	</div>
 {/snippet}
 
 <div class={['flex min-h-0 flex-1', className]}>
