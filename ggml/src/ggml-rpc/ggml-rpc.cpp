@@ -381,6 +381,9 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 
 // RPC client-side implementation
 
+// with busy spinning on, the dispatcher still blocks on its queue after this long without commands
+static constexpr auto RPC_BUSY_SPIN_IDLE_TIME = std::chrono::milliseconds(100);
+
 static inline void rpc_cpu_relax() {
 #if defined(__aarch64__) && (defined(__clang__) || defined(__GNUC__))
     __asm__ volatile("yield" ::: "memory");
@@ -628,9 +631,13 @@ void rpc_dispatcher::start(const std::string & endpoint) {
 }
 
 void rpc_dispatcher::work() {
+    auto last_cmd = std::chrono::steady_clock::now();
     while (running) {
         rpc_msg_ptr msg_ptr;
-        if (busy_spin_users.load(std::memory_order_relaxed) != 0) {
+        // spin only while commands keep coming, so an idle dispatcher does not keep a core busy
+        const bool spin = busy_spin_users.load(std::memory_order_relaxed) != 0 &&
+                          std::chrono::steady_clock::now() - last_cmd < RPC_BUSY_SPIN_IDLE_TIME;
+        if (spin) {
             if (!queue.try_pop(&msg_ptr)) {
                 rpc_cpu_relax();
                 continue;
@@ -648,6 +655,7 @@ void rpc_dispatcher::work() {
             }
         }
         msg_ptr->completion.set_value();
+        last_cmd = std::chrono::steady_clock::now();
     }
 }
 
