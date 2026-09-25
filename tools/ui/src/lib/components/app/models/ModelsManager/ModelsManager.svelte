@@ -279,15 +279,12 @@
 		/>
 	</div>
 
-	<div
-		class="invisible w-0 shrink-0 overflow-clip transition-[width,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] data-[open=true]:visible data-[open=true]:w-[30rem]"
-		data-open={selected !== null}
-	>
+	<div class="pane-drawer shrink-0" data-open={selected !== null}>
 		<!-- the content box keeps the open width, so it never reflows with the drawer -->
 		<div
-			class="flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 transition-opacity duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {selected
-				? 'opacity-100'
-				: 'opacity-0'}"
+			class="flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 transition-opacity ease-[cubic-bezier(0.23,1,0.32,1)] {selected
+				? 'opacity-100 delay-100 duration-200'
+				: 'opacity-0 delay-0 duration-150'}"
 		>
 			{#if paneOption}
 				{@const shown = paneOption}
@@ -307,3 +304,36 @@
 		</div>
 	</div>
 </div>
+
+<style>
+	/*
+	 * The drawer moves by width because the table behind it gets that space back, so
+	 * the content box inside holds the open width and only the container changes.
+	 * Opening takes the iOS-like drawer curve; closing is the system responding, so
+	 * it snaps back on the stronger ease-out.
+	 */
+	.pane-drawer {
+		width: 0;
+		overflow: clip;
+		visibility: hidden;
+		transition:
+			width 150ms cubic-bezier(0.23, 1, 0.32, 1),
+			visibility 150ms;
+	}
+
+	.pane-drawer[data-open='true'] {
+		width: 30rem;
+		visibility: visible;
+		transition:
+			width 250ms cubic-bezier(0.32, 0.72, 0, 1),
+			visibility 250ms;
+	}
+
+	/* reduced motion keeps the fade and drops the slide */
+	@media (prefers-reduced-motion: reduce) {
+		.pane-drawer,
+		.pane-drawer[data-open='true'] {
+			transition: visibility 150ms;
+		}
+	}
+</style>
