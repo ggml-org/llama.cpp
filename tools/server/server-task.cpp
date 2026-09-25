@@ -1496,6 +1496,25 @@ json server_task_result_rerank::to_json() {
 }
 
 //
+// server_task_result_transcribe
+//
+json server_task_result_transcribe::to_json() {
+    if (res_type == TASK_RESPONSE_TYPE_OAI_ASR) {
+        return json {
+            {"type", "transcript.text.done"},
+            {"text", text},
+            {"usage", json {
+                {"type",         "tokens"},
+                {"input_tokens", n_tokens},
+            }},
+        };
+    }
+    return json {
+        {"text", text},
+    };
+}
+
+//
 // server_task_result_error
 //
 json server_task_result_error::to_json() {
