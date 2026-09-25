@@ -281,9 +281,51 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("until grammar with parser delimiters", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until({ p.literal("a") + p.literal("b"), p.literal("cd") });
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-4
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-4 ::= | [a] until-4-01 | [c] until-4-03 | [^ac] until-4
+            until-4-01 ::= | [a] until-4-01 | [c] until-4-03 | [^abc] until-4
+            until-4-03 ::= | [a] until-4-01 | [c] until-4-03 | [^acd] until-4
+        )""", gbnf);
+    });
+
+    t.test("delimiters reject anything but sequences of literals and tokens", [](testing &t) {
+        bool threw = false;
+        try {
+            build_peg_parser([](common_peg_parser_builder & p)  {
+                return p.until(p.literal("a") | p.literal("b"));
+            });
+        } catch (const std::invalid_argument &) {
+            threw = true;
+        }
+        t.assert_equal("choice_rejected", true, threw);
+    });
+
+    t.test("ac branches reject a shared delimiter", [](testing &t) {
+        bool threw = false;
+        try {
+            build_peg_parser([](common_peg_parser_builder & p)  {
+                return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("ab"), p.literal("y") } });
+            });
+        } catch (const std::invalid_argument &) {
+            threw = true;
+        }
+        t.assert_equal("duplicate_rejected", true, threw);
+    });
+
     t.test("ac grammar branches continue with their rest", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), std::vector<common_peg_ac_branch>{ { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
+            return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -302,7 +344,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("ac grammar optional may end before a delimiter", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), std::vector<common_peg_ac_branch>{ { p.literal("ab"), p.literal("x") } }, true);
+            return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") } }, true);
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -320,7 +362,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("ac grammar suffix delimiter offers both rests", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), std::vector<common_peg_ac_branch>{ { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
+            return p.ac(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
