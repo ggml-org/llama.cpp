@@ -119,6 +119,7 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
 template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
 template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
 template void llama_model_saver::add_kv<std::vector<uint64_t>>(const enum llm_kv, const std::vector<uint64_t> &, const bool);
+template void llama_model_saver::add_kv<std::vector<int32_t>>(const enum llm_kv, const std::vector<int32_t> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -251,6 +252,16 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_HRM_H_CYCLES,                      hparams.n_hrm_h_cycles);
     add_kv(LLM_KV_HRM_L_CYCLES,                      hparams.n_hrm_l_cycles);
     add_kv(LLM_KV_HRM_PREFIX_LM,                     hparams.hrm_prefix_lm);
+    if (hparams.final_logit_sigmoid_capping[0] != 0.0f) {
+        add_kv(LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING, std::vector<float>(
+                hparams.final_logit_sigmoid_capping.begin(), hparams.final_logit_sigmoid_capping.end()));
+    }
+    add_kv(LLM_KV_MUDD_FEED_FORWARD_LENGTH,          hparams.n_mudd_ff);
+    add_kv(LLM_KV_MUDD_TAP_COUNT,                    hparams.n_mudd_taps);
+    if (hparams.n_mudd_taps > 0) {
+        add_kv(LLM_KV_MUDD_TAP_INDICES, std::vector<int32_t>(
+                hparams.mudd_tap_idx.begin(), hparams.mudd_tap_idx.begin() + hparams.n_layer()*hparams.n_mudd_taps));
+    }
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
@@ -281,6 +292,7 @@ void llama_model_saver::add_kv_from_model() {
                 hparams.is_swa_impl.begin(), hparams.is_swa_impl.begin() + hparams.n_layer_all));
     }
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
+    add_kv(LLM_KV_ATTENTION_XSA_EPS,                 hparams.f_xsa_eps);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
     add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
     add_kv(LLM_KV_ATTENTION_TEMPERATURE_LENGTH,      hparams.attn_temp_length);
@@ -477,6 +489,7 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
     add_tensor(model->per_layer_tok_embd);
+    add_tensor(model->value_embd);
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);

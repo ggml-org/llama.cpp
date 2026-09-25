@@ -585,6 +585,15 @@ struct llama_layer {
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
+    // limite
+    struct ggml_tensor * attn_ve_gate     = nullptr;
+    struct ggml_tensor * attn_xsa_alpha   = nullptr;
+    struct ggml_tensor * attn_resid_scale = nullptr;
+    struct ggml_tensor * ffn_resid_scale  = nullptr;
+    struct ggml_tensor * mudd_down        = nullptr;
+    struct ggml_tensor * mudd_up          = nullptr;
+    struct ggml_tensor * mudd_up_b        = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -665,6 +674,9 @@ struct llama_model {
     struct ggml_tensor * altup_proj           = nullptr;
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
+
+    // limite value embeddings
+    struct ggml_tensor * value_embd = nullptr;
 
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;

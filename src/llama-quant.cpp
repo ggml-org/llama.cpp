@@ -315,6 +315,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // these are not too big so keep them as it is
     quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
+    // limite: very small gates and dense connection mixers
+    if (arch == LLM_ARCH_LIMITE) {
+        quantize &= name.find("attn_gate.weight")    == std::string::npos;
+        quantize &= name.find("attn_ve_gate.weight") == std::string::npos;
+        quantize &= name.find("mudd_")               == std::string::npos;
+    }
+
     // do not quantize positional embeddings and token types (BERT)
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");

@@ -212,6 +212,13 @@ struct llama_hparams {
     uint32_t n_hrm_l_cycles = 0;
     bool     hrm_prefix_lm = false;
 
+    // limite
+    float    f_xsa_eps = 0.0f;
+    std::array<float, 3> final_logit_sigmoid_capping = {}; // scale, shift, temperature
+    uint32_t n_mudd_ff   = 0;
+    uint32_t n_mudd_taps = 0;
+    std::array<int32_t, LLAMA_MAX_LAYERS> mudd_tap_idx; // [n_layer][n_mudd_taps], -1 = no mixing
+
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;
