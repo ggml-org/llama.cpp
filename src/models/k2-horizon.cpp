@@ -10,7 +10,7 @@ void llama_model_k2_horizon::load_arch_hparams(llama_model_loader & ml) {
     
     // moe
     if (hparams.n_expert > 0) {
-        ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+        ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
         ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT, hparams.n_layer_dense_lead, false);
         ml.get_key(LLM_KV_MOE_EVERY_N_LAYERS, hparams.moe_every_n_layers, false);
         ml.get_key(LLM_KV_EXPERT_SHARED_COUNT, hparams.n_expert_shared, false);
@@ -165,10 +165,11 @@ void llama_model_k2_horizon::load_arch_tensors(llama_model_loader & ml) {
 
         // MoE stuff
         if (is_moe_layer) {
-            if (hparams.n_ff_exp == 0){
+            const uint32_t n_ff_exp = hparams.n_ff_exp(i);
+            if (n_ff_exp == 0){
                 throw std::runtime_error("K2 MoE layer requires expert_feed_forward_length");
             }
-            
+
             // moe router and it's optional bias
             layer.ffn_gate_inp = create_tensor(
                 tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
@@ -184,17 +185,17 @@ void llama_model_k2_horizon::load_arch_tensors(llama_model_loader & ml) {
             // routed experts (up, gate, and down)
             layer.ffn_up_exps = create_tensor(
                 tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i),
-                {n_embd, hparams.n_ff_exp, n_expert},
+                {n_embd, n_ff_exp, n_expert},
                 0
             );
             layer.ffn_gate_exps = create_tensor(
                 tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i),
-                {n_embd, hparams.n_ff_exp, n_expert},
+                {n_embd, n_ff_exp, n_expert},
                 0
             );
             layer.ffn_down_exps = create_tensor(
                 tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
-                {hparams.n_ff_exp, n_embd, n_expert},
+                {n_ff_exp, n_embd, n_expert},
                 0
             );
 
@@ -204,7 +205,7 @@ void llama_model_k2_horizon::load_arch_tensors(llama_model_loader & ml) {
                 if (hparams.n_ff_shexp > 0) {
                     n_ff_shexp = hparams.n_ff_shexp;
                 } else {
-                    n_ff_shexp = hparams.n_ff_exp * hparams.n_expert_shared;
+                    n_ff_shexp = n_ff_exp * hparams.n_expert_shared;
                 }
 
                 // up gate down
