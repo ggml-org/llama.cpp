@@ -254,11 +254,11 @@
 	});
 
 	/** How long the panel takes to fade out before it swaps to another model. */
-	const SWAP_FADE_MS = 150;
-	/** How long the calls to action take to leave the toolbar, matching their collapse. */
-	const CTA_LEAVE_MS = 200;
+	const SWAP_FADE_MS = 120;
+	/** How long the calls to action take to leave the toolbar, matching their fade. */
+	const CTA_LEAVE_MS = 120;
 	/** How long the panel takes to slide out before the calls to action come back. */
-	const PANE_LEAVE_MS = 150;
+	const PANE_LEAVE_MS = 120;
 
 	// The calls to action leave first, then the panel takes the space they gave up.
 	// Closing runs the same order backwards.
@@ -321,7 +321,7 @@
 {#snippet toolbarEndRegion()}
 	<!-- the calls to action fade in place; the pane waits for them to be gone -->
 	<div
-		class="flex items-center gap-2 transition-[opacity,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
+		class="flex items-center gap-2 transition-[opacity,visibility] duration-[120ms] ease-[cubic-bezier(0.23,1,0.32,1)] {ctasVisible
 			? 'visible opacity-100'
 			: 'invisible opacity-0'}"
 	>
@@ -382,21 +382,21 @@
 		overflow: clip;
 		visibility: hidden;
 		transition:
-			width 150ms cubic-bezier(0.23, 1, 0.32, 1),
-			visibility 150ms;
+			width 120ms cubic-bezier(0.23, 1, 0.32, 1),
+			visibility 120ms;
 	}
 
 	.pane-drawer[data-open='true'] {
 		width: 30rem;
 		visibility: visible;
 		transition:
-			width 250ms cubic-bezier(0.32, 0.72, 0, 1),
-			visibility 250ms;
+			width 200ms cubic-bezier(0.32, 0.72, 0, 1),
+			visibility 200ms;
 	}
 
 	.pane-content {
 		opacity: 0;
-		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
+		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
 	}
 
 	.pane-content[data-visible='true'] {
@@ -405,19 +405,19 @@
 
 	/* opening: the fade waits for the drawer to move */
 	.pane-content[data-visible='true'][data-fade='open'] {
-		transition: opacity 200ms cubic-bezier(0.23, 1, 0.32, 1) 100ms;
+		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1) 80ms;
 	}
 
 	/* swapping models: out, then in, with no pause */
 	.pane-content[data-visible='true'][data-fade='swap'] {
-		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1);
+		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
 	}
 
 	/* reduced motion keeps the fades and drops the slide */
 	@media (prefers-reduced-motion: reduce) {
 		.pane-drawer,
 		.pane-drawer[data-open='true'] {
-			transition: visibility 150ms;
+			transition: visibility 120ms;
 		}
 
 		.pane-content,
