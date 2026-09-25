@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <dlfcn.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -114,16 +115,9 @@ struct apple_rdma::impl {
 
     ~impl() {
         broken = true;
-        // the QP must be destroyed before the memory it can still write to is
-        // deregistered and freed: ERR only starts flushing the posted WQEs
-        if (qp) {
-            struct ibv_qp_attr a = {};
-            a.qp_state = IBV_QPS_ERR;
-            ibv_modify_qp(qp, &a, IBV_QP_STATE);
-            struct ibv_wc wc[RDMA_NBUF * 2];
-            while (ibv_poll_cq(cq, RDMA_NBUF * 2, wc) > 0) {}
-            ibv_destroy_qp(qp);
-        }
+        // destroy the QP first: it can still write to the rings until it is gone.
+        // no IBV_QPS_ERR before it - Apple's provider then fails every region unmap.
+        if (qp) ibv_destroy_qp(qp);
         if (send_mr) ibv_dereg_mr(send_mr);
         if (recv_mr) ibv_dereg_mr(recv_mr);
         free(send_mem);
@@ -184,11 +178,28 @@ static uint8_t rdma_first_active_port(struct ibv_context * ctx, struct ibv_port_
     return 0;
 }
 
+// librdma.dylib is weak-linked, so its symbols are null when it is absent. Nothing may
+// call one before this has returned true.
+static bool rdma_library_present() {
+    static const bool present = [] {
+        void * handle = dlopen("/usr/lib/librdma.dylib", RTLD_LAZY);
+        if (handle == nullptr) {
+            return false;
+        }
+        dlclose(handle);
+        return true;
+    }();
+    return present;
+}
+
 // Called before the endpoints are exchanged: pick the local device facing this
 // peer, create a UC QP and register the frame rings. RDMA is point-to-point, so
 // the device is the one whose GID equals the bootstrap connection's local
 // address, i.e. the one cabled to the peer.
 std::unique_ptr<apple_rdma> apple_rdma::probe(int fd, const uint8_t * target_gid, uint8_t * caps) {
+    if (!rdma_library_present()) {
+        return nullptr;
+    }
     int ndev = 0;
     ibv_device ** devs = ibv_get_device_list(&ndev);
     if (!devs) return nullptr;

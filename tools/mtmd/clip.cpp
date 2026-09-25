@@ -780,7 +780,7 @@ ggml_tensor * clip_graph::build_attn(
         }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+        ggml_prec_set_acc(cur, GGML_PREC_F32);
         if (sinks != nullptr) {
             ggml_flash_attn_ext_add_sinks(cur, sinks);
         }
@@ -793,7 +793,7 @@ ggml_tensor * clip_graph::build_attn(
 
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         // F32 may not needed for vision encoders?
-        // ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        // ggml_prec_set_acc(kq, GGML_PREC_F32);
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, 0.0f);
         if (sinks != nullptr) {
@@ -976,6 +976,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             {
                 builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_LING3VL:
+            {
+                builder = std::make_unique<clip_graph_ling3vl>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_EXAONE4_5:
             {
                 builder = std::make_unique<clip_graph_exaone4_5>(ctx, img);
@@ -1036,6 +1040,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
         case PROJECTOR_TYPE_KIMIK25:
             {
                 builder = std::make_unique<clip_graph_kimik25>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_DEEPSEEK4V:
+            {
+                builder = std::make_unique<clip_graph_deepseek4v>(ctx, img);
             } break;
         case PROJECTOR_TYPE_COGVLM:
             {
@@ -1404,9 +1412,14 @@ struct clip_model_loader {
             }
 
             // Load the vision/audio feature layer indices if they are explicitly provided
-            // NOTE: gguf conversions should standardize the values of the vision feature layer to
-            // be non-negative, since we use -1 to mark values as unset here.
+            // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
             get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
+            for (const auto & v : hparams.feature_layers) {
+                if (v > (int) hparams.n_layer) {
+                    throw std::runtime_error(string_format("%s: feature layer index %d is out of range (n_layer: %d)",
+                                                           __func__, v, hparams.n_layer));
+                }
+            }
 
             // model-specific params
             switch (model.proj_type) {
@@ -1452,7 +1465,12 @@ struct clip_model_loader {
                         std::vector<int> wa_layer_indexes_vec;
                         get_arr_int(KEY_WIN_ATTN_LAYER_INDEXES, wa_layer_indexes_vec, false);
                         if (!wa_layer_indexes_vec.empty()) {
-                            hparams.insert_layer_id = wa_layer_indexes_vec[0];
+                            const int insert_lid = wa_layer_indexes_vec[0];
+                            if (insert_lid < 0 || insert_lid >= (int) hparams.n_layer) {
+                                throw std::runtime_error(string_format("%s: layer index %d is out of range (n_layer: %d)",
+                                                                       __func__, insert_lid, hparams.n_layer));
+                            }
+                            hparams.insert_layer_id = insert_lid;
                         }
                     } break;
                 case PROJECTOR_TYPE_INTERNVL:
@@ -1585,6 +1603,31 @@ struct clip_model_loader {
                             hparams.set_limit_image_tokens(2, 4096);
                         }
                     } break;
+                case PROJECTOR_TYPE_DEEPSEEK4V:
+                    {
+                        hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                        hparams.image_pad_color   = {127, 127, 127};
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
+                        get_u32(KEY_IMAGE_MIN_PIXELS,  hparams.image_min_pixels);
+                        hparams.dsv4_max_n_token  = 384;
+                        hparams.dsv4_max_wh_ratio = 8;
+                        const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
+                        // handle min/max token counts from CLI
+                        if (hparams.custom_image_min_tokens > 0) {
+                            hparams.image_min_pixels = hparams.custom_image_min_tokens * patch_area;
+                        }
+                        if (hparams.custom_image_max_tokens > 0) {
+                            // the cap is on the whole token block, keep some room for the resize solver
+                            hparams.dsv4_max_n_token = std::max(hparams.custom_image_max_tokens, 16);
+                        }
+                        hparams.image_max_pixels = hparams.dsv4_max_n_token * patch_area;
+                        // a small custom max token count also lowers the min-pixel upscale threshold
+                        hparams.image_min_pixels = std::min(hparams.image_min_pixels, hparams.image_max_pixels);
+                        // avoid OOM on warmup
+                        const int warmup_side = (int) std::sqrt((double) std::min(256, hparams.dsv4_max_n_token));
+                        hparams.set_warmup_n_tokens(warmup_side * warmup_side);
+                    } break;
                 case PROJECTOR_TYPE_GEMMA3:
                     {
                         // default value (used by all model sizes in gemma 3 family)
@@ -1607,8 +1650,7 @@ struct clip_model_loader {
                             hparams.patch_size = hparams.patch_size * hparams.n_merge;
                             hparams.n_merge = 1;
                         }
-                        // @ngxson : the model performs quite poor with small images, we need to bump minimum image tokens to 40 to avoid that
-                        hparams.set_limit_image_tokens(40, 280);
+                        hparams.set_limit_image_tokens(70, 1120);
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
 
@@ -1623,6 +1665,7 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_QWEN2VL:
                 case PROJECTOR_TYPE_QWEN25VL:
                 case PROJECTOR_TYPE_QWEN3VL:
+                case PROJECTOR_TYPE_LING3VL:
                     {
                         hparams.n_merge = 2; // default value for Qwen 2 and 2.5
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
@@ -2450,6 +2493,15 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
+            case PROJECTOR_TYPE_LING3VL:
+                {
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);        // merger.norm
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);     // merger.norm
+                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));  // linear_proj.0
+                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));  // linear_proj.2
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
             case PROJECTOR_TYPE_MIMOVL:
                 {
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
@@ -2713,6 +2765,18 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
                     model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_DEEPSEEK4V:
+                {
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    // sentinel token embeddings written into the output block
+                    model.image_newline        = get_tensor(TN_IMAGE_NEWLINE);
+                    model.token_embd_img_start = get_tensor(TN_TOK_IMG_START);
+                    model.token_embd_img_end   = get_tensor(TN_TOK_IMG_END);
+                    model.token_embd_img_pad   = get_tensor(TN_TOK_IMG_PAD);
                 } break;
             case PROJECTOR_TYPE_PIXTRAL:
                 {
@@ -2988,9 +3052,9 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_GEN:
                 {
-                    // code_predictor
-                    model.gen_code_proj_in_w = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "weight"));
-                    model.gen_code_proj_in_b = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "bias"));
+                    // code_predictor, proj_in is absent when the talker and the predictor share the hidden size
+                    model.gen_code_proj_in_w = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "weight"), false);
+                    model.gen_code_proj_in_b = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "bias"),   false);
                     model.gen_code_embd_w     = get_tensor(string_format(TN_A_GEN_CODE_EMBD,     "weight"));
                     model.gen_code_head_w     = get_tensor(string_format(TN_A_GEN_CODE_HEAD,     "weight"));
                     model.gen_code_out_embd_w = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
@@ -3161,8 +3225,8 @@ struct clip_model_loader {
                     model.mm_model_proj_b   = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
                     model.mm_pre_norm_w     = get_tensor(string_format(TN_MM_PRE_NORM, "weight"));
                     model.mm_post_norm_w    = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
-                    model.mm_img_begin      = get_tensor(TN_TOK_IMG_BEGIN);
-                    model.mm_img_end        = get_tensor(TN_TOK_IMG_END);
+                    model.mm_img_begin      = get_tensor(TN_MM_IMG_BEGIN);
+                    model.mm_img_end        = get_tensor(TN_MM_IMG_END);
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     model.view_seperator    = get_tensor(TN_IMAGE_SEPERATOR, false);
                 } break;
@@ -3186,6 +3250,7 @@ struct clip_model_loader {
                     model.pos_embed          = get_tensor(string_format(TN_SAM_POS_EMBD,   "weight"));
                     model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
                     model.patch_embed_proj_b = get_tensor(string_format(TN_SAM_PATCH_EMBD, "bias"));
+                    model.n_sam_layers = hparams.sam_n_layer;
                     model.sam_layers.resize(model.n_sam_layers);
                     for (int il = 0; il < model.n_sam_layers; ++il) {
                         auto & layer    = model.sam_layers[il];
@@ -3998,6 +4063,7 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
@@ -4024,6 +4090,7 @@ int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_GLM4V:
@@ -4104,6 +4171,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_MIMOVL:
         case PROJECTOR_TYPE_MINIMAX_M3:
@@ -4149,6 +4217,13 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
                 int x_patch = CLIP_ALIGN(img->nx(), out_patch_size) / out_patch_size;
                 int y_patch = CLIP_ALIGN(img->ny(), out_patch_size) / out_patch_size;
                 n_patches = x_patch * y_patch;
+            } break;
+        case PROJECTOR_TYPE_DEEPSEEK4V:
+            {
+                const int out_patch_size = params.patch_size * params.n_merge;
+                const int n_llm_w = CLIP_ALIGN(img->nx(), out_patch_size) / out_patch_size;
+                const int n_llm_h = CLIP_ALIGN(img->ny(), out_patch_size) / out_patch_size;
+                n_patches = dsv4_get_block_layout(n_llm_w, n_llm_h, img->lead_pad).n_out;
             } break;
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_DOTS_OCR:
@@ -4389,7 +4464,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     // build the inference graph
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_get_graph_builder(ctx, imgs, params)->build();
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+    if (!ggml_backend_sched_alloc_graph(ctx->sched.get(), gf)) {
+        LOG_ERR("%s: failed to allocate compute graph\n", __func__);
+        return false;
+    }
 
     // set inputs
     const auto & model   = ctx->model;
@@ -4602,8 +4680,10 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit
                 //    -> https://huggingface.co/HuggingFaceM4/siglip-so400m-14-980-flash-attn2-navit/blob/d66538faeba44480d0bfaa42145eef26f9423199/modeling_siglip.py#L316
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                // note: sized by the actual patch counts; a tall/wide image produces more
+                // than 1024 patches per side and a fixed [1024] array would be overrun
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }
@@ -4646,8 +4726,8 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
-                int bucket_coords_h[1024];
-                int bucket_coords_w[1024];
+                std::vector<int> bucket_coords_h(pos_h);
+                std::vector<int> bucket_coords_w(pos_w);
                 for (int i = 0; i < pos_h; i++){
                     bucket_coords_h[i] = std::floor(70.0*i/pos_h);
                 }
@@ -4732,6 +4812,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GLM4V:
             {
                 const int merge_ratio = hparams.n_merge;
@@ -5020,6 +5101,58 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     pos_data[i] = i % n_patches_per_col;
                 }
                 set_input_i32("pos_w", pos_data);
+            } break;
+        case PROJECTOR_TYPE_DEEPSEEK4V:
+            {
+                // set the 2D positions (mrope layout, only the first 2 channels are used)
+                int n_patches_per_row = image_size_width / patch_size;
+                std::vector<int32_t> positions(n_pos * 4, 0);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i]         = i / n_patches_per_row; // row
+                    positions[n_pos + i] = i % n_patches_per_row; // col
+                }
+                set_input_i32("positions", positions);
+
+                // token block layout index (see clip_graph_deepseek4v::build)
+                // rows [0, n_grid) are the aligner output, the sentinels follow
+                const int n_merge = hparams.n_merge;
+                const int n_llm_w = CLIP_ALIGN(pos_w, n_merge) / n_merge;
+                const int n_llm_h = CLIP_ALIGN(pos_h, n_merge) / n_merge;
+                const int n_grid  = n_llm_w * n_llm_h;
+                const int idx_start   = n_grid;
+                const int idx_end     = n_grid + 1;
+                const int idx_newline = n_grid + 2;
+                const int idx_pad     = n_grid + 3;
+
+                const int lead_pad = imgs.entries[0].lead_pad;
+                const auto bl = dsv4_get_block_layout(n_llm_w, n_llm_h, lead_pad);
+
+                std::vector<int32_t> idx;
+                idx.reserve(bl.n_out);
+                for (int i = 0; i < lead_pad; i++) {
+                    idx.push_back(idx_pad);
+                }
+                idx.push_back(idx_start);
+                // pairs of adjacent rows are interleaved column-wise ("N-layout")
+                // ref: build_image_block in inference/image_processor.py
+                for (int t = 0; t < bl.rows * bl.row_len; t++) {
+                    const int g   = t / (2 * bl.row_len);
+                    const int rem = t % (2 * bl.row_len);
+                    const int c   = rem / 2; // column
+                    const int r   = 2 * g + rem % 2; // row
+                    if (r >= n_llm_h) {
+                        idx.push_back(idx_pad);
+                    } else if (c == n_llm_w) {
+                        idx.push_back(idx_newline);
+                    } else {
+                        idx.push_back(r * n_llm_w + c);
+                    }
+                }
+                for (int i = 0; i < bl.pad_last; i++) {
+                    idx.push_back(idx_pad);
+                }
+                idx.push_back(idx_end);
+                set_input_i32("layout_idx", idx);
             } break;
         case PROJECTOR_TYPE_GLM_EDGE:
         {
@@ -5762,6 +5895,19 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         LOG_INF("\n=== MTMD_DEBUG_EMBEDDINGS ===\n");
         LOG_INF("Shape: [%lld, %lld]\n", (long long)n_embd, (long long)n_tokens);
 
+        // TEMP debugging (parity validation), will be removed before merge
+        // when the env var holds a path, dump the raw data: [int32 n_tokens][int32 n_embd][f32 data]
+        const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS");
+        if (dump_path && strcmp(dump_path, "1") != 0) {
+            FILE * f = fopen(dump_path, "wb");
+            if (f) {
+                const int32_t hdr[2] = { (int32_t)n_tokens, (int32_t)n_embd };
+                fwrite(hdr, sizeof(hdr), 1, f);
+                fwrite(emb_data.data(), sizeof(float), emb_data.size(), f);
+                fclose(f);
+            }
+        }
+
         // Print first few values of first token
         LOG_INF("Token 0 (first 16 values): ");
         for (int i = 0; i < std::min((int64_t)16, n_embd); i++) {
@@ -5831,6 +5977,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
+        case PROJECTOR_TYPE_LING3VL:
+            return ctx->model.mm_1_b->ne[0];
         case PROJECTOR_TYPE_MIMOVL:
             return ctx->model.mm_1_w->ne[1];
         case PROJECTOR_TYPE_STEP3VL:
@@ -5866,6 +6014,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_YASA2:
+        case PROJECTOR_TYPE_DEEPSEEK4V:
             return ctx->model.mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANVL:
             return ctx->model.mm_model_proj->ne[1];
@@ -5923,6 +6072,7 @@ int clip_model_n_temporal_merge(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_LING3VL:
             return 2;
         default:
             return 1;

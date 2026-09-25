@@ -155,8 +155,6 @@ class ServerProcess:
         else:
             server_path = "../../../build/bin/llama-server"
         server_args = [
-            "--host",
-            self.server_host,
             "--port",
             self.server_port,
             "--temp",
@@ -164,6 +162,7 @@ class ServerProcess:
             "--seed",
             self.seed,
         ]
+        server_args.extend(["--host", self.server_host])
         if self.offline:
             server_args.append("--offline")
         if self.model_file:
@@ -294,6 +293,7 @@ class ServerProcess:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
             env["AIP_MODE"] = "PREDICTION"
+            env["AIP_HTTP_PORT"] = str(self.server_port)
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -364,6 +364,11 @@ class ServerProcess:
         if hasattr(self, '_log') and self._log != sys.stdout:
             self._log.close()
 
+    def make_url(self, path: str, host: str | None = None) -> str:
+        if host is None:
+            host = self.server_host.split(",")[0].strip()
+        return f"http://{host}:{self.server_port}{path}"
+
     def make_request(
         self,
         method: str,
@@ -371,8 +376,9 @@ class ServerProcess:
         data: dict | Any | None = None,
         headers: dict | None = None,
         timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+        host: str | None = None,
     ) -> ServerResponse:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         parse_body = False
         if method == "GET":
             response = requests.get(url, headers=headers, timeout=timeout)
@@ -406,8 +412,9 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
+        host: str | None = None,
     ) -> Iterator[dict]:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
+        url = self.make_url(path, host)
         if method == "POST":
             response = requests.post(url, headers=headers, json=data, stream=True)
         else:

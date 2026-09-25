@@ -374,10 +374,40 @@ static void test_expressions(testing & t) {
         "42"
     );
 
+    test_template(t, "none in object",
+        "{{ x in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "False"
+    );
+
+    test_template(t, "none not in object",
+        "{{ x not in {'low': 1, 'high': 2} }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
+    test_template(t, "none in array",
+        "{{ x in [1, none, 3] }}",
+        {{"x", nullptr}},
+        "True"
+    );
+
     test_template(t, "dot notation",
         "{{ user.name }}",
         {{"user", {{"name", "Bob"}}}},
         "Bob"
+    );
+
+    test_template(t, "dot notation (integer property)",
+        "{{ {10: 'Bob'}.10 }}",
+        json::object(),
+        "Bob"
+    );
+
+    test_template(t, "dot notation (array index)",
+        "{{ user.10 }}",
+        {{"user", json::array({"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k"})}},
+        "k"
     );
 
     test_template(t, "negative float (not dot notation)",
@@ -426,6 +456,49 @@ static void test_expressions(testing & t) {
         "{{ items[1:-1]|string }}",
         {{"items", json::array({"a", "b", "c"})}},
         "['b']"
+    );
+
+    test_template(t, "array slice negative variable",
+        "{{ items[:-n]|string }}",
+        {{"items", json::array({"a", "b", "c"})}, {"n", 1}},
+        "['a', 'b']"
+    );
+
+    test_template(t, "array slice negative variable indent",
+        "{{ indent[:-indent_factor] }}",
+        {{"indent", "    "}, {"indent_factor", 2}},
+        "  "
+    );
+
+    test_template(t, "unary minus variable",
+        "{{ -n }}",
+        {{"n", 3}},
+        "-3"
+    );
+
+    test_template(t, "unary plus variable",
+        "{{ +n }}",
+        {{"n", -3}},
+        "-3"
+    );
+
+    test_template(t, "unary plus float",
+        "{{ +x }}",
+        {{"x", -1.5}},
+        "-1.5"
+    );
+
+    // Unary binds tighter than filter: -n|abs == (-n)|abs, not -(n|abs)
+    test_template(t, "unary minus then abs filter",
+        "{{ -n|abs }}",
+        {{"n", -3}},
+        "3"
+    );
+
+    test_template(t, "unary minus then number test",
+        "{{ -n is number }}",
+        {{"n", 3}},
+        "True"
     );
 
     test_template(t, "array slice step",

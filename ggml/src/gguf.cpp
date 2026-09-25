@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <map>
 #include <new>
 #include <stdexcept>
@@ -237,6 +238,7 @@ struct gguf_reader {
         : callback(callback),
           userdata(userdata),
           max_chunk_read(max_chunk_read),
+          start_offset(data_offset),
           data_offset(data_offset),
           nbytes_remain(nbytes_remain) {
         GGML_ASSERT(max_chunk_read > 0);
@@ -365,6 +367,11 @@ struct gguf_reader {
         return data_offset;
     }
 
+    // position in the file where the GGUF data starts, alignment is relative to it, not to the file
+    uint64_t start() const {
+        return start_offset;
+    }
+
     bool seek(uint64_t absolute_offset) const {
         const uint64_t end_offset = uint64_t(data_offset) + nbytes_remain;
         if (absolute_offset > end_offset) {
@@ -414,6 +421,7 @@ private:
     gguf_reader_callback_t callback = nullptr;
     void * userdata = nullptr;
     size_t max_chunk_read = 0;
+    uint64_t start_offset = 0;
     mutable uint64_t data_offset = 0;
     mutable uint64_t nbytes_remain = 0;
 };
@@ -762,7 +770,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
     GGML_ASSERT(int64_t(ctx->info.size()) == n_tensors);
 
     // we require the data section to be aligned, so take into account any padding
-    if (n_tensors > 0 && !gr.seek(GGML_PAD(gr.tell(), ctx->alignment))) {
+    if (n_tensors > 0 && !gr.seek(gr.start() + GGML_PAD(gr.tell() - gr.start(), ctx->alignment))) {
         GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
         gguf_free(ctx);
         return nullptr;

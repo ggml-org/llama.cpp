@@ -467,10 +467,15 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for ti in tensors.values():
+                for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
+                    start = fout.tell()
                     ti.tensor.tofile(fout)
+                    # a short write here would only surface as a corrupt file at load time
+                    if fout.tell() - start != ti.nbytes:
+                        raise ValueError(
+                            f"tensor {name!r} wrote {fout.tell() - start} bytes, expected {ti.nbytes}")
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
@@ -514,6 +519,12 @@ class GGUFWriter:
 
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
+
+    def add_tensor_extra_prec_a4(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+        if len(tensor_names) != len(values):
+            raise ValueError("tensor_extra prec_a4 names and values must have the same length")
+        self.add_array(Keys.General.TENSOR_EXTRA_NAME, list(tensor_names))
+        self.add_array(Keys.General.TENSOR_EXTRA_PREC_A4, list(values))
 
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
@@ -728,8 +739,11 @@ class GGUFWriter:
         else:
             self.add_array(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
-    def add_expert_feed_forward_length(self, length: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+    def add_expert_feed_forward_length(self, length: int | Sequence[int]) -> None:
+        if isinstance(length, int):
+            self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+        else:
+            self.add_array(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
     def add_expert_shared_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -833,6 +847,9 @@ class GGUFWriter:
         else:
             self.add_array(key, value)
 
+    def add_recurrent_layers(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.RECURRENT_LAYERS.format(arch=self.arch), value)
+
     def add_rope_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.ROPE_PATTERN.format(arch=self.arch), value)
 
@@ -855,8 +872,11 @@ class GGUFWriter:
     def add_expert_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
-    def add_expert_used_count(self, count: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+    def add_expert_used_count(self, count: int | Sequence[int]) -> None:
+        if isinstance(count, int):
+            self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+        else:
+            self.add_array(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
 
     def add_expert_shared_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)
@@ -917,6 +937,18 @@ class GGUFWriter:
 
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
+
+    def add_hrm_layers_per_stack(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.LAYERS_PER_STACK.format(arch=self.arch), value)
+
+    def add_hrm_h_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.H_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_l_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.L_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_prefix_lm(self, value: bool) -> None:
+        self.add_bool(Keys.HRM.PREFIX_LM.format(arch=self.arch), value)
 
     def add_adapter_count(self, count: int) -> None:
         self.add_uint32(Keys.Adapters.COUNT.format(arch=self.arch), count)
@@ -1043,6 +1075,9 @@ class GGUFWriter:
 
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
+
+    def add_hyper_connection_magnitude(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.MAGNITUDE.format(arch=self.arch), value)
 
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)

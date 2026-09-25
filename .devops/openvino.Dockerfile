@@ -1,18 +1,18 @@
-ARG OPENVINO_VERSION_MAJOR=2026.3
-ARG OPENVINO_VERSION_FULL=2026.3.0.22451.bd8d6542e3c
+ARG OPENVINO_VERSION_MAJOR=2026.4
+ARG OPENVINO_VERSION_FULL=2026.4.0.22959.99c81491cc3
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.38.2
-ARG IGC_VERSION_FULL=2_2.38.2+22051
-ARG COMPUTE_RUNTIME_VERSION=26.27.39122.11
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.27.39122.11-0
+ARG IGC_VERSION=v2.40.13
+ARG IGC_VERSION_FULL=2_2.40.13+22418
+ARG COMPUTE_RUNTIME_VERSION=26.31.39395.13
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.31.39395.13-0
 ARG IGDGMM_VERSION=22.10.0
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
-ARG NPU_DRIVER_VERSION=v1.35.0
-ARG NPU_DRIVER_FULL=v1.35.0.20260722-29947505341
-ARG LIBZE1_VERSION=1.28.2-1~24.04~ppa1
+ARG NPU_DRIVER_VERSION=v1.38.0
+ARG NPU_DRIVER_FULL=v1.38.0.20260910-34487311128
+ARG LIBZE1_VERSION=1.32.0-1~24.04~ppa1
 
 # Optional proxy build arguments
 ARG http_proxy=
@@ -173,7 +173,7 @@ RUN --mount=type=cache,target=/var/cache/intel-npu,sharing=locked \
     fi; \
     DEB=/var/cache/intel-npu/libze1_${LIBZE1_VERSION}_amd64.deb; \
     if [ ! -f "$DEB" ]; then \
-        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
+        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
     fi; \
     mkdir /tmp/npu/ && cd /tmp/npu/ && tar -xf "$TGZ" && cp "$DEB" .; \
     apt-get update; \

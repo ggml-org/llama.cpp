@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v6
 
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.16
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: msys-windows-2025-x64
       #    variant: ccache

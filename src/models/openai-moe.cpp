@@ -2,13 +2,11 @@
 
 void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
 
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    uint32_t swa_period = 2;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-    hparams.set_swa_pattern(swa_period);
+    load_swa_pattern(ml, 2);
 
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
@@ -24,7 +22,7 @@ void llama_model_openai_moe::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_openai_moe::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-    const int64_t n_ff_exp = hparams.n_ff_exp;
+    const int64_t n_ff_exp = hparams.n_ff_exp();
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 

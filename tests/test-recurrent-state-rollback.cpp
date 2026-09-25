@@ -1,21 +1,18 @@
 #include "arg.h"
 #include "common.h"
+#include "ggml-backend.h"
 #include "llama.h"
+
+#include "../src/llama-io.h"
+#include "../src/llama-memory.h"
 
 #include <algorithm>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <limits>
+#include <set>
 #include <vector>
-
-static llama_context * make_ctx(const common_params & params, llama_model * model) {
-    auto cparams = common_context_params_to_llama(params);
-    cparams.n_seq_max = 1;
-    cparams.n_rs_seq  = 8;
-    cparams.n_batch   = std::max(cparams.n_batch,  (uint32_t) (cparams.n_rs_seq + 1));
-    cparams.n_ubatch  = std::max(cparams.n_ubatch, (uint32_t) (cparams.n_rs_seq + 1));
-    return llama_init_from_model(model, cparams);
-}
 
 static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens, uint32_t count) {
     llama_batch batch = llama_batch_init(count, 0, 1);
@@ -35,12 +32,84 @@ static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos) {
     return ok;
 }
 
+struct cache_buffer_collector : llama_io_write_i {
+    std::set<ggml_backend_buffer_t> buffers;
+    size_t size = 0;
+
+    void write(const void *, size_t n) override {
+        size += n;
+    }
+
+    void write_tensor(ggml_tensor * tensor, size_t, size_t n) override {
+        buffers.insert(tensor->buffer);
+        size += n;
+    }
+
+    size_t n_bytes() override {
+        return size;
+    }
+};
+
+static llama_context * init_ctx(llama_model * model, llama_context_params cparams, uint8_t fill) {
+    llama_context * ctx = llama_init_from_model(model, cparams);
+    if (ctx == nullptr || fill == 0) {
+        return ctx;
+    }
+
+    // Use a full ubatch so buffer discovery preserves prefill allocation sizes.
+    const uint32_t n_tokens = llama_n_ubatch(ctx);
+    if (!decode_tokens(ctx, std::vector<llama_token>(n_tokens, 0), n_tokens)) {
+        llama_free(ctx);
+        return nullptr;
+    }
+    llama_synchronize(ctx);
+    cache_buffer_collector collector;
+    llama_get_memory(ctx)->state_write(collector);
+    llama_memory_clear(llama_get_memory(ctx), true);
+    if (collector.buffers.empty()) {
+        fprintf(stderr, "%s : no cache buffers found\n", __func__);
+        llama_free(ctx);
+        return nullptr;
+    }
+    for (auto * buffer : collector.buffers) {
+        ggml_backend_buffer_clear(buffer, fill);
+    }
+    return ctx;
+}
+
+static llama_context * make_ctx(const common_params & params, llama_model * model, uint8_t fill) {
+    auto cparams = common_context_params_to_llama(params);
+    cparams.n_seq_max = 1;
+    cparams.n_rs_seq  = 8;
+    cparams.n_batch   = std::max(cparams.n_batch,  (uint32_t) (cparams.n_rs_seq + 1));
+    cparams.n_ubatch  = std::max(cparams.n_ubatch, (uint32_t) (cparams.n_rs_seq + 1));
+    return init_ctx(model, cparams, fill);
+}
+
+static float logit_diff(float a, float b) {
+    return std::isfinite(a) && std::isfinite(b) ? std::fabs(a - b) : std::numeric_limits<float>::infinity();
+}
+
+static double nmse(const float * a, const float * b, int n) {
+    double mse_ab = 0.0;
+    double mse_a0 = 0.0;
+    for (int i = 0; i < n; i++) {
+        if (!std::isfinite(a[i]) || !std::isfinite(b[i])) {
+            return std::numeric_limits<double>::infinity();
+        }
+        const double diff = (double) a[i] - b[i];
+        mse_ab += diff*diff;
+        mse_a0 += (double) a[i]*a[i];
+    }
+    return mse_a0 == 0.0 ? (mse_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : mse_ab/mse_a0;
+}
+
 // Roll back multiple sequences, then replay them in a single batch whose
 // per-seq token count exceeds n_ubatch: each seq's replay spans several
 // ubatches while its rollback restore is still pending. Compared against a
 // reference context that never advanced past the rollback point and decodes
 // the identical replay batch.
-static bool test_multi_seq_split_replay(const common_params & params, llama_model * model, const int n_vocab) {
+static bool test_multi_seq_split_replay(const common_params & params, llama_model * model, const int n_vocab, uint8_t fill) {
     constexpr uint32_t  n_seqs     = 2;
     constexpr uint32_t  n_ubatch   = 16;
     constexpr uint32_t  n_prompt   = 19;
@@ -56,7 +125,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         cparams.n_batch    = 256;
         cparams.n_ubatch   = n_ubatch;
         cparams.kv_unified = false;
-        return llama_init_from_model(model, cparams);
+        return init_ctx(model, cparams, fill);
     };
 
     llama_context * ctx_roll = make_ctx_multi();
@@ -127,13 +196,15 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         return false;
     }
 
-    // identical ubatch shapes from bit-exact states: a correct implementation
-    // matches bitwise, so eps only allows backend scheduling noise
-    constexpr float eps = 1e-7f;
+    // identical ubatch shapes should produce identical states, but the larger
+    // stdev makes the model sensitive to backend scheduling/rounding noise
+    constexpr float nmse_eps = 1e-5f;
 
     float    diff_max  = 0.0f;
     uint32_t seq_first = 0;
     int32_t  pos_first = -1;
+    double   nmse_ab   = 0.0;
+    double   nmse_a0   = 0.0;
     for (uint32_t i = 0; i < n_seqs*n_replay; ++i) {
         const float * l_roll = llama_get_logits_ith(ctx_roll, i);
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  i);
@@ -143,23 +214,34 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
             return false;
         }
         for (int t = 0; t < n_vocab; ++t) {
-            const float diff = std::fabs(l_roll[t] - l_ref[t]);
-            if (diff > eps && pos_first < 0) {
+            const float r = l_roll[t];
+            const float f = l_ref[t];
+            const float diff = logit_diff(r, f);
+            if (diff > 0.0f && pos_first < 0) {
                 seq_first = i/n_replay;
                 pos_first = p0 + (int32_t) (i%n_replay);
             }
             diff_max = std::max(diff_max, diff);
+            if (std::isfinite(r) && std::isfinite(f)) {
+                const double d = (double) r - f;
+                nmse_ab += d*d;
+                nmse_a0 += (double) r*r;
+            } else {
+                nmse_ab = std::numeric_limits<double>::infinity();
+                nmse_a0 = 1.0;
+            }
         }
     }
+    const double nmse_val = nmse_a0 == 0.0 ? (nmse_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : nmse_ab/nmse_a0;
 
-    if (diff_max > eps) {
-        fprintf(stderr, "%s : multi-seq split replay logits mismatch (max diff %g, first at seq %u pos %d)\n",
-                __func__, (double) diff_max, seq_first, pos_first);
+    if (nmse_val > nmse_eps) {
+        fprintf(stderr, "%s : multi-seq split replay logits mismatch (max diff %g, nmse %g, first at seq %u pos %d)\n",
+                __func__, (double) diff_max, nmse_val, seq_first, pos_first);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : multi-seq split replay matched (max diff %g)\n", __func__, (double) diff_max);
+    fprintf(stderr, "%s : multi-seq split replay matched (max diff %g, nmse %g)\n", __func__, (double) diff_max, nmse_val);
 
     // seq-1-only decodes must be independent of seq 0's content: diverge seq 0
     // in ctx_ref only, then compare identical seq-1-only continuations bitwise
@@ -176,6 +258,8 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
 
     float diff_tail = 0.0f;
+    double nmse_tail_ab = 0.0;
+    double nmse_tail_a0 = 0.0;
     for (uint32_t i = 0; i < n_tail && ok; ++i) {
         const llama_pos pos = p0 + (llama_pos) (n_replay + i);
         llama_batch batch_one = llama_batch_init(1, 0, 1);
@@ -191,54 +275,40 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         const float * l_ref  = llama_get_logits_ith(ctx_ref,  0);
         ok = l_roll != nullptr && l_ref != nullptr;
         for (int t = 0; ok && t < n_vocab; ++t) {
-            diff_tail = std::max(diff_tail, std::fabs(l_roll[t] - l_ref[t]));
+            const float r = l_roll[t];
+            const float f = l_ref[t];
+            diff_tail = std::max(diff_tail, logit_diff(r, f));
+            if (std::isfinite(r) && std::isfinite(f)) {
+                const double d = (double) r - f;
+                nmse_tail_ab += d*d;
+                nmse_tail_a0 += (double) r*r;
+            } else {
+                nmse_tail_ab = std::numeric_limits<double>::infinity();
+                nmse_tail_a0 = 1.0;
+            }
         }
     }
+    const double nmse_tail = nmse_tail_a0 == 0.0 ? (nmse_tail_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : nmse_tail_ab/nmse_tail_a0;
 
-    if (!ok || diff_tail > eps) {
-        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g)\n",
-                __func__, ok ? 1 : 0, (double) diff_tail);
+    if (!ok || nmse_tail > nmse_eps) {
+        fprintf(stderr, "%s : seq-1-only decode leaked seq 0 state (ok=%d, max diff %g, nmse %g)\n",
+                __func__, ok ? 1 : 0, (double) diff_tail, nmse_tail);
         cleanup();
         return false;
     }
 
-    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g)\n", __func__, (double) diff_tail);
+    fprintf(stderr, "%s : seq-1-only decode independent of seq 0 (max diff %g, nmse %g)\n", __func__, (double) diff_tail, nmse_tail);
     cleanup();
     return true;
 }
 
-int main(int argc, char ** argv) {
-    std::setlocale(LC_NUMERIC, "C");
-
-    common_params params;
-    params.sampling.seed = 1234;
-    params.n_predict = 1;
-
-    common_init();
-
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
-        return 1;
-    }
-
-    ggml_backend_load_all();
-
-    common_init_result_ptr llama_init = common_init_from_params(params);
-    llama_model * model = llama_init->model();
-    if (model == nullptr) {
-        fprintf(stderr, "%s : failed to init model\n", __func__);
-        return 1;
-    }
-
-    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
-        fprintf(stderr, "%s : skipping for non-recurrent model\n", __func__);
-        return 0;
-    }
-
+static int test_rollback(const common_params & params, llama_model * model, uint8_t fill) {
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
 
-    llama_context * ctx_src = make_ctx(params, model);
-    llama_context * ctx_dst = make_ctx(params, model);
+    // TODO: use smart pointers
+    llama_context * ctx_src = make_ctx(params, model, fill);
+    llama_context * ctx_dst = make_ctx(params, model, fill);
     if (ctx_src == nullptr || ctx_dst == nullptr) {
         fprintf(stderr, "%s : failed to init contexts\n", __func__);
         return 1;
@@ -291,7 +361,7 @@ int main(int argc, char ** argv) {
     ckpt.update_tgt(ctx_src, 0, 0);
     ckpt.load_tgt(ctx_dst, 0, 0);
 
-    constexpr float eps = 1e-5f;
+    constexpr float nmse_eps = 0.0;
     std::vector<std::vector<float>> logits_src_replay(n_rollback);
     const auto replay_and_compare = [&](const char * mode) {
         for (uint32_t i = 0; i < n_rollback; ++i) {
@@ -310,12 +380,17 @@ int main(int argc, char ** argv) {
             }
 
             logits_src_replay[i].assign(logits_src, logits_src + n_vocab);
+            const double nmse_val = nmse(logits_src, logits_dst, n_vocab);
+            int token_first = -1;
             for (int token = 0; token < n_vocab; ++token) {
-                if (std::fabs(logits_src[token] - logits_dst[token]) > eps) {
-                    fprintf(stderr, "%s : %s logits mismatch at position %d, token %d (%g != %g)\n",
-                            __func__, mode, pos, token, (double) logits_src[token], (double) logits_dst[token]);
-                    return false;
+                if (logit_diff(logits_src[token], logits_dst[token]) > 0.0f && token_first < 0) {
+                    token_first = token;
                 }
+            }
+            if (nmse_val > nmse_eps) {
+                fprintf(stderr, "%s : %s logits mismatch at position %d, first token %d, nmse %g\n",
+                        __func__, mode, pos, token_first, nmse_val);
+                return false;
             }
         }
         return true;
@@ -324,25 +399,27 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1) ||
-        !llama_memory_seq_rm(llama_get_memory(ctx_dst), 0, rollback_pos, -1)) {
-        fprintf(stderr, "%s : partial rollback failed\n", __func__);
-        return 1;
-    }
+    // TODO: this test is invalid because RS rollback is only correct once after a ubatch with more than n_rs_seq tokens
+    //       this is not the case here. add asserts and guardrails to prevent such attempts
+    //if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, rollback_pos, -1) ||
+    //    !llama_memory_seq_rm(llama_get_memory(ctx_dst), 0, rollback_pos, -1)) {
+    //    fprintf(stderr, "%s : partial rollback failed\n", __func__);
+    //    return 1;
+    //}
 
-    constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
-    common_prompt_checkpoint ckpt_partial;
-    ckpt_partial.update_tgt(ctx_src, 0, partial_flags);
-    ckpt_partial.load_tgt(ctx_dst, 0, partial_flags);
+    //constexpr llama_state_seq_flags partial_flags = LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY;
+    //common_prompt_checkpoint ckpt_partial;
+    //ckpt_partial.update_tgt(ctx_src, 0, partial_flags);
+    //ckpt_partial.load_tgt(ctx_dst, 0, partial_flags);
 
-    if (!replay_and_compare("partial")) {
-        return 1;
-    }
+    //if (!replay_and_compare("partial")) {
+    //    return 1;
+    //}
 
     // Repeat the load into a context that already has its own rollback state:
     // groups 1..n_rs_seq hold a different prompt's history, and rs_idx[0] is
     // non-zero at load time. The restore must wipe that state and still match.
-    llama_context * ctx_dirty = make_ctx(params, model);
+    llama_context * ctx_dirty = make_ctx(params, model, fill);
     if (ctx_dirty == nullptr) {
         fprintf(stderr, "%s : failed to init dirty ctx\n", __func__);
         return 1;
@@ -379,12 +456,17 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        const double nmse_dirty = nmse(logits_src_replay[i].data(), logits_dirty, n_vocab);
+        int token_first = -1;
         for (int token = 0; token < n_vocab; ++token) {
-            if (std::fabs(logits_src_replay[i][token] - logits_dirty[token]) > eps) {
-                fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g)\n",
-                        __func__, pos, token, (double) logits_src_replay[i][token], (double) logits_dirty[token]);
-                return 1;
+            if (logit_diff(logits_src_replay[i][token], logits_dirty[token]) > 0.0f && token_first < 0) {
+                token_first = token;
             }
+        }
+        if (nmse_dirty > nmse_eps) {
+            fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, first token %d, nmse %g\n",
+                    __func__, pos, token_first, nmse_dirty);
+            return 1;
         }
     }
 
@@ -393,8 +475,45 @@ int main(int argc, char ** argv) {
     llama_free(ctx_dst);
     llama_free(ctx_dirty);
 
-    if (!test_multi_seq_split_replay(params, model, n_vocab)) {
+    if (!test_multi_seq_split_replay(params, model, n_vocab, fill)) {
         return 1;
+    }
+
+    return 0;
+}
+
+int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    common_params params;
+    params.sampling.seed = 1234;
+    params.n_predict = 1;
+
+    common_init();
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    ggml_backend_load_all();
+
+    common_init_result_ptr llama_init = common_init_from_params(params);
+    llama_model * model = llama_init->model();
+    if (model == nullptr) {
+        fprintf(stderr, "%s : failed to init model\n", __func__);
+        return 1;
+    }
+
+    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
+        fprintf(stderr, "%s : skipping for non-recurrent model\n", __func__);
+        return 0;
+    }
+
+    for (uint8_t fill : { 0, 0x3e }) {
+        fprintf(stderr, "%s : testing with cache fill 0x%02x\n", __func__, fill);
+        if (test_rollback(params, model, fill) != 0) {
+            return 1;
+        }
     }
 
     return 0;

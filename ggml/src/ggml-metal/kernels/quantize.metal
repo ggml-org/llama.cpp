@@ -207,6 +207,51 @@ template [[host_name("kernel_concat_i16")]]  kernel kernel_concat_t kernel_conca
 template [[host_name("kernel_concat_i32")]]  kernel kernel_concat_t kernel_concat<int>;
 template [[host_name("kernel_concat_i64")]]  kernel kernel_concat_t kernel_concat<long>;
 
+template<typename block_q>
+kernel void kernel_concat_q(
+        constant ggml_metal_kargs_concat & args,
+        device  const char * src0,
+        device  const char * src1,
+        device        char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+
+    // note: for quantized types, the args are in units of blocks (nb0 == type_size)
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+
+    if (i1 >= args.ne1) {
+        return;
+    }
+
+    int o[4] = {0, 0, 0, 0};
+    o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        device const block_q * x;
+
+        if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
+            x = (device const block_q *)(src0 + (i3       )*args.nb03 + (i2       )*args.nb02 + (i1       )*args.nb01 + (i0       )*args.nb00);
+        } else {
+            x = (device const block_q *)(src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11 + (i0 - o[0])*args.nb10);
+        }
+
+        device block_q * y = (device block_q *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
+
+        *y = *x;
+    }
+}
+
+typedef decltype(kernel_concat_q<block_q4_0>) kernel_concat_q_t;
+
+template [[host_name("kernel_concat_q4_0")]] kernel kernel_concat_q_t kernel_concat_q<block_q4_0>;
+template [[host_name("kernel_concat_q4_1")]] kernel kernel_concat_q_t kernel_concat_q<block_q4_1>;
+template [[host_name("kernel_concat_q5_0")]] kernel kernel_concat_q_t kernel_concat_q<block_q5_0>;
+template [[host_name("kernel_concat_q5_1")]] kernel kernel_concat_q_t kernel_concat_q<block_q5_1>;
+template [[host_name("kernel_concat_q8_0")]] kernel kernel_concat_q_t kernel_concat_q<block_q8_0>;
+
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
 kernel void kernel_get_rows_q(
         constant ggml_metal_kargs_get_rows & args,
