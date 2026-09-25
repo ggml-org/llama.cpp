@@ -875,8 +875,6 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             uint32_t op;
             int32_t  op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
             uint32_t ne[GGML_MAX_DIMS];
-            // nb[] must be in the key: the map is indexed by the key hash and never compares the
-            // key, so two tensors that differ only in strides would share one entry
             uint64_t nb[GGML_MAX_DIMS];
         };
 
