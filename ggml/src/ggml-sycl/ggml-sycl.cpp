@@ -394,7 +394,7 @@ static void ggml_check_sycl() try {
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
         GGML_LOG_INFO("Build with Macros:\n");
-#if defined(GGML_SYCL_DNNL)
+#if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DNNL: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");
@@ -444,7 +444,7 @@ static void ggml_check_sycl() try {
                       g_ggml_sycl_get_mem_api, mem_api_int2str(g_ggml_sycl_get_mem_api));
 #endif
 
-#if defined(GGML_SYCL_DNNL)
+#if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: %d\n", g_ggml_sycl_enable_dnn);
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN: %d\n", g_ggml_sycl_fa_onednn);
 #else
