@@ -5,6 +5,37 @@
 
 #include <vector>
 
+// dispatch by int tag: a function pointer NTTP embeds the helper mangled name into the
+// kernel image name, and IGC in the driver fails to compile such images
+enum cpy_blck_tag {
+    CPY_BLCK_Q8_0,
+    CPY_BLCK_Q1_0,
+    CPY_BLCK_Q2_0,
+    CPY_BLCK_Q5_1,
+    CPY_BLCK_Q5_0,
+    CPY_BLCK_Q4_1,
+    CPY_BLCK_Q4_0,
+    CPY_BLCK_IQ4_NL,
+    CPY_BLCK_MXFP4,
+    CPY_BLCK_NVFP4,
+};
+
+template <cpy_blck_tag tag>
+static void dispatch_cpy_blck(const char * src, char * dst) {
+    switch (tag) {
+        case CPY_BLCK_Q8_0:    cpy_blck_f32_q8_0(src, dst); break;
+        case CPY_BLCK_Q1_0:    cpy_blck_f32_q1_0(src, dst); break;
+        case CPY_BLCK_Q2_0:    cpy_blck_f32_q2_0(src, dst); break;
+        case CPY_BLCK_Q5_1:    cpy_blck_f32_q5_1(src, dst); break;
+        case CPY_BLCK_Q5_0:    cpy_blck_f32_q5_0(src, dst); break;
+        case CPY_BLCK_Q4_1:    cpy_blck_f32_q4_1(src, dst); break;
+        case CPY_BLCK_Q4_0:    cpy_blck_f32_q4_0(src, dst); break;
+        case CPY_BLCK_IQ4_NL:  cpy_blck_f32_iq4_nl(src, dst); break;
+        case CPY_BLCK_MXFP4:   cpy_blck_f32_mxfp4(src, dst); break;
+        case CPY_BLCK_NVFP4:   cpy_blck_f32_nvfp4(src, dst); break;
+    }
+}
+
 namespace utils {
 template<typename T>
 static constexpr bool is_arithmetic_v() {
@@ -34,7 +65,7 @@ inline void convert<sycl::half, sycl::ext::oneapi::bfloat16>(const char* src, ch
 }
 #endif
 
-template <typename TIn, typename TIdx, typename blockType, int qk, cpy_kernel_t cpyblck>
+template <typename TIn, typename TIdx, typename blockType, int qk, cpy_blck_tag cpyblck>
 static void set_rows_sycl_q(const char * __restrict__ src0_d,
                             const TIdx * __restrict__ src1_d,
                             blockType * __restrict__ dst_d,
@@ -89,14 +120,14 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
             calculate_offset<3>({ nb1, nb2, nb3 }, { dst_row, i02, i03 }) + (i00 / qk) * sizeof(blockType);
         char * dst_block = reinterpret_cast<char *>(reinterpret_cast<char *>(dst_d) + dst_offset);
         if constexpr (std::is_same_v<TIn, float>) {
-            cpyblck(src_block, dst_block);
+            dispatch_cpy_blck<cpyblck>(src_block, dst_block);
         } else {
             float src_block_f32[qk];
             const TIn * src_block_t = reinterpret_cast<const TIn *>(src_block);
             for (int j = 0; j < qk; ++j) {
                 src_block_f32[j] = (float) src_block_t[j];
             }
-            cpyblck(reinterpret_cast<const char *>(src_block_f32), dst_block);
+            dispatch_cpy_blck<cpyblck>(reinterpret_cast<const char *>(src_block_f32), dst_block);
         }
     });
     GGML_UNUSED(ne10);
@@ -356,61 +387,61 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
 #endif
         case GGML_TYPE_Q8_0:
-            set_rows_sycl_q<TIn, TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(
+            set_rows_sycl_q<TIn, TIdx, block_q8_0, QK8_0, CPY_BLCK_Q8_0>(
                 src0_d, src1_d, (block_q8_0 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q1_0:
-            set_rows_sycl_q<TIn, TIdx, block_q1_0, QK1_0, cpy_blck_f32_q1_0>(
+            set_rows_sycl_q<TIn, TIdx, block_q1_0, QK1_0, CPY_BLCK_Q1_0>(
                 src0_d, src1_d, (block_q1_0 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q2_0:
-            set_rows_sycl_q<TIn, TIdx, block_q2_0, QK2_0, cpy_blck_f32_q2_0>(
+            set_rows_sycl_q<TIn, TIdx, block_q2_0, QK2_0, CPY_BLCK_Q2_0>(
                 src0_d, src1_d, (block_q2_0 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_1:
-            set_rows_sycl_q<TIn, TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(
+            set_rows_sycl_q<TIn, TIdx, block_q5_1, QK5_1, CPY_BLCK_Q5_1>(
                 src0_d, src1_d, (block_q5_1 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_0:
-            set_rows_sycl_q<TIn, TIdx, block_q5_0, QK5_0, cpy_blck_f32_q5_0>(
+            set_rows_sycl_q<TIn, TIdx, block_q5_0, QK5_0, CPY_BLCK_Q5_0>(
                 src0_d, src1_d, (block_q5_0 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_1:
-            set_rows_sycl_q<TIn, TIdx, block_q4_1, QK4_1, cpy_blck_f32_q4_1>(
+            set_rows_sycl_q<TIn, TIdx, block_q4_1, QK4_1, CPY_BLCK_Q4_1>(
                 src0_d, src1_d, (block_q4_1 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q4_0:
-            set_rows_sycl_q<TIn, TIdx, block_q4_0, QK4_0, cpy_blck_f32_q4_0>(
+            set_rows_sycl_q<TIn, TIdx, block_q4_0, QK4_0, CPY_BLCK_Q4_0>(
                 src0_d, src1_d, (block_q4_0 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            set_rows_sycl_q<TIn, TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(
+            set_rows_sycl_q<TIn, TIdx, block_iq4_nl, QK4_NL, CPY_BLCK_IQ4_NL>(
                 src0_d, src1_d, (block_iq4_nl *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_MXFP4:
-            set_rows_sycl_q<TIn, TIdx, block_mxfp4, QK_MXFP4, cpy_blck_f32_mxfp4>(
+            set_rows_sycl_q<TIn, TIdx, block_mxfp4, QK_MXFP4, CPY_BLCK_MXFP4>(
                 src0_d, src1_d, (block_mxfp4 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_NVFP4:
-            set_rows_sycl_q<TIn, TIdx, block_nvfp4, QK_NVFP4, cpy_blck_f32_nvfp4>(
+            set_rows_sycl_q<TIn, TIdx, block_nvfp4, QK_NVFP4, CPY_BLCK_NVFP4>(
                 src0_d, src1_d, (block_nvfp4 *) dst->data, ne00, ne01, ne02, ne03,
                 ne10, ne11, ne12, ne13, nb00, nb01,
                 nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
