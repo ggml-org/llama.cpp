@@ -13,6 +13,7 @@
 		type ModelsTableGroup,
 		saveOverrides
 	} from './utils';
+	import { CollapsibleRegion } from '$lib/components/app';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import { backendsStore, conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -230,6 +231,15 @@
 	}
 </script>
 
+{#snippet toolbarEndRegion()}
+	<!-- the pane takes the toolbar's width, so the calls to action leave with it -->
+	<CollapsibleRegion axis="width" open={!selected}>
+		<div class="flex items-center gap-2">
+			{@render toolbarEnd?.()}
+		</div>
+	</CollapsibleRegion>
+{/snippet}
+
 <div
 	class={['grid min-h-0 flex-1', className]}
 	style="grid-template-columns: minmax(0, 1fr){selected ? ' 30rem' : ''};"
@@ -246,7 +256,7 @@
 			onUseAsDraft={useAsDraft}
 			{overrides}
 			{selectedId}
-			{toolbarEnd}
+			toolbarEnd={toolbarEndRegion}
 		/>
 	</div>
 
