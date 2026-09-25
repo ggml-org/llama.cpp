@@ -1221,7 +1221,7 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
-bool llama_act_policy::apply(ggml_tensor * res) const {
+bool llama_prec_policy::apply(ggml_tensor * res) const {
     if (!res || !res->src[0]) {
         return false;
     }
@@ -1234,7 +1234,7 @@ bool llama_act_policy::apply(ggml_tensor * res) const {
     return ggml_prec_set_src(res, it->second, 1);
 }
 
-static void load_act_policy(llama_model_loader & ml, const llama_model & model, llama_act_policy & policy) {
+void llama_prec_policy::load(llama_model_loader & ml, const llama_model & model) {
     std::vector<std::string> tensor_names;
     if (!ml.get_arr(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names, false)) {
         return;
@@ -1266,7 +1266,7 @@ static void load_act_policy(llama_model_loader & ml, const llama_model & model, 
     // resolve names to tensor pointers
     for (const auto & [name, w] : model.tensors_by_name) {
         if (want.count(name)) {
-            policy.prec_src1.emplace(w, GGML_PREC_Q8);
+            prec_src1.emplace(w, GGML_PREC_Q8);
         }
     }
 }
@@ -1796,7 +1796,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     }
 
     // per-tensor activation precision policy
-    load_act_policy(ml, *this, act_policy);
+    prec_policy.load(ml, *this);
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
