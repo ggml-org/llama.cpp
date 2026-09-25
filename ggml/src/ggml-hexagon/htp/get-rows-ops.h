@@ -1,6 +1,9 @@
 #ifndef HTP_GET_ROWS_OPS_H
 #define HTP_GET_ROWS_OPS_H
 
+#include <stdbool.h>
+#include <string.h>
+
 #include "hex-fastdiv.h"
 #include "matmul-ops.h"
 
@@ -12,6 +15,7 @@ struct htp_get_rows_kernel_params {
     int32_t  total_tasks;
     int32_t  tasks_per_thread;
     int32_t  vtcm_size;
+    int32_t  tiled;
 
     // Fastdiv helpers
     struct fastdiv_values div_ne10;
@@ -37,7 +41,26 @@ static inline void htp_get_rows_vtcm_layout_build(
     struct htp_get_rows_vtcm_layout * vtcm_layout,
     int type,
     uint32_t ne00,
-    uint32_t n_threads) {
+    uint32_t n_threads,
+    bool use_dma,
+    bool tiled) {
+
+    if (use_dma) {
+        memset(vtcm_layout, 0, sizeof(*vtcm_layout));
+        return;
+    }
+
+    if (tiled) {
+        const size_t tile_size = type == 2 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+        vtcm_layout->src0_spad_half_size = (tile_size + 255) & ~255;
+        vtcm_layout->dst_spad_half_size  = (ne00 * sizeof(float) + 255) & ~255;
+        vtcm_layout->src0_bytes_per_thread = 2 * vtcm_layout->src0_spad_half_size;
+        vtcm_layout->dst_bytes_per_thread  = vtcm_layout->dst_spad_half_size;
+        vtcm_layout->off_src0 = 0;
+        vtcm_layout->off_dst  = vtcm_layout->src0_bytes_per_thread * n_threads;
+        vtcm_layout->total_bytes = vtcm_layout->off_dst + vtcm_layout->dst_bytes_per_thread * n_threads;
+        return;
+    }
 
     uint32_t src0_row_size = 0;
     switch (type) {
@@ -46,9 +69,6 @@ static inline void htp_get_rows_vtcm_layout_build(
             break;
         case 1: // HTP_TYPE_F16
             src0_row_size = ne00 * 2;
-            break;
-        case 2: // HTP_TYPE_Q4_0
-            src0_row_size = (ne00 / 32) * 18;
             break;
         case 8: // HTP_TYPE_Q8_0
             src0_row_size = (ne00 / 32) * 34;
@@ -64,17 +84,7 @@ static inline void htp_get_rows_vtcm_layout_build(
     vtcm_layout->src0_spad_half_size = src0_row_size_aligned;
     vtcm_layout->dst_spad_half_size  = dst_row_size_aligned;
 
-    size_t tiled_src0_bytes = src0_row_size_aligned;
-    if (type == 2) {
-        tiled_src0_bytes += (HTP_MM_WEIGHT_TILE_SIZE_Q4_0 + 255) & ~255;
-    } else if (type == 8) {
-        tiled_src0_bytes += (HTP_MM_WEIGHT_TILE_SIZE_Q8_0 + 255) & ~255;
-    }
-
     vtcm_layout->src0_bytes_per_thread = src0_row_size_aligned * 2;
-    if (tiled_src0_bytes > vtcm_layout->src0_bytes_per_thread) {
-        vtcm_layout->src0_bytes_per_thread = tiled_src0_bytes;
-    }
     vtcm_layout->dst_bytes_per_thread  = dst_row_size_aligned * 2;
 
     vtcm_layout->off_src0 = 0;
