@@ -1,0 +1,53 @@
+# Tensor pair config for Gemma4 model validation.
+# Maps llama.cpp cb() tensor names to PyTorch hook tensor names.
+#
+# Used by validate-conversion.py.
+
+model_type: gemma4
+
+# Total number of layers. Can be overridden with --n-layers.
+# Gemma4-E2B has 35 layers (0-34); Gemma4-27B has 62.
+n_layers: 35
+
+# Tensors that are not layer-specific.
+# 'llama' names are saved by llama-debug --save-tensors.
+# 'torch' names are saved by run-org-model.py --dump-tensors.
+global_tensors:
+  - llama: inp_scaled
+    torch: inp_scaled
+    description: "Embedding output after sqrt(n_embd) scaling (BF16 semantics)"
+
+  - llama: result_norm
+    torch: result_norm
+    description: "Final RMS norm output (last token only)"
+
+# Per-layer tensors. Use {layer} as a placeholder for the layer index.
+# Only dumped for the target layers (first, middle, last).
+layer_tensors:
+  - llama: "attn_norm-{layer}"
+    torch: "attn_norm-{layer}"
+    description: "Attention input RMS norm * weight"
+
+  - llama: "attn_raw_out-{layer}"
+    torch: "attn_raw_out-{layer}"
+    description: "Raw attention output (before post-attention norm)"
+
+  - llama: "attn_post_norm-{layer}"
+    torch: "attn_post_norm-{layer}"
+    description: "Post-attention norm * weight (before residual add)"
+
+  - llama: "attn_out-{layer}"
+    torch: "attn_out-{layer}"
+    description: "After residual add, before FFN branch"
+
+  - llama: "ffn_norm-{layer}"
+    torch: "ffn_norm-{layer}"
+    description: "Pre-FFN RMS norm * weight"
+
+  - llama: "ffn_post_norm-{layer}"
+    torch: "ffn_post_norm-{layer}"
+    description: "Post-FFN norm * weight (before residual add)"
+
+  - llama: "l_out-{layer}"
+    torch: "l_out-{layer}"
+    description: "Full layer output (after FFN residual add)"

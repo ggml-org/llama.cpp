@@ -19,6 +19,8 @@ def parse_arguments():
     parser.add_argument("--prompt-file", "-f", help="Optional prompt file", required=False)
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose debug output")
     parser.add_argument("--device", "-d", help="Device to use (cpu, cuda, mps, auto)", default="auto")
+    parser.add_argument("--dump-tensors", help="Directory to save intermediate tensors as float32 .bin files for comparison with llama.cpp debug output", metavar="DIR")
+    parser.add_argument("--dump-layer", type=int, default=0, help="Which layer to dump tensors from (default: 0)")
     return parser.parse_args()
 
 def load_model_and_tokenizer(model_path, device="auto"):
@@ -100,6 +102,142 @@ def enable_torch_debugging(model):
             if len(list(module.children())) == 0:  # only leaf modules
                 module.register_forward_hook(debug_hook(name))
 
+
+def save_tensor(t, name, dump_dir):
+    """Save a tensor as flat float32 binary + shape sidecar, matching llama.cpp layout.
+
+    llama.cpp stores tensors with ne[0] (innermost) = last PyTorch dim,
+    so for a [batch, seq, hidden] tensor the flat layout is identical to
+    PyTorch's contiguous layout when batch=1: seq rows of hidden floats.
+    """
+    import pathlib
+    pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+
+    arr = t.detach().float().cpu()
+    # Drop batch dim if present (batch=1 always for inference)
+    if arr.ndim == 4:
+        arr = arr[0]           # [seq, heads, dim] or similar
+    elif arr.ndim == 3:
+        arr = arr[0]           # [seq, hidden]
+
+    flat = arr.contiguous().numpy().flatten().astype("float32")
+    shape = list(arr.shape)
+
+    flat.tofile(f"{dump_dir}/{name}.bin")
+    with open(f"{dump_dir}/{name}.shape", "w") as f:
+        f.write(" ".join(str(d) for d in shape) + "\n")
+    print(f"  Saved tensor '{name}' shape={shape} ({flat.size} elements)")
+
+
+def save_tensor_attn_qk(t, name, dump_dir):
+    """Save Q or K tensor from PyTorch [batch, seq, n_heads, head_dim]
+    matching GGML layout ne=[head_dim, n_heads, seq] (both give same flat order)."""
+    import pathlib
+    pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+
+    arr = t.detach().float().cpu()
+    if arr.ndim == 4:
+        arr = arr[0]  # drop batch → [seq, n_heads, head_dim]
+    # ndim==3: already [seq, n_heads, head_dim]
+
+    flat = arr.contiguous().numpy().flatten().astype("float32")
+    shape = list(arr.shape)
+
+    flat.tofile(f"{dump_dir}/{name}.bin")
+    with open(f"{dump_dir}/{name}.shape", "w") as f:
+        f.write(" ".join(str(d) for d in shape) + "\n")
+    print(f"  Saved tensor '{name}' shape={shape} ({flat.size} elements)")
+
+
+def register_dump_hooks(model, config, dump_dir, target_layer=0):
+    """Register forward hooks that save key intermediate tensors for a given layer.
+
+    Tensor names mirror the llama.cpp cb() names with the layer suffix -N.
+    """
+    il = target_layer
+    hooks = []
+
+    # Find the text model regardless of multimodal wrapper.
+    text_model = getattr(model, "model", model)
+    if not hasattr(text_model, "embed_tokens"):
+        text_model = getattr(text_model, "language_model", text_model)
+        text_model = getattr(text_model, "model", text_model)
+
+    layer0  = text_model.layers[0]
+    layerN  = text_model.layers[il]
+
+    # ---- inp_scaled: input to layer0.input_layernorm = inpL in llama.cpp ----
+    def inp_scaled_hook(_m, inp):
+        t = inp[0] if isinstance(inp, tuple) else inp
+        save_tensor(t, "inp_scaled", dump_dir)
+    hooks.append(layer0.input_layernorm.register_forward_pre_hook(inp_scaled_hook))
+
+    def make_save_hook(tensor_name):
+        def hook(_m, _inp, out):
+            t = out[0] if isinstance(out, tuple) else out
+            save_tensor(t, tensor_name, dump_dir)
+        return hook
+
+    # ---- target layer tensors ----
+    hooks.append(layerN.input_layernorm.register_forward_hook(
+        make_save_hook(f"attn_norm-{il}")))
+
+    if hasattr(layerN, "self_attn"):
+        if hasattr(layerN.self_attn, "q_norm"):
+            def q_norm_hook(_m, _inp, out):
+                t = out[0] if isinstance(out, tuple) else out
+                save_tensor_attn_qk(t, f"Qcur_normed-{il}", dump_dir)
+            hooks.append(layerN.self_attn.q_norm.register_forward_hook(q_norm_hook))
+
+        if hasattr(layerN.self_attn, "k_norm"):
+            def k_norm_hook(_m, _inp, out):
+                t = out[0] if isinstance(out, tuple) else out
+                save_tensor_attn_qk(t, f"Kcur_normed-{il}", dump_dir)
+            hooks.append(layerN.self_attn.k_norm.register_forward_hook(k_norm_hook))
+
+        def attn_raw_out_hook(_m, _inp, out):
+            t = out[0] if isinstance(out, tuple) else out
+            save_tensor(t, f"attn_raw_out-{il}", dump_dir)
+        hooks.append(layerN.self_attn.register_forward_hook(attn_raw_out_hook))
+
+    if hasattr(layerN, "post_attention_layernorm"):
+        hooks.append(layerN.post_attention_layernorm.register_forward_hook(
+            make_save_hook(f"attn_post_norm-{il}")))
+
+    if hasattr(layerN, "pre_feedforward_layernorm"):
+        hooks.append(layerN.pre_feedforward_layernorm.register_forward_hook(
+            make_save_hook(f"ffn_norm-{il}")))
+        def attn_out_hook(_m, inp):
+            t = inp[0] if isinstance(inp, tuple) else inp
+            save_tensor(t, f"attn_out-{il}", dump_dir)
+        hooks.append(layerN.pre_feedforward_layernorm.register_forward_pre_hook(attn_out_hook))
+    elif hasattr(layerN, "mlp"):
+        def attn_out_hook_dense(_m, inp):
+            t = inp[0] if isinstance(inp, tuple) else inp
+            save_tensor(t, f"attn_out-{il}", dump_dir)
+        hooks.append(layerN.mlp.register_forward_pre_hook(attn_out_hook_dense))
+
+    if hasattr(layerN, "post_feedforward_layernorm"):
+        hooks.append(layerN.post_feedforward_layernorm.register_forward_hook(
+            make_save_hook(f"ffn_post_norm-{il}")))
+
+    def layerN_post_hook(_m, _inp, out):
+        t = out[0] if isinstance(out, tuple) else out
+        save_tensor(t, f"l_out-{il}", dump_dir)
+    hooks.append(layerN.register_forward_hook(layerN_post_hook))
+
+    # ---- final norm (last token only) ----
+    if hasattr(text_model, "norm"):
+        def result_norm_hook(_m, _inp, out):
+            t = out[0] if isinstance(out, tuple) else out
+            if t.ndim == 3:
+                t = t[:, -1:, :]
+            save_tensor(t, "result_norm", dump_dir)
+        hooks.append(text_model.norm.register_forward_hook(result_norm_hook))
+
+    print(f"Registered {len(hooks)} tensor-dump hooks (layer {il}) → {dump_dir}/")
+    return hooks
+
 def get_prompt(args):
     if args.prompt_file:
         with open(args.prompt_file, encoding='utf-8') as f:
@@ -122,13 +260,23 @@ def main():
     if args.verbose:
         enable_torch_debugging(model)
 
+    dump_hooks = []
+    if args.dump_tensors:
+        dump_hooks = register_dump_hooks(model, config, args.dump_tensors, args.dump_layer)
+
     model_name = os.path.basename(model_path)
 
     # Iterate over the model parameters (the tensors) and get the first one
     # and use it to get the device the model is on.
     device = next(model.parameters()).device
     prompt = get_prompt(args)
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    # Prepend BOS if the tokenizer didn't add it — llama.cpp always adds BOS
+    # (add_bos: true in GGUF), so we need the same prefix for apples-to-apples comparison.
+    if tokenizer.bos_token_id is not None and (input_ids.shape[1] == 0 or input_ids[0, 0] != tokenizer.bos_token_id):
+        bos = torch.tensor([[tokenizer.bos_token_id]])
+        input_ids = torch.cat([bos, input_ids], dim=1)
+    input_ids = input_ids.to(device)
     token_ids = input_ids[0].cpu().tolist()
 
     print(f"Input tokens: {input_ids}")
