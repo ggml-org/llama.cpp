@@ -92,7 +92,6 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 p.ac(p.tool_arg_string_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n"));
 
             struct function_parsers {
-                size_t            index;
                 std::string       name;
                 common_peg_parser opener;
                 common_peg_parser body;
@@ -157,36 +156,49 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 auto body   = p.literal("\n") + p.tool_args(args) + p.tool_close(p.literal("</function>\n"));
 
                 tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(opener + body));
-                functions.push_back({ tool_index, name, opener, body });
+                functions.push_back({ name, opener, body });
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
 
             auto tool_call_body = tool_choice + p.token("</tool_call>") + p.space();
             auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
+            auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
-            // The gated grammar matches a trigger itself and then continues with the rest of its rule
-            auto more       = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
-            auto tool_calls = p.choice({ p.trigger_rule("tool-call-root", p.token("<tool_call>"), p.literal("\n") + tool_call_body + more) });
-
-            auto tool_call_start_parser = p.choice({p.token("<tool_call>")});
+            // Each trigger and the rest that follows it once the grammar has matched the trigger
+            struct trigger {
+                common_peg_parser start;
+                common_peg_parser rest;
+            };
+            std::vector<trigger> triggers = { { p.token("<tool_call>"), p.literal("\n") + tool_call_body + more } };
 
             if (is_qwen3_coder) {
                 // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
                 // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
                 // constraining on <function which may occur in valid content generation, e.g. #include <functional>
                 for (const auto & f : functions) {
-                    tool_calls |= p.trigger_rule("tool-call-bare-" + std::to_string(f.index), f.opener,
-                                                 f.body + p.token("</tool_call>") + p.space() + more);
-                    tool_call_start_parser |= p.literal("<function=" + f.name + ">");
+                    triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
                 }
+            }
+
+            auto tool_call_start = p.choice();
+            auto tool_calls      = p.choice();
+            std::vector<common_peg_ac_branch> branches;
+            for (const auto & t : triggers) {
+                tool_call_start |= t.start;
+                tool_calls      |= t.start + t.rest;
+                branches.push_back({ t.start, t.rest });
             }
 
             // The templates separate content from the tool calls with one or two newlines,
             // stop the content before them
-            auto content_end = (p.literal("\n\n") + tool_call_start_parser) | (p.literal("\n") + tool_call_start_parser) | tool_call_start_parser;
+            auto content_end = (p.literal("\n\n") + tool_call_start) | (p.literal("\n") + tool_call_start) | tool_call_start;
 
-            return generation_prompt + (reasoning << p.content(p.until(content_end)) << p.repeat(tool_calls, min_calls, 1));
+            // The grammar lets content through until a trigger completes and then constrains the rest
+            auto tool_section = p.trigger_rule("tool-section",
+                p.ac(p.content(p.until(content_end)) << p.repeat(tool_calls, min_calls, 1), branches, min_calls == 0));
+
+            return generation_prompt + (reasoning << tool_section);
         }
 
         // Content only parser
@@ -194,12 +206,10 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
     });
 
     if (include_grammar) {
-        // The grammar waits for the triggers itself, so the sampler runs it from the first token
-        auto gated = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
-
+        // The tool section grammar waits for the triggers itself, so the sampler runs it from the first token
         data.grammar_lazy = false;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            data.parser.build_grammar(builder, gated);
+            data.parser.build_grammar(builder, !has_response_format);
         });
     }
 
