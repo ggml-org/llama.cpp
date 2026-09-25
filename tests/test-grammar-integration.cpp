@@ -558,6 +558,7 @@ static void test_token_rule_utf8() {
         // Failing strings
         {
             token(10) + token_piece(20, "\xF0"),
+            token(10) + token_piece(20, "\xF0") + token(11),
         }
     );
 

@@ -1584,6 +1584,11 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
     const auto   decoded     = llama_grammar_decode_utf8(piece, grammar.partial_utf8);
     const auto & code_points = decoded.first;
 
+    // the mask rejects a piece that does not continue a partial character, so accepting one has to fail too
+    if (decoded.second.n_remain < 0) {
+        throw std::runtime_error("Invalid UTF-8 continuation in piece: " + piece + " (" + std::to_string(token) + ")");
+    }
+
     const bool opaque = llama_grammar_is_opaque(grammar, token);
 
     llama_grammar_stacks stacks_new;
