@@ -1206,10 +1206,34 @@ static void test_tests(testing & t) {
         "yes"
     );
 
-    test_template(t, "is sameas",
+    test_template(t, "is sameas boolean",
         "{{ 'yes' if x is sameas(false) }}",
         {{"x", false}},
         "yes"
+    );
+
+    test_template(t, "is sameas integer",
+        "{{ 'yes' if x is sameas(1) }}",
+        {{"x", 1}},
+        "yes"
+    );
+
+    test_template(t, "is sameas object",
+        "{{ 'yes' if x is sameas(x) }}",
+        {{"x", {{"y", false}}}},
+        "yes"
+    );
+
+    test_template(t, "is sameas ref object",
+        "{% set y = x.y %}{{ 'yes' if x.y is sameas(y) and x.y is not sameas(x.z) }}",
+        {{"x", {{"y", {{"z", 1}}}, {"z", {{"z", 1}}}}}},
+        "yes"
+    );
+
+    test_template(t, "is sameas undefined",
+        "{{ 'yes' if x is sameas(x) else 'no' }}",
+        json::object(),
+        "no"
     );
 
     test_template(t, "is boolean",
