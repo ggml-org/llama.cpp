@@ -142,9 +142,6 @@ struct ov_runtime_context {
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
 
-enum ggml_status ov_graph_compute_dynamic(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
-enum ggml_status ov_graph_compute_static(struct ggml_cgraph * cgraph, std::shared_ptr<ov_runtime_context> r_ctx);
-
 size_t checksum(const void * data, size_t size);
 
 bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path);
@@ -185,18 +182,6 @@ int64_t get_inp_pos_n_tokens(struct ggml_cgraph * cgraph, const ggml_tensor * in
 
 bool get_is_prefill(struct ggml_cgraph * cgraph, const ggml_tensor * inp_pos);
 
-ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
-ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                                             const std::string & param_name);
-ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                                              const std::string & param_name,
-                                              int chunk_index);
-
-ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                                   std::shared_ptr<ov::InferRequest> infer_request,
-                                   int output_index,
-                                   const ggml_tensor * ggml_tensor);
-
 bool is_naive(struct ggml_cgraph * cgraph);
 
 /**
@@ -205,9 +190,3 @@ bool is_naive(struct ggml_cgraph * cgraph);
  * @return true if the graph is identified as split; otherwise false.
  */
 bool is_model_splitted(struct ggml_cgraph * cgraph);
-
-enum ggml_status naive_compute(struct ggml_cgraph * cgraph,
-                               ov::Core & core,
-                               const std::string & device,
-                               const ov::AnyMap & config,
-                               ov_compiled_model_cache & cache);

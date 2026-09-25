@@ -314,6 +314,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_minimax_m2(params);
         case LLM_ARCH_MINIMAX_M3:
             return new llama_model_minimax_m3(params);
+        case LLM_ARCH_HRM_TEXT:
+            return new llama_model_hrm_text(params);
         case LLM_ARCH_COGVLM:
             return new llama_model_cogvlm(params);
         case LLM_ARCH_PANGU_EMBED:
@@ -473,6 +475,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        if (ud->model->arch == LLM_ARCH_HRM_TEXT) {
+            // aliased cache slots cannot satisfy the meta-split invariants, so replicate all tensors
+            return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, tensor, 0, 0};
+        }
         if (is_dsv4) {
             if (std::regex_match(tensor_name, pattern_kv_cache) ||
                     std::regex_match(tensor_name, pattern_dsv4_state)) {
@@ -597,8 +603,20 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
+        // TODO: clarify why this is necessary specifically for these models
+        // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
         if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
                 ud->model->arch == LLM_ARCH_QWEN4EXP) {
+
+            // fused full attention layers with Q gate tensors that need n_embd doubled:
+            if (!hparams.is_recr(il) && (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias))) {
+                const int64_t n_embd      = hparams.n_head(il) * hparams.n_embd_head_k(il) * 2;
+                const int64_t n_embd_gqa  = hparams.n_embd_v_gqa(il);
+                GGML_ASSERT(hparams.n_embd_k_gqa(il) == n_embd_gqa);
+                GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
+                return {{n_embd, 1}, {n_embd_gqa, 2}};
+            }
+
             const int64_t head_k_dim = hparams.ssm_d_state;
             const int64_t head_v_dim = hparams.ssm_d_state;
             const int64_t n_k_heads  = hparams.ssm_n_group;
@@ -648,11 +666,16 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
 
         if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias)) {
-            const int64_t n_embd      = hparams.n_embd;
-            const int64_t n_embd_gqa  = hparams.n_embd_v_gqa(il);
-            GGML_ASSERT(hparams.n_embd_k_gqa() == n_embd_gqa);
-            GGML_ASSERT(tensor->ne[axis] == n_embd + 2*n_embd_gqa);
-            return {{n_embd, 1}, {n_embd_gqa, 2}};
+            const int64_t n_embd_q = hparams.n_head(il) * hparams.n_embd_head_k(il);
+            const int64_t n_embd_k = hparams.n_embd_k_gqa(il);
+            const int64_t n_embd_v = hparams.n_embd_v_gqa(il);
+            GGML_ASSERT(tensor->ne[axis] == n_embd_q + n_embd_k + n_embd_v);
+            if (n_embd_k == n_embd_v) {
+                return {{n_embd_q, 1}, {n_embd_k, 2}};
+            }
+            // uneven K/V head sizes (e.g. MiMo d_k=192 d_v=128): split K and V as separate
+            // segments so each device gets whole heads of both
+            return {{n_embd_q, 1}, {n_embd_k, 1}, {n_embd_v, 1}};
         }
         if (std::regex_match(tensor_name, pattern_ffn_up_weight) || std::regex_match(tensor_name, pattern_ffn_up_bias)) {
             const int64_t n_ff = hparams.n_ff(il);
@@ -736,6 +759,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
                 GGML_ASSERT(segments.size() == 1);
                 // some models have Q gate tensors, for those cases the granularity needs to be doubled:
+                // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
                 if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
                         ud->model->arch == LLM_ARCH_QWEN4EXP) {
                     return {std::lcm(2*n_embd_q, blck_size_perf)};
@@ -744,7 +768,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
             if (std::regex_match(tensor_name, pattern_attn_out_weight)) {
                 GGML_ASSERT(segments.size() == 1);
-                return {granularity_q};
+                return {granularity_head * hparams.n_embd_head_v(il)};
             }
             if (std::regex_match(tensor_name, pattern_attn_gate_weight)) {
                 GGML_ASSERT(segments.size() == 1);
@@ -755,13 +779,28 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             }
 
             const int64_t granularity_kv = granularity_q / n_gqa;
+            // the V head size can differ from the K head size (e.g. MiMo d_k=192 d_v=128):
+            // align V tensors to whole V heads at the same head-index scale as Q and K so all
+            // three stay in lockstep per device
+            const int64_t granularity_v  = (granularity_kv / hparams.n_embd_head_k(il)) * hparams.n_embd_head_v(il);
             if (std::regex_match(tensor_name, pattern_kv_weight) ||
                 std::regex_match(tensor_name, pattern_kv_bias) ||
                 std::regex_match(tensor_name, pattern_kv_cache)) {
                 GGML_ASSERT(segments.size() == 1);
-                return {granularity_kv};
+                const bool is_v = tensor_name.find("attn_v") != std::string::npos || tensor_name.find("cache_v") != std::string::npos;
+                return {is_v ? granularity_v : granularity_kv};
             }
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_bias)) {
+                // fused full attention layers need Q gate tensors handled like above:
+                // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
+                if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE ||
+                        ud->model->arch == LLM_ARCH_QWEN4EXP) {
+                    return {std::lcm(2*n_embd_q, blck_size_perf), granularity_kv};
+                }
+                if (segments.size() == 3) {
+                    // uneven K/V head sizes: per-segment granularity, V aligned to whole V heads
+                    return {granularity_q, granularity_kv, granularity_v};
+                }
                 GGML_ASSERT(segments.size() == 2);
                 return {granularity_q, granularity_kv};
             }
@@ -1181,6 +1220,56 @@ struct llama_model::impl {
 
     std::vector<float> tensor_split_owned;
 };
+
+bool llama_prec_policy::apply(ggml_tensor * res) const {
+    if (!res || !res->src[0]) {
+        return false;
+    }
+
+    const auto it = prec_src1.find(res->src[0]);
+    if (it == prec_src1.end()) {
+        return false;
+    }
+
+    return ggml_prec_set_src(res, it->second, 1);
+}
+
+void llama_prec_policy::load(llama_model_loader & ml, const llama_model & model) {
+    std::vector<std::string> tensor_names;
+    if (!ml.get_arr(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names, false)) {
+        return;
+    }
+
+    const gguf_context * ctx = ml.metadata;
+    const std::string key = ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4);
+    const int kid = gguf_find_key(ctx, key.c_str());
+    if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY || gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
+        throw std::runtime_error(format("%s must be a bool array", key.c_str()));
+    }
+
+    const size_t n_values = gguf_get_arr_n(ctx, kid);
+    if (n_values != tensor_names.size()) {
+        throw std::runtime_error(format(
+            "%s tensor/value length mismatch (%zu vs %zu)",
+            key.c_str(), tensor_names.size(), n_values));
+    }
+
+    // tensors that can not use 4-bit activations, keep src1 at higher precision
+    const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
+    std::unordered_set<std::string> want;
+    for (size_t i = 0; i < n_values; ++i) {
+        if (values[i] == 0) {
+            want.insert(tensor_names[i]);
+        }
+    }
+
+    // resolve names to tensor pointers
+    for (const auto & [name, w] : model.tensors_by_name) {
+        if (want.count(name)) {
+            prec_src1.emplace(w, GGML_PREC_Q8);
+        }
+    }
+}
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
     if (params.tensor_split != nullptr) {
@@ -1705,6 +1794,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
+
+    // per-tensor activation precision policy
+    prec_policy.load(ml, *this);
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
@@ -2930,7 +3022,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GRANITE_SWA:
         case LLM_ARCH_CHAMELEON:
         case LLM_ARCH_BAILINGMOE:
-        case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_SMOLLM3:
         case LLM_ARCH_ARCEE:
@@ -2945,6 +3036,10 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_NANBEIGE:
         case LLM_ARCH_POCKETTTS:
+            return LLAMA_ROPE_TYPE_NORM;
+        case LLM_ARCH_BAILINGMOE3:
+            // VL files carry mrope sections; text-only files keep NORM rope
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_MROPE : LLAMA_ROPE_TYPE_NORM;
         // HY_V4 rotates consecutive pairs, matching the reference implementation
         case LLM_ARCH_HY_V4:
             return LLAMA_ROPE_TYPE_NORM;
@@ -3022,6 +3117,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_MAPLE:
+        case LLM_ARCH_HRM_TEXT:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
@@ -3225,6 +3321,15 @@ ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std:
 }
 
 void llama_model_base::create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_, int64_t n_ff_, int64_t n_expert_, int flags) {
+    if (flags & TENSOR_SKIP) {
+        const int skip = TENSOR_NOT_REQUIRED | TENSOR_SKIP;
+
+        create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", bid), {n_embd_, n_ff_ * 2, n_expert_}, skip | TENSOR_SKIP_IF_VIRTUAL);
+        create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS,    "weight", bid), {n_embd_, n_ff_,     n_expert_}, skip);
+        create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,      "weight", bid), {n_embd_, n_ff_,     n_expert_}, skip);
+        return;
+    }
+
     layer.ffn_gate_up_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", bid), {n_embd_, n_ff_ * 2, n_expert_}, TENSOR_NOT_REQUIRED);
     if (layer.ffn_gate_up_exps == nullptr) {
         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", bid), {n_embd_, n_ff_, n_expert_}, flags);
@@ -3268,6 +3373,15 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
         layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);
     }
+}
+
+void llama_model_base::load_swa_pattern(llama_model_loader & ml, uint32_t n_pattern, bool dense_first) {
+    if (ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, false)) {
+        return;
+    }
+
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, n_pattern, false);
+    hparams.set_swa_pattern(n_pattern, dense_first);
 }
 
 const int32_t * llama_model_target_layer_ids(const struct llama_model * model) {

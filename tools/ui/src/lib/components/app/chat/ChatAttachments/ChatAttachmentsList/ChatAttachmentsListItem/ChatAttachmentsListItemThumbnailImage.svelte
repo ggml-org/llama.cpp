@@ -34,7 +34,7 @@
 {/snippet}
 
 <div
-	class="group relative overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
+	class="group relative min-w-0 overflow-hidden rounded-lg bg-muted shadow-lg dark:border dark:border-muted {className}"
 >
 	{#if onclick}
 		<button

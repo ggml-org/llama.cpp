@@ -84,7 +84,7 @@ bool KVStateSeqAxis::run_on_model(const std::shared_ptr<ov::Model> & model) {
         // Readers still expect seq at dim 1. A reader that is itself the inverse
         // Transpose wanted seq at dim 2 all along, so drop it; give anything else the
         // inverse Transpose so its input is unchanged.
-        for (auto & reader : readers) {
+        for (const auto & reader : readers) {
             auto * node = reader.get_node();
             if (ov::is_type<ov::op::v6::Assign>(node)) {
                 continue;

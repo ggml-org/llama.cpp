@@ -11,6 +11,58 @@
 #include <string>
 #include <vector>
 
+constexpr double NMSE_THRESHOLD = 1e-5;
+
+enum class test_status {
+    PASS,
+    FAIL,
+    SKIP,
+};
+
+static const char * test_status_str(test_status status) {
+    switch (status) {
+        case test_status::PASS: return "\033[1;32mPASS\033[0m";
+        case test_status::FAIL: return "\033[1;31mFAIL\033[0m";
+        case test_status::SKIP: return "\033[1;33mSKIP\033[0m";
+    }
+    return "";
+}
+
+// normalized mean squared error = mse(a, b) / mse(a, 0)
+static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
+    GGML_ASSERT(a.size() == b.size());
+    double mse_a_b = 0.0;
+    double mse_a_0 = 0.0;
+
+    for (size_t i = 0; i < a.size(); i++) {
+        const float a_i = a[i];
+        const float b_i = b[i];
+
+        mse_a_b += (double) (a_i - b_i) * (a_i - b_i);
+        mse_a_0 += (double) a_i * a_i;
+    }
+
+    return mse_a_b / mse_a_0;
+}
+
+struct generation_result {
+    llama_tokens tokens;
+    std::vector<std::vector<float>> logits;
+
+    bool empty() const { return tokens.empty(); }
+};
+
+static bool get_current_logits(llama_context * ctx, std::vector<float> & out) {
+    const auto * vocab = llama_model_get_vocab(llama_get_model(ctx));
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const float * logits = llama_get_logits_ith(ctx, -1);
+    if (logits == nullptr) {
+        return false;
+    }
+    out.assign(logits, logits + n_vocab);
+    return true;
+}
+
 struct llama_batch_ptr {
     llama_batch batch;
 
@@ -28,15 +80,23 @@ struct llama_batch_ptr {
     const llama_batch & get() const { return batch; }
 };
 
-static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
-    llama_tokens result;
+static generation_result generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
+    generation_result result;
     llama_batch_ptr batch(1, 0, 1);
 
     for (int i = 0; i < n_predict; i++) {
+        std::vector<float> logits;
+        if (!get_current_logits(ctx, logits)) {
+            LOG_ERR("\n%s: failed to get logits\n", __func__);
+            return {};
+        }
+
         auto next_token = llama_sampler_sample(smpl, ctx, -1);
 
-        LOG("%d ", next_token);
-        result.push_back(next_token);
+        // LOG_LEVEL_INFO gate: visible in single-model mode, silenced in --models table mode
+        LOGV(LOG_LEVEL_INFO, "%d ", next_token);
+        result.tokens.push_back(next_token);
+        result.logits.push_back(std::move(logits));
 
         common_batch_clear(batch.get());
         common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
@@ -51,12 +111,61 @@ static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, i
     return result;
 }
 
+static bool generate_tokens_compare(
+        llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id,
+        const generation_result & expected) {
+    if (expected.tokens.size() != expected.logits.size() || expected.tokens.size() < (size_t) n_predict) {
+        LOG_ERR("\n%s: invalid expected generation\n", __func__);
+        return false;
+    }
+
+    llama_batch_ptr batch(1, 0, 1);
+
+    for (int i = 0; i < n_predict; i++) {
+        std::vector<float> logits;
+        if (!get_current_logits(ctx, logits)) {
+            LOG_ERR("\n%s: failed to get logits\n", __func__);
+            return false;
+        }
+        if (logits.size() != expected.logits[i].size()) {
+            LOG_ERR("\n%s: logits size mismatch at step %d: %zu != %zu\n", __func__, i, logits.size(), expected.logits[i].size());
+            return false;
+        }
+
+        const double nmse_val = nmse(expected.logits[i], logits);
+        LOG_TRC("%s: step %d nmse = %.6e\n", __func__, i, nmse_val);
+        if (nmse_val > NMSE_THRESHOLD) {
+            LOG_ERR("\n%s: error: NMSE at step %d is %.6e (threshold %.1e)\n", __func__, i, nmse_val, NMSE_THRESHOLD);
+            return false;
+        }
+
+        const auto next_token = llama_sampler_sample(smpl, ctx, -1);
+        const auto expected_token = expected.tokens[i];
+
+        LOGV(LOG_LEVEL_INFO, "%d ", next_token);
+        if (next_token != expected_token) {
+            LOG_TRC("%s: sampled token %d differs from expected %d, using expected token\n", __func__, next_token, expected_token);
+        }
+
+        common_batch_clear(batch.get());
+        common_batch_add(batch.get(), expected_token, n_past, {seq_id}, true);
+
+        if (llama_decode(ctx, batch.get())) {
+            LOG_ERR("\n%s: failed to evaluate\n", __func__);
+            return false;
+        }
+        n_past++;
+    }
+
+    return true;
+}
+
 // Test 1: baseline
 // - decode all but the last token
 // - save state to disk
 // - decode the last token
 // - generate n_predict tokens
-static llama_tokens test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
+static generation_result test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -71,14 +180,14 @@ static llama_tokens test_baseline(struct llama_model * model, const struct commo
         return {};
     }
 
-    LOG("\n=== Test 1: baseline ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 1: baseline ===\n");
 
     auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
     if (result.empty()) {
         return {};
     }
 
-    LOG("\n");
+    LOGV(LOG_LEVEL_INFO, "\n");
 
     return result;
 }
@@ -103,7 +212,7 @@ static bool test_seq_rm_isolated(
         return false;
     }
 
-    LOG("\n=== Test 2: sequence removal isolation ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 2: sequence removal isolation ===\n");
 
     const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
     for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
@@ -156,7 +265,7 @@ static bool test_seq_rm_isolated(
         return false;
     }
 
-    LOG("PASS\n");
+    LOGV(LOG_LEVEL_INFO, "PASS\n");
     return true;
 }
 
@@ -166,7 +275,7 @@ static bool test_seq_rm_isolated(
 // - load state from file
 // - replay the last prompt token
 // - generate n_predict tokens and compare against expected result
-static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -175,7 +284,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 3: state load ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 3: state load ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -195,18 +304,12 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     }
     n_past++;
 
-    // Generate tokens
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
-    if (result.empty()) {
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 0, expected_result)) {
         return false;
     }
 
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
-        return false;
-    }
-
-    LOG("\nPASS\n");
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
     return true;
 }
 
@@ -217,7 +320,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the CPU path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -226,7 +329,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 4: seq copy (host) ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 4: seq copy (host) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -267,18 +370,12 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
-    // Generate tokens on seq 1
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
-    if (result.empty()) {
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 1, expected_result)) {
         return false;
     }
 
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
-        return false;
-    }
-
-    LOG("\nPASS\n");
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
     return true;
 }
 
@@ -289,7 +386,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the on-device path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
+static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const generation_result & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -298,7 +395,7 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 5: seq copy (device) ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 5: seq copy (device) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -339,18 +436,12 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
         LOG_TRC("%s: seq 1 restored, %zd bytes\n", __func__, nset);
     }
 
-    // Generate tokens on seq 1
-    auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 1);
-    if (result.empty()) {
+    // Generate tokens and compare logits against the baseline
+    if (!generate_tokens_compare(ctx.get(), smpl.get(), n_past, params.n_predict, 1, expected_result)) {
         return false;
     }
 
-    if (result != expected_result) {
-        LOG_ERR("\n%s: error: generation differs from expected\n", __func__);
-        return false;
-    }
-
-    LOG("\nPASS\n");
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
     return true;
 }
 
@@ -367,7 +458,7 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
     params_ctx.kv_unified = true;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
 
-    LOG("\n=== Test %d: seq copy (%s, scatter) ===\n", test_num, on_device ? "device" : "host");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test %d: seq copy (%s, scatter) ===\n", test_num, on_device ? "device" : "host");
 
     const uint32_t flags = on_device ? LLAMA_STATE_SEQ_FLAGS_ON_DEVICE : LLAMA_STATE_SEQ_FLAGS_NONE;
 
@@ -444,7 +535,7 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
         return false;
     }
 
-    LOG("\nPASS\n");
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
     return true;
 }
 
@@ -455,7 +546,7 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
     auto params_ctx = common_context_params_to_llama(params);
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
 
-    LOG("\n=== Test 8: state blob round-trip ===\n");
+    LOGV(LOG_LEVEL_INFO, "\n=== Test 8: state blob round-trip ===\n");
 
     if (llama_decode(ctx.get(), llama_batch_get_one(const_cast<llama_token *>(tokens.data()), (int32_t) tokens.size()))) {
         LOG_ERR("\n%s: failed to decode prompt\n", __func__);
@@ -503,14 +594,29 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
         return false;
     }
 
-    LOG("\nPASS\n");
+    LOGV(LOG_LEVEL_INFO, "\nPASS\n");
     return true;
 }
 
 
+struct test_suite {
+    std::vector<test_status> results;
+
+    bool all_passed() const {
+        return std::all_of(results.begin(), results.end(), [](test_status s) { return s == test_status::PASS; });
+    }
+};
+
+// column headers for the --models table, one per test, in the order they are run
+static const std::vector<const char *> test_names = {
+    "baseline", "seq_rm", "state_load", "cp_h", "cp_d", "cp_h_s", "cp_d_s", "rt",
+};
+
 // Run the full save/load test suite (tests 1-8) for a single model.
-// Returns true if all tests pass, false otherwise.
-static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+// Returns the per-test results.
+static test_suite run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+    test_suite suite;
+
     struct common_params params = base_params;
     params.model.path = model_path;
 
@@ -519,7 +625,8 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
-        return false;
+        suite.results.assign(test_names.size(), test_status::SKIP);
+        return suite;
     }
 
     GGML_ASSERT(llama_init->context() == nullptr);
@@ -551,50 +658,47 @@ static bool run_save_load_tests_for_model(const std::string & model_path, const 
 
     // Test 1: baseline (saves state to disk)
     auto result_baseline = test_baseline(model, params, tokens);
-    if (result_baseline.empty()) {
-        return false;
-    }
+    suite.results.push_back(result_baseline.empty() ? test_status::FAIL : test_status::PASS);
 
     // Test 2: sequence removal isolation
-    if (!test_seq_rm_isolated(model, params, tokens)) {
-        return false;
-    }
+    suite.results.push_back(test_seq_rm_isolated(model, params, tokens) ? test_status::PASS : test_status::FAIL);
 
-    // Test 3: state load
-    if (!test_state_load(model, params, tokens, result_baseline)) {
-        return false;
-    }
+    if (!result_baseline.empty()) {
+        // Test 3: state load
+        suite.results.push_back(test_state_load(model, params, tokens, result_baseline) ? test_status::PASS : test_status::FAIL);
 
-    // Test 4: seq copy (host)
-    if (!test_seq_cp_host(model, params, tokens, result_baseline)) {
-        return false;
-    }
+        // Test 4: seq copy (host)
+        suite.results.push_back(test_seq_cp_host(model, params, tokens, result_baseline) ? test_status::PASS : test_status::FAIL);
 
-    // Test 5: seq copy (device)
-    if (!test_seq_cp_device(model, params, tokens, result_baseline)) {
-        return false;
+        // Test 5: seq copy (device)
+        suite.results.push_back(test_seq_cp_device(model, params, tokens, result_baseline) ? test_status::PASS : test_status::FAIL);
+    } else {
+        // tests 3-5 depend on the baseline result and the state file it saves
+        suite.results.push_back(test_status::SKIP);
+        suite.results.push_back(test_status::SKIP);
+        suite.results.push_back(test_status::SKIP);
     }
 
     // Test 6: seq copy (host, scatter)
-    if (!test_seq_cp_scatter(model, params, tokens, 6, false)) {
-        return false;
-    }
+    suite.results.push_back(test_seq_cp_scatter(model, params, tokens, 6, false) ? test_status::PASS : test_status::FAIL);
 
     // Test 7: seq copy (device, scatter)
-    if (!test_seq_cp_scatter(model, params, tokens, 7, true)) {
-        return false;
-    }
+    suite.results.push_back(test_seq_cp_scatter(model, params, tokens, 7, true) ? test_status::PASS : test_status::FAIL);
 
     // Test 8: state blob round-trip
-    if (!test_state_roundtrip(model, params, tokens)) {
-        return false;
-    }
+    suite.results.push_back(test_state_roundtrip(model, params, tokens) ? test_status::PASS : test_status::FAIL);
 
-    LOG("\nAll tests passed.\n");
-
-    return true;
+    return suite;
 }
 
+
+static void print_usage(int /* argc */, char ** argv) {
+    LOG("\nexample usage:\n");
+    LOG("\n  %s -m your_model.gguf\n", argv[0]);
+    LOG("\n  %s --models tests/test-models\n", argv[0]);
+    LOG("\n  %s -m your_model.gguf -lv 5\n", argv[0]);
+    LOG("\n");
+}
 
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
@@ -632,7 +736,7 @@ int main(int argc, char ** argv) {
         params.model.path = models_dir;
     }
 
-    if (!common_params_parse(fargc, filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+    if (!common_params_parse(fargc, filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON, print_usage)) {
         return 1;
     }
 
@@ -667,27 +771,59 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        LOG_INF("%s: running save/load tests over %zu models in '%s'\n", __func__, models.size(), models_dir.c_str());
+        auto col_width = [](const char * name) { return (int) std::max(strlen(name), (size_t) 4); };
+
+        size_t name_width = 5; // "Model"
+        for (const auto & model_path : models) {
+            name_width = std::max(name_width, std::filesystem::path(model_path).filename().string().size());
+        }
+
+        // silence everything but the table itself (LOG has verbosity LOG_LEVEL_OUTPUT = 0)
+        common_log_set_verbosity_thold(0);
+
+        LOG("%-*s", (int) name_width, "Model");
+        for (const auto & name : test_names) {
+            LOG("  %-*s", col_width(name), name);
+        }
+        LOG("\n");
+        common_log_flush(common_log_main());
 
         size_t n_pass = 0;
         size_t n_fail = 0;
         for (const auto & model_path : models) {
-            LOG("\n================================================================\n");
-            LOG_INF("%s: model %s\n", __func__, model_path.c_str());
+            const auto name = std::filesystem::path(model_path).filename().string();
 
-            if (run_save_load_tests_for_model(model_path, params)) {
+            LOG("%-*s", (int) name_width, name.c_str());
+            common_log_flush(common_log_main());
+
+            const test_suite suite = run_save_load_tests_for_model(model_path, params);
+
+            for (size_t i = 0; i < suite.results.size(); i++) {
+                LOG("  %s%*s", test_status_str(suite.results[i]), col_width(test_names[i]) - 4, "");
+            }
+            LOG("\n");
+            common_log_flush(common_log_main());
+
+            if (suite.all_passed()) {
                 n_pass++;
             } else {
                 n_fail++;
             }
         }
 
-        LOG("\n================================================================\n");
+        common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
+        common_log_flush(common_log_main());
+
         LOG_INF("%s: summary: %zu passed, %zu failed (of %zu)\n", __func__, n_pass, n_fail, models.size());
 
         return n_fail == 0 ? 0 : 1;
     }
 
     // single-model mode
-    return run_save_load_tests_for_model(params.model.path, params) ? 0 : 1;
+    const test_suite suite = run_save_load_tests_for_model(params.model.path, params);
+    const bool all_passed = suite.all_passed();
+    if (all_passed) {
+        LOG("\nAll tests passed.\n");
+    }
+    return all_passed ? 0 : 1;
 }

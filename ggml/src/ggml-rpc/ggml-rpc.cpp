@@ -858,6 +858,11 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
     if (rpc_get) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
 
+        // the reported size must never be below ggml_nbytes: rpc_tensor stores nb[] as uint32_t,
+        // so a stride over 4 GiB is truncated on the wire and the remote size comes back too small
+        // TODO: change rpc_tensor nb to 64-bit int
+        const size_t min_size = ggml_nbytes(tensor);
+
         // Cache key for calls to read the alloc_size.
         // We deliberately exclude src tensor dimensions from the key because:
         // 1. For CPU backends, alloc_size = ggml_nbytes(output) regardless of src shapes
@@ -871,6 +876,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             uint32_t op;
             int32_t  op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
             uint32_t ne[GGML_MAX_DIMS];
+            uint64_t nb[GGML_MAX_DIMS];
         };
 
         alloc_size_cache_key key = {};
@@ -880,6 +886,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
         memcpy(key.op_params, tensor->op_params, sizeof(key.op_params));
         for (int i = 0; i < GGML_MAX_DIMS; i++) {
             key.ne[i] = (uint32_t)tensor->ne[i];
+            key.nb[i] = (uint64_t)tensor->nb[i];
         }
 
         uint64_t cache_hash = fnv_hash((const uint8_t *)&key, sizeof(key));
@@ -893,7 +900,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             std::lock_guard<std::mutex> lock(cache_mutex);
             auto it = cache.find(cache_hash);
             if (it != cache.end()) {
-                return it->second;
+                return std::max<size_t>(it->second, min_size);
             }
         }
 
@@ -915,7 +922,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
             cache[cache_hash] = response.alloc_size;
         }
 
-        return response.alloc_size;
+        return std::max<size_t>(response.alloc_size, min_size);
     }
 
     return ggml_nbytes(tensor);
@@ -1300,6 +1307,11 @@ bool rpc_server::free_buffer(const rpc_msg_free_buffer_req & request) {
     if (buffers.find(buffer) == buffers.end()) {
         GGML_LOG_ERROR("[%s] buffer not found\n", __func__);
         return false;
+    }
+    // Discard all cached graphs to avoid use-after-free in graph_recompute,
+    // since their nodes may hold pointers to the buffer being freed.
+    for (auto & sg : stored_graphs) {
+        sg.graph = nullptr;
     }
     ggml_backend_buffer_free(buffer);
     buffers.erase(buffer);
@@ -1752,7 +1764,6 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         int64_t id;
         memcpy(&id, &nodes[i], sizeof(id));
         graph->nodes[i] = create_node(id, ctx, tensor_ptrs, tensor_map);
-
         // Check if create_node failed for a *non-zero* ID.
         // If id was 0, create_node returning nullptr is expected.
         // If id was non-zero and create_node returned nullptr, it indicates a deserialization error.
