@@ -10281,7 +10281,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, use_cm2 ? std::array<uint32_t, 3>{ H, n_seqs, S_v / GGML_VK_GDN_CM2_V } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
+        pc, use_cm2 ? std::array<uint32_t, 3>{ S_v / GGML_VK_GDN_CM2_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
 }
 
 void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
