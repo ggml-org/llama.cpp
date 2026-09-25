@@ -863,6 +863,9 @@ class GGUFWriter:
     def add_final_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.FINAL_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
+    def add_final_logit_sigmoid_capping(self, scale: float, shift: float, temperature: float) -> None:
+        self.add_array(Keys.LLM.FINAL_LOGIT_SIGMOID_CAPPING.format(arch=self.arch), [scale, shift, temperature])
+
     def add_expert_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
@@ -931,6 +934,15 @@ class GGUFWriter:
 
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
+
+    def add_mudd_feed_forward_length(self, value: int) -> None:
+        self.add_uint32(Keys.MUDD.FEED_FORWARD_LENGTH.format(arch=self.arch), value)
+
+    def add_mudd_tap_count(self, value: int) -> None:
+        self.add_uint32(Keys.MUDD.TAP_COUNT.format(arch=self.arch), value)
+
+    def add_mudd_tap_indices(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.MUDD.TAP_INDICES.format(arch=self.arch), value)
 
     def add_hrm_layers_per_stack(self, value: int) -> None:
         self.add_uint32(Keys.HRM.LAYERS_PER_STACK.format(arch=self.arch), value)
@@ -1109,6 +1121,9 @@ class GGUFWriter:
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
+
+    def add_xsa_eps(self, value: float) -> None:
+        self.add_float32(Keys.Attention.XSA_EPS.format(arch=self.arch), value)
 
     def add_attn_output_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.OUTPUT_SCALE.format(arch=self.arch), value)
