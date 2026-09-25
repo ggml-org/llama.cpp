@@ -26,7 +26,7 @@ void test_json_serialization(testing &t) {
 
     t.test("ac branches rebuild the same grammar", [](testing &t) {
         auto original = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.ac(p.until("</tag>") + p.literal("</tag>") + p.literal("x"), std::vector<common_peg_ac_branch>{ { p.literal("</tag>"), p.literal("x") } }, true);
+            return p.ac(p.until("</tag>") + p.literal("</tag>") + p.literal("x"), { { p.literal("</tag>"), p.literal("x") } }, true);
         });
         auto deserialized = common_peg_arena::from_json(common_json::parse(original.to_json().dump()));
 
