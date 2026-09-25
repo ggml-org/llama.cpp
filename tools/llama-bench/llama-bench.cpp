@@ -475,7 +475,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nkvo, --no-kv-offload <0|1>                      (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
-    printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
+    printf("  -lm, --load-mode <auto|none|mmap|mmap-ondemand|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
@@ -788,6 +788,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                         mode = LLAMA_LOAD_MODE_NONE;
                     } else if (m == "mmap") {
                         mode = LLAMA_LOAD_MODE_MMAP;
+                    } else if (m == "mmap-ondemand") {
+                        mode = LLAMA_LOAD_MODE_MMAP_ONDEMAND;
                     } else if (m == "mlock") {
                         mode = LLAMA_LOAD_MODE_MLOCK;
                     } else if (m == "mmap+mlock") {
