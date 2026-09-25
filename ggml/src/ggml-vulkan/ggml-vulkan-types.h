@@ -757,6 +757,8 @@ struct vk_device_struct {
     bool coopmat_acc_f32_support {};
     bool coopmat_acc_f16_support {};
     bool coopmat_bf16_support {};
+    bool coopmat_bf16_acc_support {};
+    bool coopmat_maintenance1 {};
     bool coopmat_support_16x16x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};

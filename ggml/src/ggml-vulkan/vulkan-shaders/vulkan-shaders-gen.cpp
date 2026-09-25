@@ -348,7 +348,10 @@ compile_count_guard acquire_compile_slot() {
 }
 
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    // coopmat2 and the maintenance1 GDN coopmat1 variants need SPIR-V 1.6 (vulkan1.3)
+    const bool needs_spv16 = name.find("_cm2") != std::string::npos ||
+                             name.find("gated_delta_net_f32_cm1") != std::string::npos;
+    std::string target_env = needs_spv16 ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
     #ifdef _WIN32
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
@@ -1157,7 +1160,13 @@ void process_shaders() {
     string_to_spv("gated_delta_net_f32_shmem", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "0"}, {"USE_SUBGROUP_CLUSTERED", "0"}}));
 
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm2.comp", base_dict, true, false, true);
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}}), true, false, true);
+#endif
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}}), true, true, false, false, "_bf16acc");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", base_dict, true, true, false);
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_bf16acc_wave64");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_wave64");
 #endif
 
     string_to_spv("opt_step_adamw_f32", "opt_step_adamw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));

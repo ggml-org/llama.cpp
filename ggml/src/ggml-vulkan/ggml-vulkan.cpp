@@ -3734,13 +3734,39 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             }
         }
 
+        // WIP: chunked coopmat GDN prefill. Passes test-backend-ops; opt-in pending perf tuning.
+        // Prefer the coopmat2 shader; fall back to the coopmat1 + maintenance1 variant.
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        // WIP: chunked coopmat2 GDN prefill. Passes test-backend-ops; opt-in pending perf tuning.
         if (device->coopmat2 && device->coopmat2_bf16_support && getenv("GGML_VK_GDN_CM2")) {
             device->gated_delta_net_cm2_wgs = GGML_VK_GDN_CM2_WGS;
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+        }
+#endif
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
+        // Only when the coopmat2 path above is unavailable. Gate on a stable
+        // condition (not the pipeline pointer) so ggml_vk_load_shaders re-reaches
+        // this create call on the lazy per-pipeline recompile.
+        if (!(device->coopmat2 && device->coopmat2_bf16_support) &&
+            device->coopmat_support && device->coopmat_bf16_support && device->coopmat_maintenance1 &&
+            getenv("GGML_VK_GDN_CM2")) {
+            device->gated_delta_net_cm2_wgs = GGML_VK_GDN_CM2_WGS;
+            // Run at the device's native subgroup size (wave64 on RDNA, WGS=512) when it is 64.
+            const bool w64 = device->subgroup_size == 64;
+            const uint32_t rsg = w64 ? 64u : 32u;
+            const char * nm; const void * spv; size_t spvlen;
+            if (device->coopmat_bf16_acc_support) {
+                nm  = w64 ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_bf16acc";
+                spv = w64 ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_bf16acc_data;
+                spvlen = w64 ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_bf16acc_len;
+            } else {
+                nm  = w64 ? "gated_delta_net_f32_cm1_wave64" : "gated_delta_net_f32_cm1";
+                spv = w64 ? (const void *)gated_delta_net_f32_cm1_wave64_data : (const void *)gated_delta_net_f32_cm1_data;
+                spvlen = w64 ? gated_delta_net_f32_cm1_wave64_len : gated_delta_net_f32_cm1_len;
+            }
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2, nm, spvlen, spv,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
         }
 #endif
     }
@@ -4081,6 +4107,11 @@ vk_device ggml_vk_get_device(size_t idx) {
                        !getenv("GGML_VK_DISABLE_COOPMAT2")) {
                 coopmat2_support = true;
 #endif
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+            } else if (strcmp("VK_EXT_cooperative_matrix_maintenance1", properties.extensionName) == 0 &&
+                       !getenv("GGML_VK_DISABLE_COOPMAT_MAINTENANCE1")) {
+                device->coopmat_maintenance1 = true;
+#endif
             } else if (strcmp(VK_NV_COOPERATIVE_MATRIX_DECODE_VECTOR_EXTENSION_NAME, properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT2_DECODE_VECTOR")) {
                 coopmat2_decode_vector_support = true;
@@ -4390,6 +4421,15 @@ vk_device ggml_vk_get_device(size_t idx) {
             last_struct->pNext = (VkBaseOutStructure *)&coopmat2_features;
             last_struct = (VkBaseOutStructure *)&coopmat2_features;
             device_extensions.push_back("VK_NV_cooperative_matrix2");
+        }
+#endif
+
+#if defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+        // VK_EXT_cooperative_matrix_maintenance1 has no feature-enable struct in the
+        // Vulkan headers used here; enabling the extension is sufficient. Chain a
+        // features struct into pNext here if a newer SDK adds one.
+        if (device->coopmat_support && device->coopmat_maintenance1) {
+            device_extensions.push_back("VK_EXT_cooperative_matrix_maintenance1");
         }
 #endif
 
@@ -4754,6 +4794,18 @@ vk_device ggml_vk_get_device(size_t idx) {
                         // Only enable if shape is identical
                         device->coopmat_bf16_support = true;
                     }
+                }
+                // bf16 accumulator (bf16/bf16/bf16/bf16) at the shader's fixed 16x16x16
+                // shape lets the GDN coopmat1 path keep the hi/lo split as accumulators.
+                if (bfloat16_support &&
+                    prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.BType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.CType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    prop.ResultType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
+                    (vk::ScopeKHR)prop.scope == vk::ScopeKHR::eSubgroup &&
+                    prop.MSize == 16 && prop.NSize == 16 && prop.KSize == 16
+                ) {
+                    device->coopmat_bf16_acc_support = true;
                 }
 #endif
             }
