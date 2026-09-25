@@ -4,7 +4,7 @@
 
 #include "ggml.h"
 
-#include <string.h>
+#include <cstring>
 
 #if defined(__AVX512VNNI__) || defined(__AVX2__) || defined(__AVX__)
 #include <immintrin.h>
