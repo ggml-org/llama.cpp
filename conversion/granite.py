@@ -738,11 +738,8 @@ class GraniteSpeech5Model(TextModel):
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
 
-        # id 0 is the CTC blank symbol; insert a placeholder so GGUF vocab size
-        # matches the model's output width (vocab_size real tokens + 1 blank)
-        tokens.insert(0, "<blank>")
-        toktypes.insert(0, gguf.TokenType.CONTROL)
-
+        # HF tokenizer already has <|blank|> at index 0; model output has vocab_size values
+        # matching the tokenizer entries. No blank insertion needed.
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
