@@ -1,5 +1,6 @@
 #include "llama-memory-recurrent.h"
 
+#include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "llama-impl.h"
 #include "llama-io.h"
@@ -8,14 +9,65 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
 #include <stdexcept>
 
+#ifdef __linux__
+#include <sys/mman.h>
+#endif
+
 //
 // llama_memory_recurrent
 //
+
+#ifdef __linux__
+// allocate the tensors of ctx in one anonymous private mapping, placed exactly as
+// ggml_backend_alloc_ctx_tensors_from_buft would place them, and wrap it with
+// ggml_backend_cpu_buffer_from_ptr (which does not own the memory: the caller unmaps it
+// after freeing the buffer). the pages read as zero until they are written, without
+// becoming resident. returns nullptr (and touches nothing) when the mapping cannot be made
+static ggml_backend_buffer_t rs_alloc_lazy_zero_host_buffer(
+        ggml_context * ctx, ggml_backend_buffer_type_t buft, void ** ptr_out, size_t * size_out) {
+    const size_t size = ggml_backend_alloc_ctx_tensors_from_buft_size(ctx, buft);
+    if (size == 0) {
+        return nullptr;
+    }
+
+    void * ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ptr == MAP_FAILED) {
+        LLAMA_LOG_WARN("%s: anonymous mmap of %zu bytes failed (%s), falling back to the eager clear\n",
+                __func__, size, strerror(errno));
+        return nullptr;
+    }
+
+    // mmap returns page-aligned memory, which satisfies the CPU buffer alignment
+    ggml_backend_buffer_t buf = ggml_backend_cpu_buffer_from_ptr(ptr, size);
+    if (!buf) {
+        munmap(ptr, size);
+        return nullptr;
+    }
+
+    ggml_tallocr talloc = ggml_tallocr_new(buf);
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->data == nullptr && t->view_src == nullptr) {
+            if (ggml_tallocr_alloc(&talloc, t) != GGML_STATUS_SUCCESS) {
+                ggml_backend_buffer_free(buf);
+                munmap(ptr, size);
+                return nullptr;
+            }
+        }
+    }
+
+    *ptr_out  = ptr;
+    *size_out = size;
+
+    return buf;
+}
+#endif
 
 llama_memory_recurrent::llama_memory_recurrent(
         const llama_model & model,
@@ -115,13 +167,42 @@ llama_memory_recurrent::llama_memory_recurrent(
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
+    //
+    // Linux, CPU buffers: the buffer is one anonymous private mmap that is NOT memset. its
+    // pages read as zero until they are written, exactly like the memset would leave them,
+    // but only the cells that are actually used ever become resident. the buffer holds
+    // mem_size*(1 + n_rs_seq) rows per layer, so with many slots or rollback snapshots the
+    // eager clear pinned gigabytes that a typical run never touches (a qwen35 GDN state is
+    // 2 MiB per layer per row). clear(true) drops the pages with madvise(MADV_DONTNEED)
+    // instead of a memset. LLAMA_RS_EAGER_ZERO=1 restores the eager allocation + memset
+#ifdef __linux__
+    static const bool rs_eager_zero = getenv("LLAMA_RS_EAGER_ZERO") != nullptr;
+#endif
+
     for (auto & [buft, ctx] : ctx_map) {
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for rs cache");
+        ggml_backend_buffer_t buf  = nullptr;
+        bool                  lazy = false;
+
+#ifdef __linux__
+        if (!rs_eager_zero && buft == ggml_backend_cpu_buffer_type()) {
+            void * ptr  = nullptr;
+            size_t size = 0;
+            buf = rs_alloc_lazy_zero_host_buffer(ctx.get(), buft, &ptr, &size);
+            if (buf) {
+                mmaps.push_back({ buf, ptr, size });
+                lazy = true;
+            }
         }
-        ggml_backend_buffer_clear(buf, 0);
-        LLAMA_LOG_INFO("%s: %10s RS buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+#endif
+        if (!buf) {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft);
+            if (!buf) {
+                throw std::runtime_error("failed to allocate buffer for rs cache");
+            }
+            ggml_backend_buffer_clear(buf, 0);
+        }
+        LLAMA_LOG_INFO("%s: %10s RS buffer size = %8.2f MiB%s\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0,
+                lazy ? " (anonymous mmap, lazily zeroed)" : "");
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -138,6 +219,17 @@ llama_memory_recurrent::llama_memory_recurrent(
     }
 }
 
+llama_memory_recurrent::~llama_memory_recurrent() {
+    // the from_ptr buffers do not own their memory: free them first, then unmap
+    ctxs_bufs.clear();
+#ifdef __linux__
+    for (const auto & m : mmaps) {
+        munmap(m.ptr, m.size);
+    }
+#endif
+    mmaps.clear();
+}
+
 void llama_memory_recurrent::clear(bool data) {
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
@@ -151,7 +243,20 @@ void llama_memory_recurrent::clear(bool data) {
 
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
-            ggml_backend_buffer_clear(buf.get(), 0);
+            bool dropped = false;
+#ifdef __linux__
+            for (const auto & m : mmaps) {
+                if (m.buf == buf.get()) {
+                    // drop the pages instead of a memset: a private anonymous mapping reads
+                    // back as zero and stays non-resident
+                    dropped = madvise(m.ptr, m.size, MADV_DONTNEED) == 0;
+                    break;
+                }
+            }
+#endif
+            if (!dropped) {
+                ggml_backend_buffer_clear(buf.get(), 0);
+            }
         }
     }
 
@@ -1321,4 +1426,34 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
         }
     }
     return (int32_t)(idx * mem->size) + src0;
+}
+
+bool llama_memory_recurrent_context::rs_inplace_ok(uint32_t n_seqs) const {
+    // the full (reserve) context spans the whole cache
+    if (is_full) {
+        return false;
+    }
+
+    // with rollback snapshots the live row is not the only row that has to be written
+    if (mem->n_rs_seq > 0) {
+        return false;
+    }
+
+    // the extra rows [head + n_seqs, head + n_rs) that build_rs relocates must not exist
+    if (mem->n != n_seqs) {
+        return false;
+    }
+
+    // every cell of the ubatch has to read its own state. after find_slot this holds for every
+    // cell that already owned its state and for a single fresh sequence whose cell is rs_z (the
+    // graph zeroes that row before reading it). it does not hold after seq_cp, after a cell
+    // reorder or when two fresh sequences share rs_z - those ubatches take the gathered path
+    for (uint32_t i = 0; i < n_seqs; ++i) {
+        const uint32_t cell_idx = mem->head + i;
+        if (mem->cells[cell_idx].src0 != (int32_t) cell_idx) {
+            return false;
+        }
+    }
+
+    return true;
 }

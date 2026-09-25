@@ -281,6 +281,11 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // the cache rows of this ubatch can be updated in place (llama_memory_recurrent_context::rs_inplace_ok)
+    // part of the graph reuse key: a graph built for the in-place path must not be reused by a ubatch
+    // that needs the gathered one and vice versa
+    bool rs_inplace = false;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {

@@ -10935,6 +10935,10 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // K (snapshot slot count) is an op param; state holds s0 only [S_v, S_v, H, n_seqs].
     const int64_t K = ggml_get_op_params_i32(dst, 0);
     GGML_ASSERT(K >= 1);
+    // in-place form (ggml_gated_delta_net_inplace): the state is updated in src_state itself
+    // and the output holds the attention scores only
+    const bool inplace = ggml_get_op_params_i32(dst, 1) != 0;
+    GGML_ASSERT(!inplace || K == 1);
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
@@ -10974,16 +10978,23 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
         const int64_t iq3 = iv3 / rq3;
         const int64_t ik3 = iv3 / rk3;
 
-        // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
-        // For K>1, work in scratch and copy out per-token when the slot is in range.
-        float * s_out = (K > 1)
-            ? state_work
-            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
-
-        // copy input state into the working buffer and operate in-place
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
-        const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
-        memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+        const int64_t s_off = iv3 * state_seq_stride + iv1 * S_v * S_v;
+
+        float * s_out;
+        if (inplace) {
+            // update the state where it is: no copy in, no copy out
+            s_out = (float *) src_state->data + s_off;
+        } else {
+            // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
+            // For K>1, work in scratch and copy out per-token when the slot is in range.
+            s_out = (K > 1)
+                ? state_work
+                : state_out_base + (iv3 * H + iv1) * S_v * S_v;
+
+            // copy input state into the working buffer and operate in-place
+            memcpy(s_out, state_in_base + s_off, S_v * S_v * sizeof(float));
+        }
 
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
