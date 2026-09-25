@@ -237,8 +237,6 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        if name.startswith("model.merger.") or name.startswith("model.vision_tower."):
-            return None
         # MTP tensors are not used at inference yet; align with Qwen3Next behaviour
         if name.startswith("mtp"):
             return None
