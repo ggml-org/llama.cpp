@@ -90,7 +90,7 @@ llama_context::llama_context(
     loras(std::make_unique<llama_adapter_loras>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
     for (const auto & [t, source] : model.lazy_readers) {
-        const int n_readers = 2*(int) std::max(1u, std::thread::hardware_concurrency());
+        const int n_readers = (int) std::max(1u, std::thread::hardware_concurrency());
         auto reader = source->clone(n_readers);
         lazy_reader_ptrs.emplace(t, reader.get());
         lazy_readers.emplace(t, std::move(reader));
