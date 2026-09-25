@@ -432,6 +432,8 @@ kernel void kernel_fwht(
 // Wide blocks: one row per threadgroup instead of per simdgroup, so each thread keeps
 // N/NT values rather than N/32. Butterflies below the simdgroup width still shuffle;
 // those up to NT go through threadgroup memory; the rest stay in registers.
+// TODO: try avoiding branch https://github.com/ggml-org/llama.cpp/pull/29094#discussion_r4049563223
+// TODO: try to unroll loops
 template<int N, int NT, typename src_t>
 kernel void kernel_fwht_tg(
         constant ggml_metal_kargs_fwht & args,
