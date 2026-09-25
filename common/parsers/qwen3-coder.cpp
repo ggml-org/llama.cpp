@@ -64,7 +64,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
         // The template strips the newline before </think>, so leave it out of the reasoning
         auto think_end   = (p.literal("\n") + p.token("</think>")) | p.token("</think>");
-        auto think_body  = p.until(think_end | p.token("<tool_call>"));
+        auto think_body  = p.until({ p.literal("\n") + p.token("</think>"), p.token("</think>"), p.token("<tool_call>") });
         auto think_close = think_end | p.peek(p.token("<tool_call>"));
 
         auto reasoning_extracted = p.optional(p.token("<think>") + p.space() + p.reasoning(think_body) + think_close);
@@ -165,34 +165,41 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
             auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
-            // Each trigger and the rest that follows it once the grammar has matched the trigger
+            // Each trigger as the plain delimiter the grammar waits for, the tagged parser that consumes it, and
+            // the rest that follows it
             struct trigger {
+                common_peg_parser delimiter;
                 common_peg_parser start;
                 common_peg_parser rest;
             };
-            std::vector<trigger> triggers = { { p.token("<tool_call>"), p.literal("\n") + tool_call_body + more } };
+            auto tool_call_token = p.token("<tool_call>");
+            std::vector<trigger> triggers = { { tool_call_token, tool_call_token, p.literal("\n") + tool_call_body + more } };
 
             if (is_qwen3_coder) {
                 // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
                 // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
                 // constraining on <function which may occur in valid content generation, e.g. #include <functional>
                 for (const auto & f : functions) {
-                    triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
+                    triggers.push_back({ p.literal("<function=" + f.name + ">"), f.opener,
+                                         f.body + p.token("</tool_call>") + p.space() + more });
                 }
             }
 
-            auto tool_call_start = p.choice();
-            auto tool_calls      = p.choice();
+            std::vector<common_peg_parser>    tool_call_start;
             std::vector<common_peg_ac_branch> branches;
+            auto                              tool_calls = p.choice();
             for (const auto & t : triggers) {
-                tool_call_start |= t.start;
-                tool_calls      |= t.start + t.rest;
-                branches.push_back({ t.start, t.rest });
+                tool_call_start.push_back(t.delimiter);
+                branches.push_back({ t.delimiter, t.rest });
+                tool_calls |= t.start + t.rest;
             }
 
             // The templates separate content from the tool calls with one or two newlines,
             // stop the content before them
-            auto content_end = (p.literal("\n\n") + tool_call_start) | (p.literal("\n") + tool_call_start) | tool_call_start;
+            std::vector<common_peg_parser> content_end;
+            for (const auto & start : tool_call_start) {
+                content_end.insert(content_end.end(), { p.literal("\n\n") + start, p.literal("\n") + start, start });
+            }
 
             // The grammar lets content through until a trigger completes and then constrains the rest
             auto tool_section = p.trigger_rule("tool-section",
