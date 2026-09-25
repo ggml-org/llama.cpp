@@ -423,7 +423,8 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
 
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
                                      const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
-                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+                                     const sycl::half2 * q8_1_ds, const int & iqs,
+                                     const int vdr = q8_0_traits::vdr_mmvq) {
         const uint8_t * base = static_cast<const uint8_t *>(vbq);
         const int8_t *  qs   = reinterpret_cast<const int8_t *>(base + ibx_offset.first);
         const ggml_half  d   = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
@@ -432,14 +433,14 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
         int u[q8_0_traits::vdr_mmvq];
 
 #pragma unroll
-        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+        for (int i = 0; i < vdr; ++i) {
             v[i] = get_int_from_int8(qs, iqs + i);
             u[i] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
         }
 
         int sumi = 0;
 #pragma unroll
-        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+        for (int i = 0; i < vdr; ++i) {
             sumi = dpct::dp4a(v[i], u[i], sumi);
         }
 
