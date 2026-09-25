@@ -246,51 +246,51 @@ static void get_rows_reconstruct_q8_0_tiled(
     memcpy(&block->d, tile + HTP_MM_HMX_TILE_N_ELMS + row * sizeof(block->d), sizeof(block->d));
 }
 
-#define GET_ROWS_THREAD_TILED_FN(TYPE_NAME, BLOCK_TYPE, TILE_SIZE, RECONSTRUCT, DEQUANTIZE, IDX_TYPE)                     \
-static void get_rows_thread_##TYPE_NAME##_tiled_##IDX_TYPE(unsigned int nth, unsigned int ith, void * data) {               \
-    struct get_rows_context * grctx = (struct get_rows_context *) data;                                                      \
-    struct htp_ops_context * octx = grctx->octx;                                                                              \
-    const struct htp_get_rows_kernel_params * kparams = grctx->kparams;                                                       \
-    get_rows_preamble;                                                                                                         \
-    const uint32_t dr  = grctx->tasks_per_thread;                                                                              \
-    const uint32_t ir0 = grctx->task_start + dr * ith;                                                                         \
-    if (ir0 >= grctx->task_start + grctx->tasks) {                                                                             \
-        return;                                                                                                                \
-    }                                                                                                                          \
-    const uint32_t ir1 = MIN(ir0 + dr, grctx->task_start + grctx->tasks);                                                      \
-    const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;                                                                 \
-    const struct htp_get_rows_vtcm_layout * vtcm_layout = &grctx->vtcm_layout;                                                \
-    uint8_t * raw_row = grctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;                 \
-    uint8_t * tile_buf = raw_row + vtcm_layout->src0_spad_half_size;                                                           \
-    dma_queue * dma_q = octx->ctx->dma[ith];                                                                                   \
-    for (uint32_t i = ir0; i < ir1; ++i) {                                                                                     \
-        const uint32_t i12 = fastdiv(i, &kparams->div_ne10_ne11);                                                             \
-        const uint32_t rem = i - i12 * ne11 * ne10;                                                                            \
-        const uint32_t i11 = fastdiv(rem, &kparams->div_ne10);                                                                \
-        const uint32_t i10 = rem - i11 * ne10;                                                                                 \
-        const IDX_TYPE * src1_ptr = (const IDX_TYPE *)(uintptr_t)(octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12);      \
-        const uint32_t i01 = (uint32_t) *src1_ptr;                                                                             \
-        assert(i01 < ne01);                                                                                                    \
-        const uint32_t q02 = fastdiv(i11, &kparams->div_ne02);                                                                \
-        const uint32_t i02 = i11 - q02 * ne02;                                                                                 \
-        const uint32_t q03 = fastdiv(i12, &kparams->div_ne03);                                                                \
-        const uint32_t i03 = i12 - q03 * ne03;                                                                                 \
-        const uint32_t column_tile = i01 / HTP_MM_HMX_TILE_N_ROWS;                                                            \
-        const uint32_t row = i01 % HTP_MM_HMX_TILE_N_ROWS;                                                                     \
-        const dma_addr_t matrix = octx->src[0]->data + i02*nb02 + i03*nb03;                                                    \
-        BLOCK_TYPE * blocks = (BLOCK_TYPE *) raw_row;                                                                          \
-        /* Tiled weights interleave 32 logical rows, so rebuild a conventional row in VTCM before dequantizing it. */         \
-        for (uint32_t k_tile = 0; k_tile < n_k_tiles; ++k_tile) {                                                              \
-            const dma_addr_t tile_src = matrix + (column_tile * n_k_tiles + k_tile) * TILE_SIZE;                              \
-            while (!dma_queue_push(dma_q, dma_make_data(tile_buf, tile_src), TILE_SIZE, TILE_SIZE, TILE_SIZE, 1)) {           \
-                dma_queue_pop(dma_q);                                                                                          \
-            }                                                                                                                   \
-            dma_queue_pop(dma_q);                                                                                              \
-            RECONSTRUCT(&blocks[k_tile], tile_buf, row);                                                                       \
-        }                                                                                                                       \
-        const uintptr_t dst_ptr = octx->dst->data + i10*nb1 + i11*nb2 + i12*nb3;                                              \
-        DEQUANTIZE((float *) dst_ptr, (const BLOCK_TYPE *) raw_row, ne00);                                                    \
-    }                                                                                                                          \
+#define GET_ROWS_THREAD_TILED_FN(TYPE_NAME, BLOCK_TYPE, TILE_SIZE, RECONSTRUCT, DEQUANTIZE, IDX_TYPE)                   \
+static void get_rows_thread_##TYPE_NAME##_tiled_##IDX_TYPE(unsigned int nth, unsigned int ith, void * data) {           \
+    struct get_rows_context * grctx = (struct get_rows_context *) data;                                                 \
+    struct htp_ops_context * octx = grctx->octx;                                                                        \
+    const struct htp_get_rows_kernel_params * kparams = grctx->kparams;                                                 \
+    get_rows_preamble;                                                                                                  \
+    const uint32_t dr  = grctx->tasks_per_thread;                                                                       \
+    const uint32_t ir0 = grctx->task_start + dr * ith;                                                                  \
+    if (ir0 >= grctx->task_start + grctx->tasks) {                                                                      \
+        return;                                                                                                         \
+    }                                                                                                                   \
+    const uint32_t ir1 = MIN(ir0 + dr, grctx->task_start + grctx->tasks);                                               \
+    const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;                                                           \
+    const struct htp_get_rows_vtcm_layout * vtcm_layout = &grctx->vtcm_layout;                                          \
+    uint8_t * raw_row = grctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;            \
+    uint8_t * tile_buf = raw_row + vtcm_layout->src0_spad_half_size;                                                    \
+    dma_queue * dma_q = octx->ctx->dma[ith];                                                                            \
+    for (uint32_t i = ir0; i < ir1; ++i) {                                                                              \
+        const uint32_t i12 = fastdiv(i, &kparams->div_ne10_ne11);                                                       \
+        const uint32_t rem = i - i12 * ne11 * ne10;                                                                     \
+        const uint32_t i11 = fastdiv(rem, &kparams->div_ne10);                                                          \
+        const uint32_t i10 = rem - i11 * ne10;                                                                          \
+        const IDX_TYPE * src1_ptr = (const IDX_TYPE *)(uintptr_t)(octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12); \
+        const uint32_t i01 = (uint32_t) *src1_ptr;                                                                      \
+        assert(i01 < ne01);                                                                                             \
+        const uint32_t q02 = fastdiv(i11, &kparams->div_ne02);                                                          \
+        const uint32_t i02 = i11 - q02 * ne02;                                                                          \
+        const uint32_t q03 = fastdiv(i12, &kparams->div_ne03);                                                          \
+        const uint32_t i03 = i12 - q03 * ne03;                                                                          \
+        const uint32_t column_tile = i01 / HTP_MM_HMX_TILE_N_ROWS;                                                      \
+        const uint32_t row = i01 % HTP_MM_HMX_TILE_N_ROWS;                                                              \
+        const dma_addr_t matrix = octx->src[0]->data + i02*nb02 + i03*nb03;                                             \
+        BLOCK_TYPE * blocks = (BLOCK_TYPE *) raw_row;                                                                   \
+        /* Tiled weights interleave 32 logical rows, so rebuild a conventional row in VTCM before dequantizing it. */   \
+        for (uint32_t k_tile = 0; k_tile < n_k_tiles; ++k_tile) {                                                       \
+            const dma_addr_t tile_src = matrix + (column_tile * n_k_tiles + k_tile) * TILE_SIZE;                        \
+            while (!dma_queue_push(dma_q, dma_make_data(tile_buf, tile_src), TILE_SIZE, TILE_SIZE, TILE_SIZE, 1)) {     \
+                dma_queue_pop(dma_q);                                                                                   \
+            }                                                                                                           \
+            dma_queue_pop(dma_q);                                                                                       \
+            RECONSTRUCT(&blocks[k_tile], tile_buf, row);                                                                \
+        }                                                                                                               \
+        const uintptr_t dst_ptr = octx->dst->data + i10*nb1 + i11*nb2 + i12*nb3;                                        \
+        DEQUANTIZE((float *) dst_ptr, (const BLOCK_TYPE *) raw_row, ne00);                                              \
+    }                                                                                                                   \
 }
 
 GET_ROWS_THREAD_TILED_FN(q4_0, block_q4_0, HTP_MM_WEIGHT_TILE_SIZE_Q4_0, get_rows_reconstruct_q4_0_tiled, get_rows_dequantize_q4_0_f32, int32_t)
