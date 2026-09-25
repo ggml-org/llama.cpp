@@ -78,10 +78,16 @@ ggml_tensor * llm_graph_lazy_rows::build(ggml_context * ctx0, ggml_tensor * tabl
         return ggml_get_rows(ctx0, table, t);
     }
 
-    t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, table->ne[0], n_rows);
+    t = ggml_new_tensor_2d(ctx0, table->type, table->ne[0], n_rows);
     ggml_set_input(t);
+    t_indices = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+    ggml_set_input(t_indices);
+    identity.resize(n_rows);
+    for (int64_t i = 0; i < n_rows; ++i) {
+        identity[i] = (int32_t) i;
+    }
 
-    return t;
+    return ggml_get_rows(ctx0, t, t_indices);
 }
 
 void llm_graph_lazy_rows::set_rows(const int32_t * idx, int64_t n) {
@@ -92,10 +98,11 @@ void llm_graph_lazy_rows::set_rows(const int32_t * idx, int64_t n) {
         return;
     }
 
-    staging.resize(n*reader->row_elems()*sizeof(float));
-    reader->gather(idx, n, (float *) staging.data());
+    staging.resize(n*reader->row_size());
+    reader->gather(idx, n, staging.data());
 
     ggml_backend_tensor_set(t, staging.data(), 0, staging.size());
+    ggml_backend_tensor_set(t_indices, identity.data(), 0, n*sizeof(int32_t));
 }
 
 bool llm_graph_lazy_rows::can_reuse(int64_t n_rows) const {

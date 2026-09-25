@@ -99,7 +99,7 @@ struct llm_graph_params;
 // llm_graph_input
 //
 
-// a ggml_get_rows() over a table, or staged rows from a lazy reader
+// gathers rows from a resident or lazy table
 class llm_graph_lazy_rows {
 public:
     ggml_tensor * build(ggml_context * ctx0, ggml_tensor * table, const llama_lazy_reader * reader, int64_t n_rows);
@@ -111,11 +111,12 @@ public:
 private:
     const llama_lazy_reader * reader = nullptr;
 
-    // I32 [n_rows] row indices, or F32 [table->ne[0], n_rows] staged rows
+    // I32 row indices or staged rows in the table type
     ggml_tensor * t = nullptr;
+    ggml_tensor * t_indices = nullptr;
 
-    // host side of t, reused across set_rows() calls
     std::vector<uint8_t> staging;
+    std::vector<int32_t> identity;
 };
 
 class llm_graph_input_i {

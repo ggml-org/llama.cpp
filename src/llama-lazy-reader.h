@@ -18,19 +18,18 @@ struct llama_lazy_reader {
 
     ~llama_lazy_reader();
 
-    // fill dst with the n gathered rows, dequantized to F32; thread-safe
-    void gather(const int32_t * rows, int64_t n, float * dst) const;
+    // fill dst with the n gathered rows in the table type; thread-safe
+    void gather(const int32_t * rows, int64_t n, uint8_t * dst) const;
     std::unique_ptr<llama_lazy_reader> clone(int n_readers) const;
 
     int64_t n_rows()    const { return nrows; }
-    int64_t row_elems() const { return relems; }
     size_t  row_size()  const { return rsize;  }
     int     n_readers() const { return (int) files.size(); }
 
 private:
     // read the rows of pairs[begin, end) through files[fi], writing each to its slot
     void read_range(const std::pair<int32_t, int32_t> * pairs, int64_t begin, int64_t end,
-                    size_t fi, float * dst) const;
+                    size_t fi, uint8_t * dst) const;
 
     // one buffered file per reader thread: read_at is not thread-safe, and the loader's own descriptor may be direct I/O
     std::vector<std::unique_ptr<llama_file>> files;
@@ -39,8 +38,6 @@ private:
 
     const size_t   offs;   // file offset of row 0
     const size_t   rsize;  // bytes per stored row
-    const int64_t  relems; // F32 elements per row
+    const int64_t  relems; // elements per row
     const int64_t  nrows;
-
-    ggml_to_float_t to_float; // the dequantizer the ggml_get_rows CPU kernel uses; null for F32
 };

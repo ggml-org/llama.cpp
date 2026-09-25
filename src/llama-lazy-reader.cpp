@@ -15,9 +15,8 @@ llama_lazy_reader::llama_lazy_reader(const llama_file & source, size_t offs, enu
     offs(offs),
     rsize(ggml_row_size(type, row_elems)),
     relems(row_elems),
-    nrows(n_rows),
-    to_float(type == GGML_TYPE_F32 ? nullptr : ggml_get_type_traits(type)->to_float) {
-    if (type != GGML_TYPE_F32 && to_float == nullptr) {
+    nrows(n_rows) {
+    if (type != GGML_TYPE_F32 && ggml_get_type_traits(type)->to_float == nullptr) {
         throw std::runtime_error(format("%s cannot be read row by row: %s has no F32 conversion",
                 path.c_str(), ggml_type_name(type)));
     }
@@ -40,7 +39,7 @@ std::unique_ptr<llama_lazy_reader> llama_lazy_reader::clone(int n_readers) const
 }
 
 void llama_lazy_reader::read_range(const std::pair<int32_t, int32_t> * pairs, int64_t begin, int64_t end,
-                                   size_t fi, float * dst) const {
+                                   size_t fi, uint8_t * dst) const {
     std::vector<uint8_t> bounce(rsize);
 
     for (int64_t i = begin; i < end; ) {
@@ -51,22 +50,18 @@ void llama_lazy_reader::read_range(const std::pair<int32_t, int32_t> * pairs, in
 
         files[fi]->read_at(offs + (size_t) pairs[i].first * rsize, bounce.data(), rsize);
 
-        float * first = dst + (size_t) pairs[i].second * relems;
-        if (to_float) {
-            to_float(bounce.data(), first, relems);
-        } else {
-            memcpy(first, bounce.data(), (size_t) relems * sizeof(float));
-        }
+        uint8_t * first = dst + (size_t) pairs[i].second * rsize;
+        memcpy(first, bounce.data(), rsize);
 
         for (int64_t k = i + 1; k <= j; ++k) {
-            memcpy(dst + (size_t) pairs[k].second * relems, first, (size_t) relems * sizeof(float));
+            memcpy(dst + (size_t) pairs[k].second * rsize, first, rsize);
         }
 
         i = j + 1;
     }
 }
 
-void llama_lazy_reader::gather(const int32_t * rows, int64_t n, float * dst) const {
+void llama_lazy_reader::gather(const int32_t * rows, int64_t n, uint8_t * dst) const {
     std::vector<std::pair<int32_t, int32_t>> pairs;
     pairs.reserve(n);
     for (int64_t i = 0; i < n; ++i) {
