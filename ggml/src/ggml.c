@@ -7110,6 +7110,7 @@ static void ggml_compute_backward(
                 memcpy(&beta_slow,   (const float *) tensor->op_params + 10, sizeof(float));
                 memcpy(&sections,                    tensor->op_params + 11, sizeof(sections));
 
+                GGML_ASSERT(src1 && "backward pass for rope op not implemented");
                 struct ggml_tensor * rope_back = grad->ne[2] == src1->ne[0] ?
                     ggml_rope_ext_back(ctx, grad, src1, src2, n_dims,
                         mode, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow) :
@@ -7211,6 +7212,7 @@ static void ggml_compute_backward(
                         ggml_add_or_set(ctx, cgraph, isrc0, ggml_silu_back(ctx, ggml_mul(ctx, grad, src1), src0));
                     }
                     if (src1_needs_grads) {
+                        GGML_ASSERT(src0 && "backward pass only implemented for split swiglu");
                         ggml_add_or_set(ctx, cgraph, isrc1, ggml_mul(ctx, ggml_silu(ctx, src0), grad));
                     }
                 } break;
