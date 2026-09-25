@@ -1,4 +1,5 @@
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
@@ -85,6 +86,11 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		action: SidebarAction.MANAGE_MODELS,
 		icon: MODEL_SELECTOR_ICON,
 		tooltip: 'Models'
+	},
+	{
+		action: SidebarAction.MCP,
+		icon: McpLogo,
+		tooltip: 'MCP'
 	},
 	{
 		action: SidebarAction.SETTINGS,

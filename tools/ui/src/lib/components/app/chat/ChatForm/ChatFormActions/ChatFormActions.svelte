@@ -31,7 +31,6 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -43,7 +42,6 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -134,9 +132,6 @@
 		},
 		get onFileUpload() {
 			return onFileUpload;
-		},
-		get onMcpSettingsClick() {
-			return onMcpSettingsClick;
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;

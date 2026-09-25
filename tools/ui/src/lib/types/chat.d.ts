@@ -335,5 +335,4 @@ export interface ChatFormActionsContext {
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpSettingsClick?: () => void;
 }

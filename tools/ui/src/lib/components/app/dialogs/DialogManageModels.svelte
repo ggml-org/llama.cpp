@@ -102,7 +102,7 @@
 			</Dialog.Title>
 		</Dialog.Header>
 
-		<div class="dialog-view min-h-0 flex-1 pt-2" data-visible={!isSwapping}>
+		<div class="dialog-view min-h-0 flex-1" data-visible={!isSwapping}>
 			{#if shownView === 'manage'}
 				<ModelsManager class="h-full">
 					{#snippet toolbarEnd()}
