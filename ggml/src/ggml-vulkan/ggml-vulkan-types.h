@@ -242,6 +242,10 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
 
+// coopmat2 GDN prefill: workgroup size (subgroups of 32 split the D=128 value columns, 16 per subgroup)
+#define GGML_VK_GDN_CM2_WGS 256u
+#define GGML_VK_GDN_CM2_V 32u
+
 struct vk_pipeline_struct;
 
 typedef std::shared_ptr<struct vk_pipeline_struct> vk_pipeline;
@@ -986,6 +990,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_lightning_indexer_f32[GGML_TYPE_COUNT];
     // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
     vk_pipeline pipeline_gated_delta_net[4][2];
+    vk_pipeline pipeline_gated_delta_net_cm2;
+    uint32_t gated_delta_net_cm2_wgs;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;

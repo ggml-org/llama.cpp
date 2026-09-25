@@ -3733,6 +3733,16 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                     wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column}, 1, true, use_subgroup_ops, gdn_subgroup_size);
             }
         }
+
+#if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
+        // WIP: chunked coopmat2 GDN prefill. Passes test-backend-ops; opt-in pending perf tuning.
+        if (device->coopmat2 && device->coopmat2_bf16_support && getenv("GGML_VK_GDN_CM2")) {
+            device->gated_delta_net_cm2_wgs = GGML_VK_GDN_CM2_WGS;
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2,
+                "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+        }
+#endif
     }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
@@ -10227,7 +10237,14 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     const uint32_t s_off = S_v * H * n_tokens * n_seqs;
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
+    // Chunked coopmat2 prefill path: non-KDA, S_v == D == 128, K == 1, enough tokens.
+    const ggml_tensor * src_g = dst->src[3];
+    const bool use_cm2 = ctx->device->pipeline_gated_delta_net_cm2 != nullptr &&
+        src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
+
+    vk_pipeline pipeline = use_cm2
+        ? ctx->device->pipeline_gated_delta_net_cm2
+        : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -10264,7 +10281,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
         {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, { H, n_seqs, S_v });
+        pc, use_cm2 ? std::array<uint32_t, 3>{ H, n_seqs, S_v / GGML_VK_GDN_CM2_V } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
 }
 
 void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
