@@ -22,6 +22,7 @@
 #define TILED_TILE_K    256 // one QK_K block
 #define TILED_TILE_ROWS 256 // max window rows, ragged at edges
 #define TILED_MICRO     16  // microtile edge (also the bsums code-sum granularity)
+#define TILED_WS_SLOT   (512 * 1024) // per-thread workspace slot, a clean 512KB (multiple of 64B)
 
 // src0 tile: weight side, shared by all formats.
 // scales/mins are sized for the max subblock count (SUBBLK=16);
@@ -29,7 +30,7 @@
 struct tiled_tile_src0 {
     static constexpr int NB_MAX = TILED_TILE_K / 16; // max subblocks per 256-elem block
 
-    alignas(32) uint8_t q[TILED_TILE_ROWS * TILED_TILE_K]; // unsigned quants, widened to uint8
+    alignas(64) uint8_t q[TILED_TILE_ROWS * TILED_TILE_K]; // unsigned quants, widened to uint8
     float    d[TILED_TILE_ROWS];  // One d from each input block, widened to f32
     float    dmin[TILED_TILE_ROWS]; // dmin from each input block (if applicable), widened to F32
     int32_t   scales[TILED_TILE_ROWS * NB_MAX];  // per-subblock scale, stored as int32_t
@@ -53,7 +54,12 @@ struct tiled_ws {
     alignas(64) float acc[TILED_TILE_ROWS * TILED_TILE_ROWS];
 };
 
-static_assert(sizeof(tiled_ws) <= 512 * 1024, "tiled workspace exceeds 512KB per-thread budget");
+static_assert(sizeof(tiled_ws) <= TILED_WS_SLOT, "tiled workspace exceeds the 512KB per-thread slot");
+// the slot base is 64B-aligned and TILED_WS_SLOT is a multiple of 64B, so each per-thread slot
+// is 64B-aligned; these pin the tile fields and the acc buffer at aligned offsets within a slot
+static_assert(offsetof(tiled_ws, src0) % 64 == 0, "src0 not 64B-aligned in the workspace");
+static_assert(offsetof(tiled_ws, src1) % 64 == 0, "src1 not 64B-aligned in the workspace");
+static_assert(offsetof(tiled_ws, acc)  % 64 == 0, "acc not 64B-aligned in the workspace");
 
 // unpack primitives for reading quants, defined as inline here to keep arch-specific code in kernel.h/.cpp
 // If this section gets too hairy later, we can break up into separate includes.
@@ -79,7 +85,7 @@ inline void tiled_unpk_or(uint8_t * dst, const uint8_t * src) {
 }
 
 
-// Unpacking kernels for IQ quants 
+// Unpacking kernels for IQ quants
 
 // LUT value expansion for the LUT-based formats (iq4_xs, iq grids): the bit unpackers
 // above give the indices, these expand 8/16 of them to widened codes in one pass
@@ -155,14 +161,14 @@ inline void tiled_unpk_tern8(const uint8_t * src, int8_t delta, uint8_t * dst) {
 // over one 256-K slab held in the tiles into a j-major float buffer
 // (row width buf_stride): buf[i*buf_stride + j] += partial.
 // SUBBLK/HAS_MIN/BIAS are the src0 format constants (see tiled_tile_src0).
-// ACTBIAS (AVX2 only): the activation is pre-biased +128 by tiled_repack_src1, 
-// num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256 
+// ACTBIAS (AVX2 only): the activation is pre-biased +128 by tiled_repack_src1,
+// num_k = K-blocks per row: the tile holds num_k slabs at row stride num_k*256
 // (Default case is num_k=1, 256x256 tiles, we go to longer num_k to improve memory bandwidth when num_rows is small)
 template <int SUBBLK, bool HAS_MIN, int BIAS, bool ACTBIAS>
 void tiled_run_microtile(const tiled_tile_src0 & src0, const tiled_tile_src1 & src1,
                          int i0, int j0, int num_k, int slab, float * buf, int buf_stride);
 
-// Optional repack, if profitable for the kernel.  
+// Optional repack, if profitable for the kernel.
 // Repacks one 16-row band of src1 codes, called by driver as we reach each 16-row band in outer loop
 void tiled_repack_src1(tiled_tile_src1 * src1, int row0, int num_k, bool bias);
 

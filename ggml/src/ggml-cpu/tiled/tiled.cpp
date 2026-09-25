@@ -643,19 +643,19 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
 }
 #endif
 
-// per-thread workspace size (0 when tiled is disabled or unsupported on this arch)
+// per-thread workspace slot size (0 when tiled is disabled or unsupported on this arch)
 static size_t ggml_tiled_ws_size(void) {
     if (!ggml_tiled_matmul_enabled()) {
         return 0;
     }
-    return sizeof(tiled_ws);
+    return TILED_WS_SLOT; // clean 512KB slot, rounded up from sizeof(tiled_ws)
 }
 
 size_t ggml_tiled_wdata_size(int n_tasks, struct ggml_tensor * dst) {
     if (! ggml_tiled_supported(dst->src[0], dst->src[1])) {
         return 0; // unsupported, don't allocate
     }
-    return 64 + n_tasks * ggml_tiled_ws_size();  // 64 for alignment plus scratch for each thread
+    return 64 + n_tasks * ggml_tiled_ws_size();  // 64 for alignment plus one 512KB slot per thread
 }
 
 
@@ -1120,7 +1120,7 @@ static void ggml_compute_forward_mul_mat_tiled_driver(
         ws_base += GGML_PAD(ggml_row_size(vec_dot_type, ggml_nelements(src1)), 64);
     }
     ws_base = (char *) (((uintptr_t) ws_base + 63) & ~(uintptr_t) 63);
-    tiled_ws * ws = (tiled_ws *) ws_base + ith;
+    tiled_ws * ws = (tiled_ws *) (ws_base + (size_t) ith * ggml_tiled_ws_size());
 
     // TODO:  if we KNOW we're on a machine where all cores are equal, we could skip the coordination/work-stealing and just assign chunks deterministically
     while (current_chunk < nchunk0 * nchunk1) {

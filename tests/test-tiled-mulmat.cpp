@@ -698,7 +698,7 @@ int main(int argc, char ** argv) {
     test_mul_mat_id(backend,  512,  300,   4, 2, 1, 150, GGML_TYPE_IQ2_XXS); // iq type, imatrix quant
 
     if (run_fuzz) {
-	printf("Running fuzz tests.\n");
+        printf("Running fuzz tests.\n");
         // ragged edges, both subblock lengths (Q5_K = 32, Q6_K = 16)
         test_matmul(backend, 256, 1024, 8192, GGML_TYPE_Q6_K);   // long K, int32 accumulation
         test_matmul(backend, 357, 1024, 137, GGML_TYPE_Q6_K);    // ragged M and K
@@ -721,7 +721,7 @@ int main(int argc, char ** argv) {
         test_matmul(backend, 357, 1024, 137, GGML_TYPE_IQ4_XS);    // ragged M and K
         test_matmul(backend,   8,  256,   8, GGML_TYPE_IQ4_XS);    // tiny M, single QK_K block
         test_matmul(backend,  17, 1024, 257, GGML_TYPE_IQ4_XS);    // K past a full 256 tile
-    
+
         // fuzz: M/K around the microtile (16) and tile (256) boundaries
         // Q4_K = subblock 32, Q6_K = subblock 16
         test_matmul(backend, 1, 1024, 1, GGML_TYPE_Q4_K);
