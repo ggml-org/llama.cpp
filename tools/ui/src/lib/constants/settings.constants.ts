@@ -4,21 +4,18 @@ import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
-	Boxes,
 	Code,
 	Database,
 	Funnel,
-	Layers,
 	ListRestart,
 	Monitor,
 	Moon,
 	PencilRuler,
-	Server,
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
 import { SyncableParameterType } from '$lib/enums';
-import { ModelGroupingMode, SettingsFieldType } from '$lib/enums/settings.enums';
+import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { ColorMode } from '$lib/enums/ui.enums';
 import type {
 	SettingsConfigValue,
@@ -199,13 +196,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		slug: SETTINGS_SECTION_SLUGS.GENERAL,
 		title: SETTINGS_SECTION_TITLES.GENERAL
 	},
-	// Providers
-	{
-		icon: Server,
-		settings: [],
-		slug: SETTINGS_SECTION_SLUGS.BACKENDS,
-		title: SETTINGS_SECTION_TITLES.BACKENDS
-	},
 	// Display
 	{
 		icon: Monitor,
@@ -322,17 +312,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
 				label: 'Show full path in mentions',
 				type: SettingsFieldType.CHECKBOX
-			},
-			{
-				defaultValue: ModelGroupingMode.PROVIDER,
-				help: 'How the models manager groups its sections. One section per provider keeps every backend separate. By capability merges them into a llama-compat block, whose models can load and unload, and an OAI-compat block, which is chat only.',
-				key: SETTINGS_KEYS.MODEL_GROUPING,
-				label: 'Model grouping',
-				options: [
-					{ icon: Layers, label: 'One section per provider', value: ModelGroupingMode.PROVIDER },
-					{ icon: Boxes, label: 'By capability', value: ModelGroupingMode.COMPAT }
-				],
-				type: SettingsFieldType.SELECT
 			},
 			{
 				defaultValue: true,
