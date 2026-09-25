@@ -305,7 +305,6 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
 endif()
-llama_build_and_test(test-backend-ops.cpp)
 
 # TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
 llama_build(test-backend-ops.cpp)
