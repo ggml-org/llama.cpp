@@ -35,8 +35,8 @@ static void tiled_unpack_src0(const block_q4_K * rows, int64_t row_stride, int n
             const int s_off = r * nb_stride + slab * NB;
             const block_q4_K & x = rows[r * row_stride + slab];
 
-            tile->d[d_off]    = ggml_fp16_to_fp32(x.d);
-            tile->dmin[d_off] = ggml_fp16_to_fp32(x.dmin);
+            tile->d[d_off]    = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+            tile->dmin[d_off] = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin);
 
             uint32_t utmp[4];
             memcpy(utmp, x.scales, 12);
@@ -80,8 +80,8 @@ static void tiled_unpack_src0(const block_q5_K * rows, int64_t row_stride, int n
             const int s_off = r * nb_stride + slab * NB;
             const block_q5_K & x = rows[r * row_stride + slab];
 
-            tile->d[d_off]    = ggml_fp16_to_fp32(x.d);
-            tile->dmin[d_off] = ggml_fp16_to_fp32(x.dmin);
+            tile->d[d_off]    = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+            tile->dmin[d_off] = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin);
 
             uint32_t utmp[4];
             memcpy(utmp, x.scales, 12);
@@ -207,8 +207,8 @@ static void tiled_unpack_src0(const block_q2_K * rows, int64_t row_stride, int n
             const int q_off = r * qk_stride + slab * TILED_TILE_K;
             const int s_off = r * nb_stride + slab * NB;
             const block_q2_K & x = rows[r * row_stride + slab];
-            tile->d[d_off]    = ggml_fp16_to_fp32(x.d);
-            tile->dmin[d_off] = ggml_fp16_to_fp32(x.dmin);
+            tile->d[d_off]    = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.d);
+            tile->dmin[d_off] = ggml_fp16_to_fp32(x.GGML_COMMON_AGGR_U.GGML_COMMON_AGGR_S.dmin);
 
             // 2-bit code: element e -> half=e>>7, el=e&127
             //   byte = half*32 + (el & 31), shift = 2*(el >> 5)
