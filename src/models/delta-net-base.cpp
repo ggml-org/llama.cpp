@@ -584,6 +584,18 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     const size_t row_size = hparams.n_embd_s() * ggml_element_size(ssm_states_all);
 
+    // a ubatch shorter than K leaves slot n_seq_tokens, the state before the ubatch, unwritten; copy the input state there so a rollback of the whole ubatch restores it.
+    // A longer ubatch copies it to slot K - 1, which the snapshot write below overwrites, so the graph shape stays fixed.
+    {
+        const int64_t base_slot = std::min<int64_t>(n_seq_tokens, K - 1);
+
+        ggml_tensor * dst_base = ggml_view_2d(ctx0, ssm_states_all,
+            D, n_seqs,
+            ssm_states_all->nb[1],
+            ((size_t) base_slot * mem_size + kv_head) * row_size);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_reshape_2d(ctx0, s, D, n_seqs), dst_base));
+    }
+
     // op writes the last min(n_seq_tokens, K) snapshots; trailing slots are left unwritten
     const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
