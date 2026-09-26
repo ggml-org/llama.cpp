@@ -155,6 +155,53 @@ static int test_vec_dot_f32(bool verbose) {
     return num_failed;
 }
 
+static int test_vec_dot_q8_0_i8_min(bool verbose) {
+    struct test_block_q8_0 {
+        ggml_fp16_t d;
+        int8_t qs[32];
+    };
+
+    const struct {
+        int8_t x0;
+        int8_t x1;
+        int8_t y0;
+        int8_t y1;
+        float expected;
+    } cases[] = {
+        {   -1,    0, -128,    0,   128.0f },
+        {    1,    0, -128,    0,  -128.0f },
+        { -128,    0, -128,    0, 16384.0f },
+        { -128, -128, -128, -128, 32768.0f },
+    };
+
+    const auto * q8_0 = ggml_get_type_traits_cpu(GGML_TYPE_Q8_0);
+    int num_failed = 0;
+
+    assert(sizeof(test_block_q8_0) == ggml_row_size(GGML_TYPE_Q8_0, 32));
+
+    for (const auto & test : cases) {
+        test_block_q8_0 x[2] = {};
+        test_block_q8_0 y[2] = {};
+        x[0].d = x[1].d = y[0].d = y[1].d = ggml_fp32_to_fp16(1.0f);
+        x[0].qs[0] = test.x0;
+        x[0].qs[1] = test.x1;
+        y[0].qs[0] = test.y0;
+        y[0].qs[1] = test.y1;
+
+        float result = 0.0f;
+        q8_0->vec_dot(64, &result, 0, x, 0, y, 0, 1);
+
+        const bool failed = result != test.expected;
+        num_failed += failed;
+        if (failed || verbose) {
+            printf(" q8_0 vec_dot x={%4d,%4d} y={%4d,%4d}: %s (ref=%f got=%f)\n",
+                   test.x0, test.x1, test.y0, test.y1, RESULT_STR[failed], test.expected, result);
+        }
+    }
+
+    return num_failed;
+}
+
 static int test_vec_dot_q(bool verbose) {
     int num_failed = 0;
 
@@ -263,6 +310,7 @@ int main(int argc, char * argv[]) {
     int num_failed = 0;
 
     num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_vec_dot_q8_0_i8_min(verbose);
     num_failed += test_vec_dot_q(verbose);
 
     if (num_failed || verbose) {

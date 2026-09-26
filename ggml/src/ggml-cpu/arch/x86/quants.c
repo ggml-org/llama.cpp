@@ -1333,6 +1333,14 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         __m256i qx = _mm256_loadu_si256((const __m256i *)x[ib].qs);
         __m256i qy = _mm256_loadu_si256((const __m256i *)y[ib].qs);
 
+#if !__AVXVNNIINT8__
+        const __m256i y_min = _mm256_cmpeq_epi8(qy, _mm256_set1_epi8(INT8_MIN));
+        if (!_mm256_testz_si256(y_min, y_min)) {
+            ggml_vec_dot_q8_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+            return;
+        }
+#endif
+
         const __m256 q = mul_sum_i8_pairs_float(qx, qy);
 
         // Multiply q with scale and accumulate
@@ -1352,6 +1360,16 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const __m128i qy_1_1 = _mm_loadu_si128((const __m128i *)y[ib].qs + 1);
         const __m128i qy_2_0 = _mm_loadu_si128((const __m128i *)y[ib + 1].qs);
         const __m128i qy_2_1 = _mm_loadu_si128((const __m128i *)y[ib + 1].qs + 1);
+
+#if !__AVXVNNIINT8__
+        const __m128i min = _mm_set1_epi8(INT8_MIN);
+        const __m128i y_min_1 = _mm_or_si128(_mm_cmpeq_epi8(qy_1_0, min), _mm_cmpeq_epi8(qy_1_1, min));
+        const __m128i y_min_2 = _mm_or_si128(_mm_cmpeq_epi8(qy_2_0, min), _mm_cmpeq_epi8(qy_2_1, min));
+        if (_mm_movemask_epi8(_mm_or_si128(y_min_1, y_min_2))) {
+            ggml_vec_dot_q8_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+            return;
+        }
+#endif
 
         const __m256 p = mul_sum_i8_quad_float(qx_1_0, qx_1_1, qx_2_0, qx_2_1, qy_1_0, qy_1_1, qy_2_0, qy_2_1);
         const __m256 deltas = quad_fp16_delta_float(x[ib].d, y[ib].d, x[ib + 1].d, y[ib + 1].d);
