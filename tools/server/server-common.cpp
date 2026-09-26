@@ -1158,7 +1158,50 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+    // `tool_choice` is either a string ("auto" / "none" / "required") or, to force a
+    // specific function, an object: {"type":"function","function":{"name":"..."}}.
+    // json_value() only handles the string form: given the object it logs a type
+    // warning and returns the default "auto", so the request is served as if no
+    // choice had been made and nothing surfaces to the caller.
+    //
+    // A named choice means "call exactly this function", so narrow `tools` to that
+    // entry and treat the choice as "required". Every template path already derives
+    // forced-call grammar from tools + required, so no per-template work is needed.
+    std::string tool_choice = "auto";
+    if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
+        const auto & choice = body.at("tool_choice");
+        if (choice.is_string()) {
+            tool_choice = choice.get<std::string>();
+        } else if (choice.is_object()) {
+            if (json_value(choice, "type", std::string()) != "function") {
+                throw std::invalid_argument("Invalid tool_choice: object form requires type \"function\"");
+            }
+            if (!choice.contains("function") || !choice.at("function").is_object()) {
+                throw std::invalid_argument("Invalid tool_choice: missing \"function\" object");
+            }
+            const std::string name = json_value(choice.at("function"), "name", std::string());
+            if (name.empty()) {
+                throw std::invalid_argument("Invalid tool_choice: missing function name");
+            }
+            if (!has_tools) {
+                throw std::invalid_argument("Invalid tool_choice: names a function but no tools were provided");
+            }
+
+            json named = json::array();
+            for (const auto & tool : tools) {
+                if (tool.contains("function") && json_value(tool.at("function"), "name", std::string()) == name) {
+                    named.push_back(tool);
+                }
+            }
+            if (named.empty()) {
+                throw std::invalid_argument("Invalid tool_choice: function \"" + name + "\" is not in tools");
+            }
+            tools       = named;
+            tool_choice = "required";
+        } else {
+            throw std::invalid_argument("Invalid tool_choice: expected a string or an object");
+        }
+    }
 
     if (!opt.use_jinja) {
         if (has_tools) {
