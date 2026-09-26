@@ -752,6 +752,14 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 }
 #endif
 
+void memcpy_host_forward(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
+                         const void *ptr_src, size_t size) {
+    char *host_buf = (char *)malloc(size);
+    q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
+    q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
+    free(host_buf);
+}
+
 static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 
@@ -795,10 +803,7 @@ static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, s
     } else {
         GGML_SYCL_DEBUG("[SYCL] dev2dev memcpy by host forward for SYCL/L0 fallback\n");
     }
-    char *host_buf = (char *)malloc(size);
-    q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
-    q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
-    free(host_buf);
+    memcpy_host_forward(q_dst, q_src, ptr_dst, ptr_src, size);
 }
 
 static bool
