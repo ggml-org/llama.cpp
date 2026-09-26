@@ -127,6 +127,66 @@ def test_completion_stream_with_openai_library():
     assert match_regex("(going|bed)+", output_text)
 
 
+def test_completion_multiple_choices_usage():
+    global server
+    server.start()
+    n_choices = 2
+    max_tokens = 8
+    prompts = ["I believe the meaning of life is", "Write a joke"]
+
+    # reference: prompt token count of each prompt on its own
+    n_prompt = []
+    for prompt in prompts:
+        res = server.make_request("POST", "/v1/completions", data={
+            "max_tokens": max_tokens,
+            "prompt": prompt,
+        })
+        assert res.status_code == 200
+        n_prompt.append(res.body["usage"]["prompt_tokens"])
+        assert n_prompt[-1] > 0
+
+    # non-stream: completion tokens are summed over all choices, each prompt is counted once
+    # ref: https://github.com/ggml-org/llama.cpp/issues/29451
+    for prompt, n_prompt_expected in [(prompts[0], n_prompt[0]), (prompts, sum(n_prompt))]:
+        n_choices_total = n_choices * (len(prompt) if isinstance(prompt, list) else 1)
+        res = server.make_request("POST", "/v1/completions", data={
+            "max_tokens": max_tokens,
+            "n": n_choices,
+            "prompt": prompt,
+        })
+        assert res.status_code == 200
+        assert len(res.body["choices"]) == n_choices_total
+        for choice in res.body["choices"]:
+            assert choice["finish_reason"] == "length"
+        usage = res.body["usage"]
+        assert usage["prompt_tokens"] == n_prompt_expected
+        assert usage["completion_tokens"] == n_choices_total * max_tokens
+        assert usage["total_tokens"] == n_prompt_expected + n_choices_total * max_tokens
+
+    # stream: only the last chunk carries usage, covering all choices
+    res = server.make_stream_request("POST", "/v1/completions", data={
+        "max_tokens": max_tokens,
+        "n": n_choices,
+        "prompt": prompts[0],
+        "stream": True,
+    })
+    usage_chunks = []
+    n_finished = 0
+    for data in res:
+        assert not usage_chunks, f"received a chunk after the usage chunk: {data}"
+        if data["choices"][0]["finish_reason"] is not None:
+            assert data["choices"][0]["finish_reason"] == "length"
+            n_finished += 1
+        if "usage" in data:
+            usage_chunks.append(data["usage"])
+    assert n_finished == n_choices
+    assert len(usage_chunks) == 1
+    usage = usage_chunks[0]
+    assert usage["prompt_tokens"] == n_prompt[0]
+    assert usage["completion_tokens"] == n_choices * max_tokens
+    assert usage["total_tokens"] == n_prompt[0] + n_choices * max_tokens
+
+
 # Test case from https://github.com/ggml-org/llama.cpp/issues/13780
 @pytest.mark.slow
 def test_completion_stream_with_openai_library_stops():
