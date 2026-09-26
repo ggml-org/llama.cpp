@@ -4,8 +4,8 @@ import base64
 import requests
 import struct
 
-# sequence state file: magic(4) version(4) payload_size(4), then payload_size llama_token words
-STATE_FILE_HEADER_SIZE = 12
+# sequence state file: magic(4) version(4) type(4) payload_size(4), then payload_size bytes
+STATE_FILE_HEADER_SIZE = 16
 
 server = ServerPreset.tinyllama2()
 
@@ -93,7 +93,7 @@ def test_slot_restore_legacy_token_list():
     assert res.status_code == 200
     assert res.body["n_saved"] == 84
 
-    # rewrite the token payload into a plain token list, as written by servers that predate the packed server_tokens format
+    # rewrite the file as v3 with a plain token list, as written by llama_state_seq_save_file
     path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
@@ -102,13 +102,12 @@ def test_slot_restore_legacy_token_list():
     packed_header_size = 12
 
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    payload_end = STATE_FILE_HEADER_SIZE + payload_size * 4
+    payload_end = STATE_FILE_HEADER_SIZE + payload_size
     n_tokens = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE + 8)[0]
     assert n_tokens == 84
 
     tokens_start = STATE_FILE_HEADER_SIZE + packed_header_size
-    data = data[:STATE_FILE_HEADER_SIZE] + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
-    struct.pack_into("=I", data, STATE_FILE_HEADER_SIZE - 4, n_tokens)
+    data = data[:4] + struct.pack("=II", 3, n_tokens) + data[tokens_start:tokens_start + n_tokens * 4] + data[payload_end:]
 
     with open(path, "wb") as f:
         f.write(data)
@@ -466,7 +465,7 @@ def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
     with open(path, "rb") as f:
         data = bytearray(f.read())
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
-    assert payload_size > n_ctx_slot  # the scenario under test: the payload does not fit in n_ctx
+    assert payload_size > n_ctx_slot * 4  # the scenario under test: the payload does not fit in n_ctx
 
     # drop the image from the slot, then restore it from the file
     res = server.make_request("POST", "/completion", data={
