@@ -207,6 +207,8 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_QUALCOMM 0x5143
 
+#define VK_VENDOR_ID_SAMSUNG 0x144d
+
 #define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
 #define VK_CHECK(err, msg, dev)                                     \
@@ -1432,4 +1434,3 @@ struct ggml_backend_vk_device_context {
     std::string pci_bus_id;
     int op_offload_min_batch_size;
 };
-
