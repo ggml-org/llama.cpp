@@ -18,10 +18,12 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
 #include <memory>
+#include <new>
 #include <filesystem>
 #include <random>
 #include <utility>
@@ -134,8 +136,21 @@ struct server_batch {
     float  alora_scale       = -1.0f;
     size_t alora_disabled_id = 0;
 
+    int debug_fail_slot  = -1;
+    int debug_fail_after = 0;
+
     server_batch() {
         batch.pos = nullptr; // sentinel: uninitialized batch
+
+        const auto fail_slot = common_get_env("LLAMA_SERVER_DEBUG_FAIL_SLOT");
+        const auto fail_after = common_get_env("LLAMA_SERVER_DEBUG_FAIL_AFTER");
+        const auto slot = std::from_chars(fail_slot.data(), fail_slot.data() + fail_slot.size(), debug_fail_slot);
+        const auto after = std::from_chars(fail_after.data(), fail_after.data() + fail_after.size(), debug_fail_after);
+        if (slot.ec != std::errc{} || slot.ptr != fail_slot.data() + fail_slot.size() || debug_fail_slot < 0 ||
+            after.ec != std::errc{} || after.ptr != fail_after.data() + fail_after.size() || debug_fail_after <= 0) {
+            debug_fail_slot  = -1;
+            debug_fail_after = 0;
+        }
     }
 
     ~server_batch() {
@@ -153,6 +168,16 @@ struct server_batch {
         tokens.reserve(n_tokens_alloc);
     }
 
+    void debug_maybe_fail_allocation(int32_t id_slot) {
+        if (id_slot == debug_fail_slot && --debug_fail_after == 0) {
+            const auto other_tokens = std::count_if(tokens.begin(), tokens.end(), [id_slot](const token & t) {
+                return t.id_slot != id_slot;
+            });
+            SRV_WRN("injecting batch allocation failure: id_slot = %d, other_tokens = %d\n", id_slot, (int) other_tokens);
+            throw std::bad_alloc();
+        }
+    }
+
     bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {
         GGML_ASSERT(!has_embd); // cannot mix tokens + embd in same batch
         GGML_ASSERT(batch.pos != nullptr);
@@ -160,6 +185,9 @@ struct server_batch {
             return false;
         }
         tokens.push_back({ id_slot, token, pos, output, is_prompt });
+        if (debug_fail_after > 0) {
+            debug_maybe_fail_allocation(id_slot);
+        }
         return true;
     }
 
@@ -170,6 +198,9 @@ struct server_batch {
         }
         tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
         has_embd = true;
+        if (debug_fail_after > 0) {
+            debug_maybe_fail_allocation(id_slot);
+        }
         embd.insert(embd.end(), embd_in.begin(), embd_in.end());
         return true;
     }
@@ -2727,26 +2758,52 @@ private:
         return true;
     }
 
+    void iterate(server_slot & slot, const std::function<void(server_slot &)> & callback) {
+        const auto n_tokens = batch.tokens.size();
+        const auto n_embd = batch.embd.size();
+        const auto has_embd = batch.has_embd;
+        auto * const slot_batched = batch.slot_batched;
+        const auto alora_scale = batch.alora_scale;
+        const auto alora_disabled_id = batch.alora_disabled_id;
+
+        try {
+            callback(slot);
+        } catch (const std::exception & e) {
+            if (!batch.batch_rendered) {
+                batch.tokens.resize(n_tokens);
+                batch.embd.resize(n_embd);
+                batch.has_embd = has_embd;
+                batch.slot_batched = slot_batched == &slot ? nullptr : slot_batched;
+
+                if (batch.alora_scale > 0.0f &&
+                        (batch.alora_scale != alora_scale || batch.alora_disabled_id != alora_disabled_id)) {
+                    slot.lora[batch.alora_disabled_id].scale = batch.alora_scale;
+                }
+                batch.alora_scale = alora_scale;
+                batch.alora_disabled_id = alora_disabled_id;
+
+                if (spec) {
+                    common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
+                }
+                slot.prompt_clear();
+            }
+
+            SLT_ERR(slot, "got exception: %s\n", e.what());
+            send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
+            slot.release();
+        }
+    }
+
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
         for (auto & slot : slots) {
-            try {
-                callback(slot);
-            } catch (const std::exception & e) {
-                SLT_ERR(slot, "got exception: %s\n", e.what());
-                send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
-                slot.release();
-            }
+            iterate(slot, callback);
         }
     }
 
     void iterate(std::vector<server_slot *> & slots, std::function<void(server_slot &)> callback) {
         for (auto & slot : slots) {
-            try {
-                callback(*slot);
-            } catch (const std::exception & e) {
-                SLT_ERR(*slot, "got exception: %s\n", e.what());
-                send_error(*slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
-                slot->release();
+            if (slot->is_processing()) {
+                iterate(*slot, callback);
             }
         }
     }
@@ -2907,6 +2964,8 @@ private:
     }
 
     void pre_decode() {
+        batch.clear();
+
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
@@ -2970,9 +3029,6 @@ private:
                 slot.truncated = true;
             }
         });
-
-        // start populating the batch for this iteration
-        batch.clear();
 
         // track if given slot can be batched with slots already in the batch
         auto & slot_batched = batch.slot_batched;
@@ -3098,6 +3154,10 @@ private:
         // update the batch with the sampled/drafted tokens
         iterate(generating, [&](server_slot & slot) {
             slot.handle_last_sampled_token(batch);
+
+            if (!slot_batched) {
+                slot_batched = &slot;
+            }
         });
 
         // process in chunks of params.n_batch
