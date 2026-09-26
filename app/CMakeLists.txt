@@ -16,7 +16,7 @@ target_link_libraries(${TARGET} PRIVATE
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 # Automatically add all files from the 'licenses' directory
-file(GLOB EXTRA_LICENSES "${PROJECT_SOURCE_DIR}/licenses/LICENSE-*")
+file(GLOB EXTRA_LICENSES "${CMAKE_SOURCE_DIR}/licenses/LICENSE-*")
 
 foreach(FILE_PATH ${EXTRA_LICENSES})
     get_filename_component(FILE_NAME "${FILE_PATH}" NAME)

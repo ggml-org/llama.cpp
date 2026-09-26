@@ -42,7 +42,6 @@ _Static_assert(sizeof(struct htp_unary_kernel_params) <= 128, "htp_unary_kernel_
 static inline bool htp_op_is_unary(uint32_t opcode) {
     switch (opcode) {
         case HTP_OP_CLAMP:
-        case HTP_OP_LEAKY_RELU:
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
@@ -58,7 +57,6 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_TANH:
         case HTP_OP_UNARY_ABS:
         case HTP_OP_UNARY_LOG:
-        case HTP_OP_UNARY_RELU:
         case HTP_OP_L2_NORM:
         case HTP_OP_TRI:
             return true;
@@ -87,19 +85,17 @@ static inline void htp_unary_vtcm_layout_build(
     bool broadcast_weight,
     uint32_t n_threads,
     size_t vtcm_size,
-    size_t elem_size,
     uint32_t * out_col_tile,
     uint32_t * out_vtcm_row_per_thread
 ) {
-    const size_t src0_data_row_size = ne00 * elem_size;
-    const size_t dst_data_row_size  = ne10 * elem_size;
+    const size_t src0_data_row_size = ne00 * sizeof(float);
+    const size_t dst_data_row_size  = ne10 * sizeof(float);
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
 
     size_t src1_row_size_aligned = 0;
     if (op == HTP_OP_RMS_NORM_MUL) {
-        // RMS_NORM_MUL fusion is F32-only; its weight tensor is always F32.
         const size_t src1_data_row_size = ne11 * sizeof(float);
         src1_row_size_aligned = hex_round_up(src1_data_row_size, 128);
     }
@@ -129,19 +125,12 @@ static inline void htp_unary_vtcm_layout_build(
 
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
                                op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM);
-    // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
-    // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
-    // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM
-    // budget), execute_op_unary() will see BLOCK == 0 and skip computation for that op
-    // (logged via FARF(ERROR, ...)) since there is no F16 tiled fallback. This is a known
-    // limitation; supporting it would require adding F16 tiled kernels.
-    const bool is_f16 = (elem_size == sizeof(_Float16));
     uint32_t col_tile = 0;
 
-    if (vtcm_row_per_thread == 0 && !is_reduction && !is_f16) {
+    if (vtcm_row_per_thread == 0 && !is_reduction) {
         const size_t per_thread_budget = vtcm_size / n_threads;
         const size_t col_tile_bytes = hex_align_down(per_thread_budget / 4, 128);
-        col_tile = (uint32_t) (col_tile_bytes / elem_size);
+        col_tile = (uint32_t) (col_tile_bytes / sizeof(float));
 
         L->src0_bytes = col_tile_bytes * 2;
         L->dst_bytes  = col_tile_bytes * 2;

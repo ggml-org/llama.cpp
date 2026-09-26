@@ -12,10 +12,8 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "hex-common.h"
-#include "hex-profile.h"
 #include "htp-ops.h"
-#include "htp-tensor.h"
+#include "htp-ops.h"
 
 struct htp_repeat_context {
     struct htp_ops_context * octx;
@@ -27,7 +25,6 @@ struct htp_repeat_context {
 
     uint32_t nrows_per_thread;
     uint32_t total_dst_rows;  // ne1 * ne2 * ne3
-    uint32_t row_start;
 
     size_t   type_size;
 };
@@ -65,11 +62,11 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
 
     const size_t row_bytes = ne00 * rctx->type_size;
 
-    const uint32_t row_start = rctx->row_start + rctx->nrows_per_thread * ith;
-    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_thread, rctx->row_start + rctx->total_dst_rows);
+    const uint32_t row_start = rctx->nrows_per_thread * ith;
+    const uint32_t row_end   = MIN(row_start + rctx->nrows_per_thread, rctx->total_dst_rows);
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
-    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
+    uint64_t t1, t2;
+    t1 = HAP_perf_get_qtimer_count();
 
     for (uint32_t dst_row = row_start; dst_row < row_end; dst_row++) {
         // Decompose flat dst row index into (i1, i2, i3)
@@ -92,12 +89,12 @@ static void repeat_job_per_thread(unsigned int nth, unsigned int ith, void * dat
         }
     }
 
-    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, row_start);
+    t2 = HAP_perf_get_qtimer_count();
 
-    FARF(HIGH, "repeat %d/%d: (%ux%ux%ux%u) -> (%ux%ux%ux%u) rows %u:%u\n",
+    FARF(HIGH, "repeat %d/%d: (%ux%ux%ux%u) -> (%ux%ux%ux%u) rows %u:%u usec %u\n",
          ith, nth, src->ne[0], src->ne[1], src->ne[2], src->ne[3],
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         row_start, row_end);
+         row_start, row_end, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 int op_repeat(struct htp_ops_context * octx) {
@@ -122,29 +119,12 @@ int op_repeat(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
-        return HTP_STATUS_NO_SUPPORT;
-    }
+    const uint32_t total_dst_rows = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    const uint32_t n_threads = MIN(octx->n_threads, total_dst_rows);
 
-    const uint32_t total_dst_rows  = dst->ne[1] * dst->ne[2] * dst->ne[3];
-    const size_t dst_row_size = dst->ne[0] * type_size;
-
-    uint32_t row_start = 0;
-    uint32_t nrows     = total_dst_rows;
-
-    if (octx->ctx->mdev.count > 1) {
-        uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, type_size, (uint32_t) dst_row_size, &rows_per_chunk);
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(total_dst_rows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
-        row_start = range.start;
-        nrows     = range.count;
-    }
-
-    if (nrows == 0) {
+    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
         return HTP_STATUS_OK;
     }
-
-    const uint32_t n_threads = octx->n_threads;
 
     struct htp_repeat_context rctx = {
         .octx             = octx,
@@ -152,9 +132,8 @@ int op_repeat(struct htp_ops_context * octx) {
         .nr1              = dst->ne[1] / src0->ne[1],
         .nr2              = dst->ne[2] / src0->ne[2],
         .nr3              = dst->ne[3] / src0->ne[3],
-        .nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div),
-        .total_dst_rows   = nrows,
-        .row_start        = row_start,
+        .nrows_per_thread = (total_dst_rows + n_threads - 1) / n_threads,
+        .total_dst_rows   = total_dst_rows,
         .type_size        = type_size,
     };
 
@@ -163,7 +142,7 @@ int op_repeat(struct htp_ops_context * octx) {
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
          rctx.nr0, rctx.nr1, rctx.nr2, rctx.nr3);
 
-    work_queue_run(octx->ctx->work_queue, repeat_job_per_thread, &rctx, n_threads);
+    worker_pool_run_func(octx->ctx->worker_pool, repeat_job_per_thread, &rctx, n_threads);
 
     return HTP_STATUS_OK;
 }

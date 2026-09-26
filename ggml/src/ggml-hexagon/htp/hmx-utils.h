@@ -27,7 +27,7 @@ static inline void hmx_init_column_scales(void *out_scales, HVX_Vector v_scale) 
 // vscatter offsets for fused dequant+transpose: write K-values directly to [K][N] tile.
 // word[i] = i*128 maps K-row-pair i to byte offset i*128.
 // Column offset (n*4) is added at runtime.  Entries 0..15 cover one tile (region 2047);
-// entries 16..31 cover the next adjacent tile (region 4095) - pick region size at the
+// entries 16..31 cover the next adjacent tile (region 4095) — pick region size at the
 // call site to scatter into one tile (masked) or two contiguous tiles (unmasked).
 static const int32_t hmx_transpose_scatter_offsets[32] __attribute__((aligned(VLEN))) = {
     0 * 128,  1 * 128,  2 * 128,  3 * 128,  4 * 128,  5 * 128,  6 * 128,  7 * 128,  8 * 128,  9 * 128,  10 * 128,
@@ -198,16 +198,16 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
 }
 
 // --- HMX inline asm macros for load-store packetization ---
-#define HMX_LOAD_MPY_F16(act, wt, range)              \
-    "{\n"                                             \
+#define HMX_LOAD_MPY_F16(act, wt, range) \
+    "{\n" \
     "    activation.hf = mxmem(" act ", " range ")\n" \
-    "    weight.hf = mxmem(" wt ", " range ")\n"      \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
     "}\n"
 
-#define HMX_LOAD_MPY_DEEP_F16(act, wt, range)              \
-    "{\n"                                                  \
+#define HMX_LOAD_MPY_DEEP_F16(act, wt, range) \
+    "{\n" \
     "    activation.hf = mxmem(" act ", " range "):deep\n" \
-    "    weight.hf = mxmem(" wt ", " range ")\n"           \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
     "}\n"
 
 #define HMX_STORE_AFTER_F16(out, scale_reg) \

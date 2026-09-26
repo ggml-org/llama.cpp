@@ -6,7 +6,6 @@
 
 #include <cstring>
 #include <climits>
-#include <cstdlib>
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>

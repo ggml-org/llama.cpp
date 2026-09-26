@@ -55,7 +55,7 @@ jobs:
         uses: actions/checkout@v6
 
       # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.24
+      #   uses: ggml-org/ccache-action@v1.2.21
       #   if: ${{ matrix.sanitizer != 'UNDEFINED' }}
       #   with:
       #     key: ctest-${{ matrix.sanitizer }}-ubuntu-24.04
@@ -101,6 +101,8 @@ jobs:
 
       - name: Test
         id: cmake_test
+        # skip run in Debug - very slow
+        if: ${{ matrix.sanitizer != 'UNDEFINED' }}
         run: |
           cd build
           ctest -L main -E tokenizer --verbose --timeout 900

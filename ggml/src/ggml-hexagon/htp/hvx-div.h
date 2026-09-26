@@ -219,64 +219,64 @@ static inline HVX_Vector hvx_vec_hybrid_div_f16(HVX_Vector vec1, HVX_Vector vec2
     } while(0)
 
 // Generic macro to define alignment permutations for an op
-#define DEFINE_HVX_DIV_OP_VARIANTS(OP_NAME, OP_LOOP_BODY)                                                                            \
+#define DEFINE_HVX_DIV_OP_VARIANTS(OP_NAME, OP_LOOP_BODY) \
 static inline void OP_NAME##_aaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0);                                                                                              \
-    assert((uintptr_t) src0 % 128 == 0);                                                                                             \
-    assert((uintptr_t) src1 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a);                                                               \
-}                                                                                                                                    \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src0 % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_Vector, HVX_Vector, hvx_vec_store_a); \
+} \
 static inline void OP_NAME##_aau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0);                                                                                              \
-    assert((uintptr_t) src0 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a);                                                              \
-}                                                                                                                                    \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src0 % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_Vector, HVX_UVector, hvx_vec_store_a); \
+} \
 static inline void OP_NAME##_aua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0);                                                                                              \
-    assert((uintptr_t) src1 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_Vector, HVX_UVector, HVX_Vector, hvx_vec_store_a);                                                              \
-}                                                                                                                                    \
+    assert((uintptr_t) dst % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_UVector, HVX_Vector, hvx_vec_store_a); \
+} \
 static inline void OP_NAME##_auu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0);                                                                                              \
-    OP_LOOP_BODY(HVX_Vector, HVX_UVector, HVX_UVector, hvx_vec_store_a);                                                             \
-}                                                                                                                                    \
+    assert((uintptr_t) dst % 128 == 0); \
+    OP_LOOP_BODY(HVX_Vector, HVX_UVector, HVX_UVector, hvx_vec_store_a); \
+} \
 static inline void OP_NAME##_uaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) src0 % 128 == 0);                                                                                             \
-    assert((uintptr_t) src1 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u);                                                              \
-}                                                                                                                                    \
+    assert((uintptr_t) src0 % 128 == 0); \
+    assert((uintptr_t) src1 % 128 == 0); \
+    OP_LOOP_BODY(HVX_UVector, HVX_Vector, HVX_Vector, hvx_vec_store_u); \
+} \
 static inline void OP_NAME##_uau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) src0 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_UVector, HVX_Vector, HVX_UVector, hvx_vec_store_u);                                                             \
-}                                                                                                                                    \
+    assert((uintptr_t) src0 % 128 == 0); \
+    OP_LOOP_BODY(HVX_UVector, HVX_Vector, HVX_UVector, hvx_vec_store_u); \
+} \
 static inline void OP_NAME##_uua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    assert((uintptr_t) src1 % 128 == 0);                                                                                             \
-    OP_LOOP_BODY(HVX_UVector, HVX_UVector, HVX_Vector, hvx_vec_store_u);                                                             \
-}                                                                                                                                    \
+    assert((uintptr_t) src1 % 128 == 0); \
+    OP_LOOP_BODY(HVX_UVector, HVX_UVector, HVX_Vector, hvx_vec_store_u); \
+} \
 static inline void OP_NAME##_uuu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
-    OP_LOOP_BODY(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u);                                                            \
-}                                                                                                                                    \
+    OP_LOOP_BODY(HVX_UVector, HVX_UVector, HVX_UVector, hvx_vec_store_u); \
+} \
 
 // Dispatcher logic
-#define HVX_DIV_DISPATCHER(OP_NAME)                                                                                                          \
+#define HVX_DIV_DISPATCHER(OP_NAME) \
 static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) { \
-    if (hex_is_aligned((void *) dst, 128)) {                                                                                                 \
-        if (hex_is_aligned((void *) src0, 128)) {                                                                                            \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aaa(dst, src0, src1, num_elems);                                               \
-            else                                    OP_NAME##_aau(dst, src0, src1, num_elems);                                               \
-        } else {                                                                                                                             \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aua(dst, src0, src1, num_elems);                                               \
-            else                                    OP_NAME##_auu(dst, src0, src1, num_elems);                                               \
-        }                                                                                                                                    \
-    } else {                                                                                                                                 \
-        if (hex_is_aligned((void *) src0, 128)) {                                                                                            \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uaa(dst, src0, src1, num_elems);                                               \
-            else                                    OP_NAME##_uau(dst, src0, src1, num_elems);                                               \
-        } else {                                                                                                                             \
-            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uua(dst, src0, src1, num_elems);                                               \
-            else                                    OP_NAME##_uuu(dst, src0, src1, num_elems);                                               \
-        }                                                                                                                                    \
-    }                                                                                                                                        \
+    if (hex_is_aligned((void *) dst, 128)) { \
+        if (hex_is_aligned((void *) src0, 128)) { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aaa(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_aau(dst, src0, src1, num_elems); \
+        } else { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_aua(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_auu(dst, src0, src1, num_elems); \
+        } \
+    } else { \
+        if (hex_is_aligned((void *) src0, 128)) { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uaa(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_uau(dst, src0, src1, num_elems); \
+        } else { \
+            if (hex_is_aligned((void *) src1, 128)) OP_NAME##_uua(dst, src0, src1, num_elems); \
+            else                                    OP_NAME##_uuu(dst, src0, src1, num_elems); \
+        } \
+    } \
 }
 
 DEFINE_HVX_DIV_OP_VARIANTS(hvx_div_f32, hvx_div_f32_loop_body)

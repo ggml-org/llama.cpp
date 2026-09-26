@@ -156,20 +156,6 @@ function parseChunk(chunk: string): SearchResult | null {
 	return result;
 }
 
-const EMPTY_SEARCH_RESULTS: SearchResult[] = [];
-
-/**
- * Cheap prefilter for the wire format: a parseable result needs both a
- * `Title:` and a `URL:` field line, so a blob missing either substring can
- * never yield a result. Two substring scans cost far less than the
- * line-split parse for the megabyte tool results exec and file tools emit.
- */
-export function looksLikeSearchResult(text: string | undefined | null): boolean {
-	if (!text) return false;
-
-	return text.includes('Title:') && text.includes('URL:');
-}
-
 /** Bounded cache for extractSearchResults results. */
 const SEARCH_RESULTS_CACHE_MAX_SIZE = 32;
 const searchResultsCache = new Map<string, SearchResult[]>();
@@ -182,7 +168,7 @@ const searchResultsCache = new Map<string, SearchResult[]>();
  * tool result strings.
  */
 export function extractSearchResults(text: string | undefined | null): SearchResult[] {
-	if (!text || !looksLikeSearchResult(text)) return EMPTY_SEARCH_RESULTS;
+	if (!text) return [];
 
 	const cached = searchResultsCache.get(text);
 

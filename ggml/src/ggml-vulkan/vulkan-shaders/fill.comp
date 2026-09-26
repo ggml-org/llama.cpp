@@ -8,9 +8,7 @@ layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) writeonly buffer D {D_TYPE data_d[];};
 
 void main() {
-    // 2D grid flattening: each x workgroup covers gl_WorkGroupSize.x elements,
-    // each y workgroup covers gl_NumWorkGroups.x * gl_WorkGroupSize.x elements.
-    const uint i = (gl_GlobalInvocationID.y * gl_NumWorkGroups.x * gl_WorkGroupSize.x) + gl_GlobalInvocationID.x;
+    const uint i = gl_GlobalInvocationID.x;
 
     if (i >= p.KX) {
         return;

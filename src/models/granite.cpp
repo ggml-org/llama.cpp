@@ -38,16 +38,7 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
-        case 40: {
-            switch (hparams.n_embd) {
-                case 2048: type = LLM_TYPE_2B; break;
-                case 2560: type = LLM_TYPE_3B; break;
-                case 4096: type = LLM_TYPE_8B; break;
-                default: type = LLM_TYPE_UNKNOWN;
-            }
-            break;
-        }
-        case 64: type = LLM_TYPE_30B; break;
+        case 40: type = LLM_TYPE_3B; break;
         // Add additional layer/vocab/etc checks here for other model sizes
         default: type = LLM_TYPE_UNKNOWN;
     }

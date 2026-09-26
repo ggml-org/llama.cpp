@@ -18,7 +18,7 @@ LLAMA_BUILD_TESTS=OFF
 LLAMA_BUILD_SERVER=OFF
 LLAMA_BUILD_MTMD=ON
 GGML_METAL=ON
-GGML_METAL_EMBED_LIBRARY=${GGML_METAL_EMBED_LIBRARY:-ON}
+GGML_METAL_EMBED_LIBRARY=ON
 GGML_BLAS_DEFAULT=ON
 GGML_OPENMP=OFF
 
@@ -168,14 +168,6 @@ setup_framework_structure() {
     cp ggml/include/gguf.h         ${header_path}
     cp tools/mtmd/mtmd.h           ${header_path}
     cp tools/mtmd/mtmd-helper.h    ${header_path}
-
-    if [[ "$GGML_METAL_EMBED_LIBRARY" == "OFF" ]]; then
-        if [[ "$platform" == "macos" ]]; then
-            cp ${build_dir}/bin/*.metallib ${build_dir}/framework/${framework_name}.framework/Versions/A/Resources/
-        else
-            cp ${build_dir}/bin/*.metallib ${build_dir}/framework/${framework_name}.framework/
-        fi
-    fi
 
     # Create module map (common for all platforms)
     cat > ${module_path}module.modulemap << EOF
@@ -458,7 +450,6 @@ build_ios_sim() {
         -DIOS=ON \
         -DCMAKE_SYSTEM_NAME=iOS \
         -DCMAKE_OSX_SYSROOT=iphonesimulator \
-        -DGGML_METAL_TARGET_OS=ios \
         -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphonesimulator \
         -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
@@ -476,7 +467,6 @@ build_ios_device() {
         -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
         -DCMAKE_SYSTEM_NAME=iOS \
         -DCMAKE_OSX_SYSROOT=iphoneos \
-        -DGGML_METAL_TARGET_OS=ios \
         -DCMAKE_OSX_ARCHITECTURES="arm64" \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphoneos \
         -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
@@ -508,7 +498,6 @@ build_visionos() {
         -DCMAKE_OSX_ARCHITECTURES="arm64" \
         -DCMAKE_SYSTEM_NAME=visionOS \
         -DCMAKE_OSX_SYSROOT=xros \
-        -DGGML_METAL_TARGET_OS=xros \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
         -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
         -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
@@ -527,7 +516,6 @@ build_visionos_sim() {
         -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
         -DCMAKE_SYSTEM_NAME=visionOS \
         -DCMAKE_OSX_SYSROOT=xrsimulator \
-        -DGGML_METAL_TARGET_OS=xros \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
         -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
         -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
@@ -546,7 +534,6 @@ build_tvos_sim() {
         -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
         -DCMAKE_SYSTEM_NAME=tvOS \
         -DCMAKE_OSX_SYSROOT=appletvsimulator \
-        -DGGML_METAL_TARGET_OS=tvos \
         -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
         -DGGML_METAL=ON \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvsimulator \
@@ -565,7 +552,6 @@ build_tvos_device() {
         -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
         -DCMAKE_SYSTEM_NAME=tvOS \
         -DCMAKE_OSX_SYSROOT=appletvos \
-        -DGGML_METAL_TARGET_OS=tvos \
         -DCMAKE_OSX_ARCHITECTURES="arm64" \
         -DGGML_METAL=ON \
         -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvos \

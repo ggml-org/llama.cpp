@@ -8,7 +8,6 @@
 #include <openvino/op/pad.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
-#include <utility>
 #include <vector>
 
 namespace ov {
@@ -21,7 +20,7 @@ namespace {
 ov::Output<ov::Node> translate_circular_pad(ov::Output<ov::Node> input,
                                             const std::array<int32_t, 8> & pads,
                                             const ov::Shape & input_shape) {
-    ov::Output<ov::Node> result = std::move(input);
+    ov::Output<ov::Node> result = input;
 
     const std::array<int32_t, 4> pads_begin = {pads[6], pads[4], pads[2], pads[0]};
     const std::array<int32_t, 4> pads_end = {pads[7], pads[5], pads[3], pads[1]};
@@ -61,7 +60,9 @@ OutputVector translate_pad(const NodeContext & context) {
 
     auto input = process_view_input_new(context, 0);
     if (context.get_input_shape(0) == context.get_output_shape()) {
-        return rename_outputs_with_suffix({input}, context.get_name());
+        auto input_shape = std::make_shared<ov::op::v3::ShapeOf>(input);
+        auto res = std::make_shared<ov::op::v1::Reshape>(input, input_shape, false);
+        return rename_outputs_with_suffix({res}, context.get_name());
     }
 
     const int32_t * op_params = context.get_output_op_params();

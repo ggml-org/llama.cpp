@@ -66,10 +66,8 @@ public:
         auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_in_md, b_in_md, c_md, primitive_attr);
         auto c_mem = dnnl::memory(matmul_pd.dst_desc(), eng, c);
 
-        const auto scratchpad_md = matmul_pd.scratchpad_desc();
-        ggml_sycl_pool_alloc<uint8_t> scratchpad(ctx.pool());
-        void * scratchpad_ptr = scratchpad_md.get_size() > 0 ? scratchpad.alloc(scratchpad_md.get_size()) : nullptr;
-        auto scratchpad_mem = dnnl::memory(scratchpad_md, eng, scratchpad_ptr);
+        auto scratchpad_md = matmul_pd.scratchpad_desc();
+        auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
 
         auto matmul_prim = dnnl::matmul(matmul_pd);
 

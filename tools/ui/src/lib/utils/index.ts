@@ -285,8 +285,7 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName,
-	looksLikeSearchResult
+	isWebSearchToolName
 } from './search-results';
 
 // Cache utilities
