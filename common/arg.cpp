@@ -1325,7 +1325,7 @@ static utf8_argv make_utf8_argv() {
         if (n <= 0) { out.buf.emplace_back(); continue; }
         auto& s = out.buf.emplace_back();
         s.resize(static_cast<size_t>(n - 1));
-        (void)WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, s.data(), n, nullptr, nullptr);
+        (void)WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wargv[i], -1, s.data(), n, nullptr, nullptr);
     }
     LocalFree(wargv);
 

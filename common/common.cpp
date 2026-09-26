@@ -1860,8 +1860,12 @@ common_threadpools::~common_threadpools() {
     if (!free_fn) {
         return;
     }
-    free_fn(threadpool);
-    free_fn(threadpool_batch);
+    if (threadpool) {
+        free_fn(threadpool);
+    }
+    if (threadpool_batch) {
+        free_fn(threadpool_batch);
+    }
 }
 
 void common_threadpools::init(llama_context * ctx, const common_params & params) {
