@@ -66,6 +66,7 @@ struct ggml_openvino_device_config {
     bool is_npu = false;
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
+    size_t max_alloc_size = SIZE_MAX;
     ov::AnyMap compile_config;
     std::unordered_map<std::string, std::string> environment_variables;
     cl_command_queue cl_queue = nullptr;
@@ -106,6 +107,9 @@ bool ggml_openvino_release_weights_enabled(const std::string & device);
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();
+
+// Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
+size_t ggml_openvino_max_alloc_size();
 
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
 // register: record a host weight buffer (idempotent per data pointer).
