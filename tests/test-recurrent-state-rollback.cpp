@@ -302,6 +302,99 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     return true;
 }
 
+// Decode one token per seq, then a ubatch of n < n_rs_seq + 1 tokens for both seqs together, and roll the whole ubatch back.
+// The ubatch writes snapshot slots [0, n) only, so the rollback reads slot n, the state from before it.
+// Compared against a reference context that never decoded the rolled-back tokens.
+static bool test_short_ubatch_rollback(const common_params & params, llama_model * model, const int n_vocab, uint8_t fill) {
+    constexpr uint32_t  n_seqs   = 2;
+    constexpr uint32_t  n_rs_seq = 8;
+    constexpr uint32_t  n_replay = 4;
+    constexpr llama_pos p0       = 1;
+    constexpr float     nmse_eps = 1e-5f;
+
+    const auto make_ctx_multi = [&]() {
+        auto cparams = common_context_params_to_llama(params);
+        cparams.n_seq_max  = n_seqs;
+        cparams.n_rs_seq   = n_rs_seq;
+        cparams.n_ctx      = 256*n_seqs;
+        cparams.n_batch    = 256;
+        cparams.n_ubatch   = 16;
+        cparams.kv_unified = false;
+        return init_ctx(model, cparams, fill);
+    };
+
+    const auto tok = [&](uint32_t seq, llama_pos pos) {
+        return (llama_token) ((7*(uint32_t) pos + 31*seq + 1) % (uint32_t) n_vocab);
+    };
+
+    const auto decode_seqs = [&](llama_context * ctx, llama_pos pos0, uint32_t n_tokens, bool output) {
+        llama_batch batch = llama_batch_init(n_seqs*n_tokens, 0, 1);
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                const llama_pos pos = pos0 + (llama_pos) i;
+                common_batch_add(batch, tok(s, pos), pos, { (llama_seq_id) s }, output);
+            }
+        }
+        const bool ok = llama_decode(ctx, batch) == 0;
+        llama_batch_free(batch);
+        return ok;
+    };
+
+    double nmse_max = 0.0;
+    for (uint32_t n = 1; n <= n_rs_seq; ++n) {
+        llama_context * ctx_roll = make_ctx_multi();
+        llama_context * ctx_ref  = make_ctx_multi();
+        const auto cleanup = [&]() {
+            llama_free(ctx_roll);
+            llama_free(ctx_ref);
+        };
+        if (ctx_roll == nullptr || ctx_ref == nullptr) {
+            fprintf(stderr, "%s : failed to init contexts\n", __func__);
+            cleanup();
+            return false;
+        }
+        if (llama_n_rs_seq(ctx_roll) < n_rs_seq) {
+            fprintf(stderr, "%s : skipping because n_rs_seq is too small\n", __func__);
+            cleanup();
+            return true;
+        }
+
+        bool ok = decode_seqs(ctx_roll, 0, p0, false) && decode_seqs(ctx_ref, 0, p0, false);
+        ok = ok && decode_seqs(ctx_roll, p0, n, false);
+        for (uint32_t s = 0; s < n_seqs; ++s) {
+            ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_roll), (llama_seq_id) s, p0, -1);
+        }
+        ok = ok && decode_seqs(ctx_roll, p0, n_replay, true) && decode_seqs(ctx_ref, p0, n_replay, true);
+        if (!ok) {
+            fprintf(stderr, "%s : decode or rollback failed for a ubatch of %u\n", __func__, n);
+            cleanup();
+            return false;
+        }
+
+        for (uint32_t i = 0; i < n_seqs*n_replay; ++i) {
+            const float * l_roll = llama_get_logits_ith(ctx_roll, i);
+            const float * l_ref  = llama_get_logits_ith(ctx_ref,  i);
+            if (l_roll == nullptr || l_ref == nullptr) {
+                fprintf(stderr, "%s : missing logits at index %u\n", __func__, i);
+                cleanup();
+                return false;
+            }
+            const double nmse_val = nmse(l_roll, l_ref, n_vocab);
+            if (nmse_val > nmse_eps) {
+                fprintf(stderr, "%s : logits mismatch after rolling back a ubatch of %u (seq %u pos %d, nmse %g)\n",
+                        __func__, n, i/n_replay, p0 + (llama_pos) (i%n_replay), nmse_val);
+                cleanup();
+                return false;
+            }
+            nmse_max = std::max(nmse_max, nmse_val);
+        }
+        cleanup();
+    }
+
+    fprintf(stderr, "%s : whole-ubatch rollback matched for ubatches of 1 to %u (max nmse %g)\n", __func__, n_rs_seq, nmse_max);
+    return true;
+}
+
 static int test_rollback(const common_params & params, llama_model * model, uint8_t fill) {
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
@@ -476,6 +569,10 @@ static int test_rollback(const common_params & params, llama_model * model, uint
     llama_free(ctx_dirty);
 
     if (!test_multi_seq_split_replay(params, model, n_vocab, fill)) {
+        return 1;
+    }
+
+    if (!test_short_ubatch_rollback(params, model, n_vocab, fill)) {
         return 1;
     }
 

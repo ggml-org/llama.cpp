@@ -243,6 +243,24 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback-kimi-k3 PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-lfm2
+        LABEL main
+        ARGS -m "${MODEL_DIR}/lfm2-dense.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-lfm2 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-bailingmoe3
+        LABEL main
+        ARGS -m "${MODEL_DIR}/bailingmoe3-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-bailingmoe3 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 
     # Test state save/load functionality across all architectures, using the generated dummy models
     llama_test(
