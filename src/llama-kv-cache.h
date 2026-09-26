@@ -4,7 +4,10 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-turbo-innerq-runtime.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -43,6 +46,29 @@ ggml_type llama_kv_cache_turbo_layer_adaptive_type_v(
 //
 // llama_kv_cache
 //
+
+// Selects the TURBO_LAYER_ADAPTIVE layer-precision mode for one KV cache
+// construction. env_val is the raw TURBO_LAYER_ADAPTIVE value (nullptr when
+// unset). Pure and process-state-free: a second cache in the same process
+// must select from its own inputs, never inherit the first construction's.
+int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
+
+// Shared policy matrix for the non-uniform layer-adaptive modes.
+bool llama_kv_cache_adaptive_mode_is_supported(int mode);
+bool llama_kv_cache_adaptive_mode_changes_k(int mode);
+bool llama_kv_cache_adaptive_mode_changes_v(int mode);
+
+// Decides whether to auto-upgrade turbo K to q8_0 to prevent quality
+// degradation, given the two independent triggers (GQA ratio, Qwen-family
+// architecture), the opt-out, and the symmetric-KV precondition. See the
+// call site in the constructor for the measurements backing each trigger,
+// and llm_arch_is_qwen() (llama-arch.h) for the family test.
+bool llama_kv_cache_auto_asymmetric_turbo_k(
+    bool disabled, uint32_t gqa_ratio, bool is_qwen_family, ggml_type type_k, ggml_type type_v);
+
+// Converts complete 4-block q8_0 groups between canonical block_q8_0 bytes
+// and the fork-local quants-first KV layout used only in SYCL device memory.
+void llama_kv_cache_q8_repack_groups(uint8_t * data, size_t size, bool to_quants_first);
 
 class llama_kv_cache : public llama_memory_i {
 public:
@@ -140,10 +166,8 @@ public:
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
         const  layer_share_cb & share,
-                 const char *   name_tag = "",
-                          size_t kv_stream_stage_bytes = 0,
-                          void * kv_stream_phase_arena = nullptr,
-                          size_t kv_stream_maximum_pool_bytes = 0);
+        // a model can hold more than one cache, so the tensor names have to stay unique
+                 const char *   name_tag = "");
 
     ~llama_kv_cache() = default;
 
@@ -163,6 +187,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // Preserves InnerQ calibration across chunk boundaries; see do_clear.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -174,9 +200,6 @@ public:
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
-
-    bool has_kv_stream_targets() const override;
-    std::vector<llama_kv_stream_target> get_kv_stream_targets() const override;
 
     // state write/load
 
@@ -194,10 +217,6 @@ public:
     ggml_tensor * get_v_storage(int32_t il) const;
     bool get_v_transposed() const;
 
-    bool kv_stream_adapt(uint32_t active_tokens, uint32_t query_tokens);
-    bool kv_stream_resize_pool(
-        size_t pool_bytes, uint32_t active_tokens, uint32_t ring_slots);
-
     bool get_has_shift() const;
 
     ggml_type type_k() const;
@@ -205,20 +224,19 @@ public:
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
-    // state_read, plus the cells the restored tokens were placed in.
-    // a cache that mirrors another one cell for cell (the qwen4exp indexer) cannot search for
-    // its own cells here: a second independent search only happens to agree with the first.
-    //   sinfos_out: if set, resized to n_stream and filled with the layout used; a stream that
-    //               carried no cells leaves an empty entry
-    //   sinfos_in : if set, the layout to use instead of searching for one. it must have one
-    //               entry per stream and the entry must match the cell count in the blob,
-    //               otherwise the read fails as it would on any other corrupt input
+    // state_read, plus the cells the restored tokens were placed in
+    // a cache that mirrors another one (the qwen4exp indexer) must not search for its own cells: two searches agree only by luck
+    //   sinfos_out: if set, filled with the layout used; a stream with no cells leaves an empty entry
+    //   sinfos_in : if set, the layout to use instead of searching. one entry per stream, cell count must match the blob
     void state_read_sinfo(
             llama_io_read_i & io,
                llama_seq_id   seq_id,
       llama_state_seq_flags   flags,
           slot_info_vec_t *   sinfos_out,
-     const slot_info_vec_t *   sinfos_in);
+    const slot_info_vec_t *   sinfos_in);
+
+    // undo a state_read() of seq_id (-1 for the whole cache) that another memory module failed to complete
+    void state_clear(llama_seq_id seq_id);
 
     //
     // graph_build API
@@ -236,9 +254,23 @@ public:
     ggml_tensor * get_turbo_rotation() const { return turbo_rotation; }
     ggml_tensor * get_turbo_rotation_inv() const { return turbo_rotation_inv; }
 
-    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
-    ggml_tensor * get_turbo_innerq_scale_inv() const { return turbo_innerq_scale_inv; }
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization.
+    // Raw accessor = always returns the owned tensor; active accessor returns
+    // nullptr unless runtime state says the scale should participate in the
+    // graph (finalized or frozen-last-good).
+    ggml_tensor * get_turbo_innerq_scale_inv_raw() const { return turbo_innerq_scale_inv; }
+    ggml_tensor * get_turbo_innerq_scale_inv() const;
 
+    // Publish/consume mutable InnerQ runtime state for this cache.
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
+    void turbo_innerq_publish_abort(int abort_reason, int retry_count, bool freeze_last_good);
+    bool turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out);
+    // P3.2.2a2a3b discriminator: non-mutating snapshot read for
+    // the consumer-side gate at apply(). Mirrors
+    // llama_turbo_innerq_runtime_state::peek() without clearing
+    // state.dirty; use this for diagnostics, not for the real
+    // consume path.
+    llama_turbo_innerq_runtime_snapshot turbo_innerq_peek_runtime() const;
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
@@ -282,7 +314,22 @@ public:
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
 
+    // true if llama_kv_cell_ext holds information that has to survive a state save/restore
+    bool has_cell_ext() const;
+
+    // for every token of the ubatch, the ids of the n tokens that precede it in its sequence
+    // example for M-RoPE image case: tokens A B X X X C, where X is a 3-token image at pos 2 spanning positions 2..4:
+    //   tok: A B X X X C
+    //   pos: 0 1 2 2 2 5
+    //   prev, n=2: A -> [NULL, NULL], B -> [NULL, A], 3rd X -> [X, X], C -> [X, X]
+    // note: used by n-gram input embeddings
+    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
+
 private:
+    // data: zero ctxs_bufs; reset_innerq: drop in-flight InnerQ calibration.
+    // reset_innerq=false keeps the published scale alive across chunk clears.
+    void do_clear(bool data, bool reset_innerq);
+
     const llama_model & model;
     const llama_hparams & hparams;
 
@@ -328,47 +375,6 @@ private:
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     // ggml contexts for the KV cache along with the allocated backend buffers:
-    struct kv_stream_runtime_owner {
-        using feedback_fn_t = bool (*)(
-            void *, uint64_t *, uint64_t *, double *, uint32_t *,
-            uint32_t *, uint32_t *, uint32_t *);
-        using span_feedback_fn_t = bool (*)(void *, double);
-        using reconfigure_fn_t = bool (*)(void *, uint32_t, uint32_t);
-        using repartition_fn_t = bool (*)(void *, uint32_t);
-        using decode_layout_fn_t = bool (*)(void *, uint32_t);
-        using mark_dirty_rows_fn_t = bool (*)(void *, const int64_t *, size_t);
-        using resize_pool_fn_t = bool (*)(void *, size_t, uint32_t, uint32_t);
-
-        void * runtime = nullptr;
-        void (*free_fn)(void *) = nullptr;
-        feedback_fn_t feedback_fn = nullptr;
-        span_feedback_fn_t span_feedback_fn = nullptr;
-        reconfigure_fn_t reconfigure_fn = nullptr;
-        repartition_fn_t repartition_fn = nullptr;
-        decode_layout_fn_t decode_layout_fn = nullptr;
-        mark_dirty_rows_fn_t mark_dirty_rows_fn = nullptr;
-        resize_pool_fn_t resize_pool_fn = nullptr;
-        uint32_t layer_count = 0;
-        uint32_t minimum_ring_slots = 0;
-        uint32_t decode_layout_pages = 0;
-        uint32_t starved_evaluations = 0;
-        uint32_t overprovisioned_evaluations = 0;
-        uint32_t evaluations_since_repartition = UINT32_MAX;
-        uint64_t previous_deadline_samples = 0;
-        uint64_t previous_deadline_misses = 0;
-        int64_t previous_adapt_us = 0;
-        uint32_t previous_query_tokens = UINT32_MAX;
-
-        ~kv_stream_runtime_owner() {
-            if (runtime != nullptr) {
-                free_fn(runtime);
-            }
-        }
-    };
-
-    // Declared before ctxs_bufs so the custom buffers release their runtime
-    // references before this owner releases the initial reference.
-    kv_stream_runtime_owner kv_stream_runtime;
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
     // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
@@ -396,6 +402,15 @@ private:
 
     // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization (128 floats)
     ggml_tensor * turbo_innerq_scale_inv = nullptr;
+
+    llama_turbo_innerq_runtime_state turbo_innerq_runtime;
+
+    // Per-context InnerQ opt-in flag. Set once at construction from the
+    // canonical LLAMA_ENABLE_INNERQ env gate (mirrors llama-context.cpp
+    // innerq_env_enabled and ggml_innerq_state_decide's env-var half).
+    // When false, get_turbo_innerq_scale_inv() returns nullptr so the
+    // graph-build src[1] matches the off-by-default pre-P3.2.4a baseline.
+    bool innerq_active = false;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -432,6 +447,8 @@ private:
     // sinfo_in, when set, replaces the find_slot call: the cells are given by the caller
     bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count,       slot_info & sinfo, llama_seq_id dest_seq_id = -1, const slot_info * sinfo_in = nullptr);
     bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, const slot_info & sinfo);
+
+    void state_clear(llama_seq_id seq_id, uint32_t strm, const slot_info & sinfo);
 };
 
 class llama_kv_cache_context : public llama_memory_context_i {
@@ -472,9 +489,6 @@ public:
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
 
-    bool has_kv_stream_targets() const override;
-    std::vector<llama_kv_stream_active_target> get_kv_stream_active_targets() const override;
-
     //
     // llama_kv_cache_context specific API
     //
@@ -498,6 +512,10 @@ public:
 
     // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
     ggml_tensor * get_turbo_innerq_scale_inv() const override;
+
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) override;
+
+    void on_graph_compute_failure(ggml_status status, int abort_reason = 0) override;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -526,6 +544,9 @@ public:
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
+
+    // see llama_kv_cache::get_prev_tokens()
+    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
     llama_memory_status status;

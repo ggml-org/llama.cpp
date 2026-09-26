@@ -1,0 +1,14 @@
+=== Qwen3-1.7B (GQA 2:1) — gate now fires ===
+0.00.148.501 D llama_kv_cache: a2a3c-pre-auto: k_is_turbo=1 type_k=turbo3 type_v=turbo3
+0.00.148.504 D llama_kv_cache: a2a3c-pre-auto: n_head=16 n_head_kv=8 gqa_ratio=2 is_qwen_family=1 disabled=0
+0.00.148.505 W llama_kv_cache: auto-asymmetric: Qwen-family architecture (GQA ratio 2:1, n_head=16, n_head_kv=8) - upgrading K from turbo3 to q8_0 to prevent quality degradation. Disable with TURBO_AUTO_ASYMMETRIC=0
+0.00.148.542 D llama_kv_cache: a2a3c-post-auto: downgrade FIRED, type_k now=q8_0
+
+=== Mistral-7B (GQA 4:1, non-Qwen) — behavior unchanged ===
+0.00.034.911 D llama_kv_cache: a2a3c-pre-auto: k_is_turbo=1 type_k=turbo3 type_v=turbo3
+0.00.034.913 D llama_kv_cache: a2a3c-pre-auto: n_head=32 n_head_kv=8 gqa_ratio=4 is_qwen_family=0 disabled=0
+0.00.034.914 D llama_kv_cache: a2a3c-post-auto: downgrade SKIPPED (disabled=0 gqa_ratio=4 is_qwen_family=0 type_k==type_v=1), type_k still=turbo3
+
+PPL before fix (Qwen3-1.7B, turbo3/turbo3): 659.6625 +/- 58.08
+PPL after fix  (Qwen3-1.7B, turbo3/turbo3 -> effective K=q8_0): 16.9173 +/- 1.35
+q8_0/q8_0 baseline (unchanged): 16.6391 +/- 1.33

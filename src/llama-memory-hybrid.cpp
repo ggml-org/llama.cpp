@@ -30,10 +30,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr,
-                     size_t kv_stream_stage_bytes,
-                     void * kv_stream_phase_arena,
-                     size_t kv_stream_maximum_pool_bytes) :
+    const layer_filter_cb & filter_recr) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
@@ -54,10 +51,7 @@ llama_memory_hybrid::llama_memory_hybrid(
             : filter_attn,
         nullptr,
         nullptr,
-        "",
-        kv_stream_stage_bytes,
-        kv_stream_phase_arena,
-        kv_stream_maximum_pool_bytes
+        ""
     )),
     mem_recr(new llama_memory_recurrent(
         model,
@@ -149,6 +143,11 @@ void llama_memory_hybrid::clear(bool data) {
     mem_recr->clear(data);
 }
 
+void llama_memory_hybrid::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
+}
+
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     // Try removing from the recurrent cache first since it may fail. If it does
     // fail, the cache will not have been mutated.
@@ -196,14 +195,6 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_memory_hybrid::memory_breakdo
     return mb;
 }
 
-bool llama_memory_hybrid::has_kv_stream_targets() const {
-    return mem_attn->has_kv_stream_targets();
-}
-
-std::vector<llama_kv_stream_target> llama_memory_hybrid::get_kv_stream_targets() const {
-    return mem_attn->get_kv_stream_targets();
-}
-
 void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
         mem_attn->state_write(io, seq_id, flags);
@@ -212,10 +203,22 @@ void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id
 }
 
 void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
+    const bool read_attn = (flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0;
+
+    if (read_attn) {
         mem_attn->state_read(io, seq_id, flags);
     }
-    mem_recr->state_read(io, seq_id, flags);
+
+    try {
+        mem_recr->state_read(io, seq_id, flags);
+    } catch (...) {
+        // the attention part is already restored - undo it
+        if (read_attn) {
+            mem_attn->state_clear(seq_id);
+        }
+
+        throw;
+    }
 }
 
 llama_kv_cache * llama_memory_hybrid::get_mem_attn() const {
@@ -303,12 +306,10 @@ ggml_tensor * llama_memory_hybrid_context::get_turbo_innerq_scale_inv() const {
     return ctx_attn ? ctx_attn->get_turbo_innerq_scale_inv() : nullptr;
 }
 
-bool llama_memory_hybrid_context::has_kv_stream_targets() const {
-    return ctx_attn ? ctx_attn->has_kv_stream_targets() : false;
-}
-
-std::vector<llama_kv_stream_active_target> llama_memory_hybrid_context::get_kv_stream_active_targets() const {
-    return ctx_attn ? ctx_attn->get_kv_stream_active_targets() : std::vector<llama_kv_stream_active_target>{};
+void llama_memory_hybrid_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    if (ctx_attn) {
+        ctx_attn->turbo_innerq_publish_scale_inv(scale_inv, n, finalized);
+    }
 }
 
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {

@@ -5,9 +5,14 @@ set(MTMD_VIDEO_HELP "enable video support in mtmd (requires ffmpeg binary in PAT
 set(MTMD_VIDEO ON CACHE BOOL "${MTMD_VIDEO_HELP}")
 # TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
 
-if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
+# do not FORCE the MTMD_VIDEO cache entry here: that would permanently
+# overwrite the user's persisted preference, so it stays OFF even after a
+# later reconfigure turns LLAMA_SUBPROCESS back on. Gate the effective
+# (non-cache) flag instead.
+set(MTMD_VIDEO_ENABLED ${MTMD_VIDEO})
+if (MTMD_VIDEO_ENABLED AND NOT LLAMA_SUBPROCESS)
     message(STATUS "Disabling MTMD_VIDEO because LLAMA_SUBPROCESS is OFF")
-    set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
+    set(MTMD_VIDEO_ENABLED OFF)
 endif()
 
 find_package(Threads REQUIRED)
@@ -17,6 +22,7 @@ add_library(mtmd
             mtmd-audio.cpp
             mtmd-image.cpp
             mtmd.h
+            mtmd-internal.h
             mtmd-helper.cpp
             mtmd-helper-gen.cpp
             mtmd-helper-common.h
@@ -29,6 +35,8 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/deepseek4v.cpp
+            models/dots3note.cpp
             models/dotsocr.cpp
             models/exaone4_5.cpp
             models/gemma4a.cpp
@@ -52,11 +60,15 @@ add_library(mtmd
             models/qwen2vl.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
+            models/pockettts-seanet.cpp
+            models/pockettts-spkenc.cpp
+            models/pockettts-gen.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
@@ -69,19 +81,17 @@ add_library(mtmd
             )
 
 set_target_properties(mtmd PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
-target_link_libraries     (mtmd PRIVATE Threads::Threads)
+target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
-target_include_directories(mtmd PRIVATE ../..)
-target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
-if (MTMD_VIDEO)
+if (MTMD_VIDEO_ENABLED)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
 endif()
 
@@ -89,6 +99,13 @@ if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
+
+    # export all symbols so that internal components can be tested by test-mtmd-impl
+    set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
+if (COMMAND llama_build_mtmd_tests)
+    llama_build_mtmd_tests()
 endif()
 
 set(MTMD_PUBLIC_HEADERS

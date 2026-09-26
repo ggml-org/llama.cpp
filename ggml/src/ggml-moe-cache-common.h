@@ -1,4 +1,4 @@
-// MoE Expert Cache — shared data structures and utilities.
+// MoE Expert Cache - shared data structures and utilities.
 //
 // Extracted from ggml-cuda/moe-cache.cu to enable Metal, Vulkan, and
 // future backend ports. Each backend includes this header and implements
@@ -338,7 +338,7 @@ struct moe_cache_scope_frame {
 };
 
 // These functions are defined per-backend (they access backend-specific globals).
-// Declarations only — implementations live in moe-cache.cu / future backends.
+// Declarations only - implementations live in moe-cache.cu / future backends.
 void moe_cache_budget_remove_participant(moe_cache_physical_budget & state, size_t reserve_bytes);
 void moe_cache_budget_allocation(moe_cache_device & device, size_t bytes, bool allocated);
 void moe_cache_budget_reallocation(moe_cache_device & device, size_t old_bytes, size_t new_bytes);

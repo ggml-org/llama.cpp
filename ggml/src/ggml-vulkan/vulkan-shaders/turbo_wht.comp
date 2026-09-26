@@ -14,6 +14,7 @@ shared float x[128];
 
 // Pre-scramble sign vectors applied before and after the WHT.
 // direction == 0: pre = S1, post = S2; direction == 1: pre = S2, post = S1.
+// keep in sync with ggml/src/ggml-turbo-wht-signs.h (C-family single source)
 const float S1[128] = float[128](
     -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
      1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,

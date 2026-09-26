@@ -40,10 +40,7 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr,
-                     size_t kv_stream_stage_bytes = 0,
-                     void * kv_stream_phase_arena = nullptr,
-                     size_t kv_stream_maximum_pool_bytes = 0);
+    const layer_filter_cb & filter_recr = nullptr);
 
     ~llama_memory_hybrid() = default;
 
@@ -63,6 +60,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // P3.2.4a: cascade clear_data_only to attn + recr sub-memories.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -79,9 +78,6 @@ public:
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0)       override;
-
-    bool has_kv_stream_targets() const override;
-    std::vector<llama_kv_stream_target> get_kv_stream_targets() const override;
 
     //
     // llama_memory_hybrid specific API
@@ -131,9 +127,7 @@ public:
     ggml_tensor * get_turbo_rot_forward() const override;
     ggml_tensor * get_turbo_rot_inverse() const override;
     ggml_tensor * get_turbo_innerq_scale_inv() const override;
-
-    bool has_kv_stream_targets() const override;
-    std::vector<llama_kv_stream_active_target> get_kv_stream_active_targets() const override;
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) override;
 
     //
     // llama_memory_hybrid_context

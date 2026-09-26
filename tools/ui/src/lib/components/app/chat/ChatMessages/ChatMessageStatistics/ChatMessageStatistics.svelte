@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
+	import { BookOpenText, Clock, Gauge, Layers, Sparkles, WholeWord, Wrench } from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ChatMessageStatsView, ChatMessageStatisticsMode } from '$lib/enums';
+	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '$lib/constants';
+	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '$lib/enums';
 	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
 	import { formatPerformanceTime } from '$lib/utils';
-	import { MS_PER_SECOND, DEFAULT_PERFORMANCE_TIME } from '$lib/constants';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -23,17 +23,17 @@
 	}
 
 	let {
-		predictedTokens,
-		predictedMs,
-		promptTokens,
-		promptMs,
+		agenticTimings,
+		hideSummary = false,
+		initialView = ChatMessageStatsView.GENERATION,
 		isLive = false,
 		isProcessingPrompt = false,
-		initialView = ChatMessageStatsView.GENERATION,
-		agenticTimings,
+		mode = ChatMessageStatisticsMode.SWITCHABLE,
 		onActiveViewChange,
-		hideSummary = false,
-		mode = ChatMessageStatisticsMode.SWITCHABLE
+		predictedMs,
+		predictedTokens,
+		promptMs,
+		promptTokens
 	}: Props = $props();
 
 	let isSwitchable = $derived(mode === ChatMessageStatisticsMode.SWITCHABLE);
@@ -140,15 +140,15 @@
 			{#snippet child({ props })}
 				<button
 					{...props}
-					type="button"
 					class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
 					opts.view
 						? 'bg-background text-foreground shadow-sm'
 						: opts.disabled
 							? 'cursor-not-allowed opacity-40'
 							: 'hover:text-foreground'}"
-					onclick={() => !opts.disabled && (activeView = opts.view)}
 					disabled={opts.disabled}
+					onclick={() => !opts.disabled && (activeView = opts.view)}
+					type="button"
 				>
 					<IconComponent class="h-3 w-3" />
 
@@ -168,35 +168,35 @@
 		<div class="inline-flex items-center rounded-sm bg-muted-foreground/15 p-0.5">
 			{#if hasPromptStats || isLive}
 				{@render viewButton({
-					view: ChatMessageStatsView.READING,
 					icon: BookOpenText,
 					label: 'Reading',
-					tooltipText: 'Processing'
+					tooltipText: 'Processing',
+					view: ChatMessageStatsView.READING
 				})}
 			{/if}
 
 			{@render viewButton({
-				view: ChatMessageStatsView.GENERATION,
+				disabled: isGenerationDisabled,
 				icon: Sparkles,
 				label: 'Generation',
 				tooltipText: isGenerationDisabled ? 'Waiting for tokens...' : 'Generation',
-				disabled: isGenerationDisabled
+				view: ChatMessageStatsView.GENERATION
 			})}
 
 			{#if hasAgenticStats}
 				{@render viewButton({
-					view: ChatMessageStatsView.TOOLS,
 					icon: Wrench,
 					label: 'Tools',
-					tooltipText: 'Tool calls'
+					tooltipText: 'Tool calls',
+					view: ChatMessageStatsView.TOOLS
 				})}
 
 				{#if !hideSummary}
 					{@render viewButton({
-						view: ChatMessageStatsView.SUMMARY,
 						icon: Layers,
 						label: 'Summary',
-						tooltipText: 'Agentic summary'
+						tooltipText: 'Agentic summary',
+						view: ChatMessageStatsView.SUMMARY
 					})}
 				{/if}
 			{/if}
@@ -208,85 +208,85 @@
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{predictedTokens?.toLocaleString()} tokens"
 				tooltipLabel="Generated tokens"
+				value="{predictedTokens?.toLocaleString()} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedTime}
 				tooltipLabel="Generation time"
+				value={formattedTime}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{tokensPerSecond.toFixed(2)} t/s"
 				tooltipLabel="Generation speed"
+				value="{tokensPerSecond.toFixed(2)} t/s"
 			/>
 		{:else if activeView === ChatMessageStatsView.TOOLS && hasAgenticStats}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Wrench}
-				value="{agenticTimings!.toolCallsCount} calls"
 				tooltipLabel="Tool calls executed"
+				value="{agenticTimings!.toolCallsCount} calls"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
+				value={formattedAgenticToolsTime}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
 				tooltipLabel="Tool execution rate"
+				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
 			/>
 		{:else if activeView === ChatMessageStatsView.SUMMARY && hasAgenticStats}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Layers}
-				value="{agenticTimings!.turns} turns"
 				tooltipLabel="Agentic turns (LLM calls)"
+				value="{agenticTimings!.turns} turns"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 				tooltipLabel="Total tokens generated"
+				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
+				value={formattedAgenticTotalTime}
 			/>
 		{:else if hasPromptStats && (mode === ChatMessageStatisticsMode.READING || isSwitchable)}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{promptTokens} tokens"
 				tooltipLabel="Prompt tokens"
+				value="{promptTokens} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
+				value={formattedPromptTime ?? '0s'}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"
 				tooltipLabel="Prompt processing speed"
+				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"
 			/>
 		{/if}
 	</div>

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { Select as SelectPrimitive } from 'bits-ui';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import { cn, type WithoutChild } from '$lib/components/ui/utils.js';
+	import { Select as SelectPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		size = 'default',
 		variant = 'default',
 		...restProps
@@ -30,11 +30,12 @@
 
 <SelectPrimitive.Trigger
 	bind:ref
-	data-slot="select-trigger"
-	data-size={size}
 	class={cn(baseClasses, className)}
+	data-size={size}
+	data-slot="select-trigger"
 	{...restProps}
 >
 	{@render children?.()}
+
 	<ChevronDownIcon class={chevronClasses} />
 </SelectPrimitive.Trigger>

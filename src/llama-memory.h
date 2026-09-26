@@ -17,31 +17,10 @@ class llama_io_read_i;
 
 class llama_kv_cache;
 
-// A sub-cache eligible for the shared CUDA phase-arena streaming runtime
-// (block KV streaming - see llama-context.cpp's kv_stream_switch_phase and
-// llama-kv-cache.cpp's kv_stream_runtime). Most memory types have none; a
-// wrapper holding more than one llama_kv_cache (iSWA, DSA, MSA, DSV4)
-// returns whichever of its sub-cache(s) actually got a streaming runtime
-// attached - see llama_memory_i::get_kv_stream_targets().
-struct llama_kv_stream_target {
-    llama_kv_cache * cache = nullptr;
-};
-
-// The per-ubatch live state of one streaming target, used to drive the
-// phase-switch/adapt feedback loop each step - see
-// llama_memory_context_i::get_kv_stream_active_targets().
-struct llama_kv_stream_active_target {
-    llama_kv_cache * cache = nullptr;
-    uint32_t         n_kv  = 0;
-};
-
 struct llama_memory_params {
     // kv cache
     ggml_type type_k;
     ggml_type type_v;
-    uint64_t  kv_stream_stage_bytes;
-    void *    kv_stream_phase_arena;
-    uint64_t  kv_stream_maximum_pool_bytes;
 
     // use full-size SWA cache
     bool swa_full;
@@ -95,18 +74,29 @@ struct llama_memory_context_i {
 
     virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
 
-    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization
-    // Returns nullptr when InnerQ is not active. Override in KV cache contexts.
+    // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization.
+    // Returns nullptr when InnerQ is not active. Today the SYCL path still
+    // uses identity/no-op plumbing until runtime abort/retry state is wired.
     virtual ggml_tensor * get_turbo_innerq_scale_inv() const { return nullptr; }
 
-    // Block KV streaming: this ubatch's live state for whichever of this
-    // memory's sub-cache(s) have a streaming runtime attached. Empty for
-    // every memory type that doesn't stream (the default), or hasn't been
-    // wired up to yet. Drives the per-ubatch phase-switch/adapt call in
-    // llama_context::process_ubatch - see llama-context.cpp.
-    virtual bool has_kv_stream_targets() const { return false; }
+    // TurboQuant InnerQ: publish a newly-measured scale_inv snapshot back to
+    // the concrete memory context. Hybrid contexts should forward to their
+    // attention-side child.
+    virtual void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+        (void) scale_inv;
+        (void) n;
+        (void) finalized;
+    }
 
-    virtual std::vector<llama_kv_stream_active_target> get_kv_stream_active_targets() const { return {}; }
+    // P3.2.3.3b2b1a/b3: narrow failure hook. Called when graph_compute() or
+    // an adjacent backend sync path returns non-success to seed state for a
+    // later attempt. `abort_reason` is backend-neutral: device-lost style
+    // causes may be forwarded here, but NaN/PPL/policy causes must come from
+    // their own gates.
+    virtual void on_graph_compute_failure(ggml_status status, int abort_reason = 0) {
+        (void) status;
+        (void) abort_reason;
+    }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
@@ -146,6 +136,8 @@ struct llama_memory_i {
 
     // if data == true, the data buffers will also be cleared together with the metadata
     virtual void clear(bool data) = 0;
+    // Default = clear(true); llama_kv_cache overrides to preserve InnerQ calibration.
+    virtual void clear_data_only() { clear(true); }
 
     virtual bool seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)                              = 0;
     virtual void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;
@@ -162,23 +154,17 @@ struct llama_memory_i {
     // state write/read
     //
 
-    virtual void state_write(llama_io_write_i &    io,
-                             llama_seq_id          seq_id = -1,
-                             llama_state_seq_flags flags  = 0) const                                          = 0;
-    virtual void state_read(llama_io_read_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
+    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
+    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
 
-    // Block KV streaming: the sub-cache(s) of this memory object, if any,
-    // that a CUDA phase-arena streaming runtime should be attached to.
-    // Empty for every memory type that doesn't support streaming (the
-    // default). A plain llama_kv_cache returns itself once it has a
-    // runtime; a multi-cache wrapper (iSWA, DSA, MSA, DSV4) returns
-    // whichever of its sub-cache(s) are the large, context-length-scaled
-    // ones worth streaming - narrow/bounded indexer or compression-state
-    // structures stay always-resident and are never returned here. See
-    // llama-context.cpp's kv_stream_switch_phase and the bootstrap pre-scan.
-    virtual bool has_kv_stream_targets() const { return false; }
-
-    virtual std::vector<llama_kv_stream_target> get_kv_stream_targets() const { return {}; }
+    // called by the context each time it learns the outcome of every graph
+    // enqueued so far. An asynchronous backend reports a failure only at a
+    // later synchronize, after the batch context whose next() already
+    // accounted for the ubatch is gone; memory types that book-keep in next()
+    // undo that accounting here on failure. Default: nothing to undo.
+    virtual void on_graph_compute_synced(ggml_status status) {
+        (void) status;
+    }
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

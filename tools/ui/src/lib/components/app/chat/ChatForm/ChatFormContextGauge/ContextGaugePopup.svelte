@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { formatParameters } from '$lib/utils/formatters';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
-	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import {
-		gaugePopup,
 		gaugeCardEnter,
 		gaugeCardLeave,
+		gaugePopup,
 		gaugePopupClose
-	} from '$lib/stores/context-gauge-popup.svelte';
+	} from './gauge-popup.svelte';
+	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
 
@@ -30,13 +30,18 @@
 
 		const onPointerDown = (event: PointerEvent) => {
 			const target = event.target;
+
 			if (!(target instanceof Node)) return;
+
 			if (cardEl?.contains(target)) return;
+
 			if (target instanceof Element && target.closest('[data-context-gauge-trigger]')) return;
+
 			gaugePopupClose();
 		};
 
 		document.addEventListener('pointerdown', onPointerDown, true);
+
 		return () => document.removeEventListener('pointerdown', onPointerDown, true);
 	});
 
@@ -49,17 +54,19 @@
 
 {#if gaugePopup.open}
 	<div
-		role="status"
 		bind:this={cardEl}
 		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
-		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
+		role="status"
+		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
 	>
 		<div class="flex flex-col gap-2">
 			<div class="flex items-center gap-2">
 				<span class="font-medium">Context</span>
+
 				<span class="text-muted-foreground">·</span>
+
 				<span class="font-mono text-muted-foreground">
 					{formatParameters(gauge.contextUsed)}
 					/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '-'}
@@ -68,8 +75,8 @@
 
 			{#if gauge.activeModelId !== null && !gauge.isActiveModelLoaded}
 				<ContextGaugeLoadModel
-					modelId={gauge.activeModelId}
 					isLoading={gauge.isActiveModelLoading}
+					modelId={gauge.activeModelId}
 					onLoad={gauge.loadModel}
 				/>
 			{:else if showProgressBar}
@@ -86,8 +93,9 @@
 					<span>
 						<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 					</span>
+
 					<span>
-						{formatParameters((gauge.contextTotal ?? 0) - gauge.contextUsed)} remaining
+						{formatParameters(gauge.contextAvailable ?? 0)} remaining
 					</span>
 				</div>
 			{:else}
@@ -96,15 +104,15 @@
 
 			{#if gauge.hasAnyUsage}
 				<ContextGaugeDetails
-					currentRead={gauge.currentRead}
-					currentFresh={gauge.currentFresh}
-					currentCache={gauge.currentCache}
-					currentOutput={gauge.currentOutput}
-					kvTotal={gauge.kvTotal}
-					cumulativeRead={gauge.cumulativeRead}
-					cumulativeOutput={gauge.cumulativeOutput}
-					cumulativeCacheTotal={gauge.cumulativeCacheTotal}
 					averageTokensPerSecond={gauge.averageTokensPerSecond}
+					cumulativeCacheTotal={gauge.cumulativeCacheTotal}
+					cumulativeOutput={gauge.cumulativeOutput}
+					cumulativeRead={gauge.cumulativeRead}
+					currentCache={gauge.currentCache}
+					currentFresh={gauge.currentFresh}
+					currentOutput={gauge.currentOutput}
+					currentRead={gauge.currentRead}
+					kvTotal={gauge.kvTotal}
 					transientDetails={gauge.transientDetails}
 				/>
 			{/if}

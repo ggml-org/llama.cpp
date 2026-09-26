@@ -1,10 +1,12 @@
-# Contributors
+# Contributing to the Raudbjorn llama.cpp fork
 
-The project differentiates between 3 levels of contributors:
+This repository is an independent fork of `ggml-org/llama.cpp`. The code, policy files, and maintainers in [`Raudbjorn/ggml-llama.cpp`](https://github.com/Raudbjorn/ggml-llama.cpp) are authoritative for this fork. Open issues and pull requests against this repository, not the upstream project. Upstream documentation is useful background only when it agrees with the current fork.
+
+The project differentiates between three levels of contributors:
 
 - Contributors: people who have contributed before (no special privileges)
-- Collaborators (Triage): people with significant contributions, who may be responsible for some parts of the code, and are expected to maintain and review contributions for the code they own
-- Maintainers: responsible for reviewing and merging PRs, after approval from the code owners
+- Collaborators (Triage): people with significant contributions who maintain and review areas they know
+- Maintainers: people responsible for reviewing and merging pull requests
 
 # AI Usage Policy
 
@@ -26,6 +28,10 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
+# Security reports
+
+Do not open a public issue for a suspected vulnerability. Report it through [the fork's private vulnerability-reporting form](https://github.com/Raudbjorn/ggml-llama.cpp/security/advisories/new). Include the affected commit, configuration, reproduction steps, and expected impact. Report vulnerabilities that affect only upstream llama.cpp to upstream instead.
+
 # Pull requests (for contributors & collaborators)
 
 ### Before you start
@@ -41,6 +47,8 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
 ### Preparing your PR
 
+This fork supports CPU, BLAS, OpenVINO, SYCL, and Vulkan. SYCL on Intel Arc A770 is the primary GPU deployment path, with Vulkan as the fallback. Changes to a hardware-specific path must name the tested CPU or GPU, driver and toolchain versions, build options, commands, and observed results. Do not claim support from compilation alone or add operational paths for backends the fork has removed.
+
 - llama.cpp uses the ggml tensor library for model evaluation. If you are unfamiliar with ggml, consider taking a look at the [examples in the ggml repository](https://github.com/ggml-org/ggml/tree/master/examples/). [simple](https://github.com/ggml-org/ggml/tree/master/examples/simple) shows the bare minimum for using ggml. [gpt-2](https://github.com/ggml-org/ggml/tree/master/examples/gpt-2) has minimal implementations for language model inference using GPT-2. [mnist](https://github.com/ggml-org/ggml/tree/master/examples/mnist) demonstrates how to train and evaluate a simple image classifier
 - Test your changes:
   - Execute [the full CI locally on your machine](ci/README.md) before publishing
@@ -49,7 +57,7 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
   - If you modified a `ggml` operator or added a new one, add the corresponding test cases to `test-backend-ops`
 - Create separate PRs for each feature or fix:
   - Avoid combining unrelated changes in a single PR
-  - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
+  - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add a supported accelerator backend only with results from relevant hardware
   - In particular, adding new data types (extension of the `ggml_type` enum) carries with it a disproportionate maintenance burden. As such, to add a new quantization type you will need to meet the following *additional* criteria *at minimum*:
     - convert a small model to GGUF using the new type and upload it to HuggingFace
     - provide [perplexity](https://github.com/ggml-org/llama.cpp/tree/master/tools/perplexity) comparisons to FP16/BF16 (whichever is the native precision) as well as to types of similar size
@@ -62,7 +70,6 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
 - If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
-- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for fixing related issues and reviewing related PRs
 
 # Pull requests (for maintainers)
 
@@ -74,6 +81,7 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 - If a PR does not warrant a new release, add `[no release]` in the squashed commit to spare CI resources
 - Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 - Add the ["merge ready"](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+is%3Aopen+draft%3Ano+sort%3Aupdated-desc+label%3A%22merge+ready%22+) label to a PR to indicate when a PR can be fast-merged without waiting for 2 independent reviews. [(more info)](https://github.com/ggml-org/llama.cpp/pull/26178)
+- Wait for CI results before merging
 
 Maintainers reserve the right to decline review or close pull requests for any reason, without any questions, particularly under any of the following conditions:
 - The proposed change is already mentioned in the roadmap or an existing issue, and it has been assigned to someone.
@@ -180,15 +188,12 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 # Code maintenance
 
-- Existing code should have designated collaborators and/or maintainers specified in the [CODEOWNERS](CODEOWNERS) file responsible for:
-  - Reviewing and merging related PRs
-  - Fixing related bugs
-  - Providing developer guidance/support
+- Existing code should have a collaborator or maintainer willing to review changes, fix related bugs, and provide developer guidance.
 
 - When adding or modifying a large piece of code:
-  - If you are a collaborator, make sure to add yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
-  - If you are a contributor, find an existing collaborator who is willing to review and maintain your code long-term
-  - Provide the necessary CI workflow (and hardware) to test your changes (see [ci/README.md](https://github.com/ggml-org/llama.cpp/tree/master/ci))
+  - Identify the collaborator or maintainer who will review and maintain it long-term
+  - Provide the necessary CI workflow and access to relevant hardware to test the change (see [ci/README.md](ci/README.md))
+  - Keep evidence specific to the fork's supported CPU, BLAS, OpenVINO, SYCL, or Vulkan path
 
 - New code should follow the guidelines (coding, naming, etc.) outlined in this document. Exceptions are allowed in isolated, backend-specific parts of the code that do not interface directly with the `ggml` interfaces.
   _(NOTE: for legacy reasons, existing code is not required to follow this guideline)_
@@ -203,6 +208,4 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 # Resources
 
-The Github issues, PRs and discussions contain a lot of information that can be useful to get familiar with the codebase. For convenience, some of the more important information is referenced from Github projects:
-
-https://github.com/ggml-org/llama.cpp/projects
+The fork's [issues](https://github.com/Raudbjorn/ggml-llama.cpp/issues), [pull requests](https://github.com/Raudbjorn/ggml-llama.cpp/pulls), and discussions record current project decisions. Upstream issues and documentation may provide useful history, but they do not override this fork's code or policy.

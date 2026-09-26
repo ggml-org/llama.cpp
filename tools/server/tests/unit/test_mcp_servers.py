@@ -37,7 +37,6 @@ def _start_server_with_mcp(mcp_json: str, **kwargs) -> ServerProcess:
     srv = ServerPreset.router()
     srv.server_tools = "all"
     srv.no_ui = True
-    srv.server_port = 8085  # avoid conflict with load_all() which uses 8080
     srv.mcp_servers_json = mcp_json
     for k, v in kwargs.items():
         setattr(srv, k, v)
@@ -117,6 +116,42 @@ def test_mcp_tool_invocation():
         server.stop()
 
 
+def test_mcp_tool_ignores_builtin_routing_headers():
+    """Built-in routing headers must not authorize, reject, or rewrite MCP calls."""
+    global server
+    mcp_json = _mcp_config_json({
+        "echo": {
+            "command": sys.executable,
+            "args": [MCP_ECHO_SERVER],
+        }
+    })
+    server = _start_server_with_mcp(mcp_json)
+
+    try:
+        res = server.make_request(
+            "POST",
+            "/tools",
+            data={
+                "tool": "echo_echo",
+                "params": {
+                    "message": "mcp routing boundary",
+                    "cwd": "operator-body-cwd",
+                    "runtime": "operator-body-runtime",
+                    "resp_type": "operator-body-response",
+                },
+            },
+            headers={
+                "x-tool-cwd": "/client/override",
+                "x-tool-runtime": "ssh:client-selected.example",
+                "x-resp-type": "client-response",
+            },
+        )
+        assert res.status_code == 200, res.body
+        assert "mcp routing boundary" in str(res.body)
+    finally:
+        server.stop()
+
+
 def test_mcp_bad_command_does_not_crash():
     """A misconfigured MCP server should not crash the llama-server."""
     global server
@@ -182,12 +217,16 @@ def test_mcp_tools_not_listed_when_not_configured():
     global server
     server = ServerPreset.router()
     server.server_tools = "all"
+    server.api_key = "mcp-mixed-mode-test-key"
     server.no_ui = True
-    server.server_port = 8085
     server.start()
 
     try:
-        res = server.make_request("GET", "/tools")
+        res = server.make_request(
+            "GET",
+            "/tools",
+            headers={"Authorization": "Bearer mcp-mixed-mode-test-key"},
+        )
         assert res.status_code == 200, res.body
 
         tools = res.body
@@ -250,7 +289,6 @@ def test_mcp_tools_via_json_config_file():
         server = ServerPreset.router()
         server.server_tools = "all"
         server.no_ui = True
-        server.server_port = 8085
         server.mcp_servers_config = config_path
         server.start()
 
@@ -468,7 +506,6 @@ def test_mcp_config_file_errors():
     server = ServerPreset.router()
     server.server_tools = "all"
     server.no_ui = True
-    server.server_port = 8085
     server.mcp_servers_json = "not valid json"
     try:
         server.start()
@@ -480,7 +517,6 @@ def test_mcp_config_file_errors():
     server = ServerPreset.router()
     server.server_tools = "all"
     server.no_ui = True
-    server.server_port = 8085
     server.mcp_servers_config = "/nonexistent/path.json"
     try:
         server.start()

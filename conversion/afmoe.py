@@ -13,6 +13,7 @@ from .llama import LlamaModel
 
 
 @ModelBase.register("AfmoeForCausalLM")
+@ModelBase.example("arcee-ai/Trinity-Large-Thinking")
 class AfmoeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.AFMOE
 

@@ -573,13 +573,13 @@ int32_t llm_chat_apply_template(
             if (role == "system") {
                 ss << message->content << "\n\n";
             } else if (role == "user") {
-                ss << LU8("<｜User｜>") << message->content;
+                ss << LU8("<\uff5cUser\uff5c>") << message->content;
             } else if (role == "assistant") {
-                ss << LU8("<｜Assistant｜>") << message->content << LU8("<｜end▁of▁sentence｜>");
+                ss << LU8("<\uff5cAssistant\uff5c>") << message->content << LU8("<\uff5cend\u2581of\u2581sentence\uff5c>");
             }
         }
         if (add_ass) {
-            ss << LU8("<｜Assistant｜>");
+            ss << LU8("<\uff5cAssistant\uff5c>");
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK_OCR) {
         for (auto message : chat) {

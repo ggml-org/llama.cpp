@@ -1,5 +1,6 @@
 #include "server-mcp.h"
 
+#include "common.h"
 #include "subproc.h"
 
 #include <atomic>
@@ -177,6 +178,7 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
 //
 
 static constexpr const char * MCP_PROTOCOL_VERSION = "2024-11-05";
+static constexpr int MCP_LIST_TOOLS_MAX_PAGES = 1000; // guard against a server that never stops paginating
 
 static std::string rpc_error_message(const json & resp) {
     if (resp.contains("error")) {
@@ -289,27 +291,51 @@ std::vector<server_mcp_tool_def> server_mcp_transport::list_tools(const std::fun
         return tools;
     }
 
-    json req = {{"jsonrpc", "2.0"}, {"id", next_id++}, {"method", "tools/list"}};
-    json resp = send_rpc(req, should_stop);
-    if (!resp.contains("result")) {
-        last_error = "tools/list failed: " + rpc_error_message(resp);
-        return {};
-    }
+    // accumulate into a local so a mid-pagination failure never leaves the `tools` cache
+    // half-populated (a later call would short-circuit on `!tools.empty()` above and
+    // silently serve the partial list as if it were complete)
+    std::vector<server_mcp_tool_def> found;
+    std::string cursor;
+    for (int page = 0; page < MCP_LIST_TOOLS_MAX_PAGES; page++) {
+        json req = {{"jsonrpc", "2.0"}, {"id", next_id++}, {"method", "tools/list"}};
+        if (!cursor.empty()) {
+            req["params"] = {{"cursor", cursor}};
+        }
+        json resp = send_rpc(req, should_stop);
+        if (!resp.contains("result")) {
+            last_error = "tools/list failed: " + rpc_error_message(resp);
+            return {};
+        }
 
-    const json & result = resp.at("result");
-    if (result.contains("tools") && result.at("tools").is_array()) {
-        for (const auto & t : result.at("tools")) {
-            server_mcp_tool_def def;
-            def.server_name = name;
-            def.name = t.value("name", "");
-            def.description = t.value("description", "");
-            if (t.contains("inputSchema")) {
-                def.input_schema = t.at("inputSchema");
+        const json & result = resp.at("result");
+        if (result.contains("tools") && result.at("tools").is_array()) {
+            for (const auto & t : result.at("tools")) {
+                server_mcp_tool_def def;
+                def.server_name = name;
+                def.name = t.value("name", "");
+                def.description = t.value("description", "");
+                if (t.contains("inputSchema")) {
+                    def.input_schema = t.at("inputSchema");
+                }
+                found.push_back(std::move(def));
             }
-            tools.push_back(std::move(def));
+        }
+
+        cursor.clear();
+        if (result.contains("nextCursor") && result.at("nextCursor").is_string()) {
+            cursor = result.at("nextCursor").get<std::string>();
+        }
+        if (cursor.empty()) {
+            tools = std::move(found);
+            return tools;
+        }
+        if (should_stop && should_stop()) {
+            break; // cancelled/timed out mid-pagination: report what we saw, but do not cache it
         }
     }
-    return tools;
+    SRV_WRN("MCP '%s': tools/list did not finish paginating after %d pages, returning partial list\n",
+            name.c_str(), MCP_LIST_TOOLS_MAX_PAGES);
+    return found;
 }
 
 json server_mcp_transport::call_tool(const std::string & tool_name,
@@ -349,43 +375,21 @@ struct server_mcp_stdio::process_handle {
 
 #if defined(_WIN32)
 // config strings are UTF-8 (from JSON) and subprocess.h converts them with CP_UTF8, so inputs must be UTF-8, not the active code page
-static std::wstring windows_utf8_to_wide(const std::string & s) {
-    if (s.empty()) {
-        return std::wstring();
-    }
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), NULL, 0);
-    if (n <= 0) {
-        return std::wstring();
-    }
-    std::wstring w((size_t) n, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), &w[0], n);
-    return w;
-}
-
-static std::string windows_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
-    if (n <= 0) {
-        return std::string();
-    }
-    std::string out((size_t) n, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, s, len, &out[0], n, NULL, NULL);
-    if (len == -1 && !out.empty() && out.back() == '\0') {
-        out.pop_back(); // drop the terminator WideCharToMultiByte counts for -1
-    }
-    return out;
+static std::string wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
+    return wstring_to_utf8(len == -1 ? std::wstring(s) : std::wstring(s, s + len));
 }
 #endif
 
 static std::string mcp_resolve_command(const std::string & command) {
 #if defined(_WIN32)
     // For Windows: make sure we handle ".exe" correctly, as well as UTF-8
-    std::wstring wcmd = windows_utf8_to_wide(command);
+    std::wstring wcmd = utf8_to_wstring(command);
     wchar_t      buf[MAX_PATH * 4];
     const DWORD  cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
 
     auto search = [&](const wchar_t * ext) -> std::string {
         DWORD n = SearchPathW(NULL, wcmd.c_str(), ext, cap, buf, NULL);
-        return (n > 0 && n < cap) ? windows_wide_to_utf8(buf, (int) n) : std::string();
+        return (n > 0 && n < cap) ? wide_to_utf8(buf, (int) n) : std::string();
     };
 
     std::string found = search(NULL); // exact path / already-extensioned / .exe on PATH
@@ -429,7 +433,7 @@ static std::vector<std::string> mcp_parent_env() {
     LPWCH block = GetEnvironmentStringsW();
     if (block) {
         for (LPWCH e = block; *e; e += wcslen(e) + 1) {
-            env.emplace_back(windows_wide_to_utf8(e, -1));
+            env.emplace_back(wide_to_utf8(e, -1));
         }
         FreeEnvironmentStringsW(block);
     }
@@ -817,4 +821,3 @@ std::shared_ptr<server_mcp_transport> server_mcp::get_or_create(const std::strin
 
     return result;
 }
-

@@ -2,9 +2,7 @@
 
 void llama_model_gemma_embedding::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
-    uint32_t swa_period = 6;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-    hparams.set_swa_pattern(swa_period);
+    load_swa_pattern(ml, 6);
 
     hparams.causal_attn = false; // embeddings do not use causal attention
 

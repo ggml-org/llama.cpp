@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Callable, Iterable, cast
 
 import torch
@@ -15,6 +14,7 @@ from .qwen3vl import Qwen3VLVisionModel
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM")
+@ModelBase.example("Qwen/Qwen3.8-Flash-Next")
 class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     """Qwen3.8-Flash-Next.
 
@@ -30,13 +30,9 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # shards held only until the row stride is known, normally none
-        self._ple_pending: dict[int, Tensor] = {}
-        self._ple_shard_rows: dict[int, int] = {}
+        # only the shard names, so the table itself is never held
+        self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
-        self._ple_rows_per_shard: int | None = None
-        self._ple_map: np.memmap | None = None
-        self._ple_path: Path | None = None
 
     # The MTP head is one trunk-shaped block (dense attention + MoE, wrapped in
     # hyper-connections) plus a combiner, so once _QwenMtpMixin renames
@@ -193,99 +189,56 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
         return super().modify_tensors(data_torch, name, bid)
 
-    # -- the PLE table ----------------------------------------------------
-    #
-    # The 128 shards concatenate into one enormous tensor, which peaks near 300 GB of RSS.
-    # Each shard is written straight into a memory-mapped file at its final row offset and
-    # then dropped, so only one shard is resident. The file is removed after the write.
-    # It holds float32 because base.py has already cast the shards to it.
-
+    # the shards concatenate into a tensor of well over 100 GB
+    # use LazyChunkedTensor here, a single shard resident at a time
     def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
 
         idx = int(name.rpartition(".shard_")[2].partition(".")[0])
         n_parts = self.hparams["split_ngram_parts"]
-        rows, row_dim = int(data_torch.shape[0]), int(data_torch.shape[-1])
 
-        self._ple_row_dim = row_dim
-        self._ple_shard_rows[idx] = rows
+        self._ple_shards[idx] = name
+        self._ple_row_dim = int(data_torch.shape[-1])
 
-        if self._ple_map is None:
-            if idx == n_parts - 1 and n_parts > 1:
-                # the last shard can be short, so it cannot set the stride
-                # this happens only if the checkpoint yields the shards out of order
-                self._ple_pending[idx] = data_torch
-                return []
-            self._ple_rows_per_shard = rows
-            self._ple_path = self.fname_out.parent / f".{self.fname_out.stem}.ple.tmp"
-            self._ple_map = np.memmap(
-                self._ple_path, dtype=np.float32, mode="w+",
-                shape=(n_parts * rows, row_dim))
-
-        for i, held in list(self._ple_pending.items()):
-            self._ple_pending.pop(i)
-            self._write_ple_shard(i, held)
-        self._write_ple_shard(idx, data_torch)
-
-        if len(self._ple_shard_rows) < n_parts:
+        if len(self._ple_shards) < n_parts:
             return []
 
-        total = sum(self._ple_shard_rows.values())
-        table = self._finish_ple_table(total)
+        # the checkpoint may yield the shards in any order, the row order is by index
+        shards = [self._ple_shards[i] for i in sorted(self._ple_shards)]
+        rows = 0
+        for shard in shards:
+            shape = self.model_tensors[shard]().shape
+            if int(shape[-1]) != self._ple_row_dim:
+                raise ValueError(
+                    f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
+            rows += int(shape[0])
 
+        table = gguf.LazyChunkedTensor(
+            [self._load_ple_shard(shard) for shard in shards],
+            shape=(rows, self._ple_row_dim),
+            dtype=np.float32,
+        )
         gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-        return [(gguf_name + ".weight", table)]
+        return [(gguf_name + ".weight", cast(Tensor, table))]
 
-    def _write_ple_shard(self, idx: int, shard: Tensor) -> None:
-        assert self._ple_map is not None and self._ple_rows_per_shard is not None
+    def _load_ple_shard(self, name: str):
+        def load() -> np.ndarray:
+            from .base import LazyTorchTensor
 
-        rows = int(shard.shape[0])
-        if idx != self.hparams["split_ngram_parts"] - 1 and rows != self._ple_rows_per_shard:
-            raise ValueError(
-                f"PLE shard {idx} has {rows} rows, expected {self._ple_rows_per_shard}; "
-                "shards other than the last must be uniform for direct placement"
-            )
-
-        start = idx * self._ple_rows_per_shard
-        # the shard is still lazy here; force it, so exactly one shard is resident
-        from .base import LazyTorchTensor
-
-        eager = LazyTorchTensor.to_eager(shard).to(torch.float32).contiguous()
-        self._ple_map[start:start + rows] = eager.numpy()
-        del eager
-
-    def _finish_ple_table(self, total_rows: int):
-        assert self._ple_map is not None and self._ple_path is not None
-        assert self._ple_row_dim is not None
-
-        self._ple_map.flush()
-        del self._ple_map
-        self._ple_map = None
-
-        # trim the tail if the last shard came up short of a full stride
-        want = total_rows * self._ple_row_dim * 4
-        if self._ple_path.stat().st_size != want:
-            with open(self._ple_path, "r+b") as f:
-                f.truncate(want)
-
-        raw = np.memmap(self._ple_path, dtype=np.float32, mode="r+",
-                        shape=(total_rows, self._ple_row_dim))
-        return torch.from_numpy(np.asarray(raw))
+            # a fresh lazy tensor every call, or to_eager() memoizes every shard
+            eager = LazyTorchTensor.to_eager(self.model_tensors[name]())
+            return eager.to(torch.float32).contiguous().numpy()
+        return load
 
     def prepare_tensors(self):
         super().prepare_tensors()
-        if self._ple_pending:
+        n_parts = self.hparams.get("split_ngram_parts", 0)
+        if self._ple_shards and len(self._ple_shards) != n_parts:
             raise ValueError(
-                f"unprocessed PLE embedding shards: {sorted(self._ple_pending)}"
+                f"got {len(self._ple_shards)} PLE embedding shards, expected {n_parts}"
             )
-
-    def write(self):
-        try:
-            super().write()
-        finally:
-            if self._ple_path is not None and self._ple_path.exists():
-                self._ple_path.unlink()
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3.8-Flash-Next")
 class Qwen4ExpVisionModel(Qwen3VLVisionModel):
     """The vision tower is an unmodified Qwen3-VL ViT."""

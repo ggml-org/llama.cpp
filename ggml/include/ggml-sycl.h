@@ -20,12 +20,37 @@ extern "C" {
 GGML_BACKEND_API ggml_backend_t ggml_backend_sycl_init(int device);
 
 GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
+// Query the flash-attention selector for an initialized device.
+GGML_BACKEND_API bool ggml_backend_sycl_flash_attn_ext_uses_mkl(int device, const struct ggml_tensor * op);
+GGML_BACKEND_API enum ggml_status ggml_backend_sycl_consume_last_status(ggml_backend_t backend);
+
+typedef enum {
+    GGML_SYCL_FAILURE_CAUSE_NONE        = 0,
+    GGML_SYCL_FAILURE_CAUSE_DEVICE_LOST = 1,
+    GGML_SYCL_FAILURE_CAUSE_OTHER       = 2,
+} ggml_backend_sycl_failure_cause;
+
+typedef struct {
+    enum ggml_status               status;
+    ggml_backend_sycl_failure_cause cause;
+    int                             raw_code;
+} ggml_backend_sycl_failure;
+
+GGML_BACKEND_API ggml_backend_sycl_failure ggml_backend_sycl_consume_last_failure(ggml_backend_t backend);
 
 // devide buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
 // split tensor buffer that splits matrices by rows across multiple devices
-GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split);
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(int main_device, const float * tensor_split);
+
+// Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
+// trio queried by the meta-backend via ggml_backend_reg_get_proc_address.
+// See typedefs in ggml/include/ggml-backend.h. Mirrors the CUDA backend's
+// pattern (ggml_backend_cuda_comm_*).
+GGML_BACKEND_API void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends);
+GGML_BACKEND_API void   ggml_backend_sycl_comm_free(void * comm_ctx);
+GGML_BACKEND_API bool   ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx, struct ggml_tensor ** tensors);
 
 // Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
 // trio queried by the meta-backend via ggml_backend_reg_get_proc_address.
@@ -36,6 +61,8 @@ GGML_BACKEND_API void   ggml_backend_sycl_comm_free(void * comm_ctx);
 GGML_BACKEND_API bool   ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx, struct ggml_tensor ** tensors);
 
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
+// pins on device 0 - a copy between another device and this memory can fail,
+// use ggml_backend_dev_host_buffer_type to pin on the device that does the copy
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type(void);
 
 GGML_BACKEND_API void ggml_backend_sycl_print_sycl_devices(void);
@@ -43,7 +70,7 @@ GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int *id_list, int max_len);
 GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device,
                                                        char *description,
                                                        size_t description_size);
-GGML_BACKEND_API int  ggml_backend_sycl_get_device_count();
+GGML_BACKEND_API int  ggml_backend_sycl_get_device_count(void);
 GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t *free, size_t *total);
 
 // SYCL doesn't support registering host memory, keep here for reference

@@ -102,7 +102,8 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
     const int64_t chunk_count_key = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_CHUNK_COUNT);
     const int64_t chunk_size_key  = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE);
 
-    if (datasets_key != -1 && gguf_get_arr_type(ctx_gguf, datasets_key) == GGUF_TYPE_STRING) {
+    if (datasets_key != -1 && gguf_get_kv_type(ctx_gguf, datasets_key) == GGUF_TYPE_ARRAY &&
+        gguf_get_arr_type(ctx_gguf, datasets_key) == GGUF_TYPE_STRING) {
         const int64_t n = gguf_get_arr_n(ctx_gguf, datasets_key);
         imatrix.datasets.reserve(imatrix.datasets.size() + n);
         for (int64_t i = 0; i < n; ++i) {
@@ -138,6 +139,13 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
 
         if (!in_sum2 || !counts) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
+            gguf_free(ctx_gguf);
+            ggml_free(ctx);
+            return false;
+        }
+
+        if (in_sum2->type != GGML_TYPE_F32 || counts->type != GGML_TYPE_F32) {
+            LOG_ERR("%s: sums and counts for %s must be F32\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
             return false;

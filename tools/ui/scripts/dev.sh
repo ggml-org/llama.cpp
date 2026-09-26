@@ -13,7 +13,7 @@ cd ../../
 
 # Ensure node_modules are installed
 if [ ! -d "tools/ui/node_modules" ]; then
-    echo "📦 Installing npm dependencies..."
+    echo "Installing npm dependencies..."
     cd tools/ui && npm ci && cd ../../
 fi
 
@@ -27,14 +27,14 @@ check_and_install_hooks() {
     fi
 
     if [ "$hooks_missing" = true ]; then
-        echo "🔧 Git hooks missing, installing them..."
+        echo "Git hooks missing, installing them..."
         if bash "$(dirname "$0")/git-hooks/install.sh"; then
-            echo "✅ Git hooks installed successfully"
+            echo "Git hooks installed successfully"
         else
-            echo "⚠️  Failed to install git hooks, continuing anyway..."
+            echo "ERROR: Failed to install git hooks, continuing anyway..."
         fi
     else
-        echo "✅ Git hooks already installed"
+        echo "Git hooks already installed"
     fi
 }
 
@@ -43,15 +43,15 @@ check_and_install_hooks
 
 # Cleanup function
 cleanup() {
-    echo "🧹 Cleaning up..."
+    echo "Cleaning up..."
     exit
 }
 
 # Set up signal handlers
 trap cleanup SIGINT SIGTERM
 
-echo "🚀 Starting development servers..."
-echo "📝 Note: Make sure to start llama-server separately if needed"
+echo "Starting development servers..."
+echo "Note: Make sure to start llama-server separately if needed"
 cd tools/ui
 # Use --insecure-http-parser to handle malformed HTTP responses from llama-server
 # (some responses have both Content-Length and Transfer-Encoding headers)

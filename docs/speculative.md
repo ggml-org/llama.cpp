@@ -78,10 +78,9 @@ See:
 
 - #22105
 
-
 ### Chained MTP (`--spec-chain N`)
 
-Chained MTP drafts N tokens in one GPU decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
+Chained MTP drafts N tokens in one decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
 
 
 ### Adaptive MTP (`draft-mtp-adaptive`)
@@ -105,7 +104,6 @@ llama-server -m Qwen3-4B.gguf --spec-type draft-mtp-adaptive \
 ```
 
 `--spec-draft-n-min-adaptive` must be in `[1, --spec-draft-n-max]`.
-
 
 ### DSpark (`draft-dspark`)
 
@@ -132,8 +130,14 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 `--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
 acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
 
-Currently only drafts with a Qwen3 backbone are supported; support for other backbones
-(e.g. Gemma4) is planned.
+Currently only standalone drafts (converted via `--target-model-dir`) with a Qwen3 backbone are
+supported; support for other backbones (e.g. Gemma4) is planned. DeepSeek-V4 does not use a
+standalone draft - it ships its own DSpark head inside the target checkpoint, extracted with
+`--dspark` instead (see `convert_hf_to_gguf.py --help`).
+
+DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
+(for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))
+convert the same way.
 
 See:
 
@@ -231,6 +235,21 @@ Example Video:
 
 If a draft model is combined with a draftless decoding the draftless decoding has higher precedence.
 
+### Backend Sampling
+
+Use `--backend-sampling` to run supported target-model samplers on the model backend. Draft-model sampling uses the backend by default and can be controlled with `--spec-draft-backend-sampling` and `--no-spec-draft-backend-sampling`.
+
+Unsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
+
+### Synthetic Acceptance
+
+`llama-server` and `llama-cli` can replace normal speculative verification with synthetic decisions for benchmarking. The generated output is not valid model output because accepted draft tokens do not have to match the target model.
+
+Use exactly one of these options:
+
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
+
 ### General Speculative Parameters
 
 ```
@@ -255,7 +274,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         number of tokens to draft for speculative decoding (default: 3)
                                         (env: LLAMA_ARG_SPEC_DRAFT_N_MAX)
 --spec-chain                            0|1|N
-                                        chained MTP drafting: all draft tokens in one GPU decode (default: off).
+                                        chained MTP drafting: all draft tokens in one decode (default: off).
                                         Use N to enable and set the draft depth.
                                         (env: LLAMA_ARG_SPEC_CHAIN)
 --spec-draft-n-min                      N

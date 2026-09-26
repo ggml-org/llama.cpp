@@ -1,14 +1,14 @@
+/**
+ * PropsService - Fetches server properties from /props
+ *
+ * Returns global server settings and capabilities, including per-model
+ * modalities in MODEL mode. No reactive state; consumed by serverStore and
+ * the model props manager.
+ */
+
 import { apiFetchWithParams } from '$lib/utils';
 
 export class PropsService {
-	/**
-	 *
-	 *
-	 * Fetching
-	 *
-	 *
-	 */
-
 	/**
 	 * Fetches global server properties from the `/props` endpoint.
 	 * In MODEL mode, returns modalities for the single loaded model.
@@ -20,6 +20,7 @@ export class PropsService {
 	 */
 	static async fetch(autoload = false): Promise<ApiLlamaCppServerProps> {
 		const params: Record<string, string> = {};
+
 		if (!autoload) {
 			params.autoload = 'false';
 		}
@@ -38,6 +39,7 @@ export class PropsService {
 	 */
 	static async fetchForModel(modelId: string, autoload = false): Promise<ApiLlamaCppServerProps> {
 		const params: Record<string, string> = { model: modelId };
+
 		if (!autoload) {
 			params.autoload = 'false';
 		}

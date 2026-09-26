@@ -1,0 +1,506 @@
+{
+  "schema_version": 1,
+  "candidate_binary_source_commit": "d7a2bcf1d06c7b706add29ba9db6446690666aa1",
+  "baseline_commit": "d66649dae2f877a572269b84aaeefde9e8ad4780",
+  "held_stack": {
+    "oneapi": "2026.0.0.20260331",
+    "igc": "2.36.3",
+    "compute_runtime": "26.22.38646.4-1.1",
+    "level_zero_loader": "1.28.6-1.1",
+    "device": "Intel Arc A770 DG2/acm-g10",
+    "driver": "i915"
+  },
+  "candidate": {
+    "behavioral_changes_after_p5": [],
+    "retained_defaults": [
+      "per-kernel SYCL device-code split",
+      "canonical q8_0 host/session bytes",
+      "per-call graph record/finalize",
+      "FA scratch pre-growth before graph capture"
+    ],
+    "retained_opt_ins": [
+      "GGML_SYCL_Q8_KV_QUANTS_FIRST=1",
+      "GGML_SYCL_FA_Q8_GQA_TILE=1",
+      "supported graph and regular Level Zero batching controls"
+    ],
+    "retained_tooling": [
+      "q8 FA route/stage profiler",
+      "submission-policy evidence harness",
+      "raw mutable command-list capability probe",
+      "ROPE fusion eligibility profiler",
+      "native-token speculative evidence harness"
+    ]
+  },
+  "primary_and_protected_matrix": {
+    "mistral": {
+      "all_cells_valid": true,
+      "invalid_cell_count": 0,
+      "new_i915_xe_faults": [],
+      "cells": [
+        {
+          "depth": 0,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 962.42697,
+          "pp512_candidate": 968.586278,
+          "pp512_paired_median_pct": -0.3174340885992444,
+          "pp512_paired_ci95_pct": 1.4107216670919585,
+          "tg128_baseline": 24.600755,
+          "tg128_candidate": 24.597026,
+          "tg128_paired_median_pct": 0.01912542928053096,
+          "tg128_paired_ci95_pct": 0.17475034586478463,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 4096,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 368.873302,
+          "pp512_candidate": 369.16742,
+          "pp512_paired_median_pct": 0.06633144776111433,
+          "pp512_paired_ci95_pct": 0.13763908341942208,
+          "tg128_baseline": 17.931848,
+          "tg128_candidate": 17.920418,
+          "tg128_paired_median_pct": -0.06374133887370181,
+          "tg128_paired_ci95_pct": 0.14047555655220453,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 8192,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 213.60031,
+          "pp512_candidate": 213.535627,
+          "pp512_paired_median_pct": -0.016609994620331303,
+          "pp512_paired_ci95_pct": 0.12262208255903254,
+          "tg128_baseline": 14.119035,
+          "tg128_candidate": 14.138446,
+          "tg128_paired_median_pct": 0.02869884521143895,
+          "tg128_paired_ci95_pct": 0.3566099814205763,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 16384,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 115.975188,
+          "pp512_candidate": 115.763375,
+          "pp512_paired_median_pct": -0.12853064665143688,
+          "pp512_paired_ci95_pct": 0.21591717751394782,
+          "tg128_baseline": 9.931008,
+          "tg128_candidate": 9.932999,
+          "tg128_paired_median_pct": 0.010210871617721828,
+          "tg128_paired_ci95_pct": 0.17185790819997251,
+          "retained_pairs": 5
+        }
+      ]
+    },
+    "llama31": {
+      "all_cells_valid": true,
+      "invalid_cell_count": 0,
+      "new_i915_xe_faults": [],
+      "cells": [
+        {
+          "depth": 0,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 892.697974,
+          "pp512_candidate": 894.50367,
+          "pp512_paired_median_pct": 0.0927932846854107,
+          "pp512_paired_ci95_pct": 1.1610879963227767,
+          "tg128_baseline": 23.604666,
+          "tg128_candidate": 23.560985,
+          "tg128_paired_median_pct": 0.009776340924982918,
+          "tg128_paired_ci95_pct": 0.26716212829859814,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 4096,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 368.428875,
+          "pp512_candidate": 368.297969,
+          "pp512_paired_median_pct": 0.0036842849145957146,
+          "pp512_paired_ci95_pct": 0.1577517294167662,
+          "tg128_baseline": 17.372281,
+          "tg128_candidate": 17.362344,
+          "tg128_paired_median_pct": -0.0795068054403103,
+          "tg128_paired_ci95_pct": 0.20641691807093357,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 8192,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 213.292688,
+          "pp512_candidate": 213.212743,
+          "pp512_paired_median_pct": -0.028063615018147914,
+          "pp512_paired_ci95_pct": 0.05770037780452519,
+          "tg128_baseline": 13.810044,
+          "tg128_candidate": 13.813448,
+          "tg128_paired_median_pct": 0.1146122343998357,
+          "tg128_paired_ci95_pct": 0.12628600777996415,
+          "retained_pairs": 5
+        },
+        {
+          "depth": 16384,
+          "kv": [
+            "q8_0",
+            "q8_0"
+          ],
+          "pp512_baseline": 115.722764,
+          "pp512_candidate": 115.681815,
+          "pp512_paired_median_pct": -0.08081876456151882,
+          "pp512_paired_ci95_pct": 0.09772534153133722,
+          "tg128_baseline": 9.766746,
+          "tg128_candidate": 9.759893,
+          "tg128_paired_median_pct": -0.09416432970433819,
+          "tg128_paired_ci95_pct": 0.11798831452166389,
+          "retained_pairs": 5
+        }
+      ]
+    }
+  },
+  "correctness": {
+    "command": "ONEAPI_DEVICE_SELECTOR=level_zero:0 LLAMA_TEST_TURBO_FA=1 build-campaign-final/bin/test-sycl-turbo-correctness",
+    "summary": "== summary: 0 GATE-FAIL, 0 XPASS (promote to GATE!), 6 xfail (expected-broken), 0 SKIP ==",
+    "effective_controls": [
+      "GGML_SYCL_DISABLE_GRAPH: 1",
+      "GGML_SYCL_ENABLE_LEVEL_ZERO: 1",
+      "GGML_SYCL_FA_FORCE_VEC_STANDARD: 0",
+      "GGML_SYCL_FA_Q8_GQA_TILE: 0"
+    ],
+    "unsupported_shape_fallback_coverage": [
+      "f16/q8_0 VEC D64/D128",
+      "f16/q8_0 TILE D64/D128",
+      "GQA 4:1 and 8:1",
+      "known turbo2 FA remains xfail"
+    ]
+  },
+  "canonical_state": {
+    "pass": true,
+    "expected": {
+      "bytes": 836576,
+      "tokens": 12
+    },
+    "save": {
+      "n_saved": 12,
+      "n_written": 836576
+    },
+    "restore": {
+      "n_restored": 12,
+      "n_read": 836576
+    },
+    "checks": {
+      "changed_prompt_n": true,
+      "restored_byte_count": true,
+      "restored_content_matches_original": true,
+      "restored_prompt_n": true,
+      "restored_token_count": true,
+      "saved_byte_count": true,
+      "saved_token_count": true,
+      "source_slot_reuse_content_matches": true
+    },
+    "failures": []
+  },
+  "speculative_oracle": {
+    "normal": [
+      {
+        "arm": "none-q8_0",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 21.614954725492282,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          },
+          {
+            "id": "multi_turn",
+            "tg": 22.01401952620837,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          },
+          {
+            "id": "free_prose",
+            "tg": 21.781467051574683,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          }
+        ]
+      },
+      {
+        "arm": "ngrammod-q8_0",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 87.92192054968545,
+            "speedup": 4.0676430585344665,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 22
+          },
+          {
+            "id": "multi_turn",
+            "tg": 55.23540532537639,
+            "speedup": 2.5091013142609846,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 22
+          },
+          {
+            "id": "free_prose",
+            "tg": 37.025809303197406,
+            "speedup": 1.6998767445519993,
+            "exact": false,
+            "hash_count": 4,
+            "verifier": true,
+            "rejections": 22
+          }
+        ]
+      },
+      {
+        "arm": "ngrammod+mapk4v-q8_0",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 89.80817706506876,
+            "speedup": 4.154909330397563,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 20
+          },
+          {
+            "id": "multi_turn",
+            "tg": 55.11836526883841,
+            "speedup": 2.5037846997100326,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 20
+          },
+          {
+            "id": "free_prose",
+            "tg": 35.97992376472559,
+            "speedup": 1.65185952257171,
+            "exact": false,
+            "hash_count": 4,
+            "verifier": true,
+            "rejections": 20
+          }
+        ]
+      },
+      {
+        "arm": "none-f16",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 21.524701498514574,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          },
+          {
+            "id": "multi_turn",
+            "tg": 21.69502564374397,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          },
+          {
+            "id": "free_prose",
+            "tg": 21.530797661385314,
+            "speedup": 1,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 0
+          }
+        ]
+      },
+      {
+        "arm": "ngrammod-f16",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 88.1722610066873,
+            "speedup": 4.096329094866755,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 17
+          },
+          {
+            "id": "multi_turn",
+            "tg": 54.572715330150864,
+            "speedup": 2.5154482979782777,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 17
+          },
+          {
+            "id": "free_prose",
+            "tg": 235.74893107198537,
+            "speedup": 10.94938212599491,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 17
+          }
+        ]
+      },
+      {
+        "arm": "ngrammod+mapk4v-f16",
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg": 90.19140825601107,
+            "speedup": 4.190135145996575,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 14
+          },
+          {
+            "id": "multi_turn",
+            "tg": 54.62508327509474,
+            "speedup": 2.517862120658362,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 14
+          },
+          {
+            "id": "free_prose",
+            "tg": 246.65046738336613,
+            "speedup": 11.455705044580146,
+            "exact": true,
+            "hash_count": 1,
+            "verifier": true,
+            "rejections": 14
+          }
+        ]
+      }
+    ],
+    "hostile": [
+      {
+        "arm": "none-q8_0",
+        "tg_median": 21.820174734187074,
+        "speedup_vs_target": 1,
+        "accept_rate": null,
+        "exact_target_only": true,
+        "verifier_invariant_ok": true,
+        "hard_off_trips": 0,
+        "rejection_records": 0
+      },
+      {
+        "arm": "deadoff0-q8_0",
+        "tg_median": 15.297427811282855,
+        "speedup_vs_target": 0.7010680710688989,
+        "accept_rate": 0.013094417643004824,
+        "exact_target_only": true,
+        "verifier_invariant_ok": true,
+        "hard_off_trips": 0,
+        "rejection_records": 148
+      },
+      {
+        "arm": "deadoff3-q8_0",
+        "tg_median": 27.832658191221945,
+        "speedup_vs_target": 1.2755469894388485,
+        "accept_rate": 0.37012987012987014,
+        "exact_target_only": true,
+        "verifier_invariant_ok": true,
+        "hard_off_trips": 6,
+        "rejection_records": 18
+      }
+    ],
+    "global_q8_0_promoted": false,
+    "controlled_q8_0_copy_classes_promoted": true,
+    "global_f16_fixed_suite_promoted": true
+  },
+  "killed_arms": [
+    {
+      "arm": "quants-first plus TILE composition",
+      "reason": "Slower than either single mechanism at deep cells; no combined route retained.",
+      "candidate_commit": null,
+      "revert_commit": null
+    },
+    {
+      "arm": "direct packed-q8 GQA stage 1",
+      "reason": "d16384 +7.59% missed the >=20% keep gate and d4096 regressed 1.84%.",
+      "candidate_commit": "2d53f3b25",
+      "revert_commit": "0bb42498e"
+    },
+    {
+      "arm": "global graph/batching policy",
+      "reason": "No one policy cleared the >=10% operational gate at every depth and parallel shape; controls remain explicit opt-ins.",
+      "candidate_commit": null,
+      "revert_commit": null
+    },
+    {
+      "arm": "mutable Level Zero command-list backend path",
+      "reason": "Driver lacks kernel-argument mutation; capability gate failed before implementation.",
+      "candidate_commit": null,
+      "revert_commit": null
+    },
+    {
+      "arm": "dense ROPE fusion",
+      "reason": "0% of structural chains passed the production donor predicate because SET_ROWS destinations were q8_0.",
+      "candidate_commit": null,
+      "revert_commit": null
+    },
+    {
+      "arm": "regular SYCL q8 prefetch",
+      "reason": "All four engaged arms missed >=3% and regressed d16384 tg128 by about 0.95-1.01%.",
+      "candidate_commit": "4dba2654c",
+      "revert_commit": "cadcd0393"
+    },
+    {
+      "arm": "global q8_0 speculative decoding",
+      "reason": "Copy-heavy prompts were exact and fast, but free_prose produced four deterministic-run hashes and was not target-exact.",
+      "candidate_commit": null,
+      "revert_commit": null
+    }
+  ],
+  "safety": {
+    "matrix_new_i915_xe_faults": 0,
+    "final_kernel_log_query": "No entries since 2026-07-22 17:00 UTC",
+    "all_gpu_fault_gates_clean": true
+  },
+  "verdict": {
+    "all_final_gates_pass": true,
+    "new_backend_default": null,
+    "production_guidance": "Keep canonical q8_0 and existing P5 defaults. Use quants-first/TILE/graph/batching only as explicit measured-shape opt-ins. Use speculation only on controlled q8_0 copy-heavy classes, or on the verified fixed suite with f16 KV.",
+    "push_or_pr": false
+  }
+}

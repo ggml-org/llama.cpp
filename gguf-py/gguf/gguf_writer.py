@@ -386,7 +386,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -402,12 +402,38 @@ class GGUFWriter:
         tensor.tofile(self.temp_file)
         self.write_padding(self.temp_file, tensor.nbytes)
 
+    @staticmethod
+    def _byteswap_tensor_data(
+        tensor: np.ndarray[Any, Any], raw_dtype: GGMLQuantizationType | None,
+    ) -> np.ndarray[Any, Any]:
+        # A block-quantized tensor (raw_dtype set, packed as a flat uint8 buffer)
+        # embeds multi-byte fields (e.g. f16/f32 block scales) inside those bytes.
+        # ndarray.byteswap() swaps whole elements, so on a uint8 view it is a
+        # silent no-op: the file's declared endianness would not match the
+        # scale fields actually written. BF16 has no such embedded fields - it
+        # is a plain 2-byte value per element - so it can be swapped via a
+        # uint16 view (same special case as
+        # gguf.scripts.gguf_convert_endian.convert_byteorder). Any other
+        # quantized type needs per-type block-layout knowledge that isn't
+        # available here (see gguf.scripts.gguf_convert_endian.byteswap_tensors),
+        # so refuse rather than write a corrupted file.
+        if raw_dtype == GGMLQuantizationType.BF16:
+            return tensor.view(np.uint16).byteswap(inplace=False).view(np.uint8)
+        if raw_dtype is not None and tensor.dtype == np.uint8:
+            raise NotImplementedError(
+                f"Writing byteswapped {raw_dtype.name} quantized data is not supported"
+            )
+        return tensor.byteswap(inplace=False)
+
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
             fp.write(bytes([0] * pad))
 
-    def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
+    def write_tensor_data(
+        self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None,
+        raw_dtype: GGMLQuantizationType | None = None,
+    ) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
@@ -418,7 +444,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):
@@ -467,10 +493,15 @@ class GGUFWriter:
                     shard_bar.reset(total=(total if total > 0 else None))
 
                 # relying on the fact that Python dicts preserve insertion order (since 3.7)
-                for ti in tensors.values():
+                for name, ti in tensors.items():
                     assert ti.tensor is not None  # can only iterate once over the tensors
                     assert ti.tensor.nbytes == ti.nbytes
+                    start = fout.tell()
                     ti.tensor.tofile(fout)
+                    # a short write here would only surface as a corrupt file at load time
+                    if fout.tell() - start != ti.nbytes:
+                        raise ValueError(
+                            f"tensor {name!r} wrote {fout.tell() - start} bytes, expected {ti.nbytes}")
                     if shard_bar is not None:
                         shard_bar.update(ti.nbytes)
                     if bar is not None:
@@ -514,6 +545,12 @@ class GGUFWriter:
 
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
+
+    def add_tensor_extra_prec_a4(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+        if len(tensor_names) != len(values):
+            raise ValueError("tensor_extra prec_a4 names and values must have the same length")
+        self.add_array(Keys.General.TENSOR_EXTRA_NAME, list(tensor_names))
+        self.add_array(Keys.General.TENSOR_EXTRA_PREC_A4, list(values))
 
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
@@ -728,8 +765,11 @@ class GGUFWriter:
         else:
             self.add_array(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
-    def add_expert_feed_forward_length(self, length: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+    def add_expert_feed_forward_length(self, length: int | Sequence[int]) -> None:
+        if isinstance(length, int):
+            self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
+        else:
+            self.add_array(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
     def add_expert_shared_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -785,6 +825,15 @@ class GGUFWriter:
     def add_key_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KEY_LENGTH_SWA.format(arch=self.arch), length)
 
+    def add_key_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KEY_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_value_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_kv_lora_rank_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KV_LORA_RANK_SWA.format(arch=self.arch), length)
+
     def add_value_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_SWA.format(arch=self.arch), length)
 
@@ -824,6 +873,12 @@ class GGUFWriter:
         else:
             self.add_array(key, value)
 
+    def add_recurrent_layers(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.RECURRENT_LAYERS.format(arch=self.arch), value)
+
+    def add_rope_pattern(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.ROPE_PATTERN.format(arch=self.arch), value)
+
     def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
@@ -843,8 +898,11 @@ class GGUFWriter:
     def add_expert_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_COUNT.format(arch=self.arch), count)
 
-    def add_expert_used_count(self, count: int) -> None:
-        self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+    def add_expert_used_count(self, count: int | Sequence[int]) -> None:
+        if isinstance(count, int):
+            self.add_uint32(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
+        else:
+            self.add_array(Keys.LLM.EXPERT_USED_COUNT.format(arch=self.arch), count)
 
     def add_expert_shared_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_SHARED_COUNT.format(arch=self.arch), count)
@@ -905,6 +963,33 @@ class GGUFWriter:
 
     def add_embedding_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EMBEDDING_SCALE.format(arch=self.arch), value)
+
+    def add_hrm_layers_per_stack(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.LAYERS_PER_STACK.format(arch=self.arch), value)
+
+    def add_hrm_h_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.H_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_l_cycles(self, value: int) -> None:
+        self.add_uint32(Keys.HRM.L_CYCLES.format(arch=self.arch), value)
+
+    def add_hrm_prefix_lm(self, value: bool) -> None:
+        self.add_bool(Keys.HRM.PREFIX_LM.format(arch=self.arch), value)
+
+    def add_adapter_count(self, count: int) -> None:
+        self.add_uint32(Keys.Adapters.COUNT.format(arch=self.arch), count)
+
+    def add_adapter_token_ids_activate(self, ids: Sequence[int]) -> None:
+        self.add_array(Keys.Adapters.TOKEN_IDS_ACTIVATE.format(arch=self.arch), ids)
+
+    def add_adapter_token_ids_substitute(self, ids: Sequence[int]) -> None:
+        self.add_array(Keys.Adapters.TOKEN_IDS_SUBSTITUTE.format(arch=self.arch), ids)
+
+    def add_adapter_lora_rank(self, rank: int) -> None:
+        self.add_uint32(Keys.Adapters.LORA_RANK.format(arch=self.arch), rank)
+
+    def add_adapter_router_gain(self, gain: float) -> None:
+        self.add_float32(Keys.Adapters.ROUTER_GAIN.format(arch=self.arch), gain)
 
     def add_wkv_head_size(self, size: int) -> None:
         self.add_uint32(Keys.WKV.HEAD_SIZE.format(arch=self.arch), size)
@@ -981,6 +1066,9 @@ class GGUFWriter:
     def add_sample_from_anchor(self, value: bool) -> None:
         self.add_bool(Keys.LLM.SAMPLE_FROM_ANCHOR.format(arch=self.arch), value)
 
+    def add_has_confidence_head(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.HAS_CONFIDENCE_HEAD.format(arch=self.arch), value)
+
     def add_target_layers(self, value: Sequence[int]) -> None:
         self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
 
@@ -1017,39 +1105,42 @@ class GGUFWriter:
     def add_hyper_connection_epsilon(self, value: float) -> None:
         self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
 
+    def add_hyper_connection_magnitude(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.MAGNITUDE.format(arch=self.arch), value)
+
     def add_hyper_connection_low_rank(self, value: int) -> None:
         self.add_uint32(Keys.HyperConnection.LOW_RANK.format(arch=self.arch), value)
 
     def add_ple_layers(self, values: Sequence[int]) -> None:
-        self.add_array(Keys.PLE.LAYERS.format(arch=self.arch), values)
+        self.add_array(Keys.PerLayerEmbedding.LAYERS.format(arch=self.arch), values)
 
     def add_ple_ngram_size(self, value: int) -> None:
-        self.add_uint32(Keys.PLE.NGRAM_SIZE.format(arch=self.arch), value)
+        self.add_uint32(Keys.PerLayerEmbedding.NGRAM_SIZE.format(arch=self.arch), value)
 
     def add_ple_heads_per_ngram(self, value: int) -> None:
-        self.add_uint32(Keys.PLE.HEADS_PER_NGRAM.format(arch=self.arch), value)
+        self.add_uint32(Keys.PerLayerEmbedding.HEADS_PER_NGRAM.format(arch=self.arch), value)
 
     def add_ple_conv_kernel(self, value: int) -> None:
-        self.add_uint32(Keys.PLE.CONV_KERNEL.format(arch=self.arch), value)
+        self.add_uint32(Keys.PerLayerEmbedding.CONV_KERNEL.format(arch=self.arch), value)
 
     # multipliers reach ~2.4e13; default INT32 inference would truncate them
     def _add_u64_array(self, key: str, values: Sequence[int]) -> None:
         self.add_key_value(key, list(values), GGUFValueType.ARRAY, GGUFValueType.UINT64)
 
     def add_ple_layer_multipliers(self, values: Sequence[int]) -> None:
-        self._add_u64_array(Keys.PLE.LAYER_MULTIPLIERS.format(arch=self.arch), values)
+        self._add_u64_array(Keys.PerLayerEmbedding.LAYER_MULTIPLIERS.format(arch=self.arch), values)
 
     def add_ple_head_offsets(self, values: Sequence[int]) -> None:
-        self._add_u64_array(Keys.PLE.HEAD_OFFSETS.format(arch=self.arch), values)
+        self._add_u64_array(Keys.PerLayerEmbedding.HEAD_OFFSETS.format(arch=self.arch), values)
 
     def add_ple_head_vocab_sizes(self, values: Sequence[int]) -> None:
-        self._add_u64_array(Keys.PLE.HEAD_VOCAB_SIZES.format(arch=self.arch), values)
+        self._add_u64_array(Keys.PerLayerEmbedding.HEAD_VOCAB_SIZES.format(arch=self.arch), values)
 
     def add_ple_eos_token_id(self, value: int) -> None:
-        self.add_uint32(Keys.PLE.EOS_TOKEN_ID.format(arch=self.arch), value)
+        self.add_uint32(Keys.PerLayerEmbedding.EOS_TOKEN_ID.format(arch=self.arch), value)
 
     def add_ple_image_token_id(self, value: int) -> None:
-        self.add_uint32(Keys.PLE.IMAGE_TOKEN_ID.format(arch=self.arch), value)
+        self.add_uint32(Keys.PerLayerEmbedding.IMAGE_TOKEN_ID.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
@@ -1140,8 +1231,26 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_expert_latent_length(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_LATENT_LENGTH.format(arch=self.arch), value)
+
+    def add_activation_situ_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_BETA.format(arch=self.arch), value)
+
+    def add_activation_situ_linear_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_LINEAR_BETA.format(arch=self.arch), value)
+
+    def add_attn_res_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.AttnRes.BLOCK_SIZE.format(arch=self.arch), value)
+
     def add_kda_head_dim(self, value: int) -> None:
         self.add_uint32(Keys.KDA.HEAD_DIM.format(arch=self.arch), value)
+
+    def add_kda_safe_gate(self, value: bool) -> None:
+        self.add_bool(Keys.KDA.SAFE_GATE.format(arch=self.arch), value)
+
+    def add_kda_gate_lower_bound(self, value: float) -> None:
+        self.add_float32(Keys.KDA.GATE_LOWER_BOUND.format(arch=self.arch), value)
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
@@ -1202,7 +1311,16 @@ class GGUFWriter:
 
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]] | None) -> None:
         if value is None:
+            # a prior call may have written the multi-template form (the default key,
+            # one tokenizer.chat_template.<name> key per named template, and the
+            # tokenizer.chat_templates name list below) - clear all of it, not just
+            # the default, or a "no chat template" caller's intent is only half applied.
             self.remove_key(Keys.Tokenizer.CHAT_TEMPLATE)
+            self.remove_key(Keys.Tokenizer.CHAT_TEMPLATES)
+            named_prefix = Keys.Tokenizer.CHAT_TEMPLATE_N.format(name="")
+            for kv_data in self.kv_data:
+                for key in [k for k in kv_data if k.startswith(named_prefix)]:
+                    kv_data.pop(key, None)
             return
 
         if not isinstance(value, str):
@@ -1330,6 +1448,12 @@ class GGUFWriter:
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
+
+    def add_vision_expert_count_per_layer(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.EXPERT_COUNT_PER_LAYER, value)
+
+    def add_vision_expert_used_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.EXPERT_USED_COUNT, value)
 
     def add_vision_use_gelu(self, value: bool) -> None:
         self.add_bool(Keys.ClipVision.USE_GELU, value)
@@ -1489,6 +1613,9 @@ class GGUFWriter:
 
     def add_gen_audio_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipGenAudio.Attention.LAYERNORM_EPS, value)
+
+    def add_gen_audio_model_variant(self, value: str) -> None:
+        self.add_string(Keys.ClipGenAudio.MODEL_VARIANT, value)
 
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "source_sha": "ef1c35835dd99f236b5f2470193dd565d964b9d4",
+  "tracked_source_clean": true,
+  "untracked_files": [],
+  "build_mode": "JIT",
+  "sycl_device_arch": "",
+  "device_selector": "level_zero:0",
+  "render_node": "/dev/dri/renderD128",
+  "host": "vinbonesjr",
+  "artifacts": {
+    "llama_perplexity": {
+      "path": "/home/svnbjrn/build-p67-ef1c35835/bin/llama-perplexity",
+      "sha256": "82964a3d784ef91026c66a47a9ab41fb3328a54e9d8c7c53b901b8cb980f5fec"
+    },
+    "llama_bench": {
+      "path": "/home/svnbjrn/build-p67-ef1c35835/bin/llama-bench",
+      "sha256": "69b15e72e471b2d4ce5a6d277ba73f72fafc293bb5a94125a32ab9e3917223c2"
+    },
+    "correctness": {
+      "path": "/home/svnbjrn/build-p67-ef1c35835/bin/test-sycl-turbo-correctness",
+      "sha256": "c338fd07d680b7e5245c0f8fef25e05f883405542af2efecc8e881ac4507ec6b"
+    },
+    "libggml_sycl": {
+      "path": "/home/svnbjrn/build-p67-ef1c35835/bin/libggml-sycl.so.0.17.0",
+      "sha256": "64c230bbb96ead0332d332432feddcdb070648a5b5df76166ea2a82713cef443"
+    }
+  },
+  "models": {
+    "mistral": {
+      "path": "/home/svnbjrn/Downloads/mistral-7b-v0.1/mistral-7b-instruct-v0.1.Q4_K_M.gguf",
+      "bytes": 4368438944,
+      "sha256": "14466f9d658bf4a79f96c3f3f22759707c291cac4e62fea625e80c7d32169991"
+    },
+    "llama31": {
+      "path": "/mnt/mrgr/models/llama31-8b-q4km/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+      "bytes": 4920739232,
+      "sha256": "7b064f5842bf9532c91456deda288a1b672397a54fa729aa665952863033557c"
+    }
+  },
+  "corpus": {
+    "path": "/var/tmp/svnbjrn/claude-1000/-mnt-mrgr-llama-cpp-sycl-turbo-Raudbjorn-fork/c05e83fd-5f8b-4569-b473-f448b4b572d0/scratchpad/wikitext/wikitext-2-raw/wiki.test.raw",
+    "bytes": 1290590,
+    "sha256": "173c87a53759e0201f33e0ccf978e510c2042d7f2cb78229d9a50d79b9e7dd08"
+  }
+}

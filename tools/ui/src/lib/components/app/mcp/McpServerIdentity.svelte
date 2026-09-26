@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { ExternalLink } from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
 	import { McpLogo } from '$lib/components/app/mcp';
 	import { TruncatedText } from '$lib/components/app/misc';
-	import { sanitizeExternalUrl } from '$lib/utils';
+	import { Badge } from '$lib/components/ui/badge';
 	import type { MCPServerInfo } from '$lib/types';
+	import { sanitizeExternalUrl } from '$lib/utils';
 
 	interface Props {
 		displayName?: string;
@@ -20,12 +20,12 @@
 	let {
 		displayName,
 		faviconUrl = null,
-		serverInfo,
 		iconClass = 'h-5 w-5',
 		iconRounded = 'rounded-sm',
+		nameClass,
+		serverInfo,
 		showVersion = true,
-		showWebsite = true,
-		nameClass
+		showWebsite = true
 	}: Props = $props();
 
 	let safeWebsiteUrl = $derived(
@@ -35,27 +35,27 @@
 
 <span class="flex min-w-0 items-center gap-1.5">
 	{#if faviconUrl}
-		<img src={faviconUrl} alt="" class={['shrink-0 text-foreground', iconRounded, iconClass]} />
+		<img alt="" class={['shrink-0 text-foreground', iconRounded, iconClass]} src={faviconUrl} />
 	{:else}
 		<McpLogo class={['shrink-0 text-foreground', iconRounded, iconClass].join(' ')} />
 	{/if}
 
-	<TruncatedText text={displayName ?? ''} class={nameClass ?? ''} />
+	<TruncatedText class={nameClass ?? ''} text={displayName ?? ''} />
 
 	{#if showVersion && serverInfo?.version}
-		<Badge variant="secondary" class="h-4 max-w-24 min-w-0 shrink px-1 text-[10px]">
+		<Badge class="h-4 max-w-24 min-w-0 shrink px-1 text-[10px]" variant="secondary">
 			<TruncatedText text={`v${serverInfo.version}`} />
 		</Badge>
 	{/if}
 
 	{#if showWebsite && safeWebsiteUrl}
 		<a
-			href={safeWebsiteUrl}
-			target="_blank"
-			rel="noopener noreferrer"
-			class="shrink-0 text-muted-foreground hover:text-foreground"
 			aria-label="Open website"
+			class="shrink-0 text-muted-foreground hover:text-foreground"
+			href={safeWebsiteUrl}
 			onclick={(e) => e.stopPropagation()}
+			rel="noopener noreferrer"
+			target="_blank"
 		>
 			<ExternalLink class="h-3 w-3" />
 		</a>

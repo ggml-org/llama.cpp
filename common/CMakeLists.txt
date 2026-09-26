@@ -53,7 +53,24 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
+# LLAMA_DOWNLOAD=OFF swaps the network-backed downloader for a stub so that
+# llama-common carries no cpp-httplib/OpenSSL dependency (SDK builds).
+if (LLAMA_DOWNLOAD)
+    set(LLAMA_COMMON_DOWNLOAD_SOURCES
+        download.cpp
+        hf-cache.cpp
+        http.h
+    )
+else()
+    set(LLAMA_COMMON_DOWNLOAD_SOURCES
+        download-stub.cpp
+    )
+endif()
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -71,16 +88,17 @@ add_library(${TARGET}
     console.h
     debug.cpp
     debug.h
-    download.cpp
     download.h
     fit.cpp
     fit.h
-    hf-cache.cpp
     hf-cache.h
-    http.h
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
+    json-schema.cpp
+    json-schema.h
+    json.cpp
+    json.h
     llguidance.cpp
     log.cpp
     log.h
@@ -118,15 +136,17 @@ add_library(${TARGET}
     jinja/string.h
     jinja/caps.cpp
     jinja/caps.h
+    ${LLAMA_COMMON_DOWNLOAD_SOURCES}
     )
 
 set_target_properties(${TARGET} PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(${TARGET} PUBLIC .)
+target_link_libraries     (${TARGET} PUBLIC vendor::nlohmann vendor::sheredom)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (LLAMA_SUBPROCESS)
@@ -141,7 +161,9 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC  llama-common-base)
-target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+if (LLAMA_DOWNLOAD)
+    target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+endif()
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)

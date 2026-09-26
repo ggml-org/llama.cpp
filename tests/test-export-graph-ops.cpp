@@ -11,7 +11,9 @@
 
 #include <array>
 #include <vector>
+#include <map>
 #include <set>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <random>
@@ -86,6 +88,158 @@ struct test_object {
                std::tie(b.op, b.type, b.ne, b.op_params, b.sources);
     }
 };
+
+static bool is_turbo_kv_type(ggml_type type) {
+    return type == GGML_TYPE_TURBO2_0 ||
+           type == GGML_TYPE_TURBO3_0 ||
+           type == GGML_TYPE_TURBO4_0;
+}
+
+static int count_turbo_wht_on_query_layout_chain(const ggml_tensor * tensor, int direction) {
+    std::set<const ggml_tensor *> visited;
+    int count = 0;
+
+    while (tensor && visited.insert(tensor).second) {
+        switch (tensor->op) {
+            case GGML_OP_TURBO_WHT: {
+                int tensor_direction;
+                memcpy(&tensor_direction, tensor->op_params, sizeof(tensor_direction));
+                count += tensor_direction == direction;
+                tensor = tensor->src[0];
+            } break;
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+            case GGML_OP_CONT:
+            case GGML_OP_PAD:
+                tensor = tensor->src[0];
+                break;
+            default:
+                return count;
+        }
+    }
+
+    return count;
+}
+
+// Walks backward through pure layout ops (view/reshape/permute/transpose/
+// cont/pad) to the first op outside that set. Used to find which node (an
+// attention node, or nothing) produced the value now feeding a TURBO_WHT op.
+static const ggml_tensor * trace_layout_origin(const ggml_tensor * tensor) {
+    std::set<const ggml_tensor *> visited;
+
+    while (tensor && visited.insert(tensor).second) {
+        switch (tensor->op) {
+            case GGML_OP_VIEW:
+            case GGML_OP_RESHAPE:
+            case GGML_OP_PERMUTE:
+            case GGML_OP_TRANSPOSE:
+            case GGML_OP_CONT:
+            case GGML_OP_PAD:
+                tensor = tensor->src[0];
+                break;
+            default:
+                return tensor;
+        }
+    }
+
+    return tensor;
+}
+
+// Finds every GGML_OP_FLASH_ATTN_EXT node (the graph's attention paths across
+// both turbo and non-turbo KV types -- these 5 DSA/MLA architectures and
+// plain llama all route attention through FA in this harness's config) and,
+// for each, checks that the query layout chain carries exactly one forward
+// WHT when K is turbo-typed (zero otherwise), and that the attention output
+// feeds exactly one inverse WHT when V is turbo-typed (zero otherwise). This
+// scopes the forward/inverse pairing per attention path rather than summing
+// GGML_OP_TURBO_WHT nodes graph-wide: a DSA lightning indexer's own forward
+// WHT on its query (see build_attn_pad_turbo_query()) legitimately has no
+// inverse partner -- it feeds a score, not a value output -- and must not be
+// counted here. Emits a GRAPH_ATTENTION_COUNTS line consumed by
+// tests/test-turbo-attention-architectures.sh, and (when
+// LLAMA_TEST_GRAPH_EXPECTATION is "turbo" or "non-turbo") enforces that the
+// graph actually has the turbo coverage the caller expected.
+static bool check_and_report_turbo_attention(ggml_cgraph * graph, const char * label, const char * expectation) {
+    std::vector<const ggml_tensor *> attn_nodes;
+
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        const ggml_tensor * node = ggml_graph_node(graph, i);
+        if (node->op == GGML_OP_FLASH_ATTN_EXT) {
+            attn_nodes.push_back(node);
+        }
+    }
+
+    std::set<const ggml_tensor *> attn_set(attn_nodes.begin(), attn_nodes.end());
+    std::map<const ggml_tensor *, int> inverse_hits;
+
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        const ggml_tensor * node = ggml_graph_node(graph, i);
+        if (node->op != GGML_OP_TURBO_WHT) {
+            continue;
+        }
+
+        int direction;
+        memcpy(&direction, node->op_params, sizeof(direction));
+        if (direction != 1) {
+            continue;
+        }
+
+        const ggml_tensor * origin = trace_layout_origin(node->src[0]);
+        if (attn_set.count(origin)) {
+            inverse_hits[origin]++;
+        }
+    }
+
+    int k_turbo = 0, v_turbo = 0, forward_wht = 0, inverse_wht = 0;
+
+    for (size_t idx = 0; idx < attn_nodes.size(); ++idx) {
+        const ggml_tensor * node = attn_nodes[idx];
+        const bool this_k_turbo = node->src[1] && is_turbo_kv_type(node->src[1]->type);
+        const bool this_v_turbo = node->src[2] && is_turbo_kv_type(node->src[2]->type);
+        k_turbo += this_k_turbo;
+        v_turbo += this_v_turbo;
+
+        const int n_forward = count_turbo_wht_on_query_layout_chain(node->src[0], 0);
+        const int expect_forward = this_k_turbo ? 1 : 0;
+        if (n_forward != expect_forward) {
+            LOG_ERR("%s: attention node %d has %d forward WHT ops on its query chain, expected %d (k_turbo=%d)\n",
+                    label, (int) idx, n_forward, expect_forward, (int) this_k_turbo);
+            return false;
+        }
+        forward_wht += n_forward;
+
+        const auto it = inverse_hits.find(node);
+        const int n_inverse = it != inverse_hits.end() ? it->second : 0;
+        const int expect_inverse = this_v_turbo ? 1 : 0;
+        if (n_inverse != expect_inverse) {
+            LOG_ERR("%s: attention node %d has %d inverse WHT ops on its output chain, expected %d (v_turbo=%d)\n",
+                    label, (int) idx, n_inverse, expect_inverse, (int) this_v_turbo);
+            return false;
+        }
+        inverse_wht += n_inverse;
+    }
+
+    LOG_INF("GRAPH_ATTENTION_COUNTS label=%s attention=%d k_turbo=%d v_turbo=%d forward_wht=%d inverse_wht=%d\n",
+            label, (int) attn_nodes.size(), k_turbo, v_turbo, forward_wht, inverse_wht);
+
+    if (expectation && strcmp(expectation, "turbo") == 0) {
+        if (k_turbo == 0 && v_turbo == 0) {
+            LOG_ERR("%s: LLAMA_TEST_GRAPH_EXPECTATION=turbo but no turbo-typed attention node found\n", label);
+            return false;
+        }
+    } else if (expectation && strcmp(expectation, "non-turbo") == 0) {
+        if (k_turbo != 0 || v_turbo != 0 || forward_wht != 0 || inverse_wht != 0) {
+            LOG_ERR("%s: LLAMA_TEST_GRAPH_EXPECTATION=non-turbo but found turbo attention coverage "
+                    "(k_turbo=%d v_turbo=%d forward_wht=%d inverse_wht=%d)\n",
+                    label, k_turbo, v_turbo, forward_wht, inverse_wht);
+            return false;
+        }
+    }
+
+    return true;
+}
 
 static void extract_graph_ops(ggml_cgraph * cgraph, const char * label, std::set<test_object> & tests) {
     int n_nodes = ggml_graph_n_nodes(cgraph);
@@ -197,6 +351,8 @@ int main(int argc, char ** argv) {
     const uint32_t n_seqs  = llama_n_seq_max(ctx);
     const uint32_t n_tokens = std::min(llama_n_ctx(ctx), llama_n_ubatch(ctx));
 
+    const char * graph_expectation = getenv("LLAMA_TEST_GRAPH_EXPECTATION");
+
     std::set<test_object> tests;
 
     auto * gf_pp = llama_graph_reserve(ctx, n_tokens, n_seqs, n_tokens);
@@ -204,11 +360,17 @@ int main(int argc, char ** argv) {
         LOG_ERR("failed to reserve prompt processing graph\n");
         return 1;
     }
+    if (!check_and_report_turbo_attention(gf_pp, "pp", graph_expectation)) {
+        return 1;
+    }
     extract_graph_ops(gf_pp, "pp", tests);
 
     auto * gf_tg = llama_graph_reserve(ctx, n_seqs, n_seqs, n_seqs);
     if (!gf_tg) {
         LOG_ERR("failed to reserve token generation graph\n");
+        return 1;
+    }
+    if (!check_and_report_turbo_attention(gf_tg, "tg", graph_expectation)) {
         return 1;
     }
     extract_graph_ops(gf_tg, "tg", tests);
@@ -226,5 +388,6 @@ int main(int argc, char ** argv) {
         test.serialize(f);
     }
 
+    common_log_flush(common_log_main());
     return 0;
 }

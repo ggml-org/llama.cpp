@@ -301,7 +301,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    llama_print_build_info();
+    llama_print_build_info(llama_version());
 
     // load the model
     fprintf(stderr, "Loading model\n");

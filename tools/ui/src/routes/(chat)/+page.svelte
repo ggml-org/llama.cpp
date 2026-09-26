@@ -1,31 +1,26 @@
 <script lang="ts">
-	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
-	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
-	import { onMount } from 'svelte';
-	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
-	import { APP_NAME, NEW_CHAT_PARAM } from '$lib/constants';
+	import { page } from '$app/state';
+	import { DialogModelNotAvailable } from '$lib/components/app';
+	import { APP_NAME, URL_PARAMS } from '$lib/constants';
+	import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
+	import { onMount } from 'svelte';
 
-	let qParam = $derived(page.url.searchParams.get('q'));
-	let modelParam = $derived(page.url.searchParams.get('model'));
-	let newChatParam = $derived(page.url.searchParams.get(NEW_CHAT_PARAM));
+	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
+	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));
+	let loadParam = $derived(page.url.searchParams.get(URL_PARAMS.LOAD));
 
-	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
-	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
-	/**
-	 * Clear URL params after message is sent to prevent re-sending on refresh
-	 */
+	// Clear params after handling the deep link so a refresh does not replay them
 	function clearUrlParams() {
 		const url = new URL(page.url);
 
-		url.searchParams.delete('q');
-		url.searchParams.delete('model');
-		url.searchParams.delete(NEW_CHAT_PARAM);
+		url.searchParams.delete(URL_PARAMS.QUERY);
+		url.searchParams.delete(URL_PARAMS.MODEL);
+		url.searchParams.delete(URL_PARAMS.LOAD);
 
 		replaceState(url.toString(), {});
 	}
@@ -39,6 +34,18 @@
 			if (model) {
 				try {
 					await modelsStore.selectModelById(model.id);
+
+					// with ?load=true in router mode, start loading right away so the
+					// model is ready sooner; not awaited so the UI stays usable
+					if (
+						loadParam === 'true' &&
+						serverStore.isRouterMode &&
+						!modelsStore.isModelLoaded(model.id)
+					) {
+						modelsStore.status
+							.load(model.id)
+							.catch((error) => console.error('Failed to load model:', error));
+					}
 				} catch (error) {
 					console.error('Failed to select model:', error);
 					requestedModelName = modelParam;
@@ -54,17 +61,18 @@
 			}
 		}
 
-		// Handle ?q= parameter - create new conversation and send message
+		// ?q= creates the conversation, the chat route sends the prompt once the
+		// conversation id is in the URL
 		if (qParam !== null) {
 			await conversationsStore.createConversation();
 			clearUrlParams();
-		} else if (modelParam || newChatParam === 'true') {
+		} else if (modelParam) {
 			clearUrlParams();
 		}
 	}
 
 	onMount(async () => {
-		if (!isConversationsInitialized()) {
+		if (!conversationsStore.isInitialized) {
 			await conversationsStore.initialize();
 		}
 
@@ -73,7 +81,7 @@
 
 		await modelsStore.fetch();
 
-		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
+		if (qParam !== null || modelParam !== null) {
 			await handleUrlParams();
 		}
 
@@ -87,6 +95,6 @@
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}
-	modelName={requestedModelName}
 	availableModels={availableModelNames}
+	modelName={requestedModelName}
 />

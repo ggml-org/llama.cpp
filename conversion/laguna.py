@@ -14,6 +14,7 @@ from .qwen import DFlashModel
 
 
 @ModelBase.register("LagunaForCausalLM")
+@ModelBase.example("poolside/Laguna-XS.2", "poolside/Laguna-S-2.1")
 class LagunaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LAGUNA
     _experts: list[dict] | None = None

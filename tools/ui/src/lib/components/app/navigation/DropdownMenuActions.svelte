@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
 	import type { Component } from 'svelte';
 
 	interface ActionItem {
@@ -24,12 +24,12 @@
 	}
 
 	let {
-		triggerIcon,
-		triggerTooltip,
-		triggerClass = '',
 		actions,
 		align = 'end',
-		open = $bindable(false)
+		open = $bindable(false),
+		triggerClass = '',
+		triggerIcon,
+		triggerTooltip
 	}: Props = $props();
 </script>
 
@@ -44,12 +44,14 @@
 					onclick={(e) => e.stopPropagation()}
 				>
 					{@render iconComponent(triggerIcon, 'h-3 w-3')}
+
 					{#if triggerTooltip}
 						<span class="sr-only">{triggerTooltip}</span>
 					{/if}
 				</DropdownMenu.Trigger>
 			{/snippet}
 		</Tooltip.Trigger>
+
 		{#if triggerTooltip}
 			<Tooltip.Content>
 				<p>{triggerTooltip}</p>
@@ -64,10 +66,10 @@
 			{/if}
 
 			<DropdownMenu.Item
+				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+				disabled={action.disabled}
 				onclick={action.onclick}
 				variant={action.variant}
-				disabled={action.disabled}
-				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
 			>
 				<div class="flex items-center gap-2">
 					{@render iconComponent(

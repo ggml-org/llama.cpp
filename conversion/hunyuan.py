@@ -17,6 +17,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-A13B-Instruct")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
@@ -154,35 +155,18 @@ class HunYuanMoEModel(TextModel):
 
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-4B-Instruct")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
-    def _get_eod_token_id(self) -> int | None:
-        """Get the actual end-of-generation token from config (eod_token_id)."""
-        return self.hparams.get("eod_token_id")
-
-    def _get_eot_token_id(self) -> int | None:
-        """Get the end-of-turn token from generation_config.json.
-        This is the first entry in eos_token_id when it's a list."""
-        gen_cfg_path = self.dir_model / "generation_config.json"
-        if gen_cfg_path.is_file():
-            with open(gen_cfg_path, encoding="utf-8") as f:
-                gen_cfg = json.load(f)
-            eos = gen_cfg.get("eos_token_id")
-            if isinstance(eos, list) and len(eos) >= 2:
-                return eos[0]
-        return None
-
-    def _fix_special_tokens(self):
-        """Fix EOS/EOT tokens that are incorrect in upstream configs."""
-        eod_id = self._get_eod_token_id()
-        if eod_id is not None:
-            self.gguf_writer.add_eos_token_id(eod_id)
-        eot_id = self._get_eot_token_id()
-        if eot_id is not None:
-            self.gguf_writer.add_eot_token_id(eot_id)
-
     def set_vocab(self):
+        # Also called by draft models (e.g. DFlash), with dir_model pointing at
+        # the target model.
+        config = ModelBase.load_hparams(self.dir_model, self.is_mistral_format)
+        config = {**config, **config.get("text_config", {})}
+        self.hparams["pad_token_id"] = config.get("pad_token_id")
+        self.hparams["eod_token_id"] = config.get("eod_token_id")
+
         if (self.dir_model / "tokenizer.json").is_file():
             tokens, toktypes, tokpre = self.get_vocab_base()
             self.gguf_writer.add_tokenizer_model("gpt2")
@@ -197,7 +181,6 @@ class HunYuanModel(TextModel):
                 token_types = ('bos', 'eos', 'unk', 'sep', 'cls', 'mask')
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True, special_token_types=token_types)
             special_vocab.add_to_gguf(self.gguf_writer)
-            self._fix_special_tokens()
         else:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -249,7 +232,18 @@ class HunYuanModel(TextModel):
             # FIX for BOS token: Overwrite incorrect id read from config.json
             if self.hparams['hidden_size'] == 4096:
                 self.gguf_writer.add_bos_token_id(127958) # only for 7b dense, fix <|bos|> token
-            self._fix_special_tokens()
+
+        # Fix EOS/EOT tokens that are incorrect in upstream configs.
+        eod_id = self.hparams.get("eod_token_id")
+        if eod_id is not None:
+            self.gguf_writer.add_eos_token_id(eod_id)
+
+        gen_cfg = self.dir_model / "generation_config.json"
+        if gen_cfg.is_file():
+            with open(gen_cfg, encoding="utf-8") as f:
+                eos = json.load(f).get("eos_token_id")
+            if isinstance(eos, list) and len(eos) >= 2:
+                self.gguf_writer.add_eot_token_id(eos[0])
 
     def set_gguf_parameters(self):
         # Some HunYuanVL variants set num_experts=1 (not real MoE);
@@ -290,6 +284,7 @@ class HunYuanModel(TextModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -333,6 +328,7 @@ class HunyuanVLVisionModel(MmprojModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLTextModel(HunYuanModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
 
@@ -365,6 +361,7 @@ class HunyuanVLTextModel(HunYuanModel):
 
 
 @ModelBase.register("HYV3ForCausalLM")
+@ModelBase.example("tencent/Hy3")
 class HYV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.HY_V3
     supports_mtp_export = True

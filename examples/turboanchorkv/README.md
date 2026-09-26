@@ -15,16 +15,17 @@ The tool keeps the paper-style attention anchor selection, observation-output ut
 ## Build and model-free test
 
 ```sh
-cmake -S . -B build \
-  -DGGML_METAL=ON \
-  -DGGML_METAL_EMBED_LIBRARY=ON \
+cmake -S . -B "$HOME/build-turboanchorkv" \
   -DLLAMA_BUILD_EXAMPLES=ON \
   -DLLAMA_BUILD_TESTS=ON \
   -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target llama-turboanchorkv test-turbo-quant -j 12
-./build/bin/llama-turboanchorkv --self-test
-ctest --test-dir build -R '^test-turboanchorkv$' --output-on-failure
+cmake --build "$HOME/build-turboanchorkv" --target llama-turboanchorkv test-turbo-quant -j 12
+"$HOME/build-turboanchorkv/bin/llama-turboanchorkv" --self-test
+ctest --test-dir "$HOME/build-turboanchorkv" -R '^test-turboanchorkv$' --output-on-failure
 ```
+
+This recipe builds the CPU evaluator. For GPU evaluation, follow the supported
+backend build instructions and use the resulting binary in the commands below.
 
 The self-test checks synthetic RoPE recovery, deterministic uniform anchor placement, residual-norm ordering, residual codec quality ordering, partial residual-slot lookup, and exact serialized byte accounting. It needs no model.
 

@@ -2,10 +2,10 @@
 	import { Collapsible as CollapsiblePrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		open = $bindable(false),
+		ref = $bindable(null),
 		...restProps
 	}: CollapsiblePrimitive.RootProps = $props();
 </script>
 
-<CollapsiblePrimitive.Root bind:ref bind:open data-slot="collapsible" {...restProps} />
+<CollapsiblePrimitive.Root bind:open bind:ref data-slot="collapsible" {...restProps} />

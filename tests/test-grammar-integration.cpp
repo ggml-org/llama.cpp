@@ -7,13 +7,13 @@
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
 #include <string>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static llama_grammar * build_grammar_with_root(const std::string & grammar_str, const char * grammar_root) {
     return llama_grammar_init_impl(nullptr, grammar_str.c_str(), grammar_root, false, nullptr, 0, nullptr, 0);
@@ -788,6 +788,64 @@ static void test_quantifiers() {
             "0xFF 0x12 0xAB 0x00 0x00 0x00",
         }
     );
+
+    // large bounds are exact (logarithmic encoding), not silently unbounded
+    auto repeat = [](size_t n, const std::string & s) {
+        std::string out;
+        out.reserve(n * s.size());
+        for (size_t i = 0; i < n; ++i) {
+            out += s;
+        }
+        return out;
+    };
+    test_grammar(
+        "large max repetition",
+        R"""(
+            root ::= "a"{0,5000}
+        )""",
+        { "", "a", repeat(4999, "a"), repeat(5000, "a") },
+        { "b", repeat(5001, "a"), repeat(5000, "a") + "b" }
+    );
+    test_grammar(
+        "large min / max repetition",
+        R"""(
+            root ::= "a"{3,5000}
+        )""",
+        { repeat(3, "a"), repeat(5000, "a") },
+        { "", repeat(2, "a"), repeat(5001, "a") }
+    );
+    test_grammar(
+        "large exact repetition",
+        R"""(
+            root ::= "a"{5000}
+        )""",
+        { repeat(5000, "a") },
+        { "", repeat(4999, "a"), repeat(5001, "a") }
+    );
+    test_grammar(
+        "large min repetition",
+        R"""(
+            root ::= "a"{5000,}
+        )""",
+        { repeat(5000, "a"), repeat(6000, "a") },
+        { "", repeat(4999, "a") }
+    );
+    test_grammar(
+        "large min / max repetition of a group",
+        R"""(
+            root ::= ("ab" | "c"){40,3000}
+        )""",
+        { repeat(40, "c"), repeat(20, "ab") + repeat(20, "c"), repeat(1500, "ab") + repeat(1500, "c") },
+        { "", repeat(39, "c"), "a", repeat(3001, "c"), repeat(40, "c") + "b" }
+    );
+    test_grammar(
+        "repetition just past the chained encoding",
+        R"""(
+            root ::= "a"{0,33}
+        )""",
+        { "", repeat(33, "a") },
+        { repeat(34, "a") }
+    );
     test_grammar(
         "segfault",
         // Grammar
@@ -918,7 +976,7 @@ static void test_json_schema() {
     // Otherwise, this test structure is the same.
 
     test_schema(
-        "empty schema (object)",
+        "empty schema (any value)",
         // Schema
         R"""(
             {}
@@ -927,14 +985,16 @@ static void test_json_schema() {
         {
             R"""({})""",
             R"""({"foo": "bar"})""",
-        },
-        // Failing strings
-        {
-            "",
             "[]",
             "null",
             R"""("")""",
             "true",
+        },
+        // Failing strings
+        {
+            "",
+            R"""({"foo"})""",
+            "foo",
         }
     );
 

@@ -182,14 +182,14 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 
 ### API for tools
 
-This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+This endpoint is intended to be used internally by the Web UI and subject to change or removal. Enabling any built-in tool requires at least one configured API key, and requests are checked by the normal timing-safe API-key middleware. MCP-only operation is unaffected by that startup requirement.
 
 **GET /tools**
 
 Get a list of tools, each tool has these fields:
 - `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
 - `display_name` (string): the name to be displayed on UI. Example: `Read file`
-- `type` (string): `"builtin"` for a built-in tool, or `"mcp"` for a tool exposed by an MCP server
+- `type` (string): `"server"` for a server tool, or `"mcp"` for a tool exposed by an MCP server
 - `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
 - `definition` (object): the OAI-compat definition of this tool
 
@@ -200,7 +200,10 @@ Invoke a tool call, request body is a JSON object with:
 - `params` (object): a mapping from argument name (string) to argument value
 
 Headers:
-- `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
+- `x-tool-cwd`: optional and valid only for built-in tools using the local host runtime. The operator must configure `--tools-cwd-root`; the header must be relative and resolve to an existing directory canonically contained beneath that root. Absolute paths, `..` traversal, symlink escapes, missing paths, and files are rejected. SSH and container runtimes reject this header because local canonicalization cannot prove containment in their filesystems. This bounds only the working-directory header, not tool path arguments or shell commands
+- `x-tool-runtime`: optional; if present and nonempty, it must exactly repeat the original `--tools-runtime` value and cannot select or override an SSH host, container ID, or image. If absent or empty, the configured runtime is used. A nonempty header without a configured runtime is rejected. Execution always uses the configured runtime's server-resolved effective target
+
+Both routing headers are ignored for MCP tools. Network or Tailscale reachability alone does not authorize outbound SSH under the `llama-server` host identity.
 
 Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
@@ -289,6 +292,36 @@ The flow for downloading a new model:
 - Child process runs the download and report status back to router via stdin/out
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
+
+### Sleep mode
+
+Sleep mode was initially introduced in PR [#18228](https://github.com/ggml-org/llama.cpp/pull/18228). The main idea is to have:
+- `server_queue` keeping track of the idle timeout
+- When the timeout is detected, `server_queue` signals to `server_context_impl` that it should go into sleep
+- `server_context_impl` frees all `llama_context` and `mtmd_context`
+
+Compared to simply exiting the whole process, this approach allows accessing some read-only endpoints during sleep, while also handling wakeup-on-request. Any inference request will wake the server up.
+
+Call stack on entering sleeping:
+- `server_queue::start_loop` (main thread) sees no task for `idle_sleep_ms` --> `sleeping = true`
+- `cb0(true)` --> `server_routes::update_cached_responses`
+    - snapshots `/props`, `/models` and metrics; the model is still alive here
+- `cb1(true)` --> `server_context_impl::handle_sleeping_state`
+    - `callback_state(SERVER_STATE_SLEEPING)` --> reported to router in child mode
+    - `destroy()` --> frees `llama_context` and `mtmd_context`
+- `condition_tasks.wait` until `req_stop_sleeping`
+
+Call stack on waking up:
+- `server_res_generator` constructor (HTTP thread) --> `server_queue::wait_until_no_sleep`
+    - sets `req_stop_sleeping = true`, then waits until `sleeping == false`
+- `server_queue::start_loop` (main thread) wakes up
+- `cb1(false)` --> `server_context_impl::handle_sleeping_state`
+    - `load_model()`, which then emits `callback_state(SERVER_STATE_READY)`
+- `cb0(false)` --> `server_routes::update_cached_responses`
+    - nothing to do, the cache is only read during sleep
+- `sleeping = false` --> `notify_all` unblocks the HTTP thread, the request is handled as usual
+
+Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
 
 ### Notable Related PRs
 

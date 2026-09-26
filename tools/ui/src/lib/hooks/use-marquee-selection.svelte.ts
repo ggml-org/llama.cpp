@@ -9,6 +9,7 @@
  * matches what the user sees on screen.
  */
 
+import { UI_DATA_ATTRS } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
 
 interface UseMarqueeSelectionOptions {
@@ -18,8 +19,8 @@ interface UseMarqueeSelectionOptions {
 	orderedIds: () => string[];
 	/** Document listeners attach only while the getter returns true. */
 	enabled: () => boolean;
-	/** DOM attribute key (after the `data-` prefix) that marks selectable rows. */
-	attributeName?: () => string;
+	/** Full `data-*` attribute that marks selectable rows. */
+	dataAttr?: () => string;
 	/** Minimum pixel distance before a press becomes a marquee drag. */
 	dragThresholdPx?: number;
 }
@@ -36,16 +37,8 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	let dragMode: 'add' | 'remove' | null = null;
 	let suppressNextClick = false;
 
-	function resolveAttributeName(): string {
-		return options.attributeName?.() ?? 'conversation-row';
-	}
-
-	/**
-	 * `dataset` keys are camelCased. `data-conversation-row` -> `conversationRow`.
-	 * We resolve the attribute name once per call and read via the camelCase key.
-	 */
-	function datasetKey(key: string = resolveAttributeName()): string {
-		return key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+	function resolveDataAttr(): string {
+		return options.dataAttr?.() ?? UI_DATA_ATTRS.CONVERSATION_ROW;
 	}
 
 	function decideDragMode(startingRowId: string | null, currentlySelected: ReadonlySet<string>) {
@@ -63,43 +56,50 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 		const order = options.orderedIds();
 		const fromIdx = order.indexOf(fromId);
 		const toIdx = order.indexOf(toId);
+
 		if (fromIdx === -1 || toIdx === -1) return;
+
 		const [lo, hi] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
 		const shouldSelect = !selected.has(toId);
+
 		for (let i = lo; i <= hi; i++) {
 			const id = order[i];
+
 			if (shouldSelect) selected.add(id);
 			else selected.delete(id);
 		}
 	}
 
 	function findRowAtPoint(x: number, y: number): string | null {
-		const attr = resolveAttributeName();
-		const selector = `[data-${attr}]`;
-		const key = datasetKey(attr);
+		const attr = resolveDataAttr();
+		const selector = `[${attr}]`;
+
 		let bestMatch: HTMLElement | null = null;
 		let bestCenterDistance = Infinity;
 
 		for (const row of document.querySelectorAll<HTMLElement>(selector)) {
 			const rect = row.getBoundingClientRect();
+
 			if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
-				return row.dataset[key] ?? null;
+				return row.getAttribute(attr);
 			}
+
 			if (x >= rect.left && x <= rect.right) {
 				const centerDistance = Math.abs(y - (rect.top + rect.height / 2));
+
 				if (centerDistance < bestCenterDistance) {
 					bestCenterDistance = centerDistance;
 					bestMatch = row;
 				}
 			}
 		}
-		return bestMatch ? (bestMatch.dataset[key] ?? null) : null;
+
+		return bestMatch ? bestMatch.getAttribute(attr) : null;
 	}
 
 	function updateMarqueeRect(currentX: number, currentY: number) {
-		const attr = resolveAttributeName();
-		const selector = `[data-${attr}]`;
-		const key = datasetKey(attr);
+		const attr = resolveDataAttr();
+		const selector = `[${attr}]`;
 		const selected = options.selectedIds();
 		const left = Math.min(dragStartX, currentX);
 		const top = Math.min(dragStartY, currentY);
@@ -108,7 +108,8 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 		const visibleIds = new SvelteSet(options.orderedIds());
 
 		for (const row of document.querySelectorAll<HTMLElement>(selector)) {
-			const id = row.dataset[key];
+			const id = row.getAttribute(attr);
+
 			if (!id || !visibleIds.has(id)) continue;
 
 			const rect = row.getBoundingClientRect();
@@ -132,17 +133,22 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 
 		if (event.shiftKey && dragAnchorId !== null) {
 			const target = findRowAtPoint(event.clientX, event.clientY);
+
 			if (target && target !== mousedownRowId) rangeSelect(dragAnchorId, target);
+
 			return;
 		}
 
 		if (!isMarqueeDragging) {
 			const dx = event.clientX - dragStartX;
 			const dy = event.clientY - dragStartY;
+
 			if (Math.hypot(dx, dy) < dragThresholdPx) return;
+
 			isMarqueeDragging = true;
 			dragMode = decideDragMode(mousedownRowId, options.selectedIds());
 		}
+
 		updateMarqueeRect(event.clientX, event.clientY);
 	}
 
@@ -150,8 +156,10 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 		if (isMarqueeDragging) {
 			suppressNextClick = true;
 			const target = findRowAtPoint(event.clientX, event.clientY);
+
 			if (target) dragAnchorId = target;
 		}
+
 		isMarqueeDragging = false;
 		mouseDownActive = false;
 		mousedownRowId = null;
@@ -171,11 +179,14 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	$effect(() => {
 		if (!options.enabled()) {
 			reset();
+
 			return;
 		}
+
 		document.addEventListener('mousemove', handleDocumentMouseMove);
 		document.addEventListener('mouseup', handleDocumentMouseUp);
 		document.addEventListener('click', handleClickCapture, { capture: true });
+
 		return () => {
 			document.removeEventListener('mousemove', handleDocumentMouseMove);
 			document.removeEventListener('mouseup', handleDocumentMouseUp);
@@ -185,7 +196,9 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 
 	function rowMouseDown(id: string, event: MouseEvent) {
 		if (!options.enabled()) return;
+
 		if (event.button !== 0) return;
+
 		event.preventDefault();
 		mouseDownActive = true;
 		mousedownRowId = id;
@@ -197,10 +210,12 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 
 	function rowClick(id: string, shiftKey: boolean) {
 		if (!options.enabled()) return;
+
 		const selected = options.selectedIds();
 
 		if (shiftKey) {
 			const anchor = dragAnchorId;
+
 			if (anchor !== null && anchor !== id) {
 				rangeSelect(anchor, id);
 			} else if (selected.has(id)) {
@@ -208,12 +223,15 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 			} else {
 				selected.add(id);
 			}
+
 			dragAnchorId = id;
+
 			return;
 		}
 
 		if (selected.has(id)) selected.delete(id);
 		else selected.add(id);
+
 		dragAnchorId = id;
 	}
 
@@ -229,11 +247,11 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	}
 
 	return {
-		rowMouseDown,
-		rowClick,
-		reset,
 		get dragAnchorId() {
 			return dragAnchorId;
-		}
+		},
+		reset,
+		rowClick,
+		rowMouseDown
 	};
 }

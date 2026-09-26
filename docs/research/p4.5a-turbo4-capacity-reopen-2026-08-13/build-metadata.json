@@ -1,0 +1,5 @@
+{
+  "source_sha": "ef1c35835dd99f236b5f2470193dd565d964b9d4",
+  "build_mode": "JIT",
+  "sycl_device_arch": ""
+}

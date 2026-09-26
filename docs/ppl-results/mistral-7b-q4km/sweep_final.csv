@@ -1,0 +1,83 @@
+kv,npar,ctx,status,init_vram_free_mib,kv_buffer_mib,model_mib,wall_s,past_train_ctx,note
+f16,1,131072,FAIL_oom,?,?,?,3.8,0,hi-probe:0.00.367.605 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,66048,FIT,15473,8256.00,4095,2.4,2,
+f16,1,98560,FAIL_oom,?,?,?,3.1,0,0.00.355.331 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,82304,FIT,15473,10304.00,4095,2.4,2,
+f16,1,90432,FAIL_oom,?,?,?,2.4,0,0.00.355.760 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,86368,FAIL_oom,?,?,?,2.4,0,0.00.355.564 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,84336,FAIL_oom,?,?,?,2.5,0,0.00.354.343 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,83320,FAIL_oom,?,?,?,2.4,0,0.00.354.818 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,1,82812,FAIL_oom,?,?,?,2.4,0,0.00.362.908 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,131072,FAIL_oom,?,?,?,3.8,0,hi-probe:0.00.352.280 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,66048,FIT,15473,8256.00,4095,2.4,2,
+f16,4,98560,FAIL_oom,?,?,?,3.1,0,0.00.370.011 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,82304,FIT,15473,10304.00,4095,2.4,2,
+f16,4,90432,FAIL_oom,?,?,?,2.5,0,0.00.358.497 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,86368,FAIL_oom,?,?,?,2.4,0,0.00.356.077 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,84336,FAIL_oom,?,?,?,2.4,0,0.00.353.931 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,83320,FAIL_oom,?,?,?,2.4,0,0.00.352.323 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+f16,4,82812,FAIL_oom,?,?,?,2.4,0,0.00.350.768 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,131072,FIT,15473,8704.00,4095,2.4,2,hi-probe:
+q8_0,4,131072,FIT,15473,8704.00,4095,2.4,2,hi-probe:
+q4_0,1,131072,FIT,15473,4608.00,4095,2.4,2,hi-probe:
+q4_0,4,131072,FIT,15473,4608.00,4095,2.4,2,hi-probe:
+turbo2,1,131072,FIT,15473,2584.00,4095,2.4,2,hi-probe:
+turbo2,4,131072,FIT,15473,2584.00,4095,2.4,2,hi-probe:
+turbo3,1,131072,FIT,15473,3200.00,4095,2.4,2,hi-probe:
+turbo3,4,131072,FIT,15473,3200.00,4095,2.4,2,hi-probe:
+turbo4,1,131072,FIT,15473,4352.00,4095,2.4,2,hi-probe:
+turbo4,4,131072,FIT,15473,4352.00,4095,2.4,2,hi-probe:
+q8_0,1,262144,FAIL_oom,?,?,?,3.8,0,phase1:0.00.363.937 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,196608,FAIL_oom,?,?,?,3.0,0,0.00.351.640 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,163840,FAIL_oom,?,?,?,2.4,0,0.00.354.557 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,147456,FIT,15473,9792.00,4095,2.4,2,
+q8_0,1,155648,FIT,15473,10336.00,4095,2.4,2,
+q8_0,1,159744,FAIL_oom,?,?,?,2.4,0,0.00.357.371 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,157696,FAIL_oom,?,?,?,2.4,0,0.00.352.669 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q8_0,1,156672,FAIL_oom,?,?,?,2.4,0,0.00.349.521 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,262144,FIT,15473,9216.00,4095,2.4,2,phase1:
+q4_0,1,524288,FAIL_oom,?,?,?,3.8,0,phase1:0.00.363.009 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,327680,FAIL_oom,?,?,?,2.4,0,0.00.352.659 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,229376,FIT,15473,8064.00,4095,2.4,2,
+q4_0,1,278528,FIT,15473,9792.00,4095,2.4,2,
+q4_0,1,303104,FAIL_oom,?,?,?,2.4,0,0.00.353.817 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,290816,FIT,15473,10224.00,4095,2.4,2,
+q4_0,1,296960,FAIL_oom,?,?,?,2.4,0,0.00.355.932 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,293888,FIT,15473,10332.00,4095,2.4,2,
+q4_0,1,295424,FAIL_oom,?,?,?,2.4,0,0.00.350.841 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+q4_0,1,294656,FAIL_oom,?,?,?,2.4,0,0.00.373.796 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo2,1,262144,FIT,15473,5168.00,4095,2.4,2,phase1:
+turbo2,1,524288,FIT,15473,10336.00,4095,2.4,2,phase1:
+turbo2,1,1048576,FAIL_oom,?,?,?,4.5,0,phase1:0.00.362.076 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo2,1,589824,FAIL_oom,?,?,?,2.4,0,0.00.362.938 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo2,1,360448,FIT,15473,7106.00,4095,2.4,2,
+turbo2,1,475136,FIT,15473,9367.00,4095,2.4,2,
+turbo2,1,532480,FAIL_oom,?,?,?,2.4,0,0.00.369.815 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo2,1,503808,FIT,15473,9932.25,4095,2.4,2,
+turbo2,1,518144,FIT,15473,10214.88,4095,2.5,2,
+turbo2,1,525312,FAIL_oom,?,?,?,2.5,0,0.00.358.916 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo2,1,521728,FIT,15473,10285.53,4095,2.4,2,
+turbo2,1,523520,FIT,15473,10320.86,4095,2.4,2,
+turbo2,1,524416,FIT,15473,10341.05,4095,2.4,2,
+turbo3,1,262144,FIT,15473,6400.00,4095,2.4,2,phase1:
+turbo3,1,524288,FAIL_oom,?,?,?,3.0,0,phase1:0.00.364.506 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo3,1,327680,FIT,15473,8000.00,4095,2.4,2,
+turbo3,1,425984,FAIL_oom,?,?,?,2.4,0,0.00.356.242 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo3,1,376832,FIT,15473,9200.00,4095,2.4,2,
+turbo3,1,401408,FIT,15473,9800.00,4095,2.4,2,
+turbo3,1,413696,FIT,15473,10100.00,4095,2.4,2,
+turbo3,1,419840,FIT,15473,10250.00,4095,2.4,2,
+turbo3,1,422912,FIT,15473,10325.00,4095,2.4,2,
+turbo3,1,424448,FAIL_oom,?,?,?,2.4,0,0.00.361.592 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo3,1,423680,FIT,15473,10343.75,4095,2.4,2,
+turbo4,1,262144,FIT,15473,8704.00,4095,2.4,2,phase1:
+turbo4,1,524288,FAIL_oom,?,?,?,3.8,0,phase1:0.00.360.917 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo4,1,327680,FAIL_oom,?,?,?,2.4,0,0.00.359.543 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo4,1,229376,FIT,15473,7616.00,4095,2.4,2,
+turbo4,1,278528,FIT,15473,9248.00,4095,2.4,2,
+turbo4,1,303104,FIT,15473,10064.00,4095,2.4,2,
+turbo4,1,315392,FAIL_oom,?,?,?,2.4,0,0.00.356.056 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo4,1,309248,FIT,15473,10268.00,4095,2.4,2,
+turbo4,1,312320,FAIL_oom,?,?,?,2.4,0,0.00.362.008 W common_fit_params: failed to fit params to free device memory: n_gpu_layers already s
+turbo4,1,310784,FIT,15473,10319.00,4095,2.4,2,
+turbo4,1,311552,FIT,15473,10344.50,4095,2.4,2,

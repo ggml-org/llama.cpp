@@ -1660,7 +1660,7 @@ static void vk_moe_end(void * opaque) {
 }
 
 // ---------------------------------------------------------------------------
-// Fused SwiGLU — not implemented for v1; stock CPU path handles the node.
+// Fused SwiGLU - not implemented for v1; stock CPU path handles the node.
 // ---------------------------------------------------------------------------
 
 static void * vk_moe_fused_begin(const ggml_moe_cache_tensor_desc * up,

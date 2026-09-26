@@ -1,0 +1,91 @@
+{{ '<begin_of_document>' -}}
+{%- if custom_tools is defined %}
+    {%- set tools = custom_tools %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- endif %}
+
+{#- Extract system message #}
+{% set ns = namespace(system_prompt='') -%}
+{%- if messages[0]['role'] == 'system' %}
+    {%- if messages[0]['content'] is string %}
+        {%- set ns.system_prompt = messages[0]['content']|trim %}
+    {%- else %}
+        {%- set ns.system_prompt = messages[0]['content'][0]['text']|trim %}
+    {%- endif %}
+    {%- set messages = messages[1:] %}
+{%- else %}
+    {%- if tools is not none %}
+        {%- set ns.system_prompt = "You are a helpful assistant created by Minimax based on MiniMax-M1 model." %}
+    {%- else %}
+        {%- set ns.system_prompt = "You are a helpful assistant created by Minimax based on MiniMax-M1 model." %}
+    {%- endif %}
+{%- endif %}
+
+{#- System message #}
+{%- if ns.system_prompt != '' %}
+{{ '<beginning_of_sentence>system ai_setting=assistant\n' + ns.system_prompt + '<end_of_sentence>\n' -}}
+{%- endif %}
+
+{#- Tools configuration #}
+{%- if tools is not none %}
+{{ '<beginning_of_sentence>system tool_setting=tools\nYou are provided with these tools:\n<tools>\n' -}}
+{%- for tool in tools %}
+{{ tool | tojson ~ '\n' -}}
+{%- endfor %}
+{{ '</tools>\n\nIf you need to call tools, please respond with <tool_calls></tool_calls> XML tags, and provide tool-name and json-object of arguments, following the format below:\n<tool_calls>\n{"name": <tool-name>, "arguments": <args-json-object>}\n...\n</tool_calls><end_of_sentence>\n' -}}
+{%- endif %}
+
+{#- Process messages #}
+{%- for message in messages %}
+    {%- if not (message.role == 'ipython' or message.role == 'tool' or 'tool_calls' in message) %}
+        {%- if message['role'] == 'user' %}
+{{ '<beginning_of_sentence>user name=user\n' -}}
+{%- if message['content'] is string %}
+{{ message['content']|trim -}}
+{%- else %}
+{%- for content in message['content'] %}
+{%- if content['type'] == 'text' %}
+{{ content['text']|trim -}}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+{{ '<end_of_sentence>\n' -}}
+        {%- elif message['role'] == 'assistant' %}
+{{ '<beginning_of_sentence>ai name=assistant\n' -}}
+{%- if message['content'] is string %}
+{{ message['content']|trim -}}
+{%- else %}
+{%- for content in message['content'] | selectattr('type', 'equalto', 'text') %}
+{{ content['text']|trim -}}
+{%- endfor %}
+{%- endif %}
+{{ '<end_of_sentence>\n' -}}
+        {%- endif %}
+    {%- elif 'tool_calls' in message %}
+{{ '<beginning_of_sentence>ai name=assistant\n<tool_calls>\n' -}}
+{%- for tool_call in message.tool_calls %}
+{{ '{"name": "' + tool_call.function.name + '", "arguments": ' + tool_call.function.arguments | tojson + '}\n' -}}
+{%- endfor %}
+{{ '</tool_calls><end_of_sentence>\n' -}}
+    {%- elif message.role == "tool" or message.role == "ipython" %}
+{{ '<beginning_of_sentence>tool name=tools\n' -}}
+{%- if message.content is string %}
+{{ 'tool result: ' + message.content + '\n\n' -}}
+{%- else %}
+{%- for content in message['content'] %}
+{%- if content['type'] == 'text' %}
+{{ 'tool result: ' + content['text'] + '\n\n' -}}
+{%- elif content.get('name') %}
+{{ 'tool name: ' + content['name'] + '\ntool result: ' + content['text'] + '\n\n' -}}
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+{{ '<end_of_sentence>\n' -}}
+    {%- endif %}
+{%- endfor %}
+
+{%- if add_generation_prompt %}
+{{ '<beginning_of_sentence>ai name=assistant\n' -}}
+{%- endif %}

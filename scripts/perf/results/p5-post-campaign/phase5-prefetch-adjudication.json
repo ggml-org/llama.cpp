@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "source_commit": "96af87126",
+  "baseline_commit": "d66649dae2f877a572269b84aaeefde9e8ad4780",
+  "held_stack": {
+    "oneapi": "2026.0.0.20260331",
+    "igc": "2.36.3",
+    "compute_runtime": "26.22.38646.4-1.1",
+    "level_zero_loader": "1.28.6-1.1",
+    "device": "Intel Arc A770 DG2/acm-g10",
+    "driver": "i915"
+  },
+  "experiment": "regular SYCL q8_0 VEC K/V prefetch",
+  "candidate_space": [
+    {
+      "arm": "d1-l1",
+      "source": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork-p5-post/scripts/perf/results/p5-post-campaign/phase5-prefetch-d1-l1/product.json",
+      "all_cells_valid": true,
+      "new_i915_faults": [],
+      "tg128": [
+        {
+          "depth": 0,
+          "paired_median_pct": 0.09952639151260545,
+          "paired_ci95_pct": 0.20346542050510774,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": -0.6167295153392871,
+          "paired_ci95_pct": 0.5354194327755287,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": -0.9023444731966257,
+          "paired_ci95_pct": 0.5853114521729148,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.9974232152739404,
+          "paired_ci95_pct": 0.06330990046111275,
+          "pairs": 5
+        }
+      ],
+      "pp512": [
+        {
+          "depth": 0,
+          "paired_median_pct": 0.5434130798460668,
+          "paired_ci95_pct": 2.806254454736997,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": 0.05636201508680827,
+          "paired_ci95_pct": 0.28193118862981503,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": 0.13822356097183963,
+          "paired_ci95_pct": 0.2825569375332124,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": 0.037593295453763886,
+          "paired_ci95_pct": 0.21885573115939844,
+          "pairs": 5
+        }
+      ]
+    },
+    {
+      "arm": "d2-l1",
+      "source": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork-p5-post/scripts/perf/results/p5-post-campaign/phase5-prefetch-d2-l1/product.json",
+      "all_cells_valid": true,
+      "new_i915_faults": [],
+      "tg128": [
+        {
+          "depth": 0,
+          "paired_median_pct": -0.12994329528922544,
+          "paired_ci95_pct": 0.24913718883511574,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": -0.33921787178675666,
+          "paired_ci95_pct": 0.10718649617402011,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": -0.6378411179995047,
+          "paired_ci95_pct": 0.13329675066509955,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.9499335657393693,
+          "paired_ci95_pct": 0.05390331619173377,
+          "pairs": 5
+        }
+      ],
+      "pp512": [
+        {
+          "depth": 0,
+          "paired_median_pct": -0.38578067486045864,
+          "paired_ci95_pct": 1.2083407879011194,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": 0.0017339129201987546,
+          "paired_ci95_pct": 0.041461719191514604,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": 0.06883755044275741,
+          "paired_ci95_pct": 0.11719205159547968,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.06878794114487663,
+          "paired_ci95_pct": 0.11298542962168899,
+          "pairs": 5
+        }
+      ]
+    },
+    {
+      "arm": "d1-l2",
+      "source": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork-p5-post/scripts/perf/results/p5-post-campaign/phase5-prefetch-d1-l2/product.json",
+      "all_cells_valid": true,
+      "new_i915_faults": [],
+      "tg128": [
+        {
+          "depth": 0,
+          "paired_median_pct": -0.18411442743417883,
+          "paired_ci95_pct": 0.2449100830109404,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": -0.19722250279611275,
+          "paired_ci95_pct": 0.17288172051430348,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": -0.57176050991401,
+          "paired_ci95_pct": 0.08903142618418369,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -1.0054806661953908,
+          "paired_ci95_pct": 0.1086271487501964,
+          "pairs": 5
+        }
+      ],
+      "pp512": [
+        {
+          "depth": 0,
+          "paired_median_pct": -0.3936212243245696,
+          "paired_ci95_pct": 0.7102757429111226,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": 0.0001638641513368455,
+          "paired_ci95_pct": 0.15579582814896661,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": -0.016289179690764932,
+          "paired_ci95_pct": 0.1853713679812853,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.029828310837409777,
+          "paired_ci95_pct": 0.11354933753808565,
+          "pairs": 5
+        }
+      ]
+    },
+    {
+      "arm": "d2-l2",
+      "source": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork-p5-post/scripts/perf/results/p5-post-campaign/phase5-prefetch-d2-l2/product.json",
+      "all_cells_valid": true,
+      "new_i915_faults": [],
+      "tg128": [
+        {
+          "depth": 0,
+          "paired_median_pct": -0.17984758319748995,
+          "paired_ci95_pct": 0.20826033447924008,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": -0.37633737304741954,
+          "paired_ci95_pct": 0.1640906216151332,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": -0.7118171296574438,
+          "paired_ci95_pct": 0.172299555902796,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.9611145658779408,
+          "paired_ci95_pct": 0.11598819465838281,
+          "pairs": 5
+        }
+      ],
+      "pp512": [
+        {
+          "depth": 0,
+          "paired_median_pct": 0.13697378583357178,
+          "paired_ci95_pct": 0.19066882819956874,
+          "pairs": 5
+        },
+        {
+          "depth": 4096,
+          "paired_median_pct": 0.10317084722144543,
+          "paired_ci95_pct": 0.06376417743229777,
+          "pairs": 5
+        },
+        {
+          "depth": 8192,
+          "paired_median_pct": 0.1026770296024937,
+          "paired_ci95_pct": 0.1939568544485658,
+          "pairs": 5
+        },
+        {
+          "depth": 16384,
+          "paired_median_pct": -0.08588507737016249,
+          "paired_ci95_pct": 0.18264535053862177,
+          "pairs": 5
+        }
+      ]
+    }
+  ],
+  "engagement": {
+    "spirv_prefetch_instructions": true,
+    "evidence": "build-prefetch-d1-l1/q8-prefetch.spvasm contains repeated prefetch builtins; /tmp/q8-prefetch-igc/OCL_asm9873580d8289cb4d_1_simd16_entry_0022.asm contains added LSC load sends for the D128 q8_0/q8_0 VEC kernel"
+  },
+  "correctness": {
+    "command": "ONEAPI_DEVICE_SELECTOR=level_zero:0 GGML_SYCL_Q8_KV_QUANTS_FIRST=1 ./build-prefetch-d1-l1/bin/test-sycl-turbo-correctness",
+    "summary": "0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP"
+  },
+  "decision": "KILL_AND_REVERT",
+  "reason": "All four engaged arms miss the >=3% promotion threshold. Every arm regresses deep-context tg128, with d16384 paired medians from -0.95% to -1.01%. No arm has a positive lower confidence bound at any deep depth.",
+  "retained_arm": null,
+  "default_change": false
+}

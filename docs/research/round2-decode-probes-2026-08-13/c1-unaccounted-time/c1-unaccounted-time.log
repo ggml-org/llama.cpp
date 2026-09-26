@@ -1,0 +1,13 @@
+GGML_SYCL_FA_ROUTE: route=VEC phase=decode q_tokens=1 head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 k_quants_first=1 v_quants_first=1
+GGML_SYCL_FA_ROUTE: route=TILE phase=prefill q_tokens=512 head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 k_quants_first=1 v_quants_first=1
+| model                          |       size |     params | backend    | ngl | type_k | type_v |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | -----: | --: | --------------: | -------------------: |
+| llama 7B Q4_K - Medium         |   4.07 GiB |     7.24 B | SYCL       |  99 |   q8_0 |   q8_0 |   1 |  tg128 @ d16384 |         20.24 ± 0.00 |
+GGML_SYCL_FA_PROFILE: route=VEC layout=quants-first launches=4128 conversion_us=67 conversion_bytes=0 stage1_us=1751660 combine_us=204152 gqa=4 repeated_packed_kv_bytes=444985245696 parallel_blocks=16 ntiles_total=32 blocks_total=512 work_items_total=65536 max_wg_per_cu=16 nsm=32
+GGML_SYCL_FA_GEOMETRY: route=VEC phase=decode type_k=q8_0 launches=4128 parallel_blocks=16 ntiles_total=32 blocks_total=512 work_items_total=65536 max_wg_per_cu=16 nsm=32 stream_k=0
+GGML_SYCL_FA_GEOMETRY: route=TILE phase=prefill type_k=q8_0 launches=1024 parallel_blocks=1 ntiles_total=4096 blocks_total=4096 work_items_total=524288 max_wg_per_cu=16 nsm=32 stream_k=0
+GGML_SYCL_GRAPH_PROFILE: graph_calls=0 direct_calls=161 nodes=0 prepare_us=0 record_us=0 finalize_calls=0 finalize_us=0 update_calls=0 update_fallbacks=0 update_us=0 submit_us=0 wait_us=0 direct_enqueue_us=7415188
+GGML_SYCL_FFN_FUSION_PROFILE: graph_calls=161 glu_nodes=5152 structural_matches=5152 eligible_matches=5152 decode_eligible_matches=4136 batched_eligible_matches=1016 reject_not_mul_mat=0 reject_src_mismatch=0 reject_glu_op=0 reject_type=0 reject_shape=0 reject_non_contig=0
+GGML_SYCL_ROPE_FUSION_PROFILE: graph_calls=161 rope_nodes=10304 structural_matches=5152 eligible_matches=0 decode_eligible_matches=0 batched_eligible_matches=0 eligible_index_rows=0 reject_ne3=0 reject_set_rows_type=5152 reject_index_type=0 reject_view_shape=0 reject_rope_mode=0
+
+build: 80d52e708 (10119)

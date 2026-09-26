@@ -30,8 +30,12 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+
+if (COMMAND llama_build_chat_test)
+    llama_build_chat_test()
+endif()
 
 # llama-server-impl: server logic, reusable by app
 
@@ -47,8 +51,10 @@ add_library(${TARGET}
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ../mtmd ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
+add_dependencies(${TARGET} llama-ui-assets)
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
@@ -63,3 +69,13 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_link_libraries(${TARGET} PRIVATE llama-server-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# Register this after the server libraries exist; tests/ is configured before tools/.
+if (LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
+    llama_build_and_test("${PROJECT_SOURCE_DIR}/tests/test-server-cors-proxy-policy.cpp")
+    target_include_directories(test-server-cors-proxy-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(test-server-cors-proxy-policy PRIVATE llama-server-impl)
+    if (WIN32)
+        target_link_libraries(test-server-cors-proxy-policy PRIVATE ws2_32)
+    endif()
+endif()

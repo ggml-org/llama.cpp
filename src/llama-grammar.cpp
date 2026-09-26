@@ -11,6 +11,10 @@
 #include <stdexcept>
 
 #define MAX_REPETITION_THRESHOLD 2000
+// a bounded repetition with more required or more optional copies than this
+// is encoded logarithmically (llama_grammar_log_repetition) instead of with
+// one chained rule per copy
+#define LINEAR_REPETITION_LIMIT 32
 //
 // helpers
 //
@@ -172,6 +176,7 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
             case '"':
             case '[':
             case ']':
+            case '-':
                       return std::make_pair(src[1], src + 2);
             default:
                       throw std::runtime_error(std::string("unknown escape at ") + src);
@@ -193,7 +198,11 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
     if (*pos == '[') {
         pos++;
         const char * int_end = parse_int(pos);
-        uint32_t token_id = std::stoul(std::string(pos, int_end - pos));
+        unsigned long id = std::stoul(std::string(pos, int_end - pos));
+        if (id > std::numeric_limits<uint32_t>::max()) {
+            throw std::runtime_error(std::string("parsed token id is too big at ") + pos);
+        }
+        uint32_t token_id = static_cast<uint32_t>(id);
         pos = int_end;
         if (*pos != ']') {
             throw std::runtime_error(std::string("expecting ']' at ") + pos);
@@ -448,6 +457,91 @@ const char * llama_grammar_parser::parse_alternates(
     return pos;
 }
 
+// Exact encoding of S{m,n} for large m or n - m. Instead of one chained rule
+// per copy it builds
+//
+//   E(1)  ::= S                          exactly one copy
+//   E(2k) ::= E(k) E(k)                  exactly 2k, one rule per power of two
+//   E(m)   = E(2^a) E(2^b) ...           one factor per set bit of m
+//   T(1)  ::= S |                        at most one copy
+//   T(k)  ::= E(p) T(k - p) | T(p - 1)   at most k, p = largest power of two <= k
+//
+// so S{m,n} becomes E(m) T(n - m) with O(log n) rules. The two alternatives of
+// T(k) accept disjoint counts (at least p, at most p - 1), which keeps the
+// grammar unambiguous: while both are still open the sampler carries one extra
+// stack per level, log2(k) in total, where the chained form carries one.
+struct llama_grammar_log_repetition {
+    llama_grammar_parser &       parser;
+    const std::string &          rule_name;
+    std::vector<uint32_t>        exact_ids; // exact_ids[i] = E(2^i), exact_ids[0] = S
+    std::map<uint64_t, uint32_t> upto_ids;  // T(k)
+
+    llama_grammar_log_repetition(llama_grammar_parser & parser, const std::string & rule_name, const llama_grammar_rule & symbol)
+        : parser(parser), rule_name(rule_name) {
+        llama_grammar_rule base(symbol);
+        base.push_back({LLAMA_GRETYPE_END, 0});
+        const uint32_t base_id = parser.generate_symbol_id(rule_name);
+        parser.add_rule(base_id, base);
+        exact_ids.push_back(base_id);
+    }
+
+    // E(2^bit)
+    uint32_t exact(int bit) {
+        while ((int) exact_ids.size() <= bit) {
+            const uint32_t half = exact_ids.back();
+            const uint32_t id   = parser.generate_symbol_id(rule_name);
+            parser.add_rule(id, {
+                {LLAMA_GRETYPE_RULE_REF, half},
+                {LLAMA_GRETYPE_RULE_REF, half},
+                {LLAMA_GRETYPE_END, 0},
+            });
+            exact_ids.push_back(id);
+        }
+        return exact_ids[bit];
+    }
+
+    // append E(count) to rule
+    void emit_exact(uint64_t count, llama_grammar_rule & rule) {
+        for (int bit = 63; bit >= 0; --bit) {
+            if ((count >> bit) & 1) {
+                rule.push_back({LLAMA_GRETYPE_RULE_REF, exact(bit)});
+            }
+        }
+    }
+
+    // T(k) for k >= 1
+    uint32_t upto(uint64_t k) {
+        GGML_ASSERT(k >= 1);
+        const auto it = upto_ids.find(k);
+        if (it != upto_ids.end()) {
+            return it->second;
+        }
+        const uint32_t id = parser.generate_symbol_id(rule_name);
+        upto_ids[k] = id;
+
+        llama_grammar_rule rule;
+        if (k == 1) {
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, exact_ids[0]});
+            rule.push_back({LLAMA_GRETYPE_ALT, 0});
+        } else {
+            int bit = 63;
+            while (((k >> bit) & 1) == 0) {
+                --bit;
+            }
+            const uint64_t p = (uint64_t) 1 << bit;
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, exact(bit)});
+            if (k - p > 0) {
+                rule.push_back({LLAMA_GRETYPE_RULE_REF, upto(k - p)});
+            }
+            rule.push_back({LLAMA_GRETYPE_ALT, 0});
+            rule.push_back({LLAMA_GRETYPE_RULE_REF, upto(p - 1)});
+        }
+        rule.push_back({LLAMA_GRETYPE_END, 0});
+        parser.add_rule(id, rule);
+        return id;
+    }
+};
+
 const char * llama_grammar_parser::parse_sequence(
         const char         * src,
         const std::string  & rule_name,
@@ -481,6 +575,8 @@ const char * llama_grammar_parser::parse_sequence(
         // S?     --> S{0,1}
         //        --> S'
         //            S'     ::= S |
+        // Bounds above LINEAR_REPETITION_LIMIT keep the same meaning but use
+        // the logarithmic rules of llama_grammar_log_repetition instead.
 
         llama_grammar_rule prev_rule(rule.begin() + last_sym_start, rule.end());
         // Calculate the total number of rules that will be generated by this repetition
@@ -491,8 +587,29 @@ const char * llama_grammar_parser::parse_sequence(
             total_rules = min_times;
         }
 
-        if (n_prev_rules * total_rules >= MAX_REPETITION_THRESHOLD) {
-            throw std::runtime_error("number of rules that are going to be repeated multiplied by the new repetition exceeds sane defaults, please reduce the number of repetitions or rule complexity");
+        const uint64_t n_opt_total = no_max ? 0 : max_times - min_times;
+        if (min_times > LINEAR_REPETITION_LIMIT || n_opt_total > LINEAR_REPETITION_LIMIT ||
+            n_prev_rules * total_rules >= MAX_REPETITION_THRESHOLD) {
+            // S{m,n} --> E(m) T(n - m)
+            rule.resize(last_sym_start);
+            llama_grammar_log_repetition enc(*this, rule_name, prev_rule);
+            enc.emit_exact(min_times, rule);
+            if (no_max) {
+                // S{m,}  --> E(m) S'
+                //            S'     ::= S S' |
+                const uint32_t rec_rule_id = generate_symbol_id(rule_name);
+                add_rule(rec_rule_id, {
+                    {LLAMA_GRETYPE_RULE_REF, enc.exact_ids[0]},
+                    {LLAMA_GRETYPE_RULE_REF, rec_rule_id},
+                    {LLAMA_GRETYPE_ALT, 0},
+                    {LLAMA_GRETYPE_END, 0},
+                });
+                rule.push_back({LLAMA_GRETYPE_RULE_REF, rec_rule_id});
+            } else if (n_opt_total > 0) {
+                rule.push_back({LLAMA_GRETYPE_RULE_REF, enc.upto(n_opt_total)});
+            }
+            n_prev_rules = 2 + enc.exact_ids.size() + enc.upto_ids.size();
+            return;
         }
 
         if (min_times == 0) {
@@ -648,8 +765,8 @@ const char * llama_grammar_parser::parse_sequence(
             } else {
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
-            if (min_times > MAX_REPETITION_THRESHOLD) {
-                throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
+            if (max_times != UINT64_MAX && max_times < min_times) {
+                throw std::runtime_error(std::string("repetition maximum is below its minimum at ") + pos);
             }
             if (max_times != UINT64_MAX && max_times > MAX_REPETITION_THRESHOLD) {
                 max_times = UINT64_MAX;
@@ -870,17 +987,18 @@ static void llama_grammar_advance_stack(
     std::set<llama_grammar_stack, decltype(stack_cmp)> seen(stack_cmp);
 
     while (!todo.empty()) {
-        llama_grammar_stack curr_stack = std::move(todo.back());
+        llama_grammar_stack curr_stack_candidate = std::move(todo.back());
         todo.pop_back();
 
-        if (seen.find( curr_stack) != seen.end()) {
+        auto [curr_stack_it, inserted] = seen.insert(std::move(curr_stack_candidate));
+        if (!inserted) {
             continue;
         }
-        seen.insert(curr_stack);
+        const llama_grammar_stack & curr_stack = *curr_stack_it;
 
         if (curr_stack.empty()) {
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             continue;
         }
@@ -923,7 +1041,7 @@ static void llama_grammar_advance_stack(
         case LLAMA_GRETYPE_TOKEN_NOT:
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
                 // only add the stack if it's not a duplicate of one we already have
-                new_stacks.emplace_back(std::move(curr_stack));
+                new_stacks.emplace_back(curr_stack);
             }
             break;
         default:

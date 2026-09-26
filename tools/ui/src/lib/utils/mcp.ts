@@ -1,40 +1,50 @@
-import type { MCPServerSettingsEntry, MCPResourceContent, MCPResourceInfo } from '$lib/types';
+import { extractRootDomain } from './url';
 import {
-	MCPTransportType,
-	MCPLogLevel,
-	UrlProtocol,
-	MimeTypePrefix,
-	MimeTypeIncludes,
-	UriPattern,
-	MimeTypeText
-} from '$lib/enums';
-import {
-	MCP_SERVER_ID_PREFIX,
-	IMAGE_FILE_EXTENSION_REGEX,
-	CODE_FILE_EXTENSION_REGEX,
-	TEXT_FILE_EXTENSION_REGEX,
-	PROTOCOL_PREFIX_REGEX,
-	FILE_EXTENSION_REGEX,
-	DISPLAY_NAME_SEPARATOR_REGEX,
-	PATH_SEPARATOR,
-	RESOURCE_TEXT_CONTENT_SEPARATOR,
-	DEFAULT_RESOURCE_FILENAME,
-	MCP_SSE_ENDPOINT,
-	MCP_SSE_ENDPOINT_SLASH,
-	MCP_SSE_ENDPOINT_QUERY
-} from '$lib/constants';
-import {
+	AlertTriangle,
+	Code,
 	Database,
 	File,
 	FileText,
 	Image,
-	Code,
 	Info,
-	AlertTriangle,
 	XCircle
 } from '@lucide/svelte';
-import type { Component } from 'svelte';
+import {
+	CODE_FILE_EXTENSION_REGEX,
+	DEFAULT_RESOURCE_FILENAME,
+	DISPLAY_NAME_SEPARATOR_REGEX,
+	EXPECTED_THEMED_ICON_PAIR_COUNT,
+	FILE_EXTENSION_REGEX,
+	IMAGE_FILE_EXTENSION_REGEX,
+	MCP_ALLOWED_ICON_MIME_TYPES,
+	MCP_SERVER_ID_PREFIX,
+	MCP_SSE,
+	MIME_TYPE_PREFIXES,
+	MIME_TYPE_SUBSTRINGS,
+	PATH_SEPARATOR,
+	PROTOCOL_PREFIX_REGEX,
+	RESOURCE_TEXT_CONTENT_SEPARATOR,
+	TEXT_FILE_EXTENSION_REGEX,
+	URI_PATTERNS
+} from '$lib/constants';
+import {
+	ColorMode,
+	HealthCheckStatus,
+	MCPLogLevel,
+	MCPTransportType,
+	MimeTypeText,
+	UrlProtocol
+} from '$lib/enums';
+import type {
+	HealthCheckState,
+	MCPResourceContent,
+	MCPResourceIcon,
+	MCPResourceInfo,
+	MCPServerDisplayInfo,
+	MCPServerSettingsEntry
+} from '$lib/types';
 import type { MimeTypeUnion } from '$lib/types/common';
+import type { Component } from 'svelte';
 
 /**
  * Detects the MCP transport type from a URL.
@@ -51,9 +61,9 @@ export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	}
 
 	if (
-		normalized.endsWith(MCP_SSE_ENDPOINT) ||
-		normalized.endsWith(MCP_SSE_ENDPOINT_SLASH) ||
-		normalized.includes(MCP_SSE_ENDPOINT_QUERY)
+		normalized.endsWith(MCP_SSE.ENDPOINT) ||
+		normalized.endsWith(MCP_SSE.ENDPOINT_SLASH) ||
+		normalized.includes(MCP_SSE.ENDPOINT_QUERY)
 	) {
 		return MCPTransportType.SSE;
 	}
@@ -73,6 +83,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 
 	if (typeof rawServers === 'string') {
 		const trimmed = rawServers.trim();
+
 		if (!trimmed) return [];
 
 		try {
@@ -97,12 +108,12 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 
 		return {
-			id,
-			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-			url,
-			name: (entry as { name?: string })?.name,
 			displayName: (entry as { displayName?: string })?.displayName,
+			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			headers: headers || undefined,
+			id,
+			name: (entry as { name?: string })?.name,
+			url,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});
@@ -149,7 +160,7 @@ export function getMcpLogLevelClass(level: MCPLogLevel): string {
  * @returns True if the MIME type starts with 'image/'
  */
 export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
-	return mimeType?.startsWith(MimeTypePrefix.IMAGE) ?? false;
+	return mimeType?.startsWith(MIME_TYPE_PREFIXES.IMAGE) ?? false;
 }
 
 /**
@@ -161,6 +172,7 @@ export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
 export function parseResourcePath(uri: string): string[] {
 	try {
 		const withoutProtocol = uri.replace(PROTOCOL_PREFIX_REGEX, '');
+
 		return withoutProtocol.split(PATH_SEPARATOR).filter((p) => p.length > 0);
 	} catch {
 		return [uri];
@@ -176,6 +188,7 @@ export function parseResourcePath(uri: string): string[] {
  */
 export function getDisplayName(pathPart: string): string {
 	const withoutExt = pathPart.replace(FILE_EXTENSION_REGEX, '');
+
 	return withoutExt
 		.split(DISPLAY_NAME_SEPARATOR_REGEX)
 		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -191,6 +204,7 @@ export function getDisplayName(pathPart: string): string {
 export function getResourceDisplayName(resource: MCPResourceInfo): string {
 	try {
 		const parts = parseResourcePath(resource.uri);
+
 		return parts[parts.length - 1] || resource.name || resource.uri;
 	} catch {
 		return resource.name || resource.uri;
@@ -207,10 +221,11 @@ export function getResourceDisplayName(resource: MCPResourceInfo): string {
 export function isCodeResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
+
 	return (
-		mime.includes(MimeTypeIncludes.JSON) ||
-		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JSON) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT) ||
 		CODE_FILE_EXTENSION_REGEX.test(u)
 	);
 }
@@ -225,7 +240,8 @@ export function isCodeResource(mimeType?: MimeTypeUnion, uri?: string): boolean 
 export function isImageResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
-	return mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u);
+
+	return mime.startsWith(MIME_TYPE_PREFIXES.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u);
 }
 
 /**
@@ -239,24 +255,24 @@ export function getResourceIcon(mimeType?: MimeTypeUnion, uri?: string): Compone
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
 
-	if (mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
+	if (mime.startsWith(MIME_TYPE_PREFIXES.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
 		return Image;
 	}
 
 	if (
-		mime.includes(MimeTypeIncludes.JSON) ||
-		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JSON) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT) ||
 		CODE_FILE_EXTENSION_REGEX.test(u)
 	) {
 		return Code;
 	}
 
-	if (mime.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
+	if (mime.includes(MIME_TYPE_PREFIXES.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
 		return FileText;
 	}
 
-	if (u.includes(UriPattern.DATABASE_KEYWORD) || u.includes(UriPattern.DATABASE_SCHEME)) {
+	if (u.includes(URI_PATTERNS.DATABASE_KEYWORD) || u.includes(URI_PATTERNS.DATABASE_SCHEME)) {
 		return Database;
 	}
 
@@ -271,6 +287,7 @@ export function getResourceIcon(mimeType?: MimeTypeUnion, uri?: string): Compone
  */
 export function getResourceTextContent(content: MCPResourceContent[] | null | undefined): string {
 	if (!content) return '';
+
 	return content
 		.filter((c): c is { uri: string; mimeType?: MimeTypeUnion; text: string } => 'text' in c)
 		.map((c) => c.text)
@@ -308,10 +325,140 @@ export function downloadResourceContent(
 	const blob = new Blob([text], { type: mimeType });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
+
 	a.href = url;
 	a.download = filename;
 	document.body.appendChild(a);
 	a.click();
 	document.body.removeChild(a);
 	URL.revokeObjectURL(url);
+}
+
+/**
+ * Validates that an icon URI uses a safe scheme (https: or data:).
+ */
+function isValidMcpIconUri(src: string): boolean {
+	try {
+		if (src.startsWith(UrlProtocol.DATA)) return true;
+
+		const url = new URL(src);
+
+		return url.protocol === UrlProtocol.HTTPS;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Selects the best icon URL from an MCP icons array.
+ * Follows security guidelines from the MCP specification:
+ * - Only allows https: and data: URIs
+ * - Filters to supported MIME types
+ *
+ * Selection priority:
+ * 1. Icon matching the current color scheme (dark/light)
+ * 2. Universal icon (no theme specified); if exactly 2, assumes [0]=light, [1]=dark
+ * 3. First valid icon as last resort
+ */
+export function getMcpIconUrl(icons: MCPResourceIcon[] | undefined, isDark = false): string | null {
+	if (!icons?.length) return null;
+
+	const validIcons = icons.filter((icon) => {
+		if (!icon.src || !isValidMcpIconUri(icon.src)) return false;
+
+		if (icon.mimeType && !MCP_ALLOWED_ICON_MIME_TYPES.has(icon.mimeType)) return false;
+
+		return true;
+	});
+
+	if (validIcons.length === 0) return null;
+
+	const preferredTheme = isDark ? ColorMode.DARK : ColorMode.LIGHT;
+	// 1. Prefer icon explicitly matching the current color scheme
+	const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
+
+	if (themedIcon) return themedIcon.src;
+
+	// 2. Handle universal icons (no theme specified)
+	const universalIcons = validIcons.filter((icon) => !icon.theme);
+
+	if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
+		// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
+		return universalIcons[isDark ? 1 : 0].src;
+	}
+
+	if (universalIcons.length > 0) {
+		return universalIcons[0].src;
+	}
+
+	// 3. Last resort: use opposite-theme icon
+	return validIcons[0].src;
+}
+
+/**
+ * Construct a fallback favicon URL from the MCP server URL.
+ * e.g. https://mcp.example.com/sse -> https://example.com/favicon.ico
+ */
+export function getMcpServerFaviconFallback(serverUrl: string): string | null {
+	try {
+		const url = new URL(serverUrl);
+		const rootDomain = extractRootDomain(url);
+
+		if (!rootDomain) return null;
+
+		const origin = `${url.protocol}//${rootDomain}`;
+		const candidates = ['favicon.ico', 'favicon.png'];
+
+		for (const path of candidates) {
+			const faviconUrl = `${origin}/${path}`;
+
+			if (isValidMcpIconUri(faviconUrl)) {
+				return faviconUrl;
+			}
+		}
+	} catch {
+		// Invalid URL, return null
+	}
+
+	return null;
+}
+
+/**
+ * Resolves the raw label for a server: user-defined display name first,
+ * then server-reported title or name when the health check succeeded,
+ * then the configured name (admin baseline or legacy data), then URL.
+ */
+function getMcpServerBaseLabel(
+	server: MCPServerDisplayInfo,
+	healthState?: HealthCheckState
+): string {
+	if (server.displayName) return server.displayName;
+
+	if (healthState?.status === HealthCheckStatus.SUCCESS)
+		return (
+			healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
+		);
+
+	return server.name || server.url;
+}
+
+/**
+ * Returns the display label for a server, suffixed with a positional
+ * counter when several configured servers resolve to the same base label
+ * (e.g. two endpoints of the same host reporting an identical name).
+ * Numbering follows config order, so it is stable across renders.
+ */
+export function getMcpServerLabel(
+	server: MCPServerDisplayInfo,
+	servers: MCPServerDisplayInfo[],
+	healthChecks: Record<string, HealthCheckState>
+): string {
+	const label = getMcpServerBaseLabel(server, healthChecks[server.id]);
+	const twins = servers.filter((s) => getMcpServerBaseLabel(s, healthChecks[s.id]) === label);
+
+	if (twins.length < 2) return label;
+
+	const position = twins.findIndex((s) => s.id === server.id);
+
+	return position < 0 ? label : `${label} (${position + 1})`;
 }

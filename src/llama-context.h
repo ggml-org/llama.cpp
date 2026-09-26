@@ -11,6 +11,7 @@
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
 
+#include <array>
 #include <map>
 #include <vector>
 
@@ -56,6 +57,8 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    ggml_status last_sync_status = GGML_STATUS_SUCCESS;
+
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -119,7 +122,6 @@ struct llama_context {
     void detach_threadpool();
 
     void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
-    void set_decode_phase(enum llama_decode_phase phase);
 
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
 
@@ -152,6 +154,10 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    int encode(const llama_batch_ext & batch_inp);
+    int decode(const llama_batch_ext & batch_inp);
+
+    // compat version
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
@@ -266,6 +272,8 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
+    llm_graph_result * get_gf_res_prev();
+
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
@@ -292,51 +300,6 @@ private:
     const llama_model & model;
 
     llama_cparams cparams;
-
-    struct kv_stream_phase_arena_owner {
-        struct layout {
-            size_t kv_bytes = 0;
-            size_t compute_offset = 0;
-            size_t compute_bytes = 0;
-            uint32_t ring_slots = 0;
-            uint32_t resident_pages_per_layer = 0;
-            std::vector<size_t> backend_sizes;
-        };
-
-        void * arena = nullptr;
-        void (*free_fn)(void *) = nullptr;
-        bool (*set_compute_fn)(void *, size_t, size_t) = nullptr;
-        ggml_backend_buffer_type_t (*buffer_type_fn)(void *) = nullptr;
-        bool (*graph_reset_fn)(ggml_backend_t) = nullptr;
-        ggml_backend_dev_t device = nullptr;
-        ggml_backend_buffer_type_t buffer_type = nullptr;
-        size_t arena_bytes = 0;
-        size_t page_bytes = 0;
-        size_t conversion_bytes = 0;
-        uint32_t layer_count = 0;
-        uint32_t minimum_ring_slots = 8;
-        size_t backend_index = SIZE_MAX;
-        size_t max_nodes = 0;
-        size_t current_kv_bytes = 0;
-        size_t current_compute_offset = 0;
-        size_t current_compute_bytes = 0;
-        uint32_t current_ring_slots = 0;
-        bool decode = false;
-        bool configured = false;
-        layout prefill;
-        layout token_generation;
-
-        ~kv_stream_phase_arena_owner() {
-            if (arena != nullptr) {
-                free_fn(arena);
-            }
-        }
-    };
-
-    bool kv_stream_switch_phase(bool decode, uint32_t active_tokens);
-
-    // Declared before memory and scheduler so their arena leases are released first.
-    kv_stream_phase_arena_owner kv_stream_phase_arena;
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
@@ -387,6 +350,7 @@ private:
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;
 
+    uint32_t n_input_tensors = 0; // number of tensors marked as input during the last graph reserve
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
@@ -421,8 +385,11 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    llm_graph_result_ptr gf_res_prev;
+    // Separate arenas give batches with and without outputs distinct CUDA graph cache keys.
+    std::array<llm_graph_result_ptr, 2> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
+
+    llm_graph_result * gf_res_prev_active = nullptr;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
@@ -434,9 +401,6 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
-
-    enum llama_decode_phase decode_phase =
-        LLAMA_DECODE_PHASE_AUTOMATIC;
 
     // perf
     mutable int64_t t_start_us  = 0;

@@ -89,7 +89,7 @@ int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
+    // Ignore SIGPIPE so the server does not crash if a child (MCP server, tools runtime) exits while we are writing to its stdin
     signal(SIGPIPE, SIG_IGN);
 #endif
 
@@ -102,14 +102,15 @@ int llama_server(int argc, char ** argv) {
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
     server_stream_session_manager_start();
 
+    SRV_INF("%s", "initializing ...\n");
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
-    return llama_server(params, argc, argv);
+    const int result = llama_server(params, argc, argv);
+    common_log_flush(common_log_main());
+    return result;
 }
 
 int llama_server(common_params & params, int argc, char ** argv) {
@@ -133,7 +134,15 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
-                               && params.model.hf_repo.empty();
+                               && params.model.hf_repo.empty()
+                               && params.model.docker_repo.empty();
+
+    // accelerator backend/NUMA init also touches the GPU (device enumeration, primary
+    // context creation on some backends), so it must be skipped for router-only servers
+    if (!is_router_server) {
+        llama_backend_init();
+        llama_numa_init(params.numa);
+    }
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);
@@ -156,6 +165,18 @@ int llama_server(common_params & params, int argc, char ** argv) {
         }
     }
 
+    // size the KV pool from --kv-unified-per-slot, unless the user pinned it with -c
+    // or with -c 0 for max context
+    const bool ctx_pool_auto_sized = params.kv_unified_per_slot > 0 &&
+                                     params.n_ctx == 0 &&
+                                     (uint32_t) params.fit_params_min_ctx != UINT32_MAX;
+
+    if (ctx_pool_auto_sized) {
+        params.n_ctx = params.n_parallel * params.kv_unified_per_slot;
+        SRV_INF("--kv-unified-per-slot: sizing KV pool to n_parallel * kv_unified_per_slot = %d * %d = %d\n", params.n_parallel,
+                params.kv_unified_per_slot, params.n_ctx);
+    }
+
     // for consistency between server router mode and single-model mode, we set the same model name as alias
     auto model_name = params.model.get_name();
     if (params.model_alias.empty() && !model_name.empty()) {
@@ -168,12 +189,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     // struct that contains llama context and inference
     server_context ctx_server;
 
-    server_http_context ctx_http;
-    if (!ctx_http.init(params)) {
-        SRV_ERR("%s", "failed to initialize HTTP server\n");
-        return 1;
-    }
-
     //
     // Router
     //
@@ -184,6 +199,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
     server_tools tools;
 
     std::optional<server_models_routes> models_routes{};
+
+    server_http_context ctx_http;
+    if (!ctx_http.init(params)) {
+        SRV_ERR("%s", "failed to initialize HTTP server\n");
+        return 1;
+    }
+
     if (is_router_server) {
         // setup server instances manager
         try {
@@ -235,8 +257,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.get ("/metrics",                  ex_wrapper(routes.get_metrics));
     ctx_http.get ("/props",                    ex_wrapper(routes.get_props));
     ctx_http.post("/props",                    ex_wrapper(routes.post_props));
-    ctx_http.get ("/models",                   ex_wrapper(routes.get_models)); // public endpoint (no API key check)
-    ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models)); // public endpoint (no API key check)
+    ctx_http.get ("/models",                   ex_wrapper(routes.get_models));
+    ctx_http.get ("/v1/models",                ex_wrapper(routes.get_models));
     ctx_http.post("/completion",               ex_wrapper(routes.post_completions)); // legacy
     ctx_http.post("/completions",              ex_wrapper(routes.post_completions));
     ctx_http.post("/v1/completions",           ex_wrapper(routes.post_completions_oai));
@@ -314,21 +336,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_WRN("%s", "-----------------\n");
     }
 
-    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
-    std::vector<std::string> warn_names;
-    if (is_router_server) {
-        warn_names.push_back("router mode");
-    }
-
-    if (params.ui_mcp_proxy) {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
-        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
-        warn_names.push_back("MCP proxy (experimental)");
-    } else {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
-        ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
-    }
-
+    // mcp_mgr must be started before the API-key gate below so mcp_mgr.empty() reflects
+    // whether any MCP servers are actually configured, not just default-constructed state
     try {
         mcp_mgr.start(params);
     } catch (const std::exception & e) {
@@ -336,9 +345,36 @@ int llama_server(common_params & params, int argc, char ** argv) {
         return 1;
     }
 
+    // router-spawned children are always bound to loopback only (see CHILD_ADDR in
+    // server-models.cpp) and have their API key stripped by design (unset_reserved_args);
+    // the network-exposure risk this check guards against does not apply to them
+    if ((!params.server_tools.empty() || !mcp_mgr.empty()) && params.api_keys.empty() && !child.is_child()) {
+        SRV_ERR("%s", "built-in server tools or MCP servers require an API key (use --api-key)\n");
+        return 1;
+    }
+
+    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    std::vector<std::string> warn_names;
+    if (is_router_server) {
+        warn_names.push_back("router mode");
+    }
+
+    if (params.ui_mcp_proxy) {
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get(params.ui_mcp_proxy_allow)));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post(params.ui_mcp_proxy_allow)));
+        warn_names.push_back("MCP proxy (experimental)");
+    } else {
+        ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
+        ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
+    }
+
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools, mcp_mgr);
+            tools.setup(
+                params.server_tools,
+                mcp_mgr,
+                params.server_tools_runtime,
+                params.server_tools_cwd_root);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
@@ -346,7 +382,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
         if (!params.server_tools.empty()) {
-            warn_names.push_back("built-in tools (experimental)");
+            warn_names.push_back("server tools (experimental)");
+        }
+        if (!params.server_tools_runtime.empty()) {
+            warn_names.push_back("tools runtime (experimental)");
         }
         if (!mcp_mgr.empty()) {
             warn_names.push_back("MCP servers (experimental)");
@@ -420,6 +459,16 @@ int llama_server(common_params & params, int argc, char ** argv) {
             ctx_http.stop();
         };
 
+        try {
+            models_routes->models.load_startup_models();
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to load models on startup: %s\n", e.what());
+            ctx_http.stop();
+            ctx_http.join();
+            clean_up();
+            return 1;
+        }
+
     } else {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server, &mcp_mgr]() {
@@ -448,9 +497,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         if (!ctx_server.load_model(params)) {
             clean_up();
-            if (ctx_http.thread.joinable()) {
-                ctx_http.thread.join();
-            }
+            ctx_http.join();
             SRV_ERR("%s", "exiting due to model loading error\n");
             return 1;
         }
@@ -484,13 +531,16 @@ int llama_server(common_params & params, int argc, char ** argv) {
 #endif
     }
 
-    SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
+    bool uses_default_port = false;
+    for (const auto & address : ctx_http.listening_addresses) {
+        SRV_INF("listening on %s\n", address.c_str());
+        uses_default_port |= string_ends_with(address, ":8080");
+    }
 
     // TODO: remove this in the future
     // check the string to also handle the .sock case
-    if (string_ends_with(ctx_http.listening_address, ":8080")) {
-        SRV_WRN("%s", "NOTICE: server default port will be changed to :9931 in a future release\n");
-        SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
+    if (uses_default_port) {
+        SRV_WRN("%s", "notice: server default port will be changed to :9931 in a future release (ref: https://github.com/ggml-org/llama.cpp/pull/26508)\n");
     }
 
     if (is_router_server) {
@@ -499,9 +549,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
             SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
         }
 
-        if (ctx_http.thread.joinable()) {
-            ctx_http.thread.join(); // keep the main thread alive
-        }
+        ctx_http.join(); // keep the main thread alive
 
         // when the HTTP server stops, clean up and exit
         clean_up();
@@ -517,9 +565,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_server.start_loop();
 
         clean_up();
-        if (ctx_http.thread.joinable()) {
-            ctx_http.thread.join();
-        }
+        ctx_http.join();
         if (monitor_thread.joinable()) {
             monitor_thread.join();
         }

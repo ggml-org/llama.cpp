@@ -110,3 +110,4 @@ struct __nv_fp8_e4m3 {
 using __nv_fp8x2_e4m3 = sycl::vec<__nv_fp8_e4m3, 2>;
 using __nv_fp8x4_e4m3 = sycl::vec<__nv_fp8_e4m3, 4>;
 
+// TurboQuant types are defined in ggml-common.h

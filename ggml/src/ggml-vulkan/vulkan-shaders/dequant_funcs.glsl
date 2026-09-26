@@ -608,6 +608,35 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ1_0)
+float tq1_0_val(uint ib, uint e, uint a_offset) {
+    const uint bidx = tq1_0_byte_of(e);
+    const uint qbyte = uint(bidx < 48u ? data_a[a_offset + ib].qs[bidx]
+                                       : data_a[a_offset + ib].qh[bidx - 48u]);
+    return float(tq1_0_trit(qbyte, tq1_0_digit_of(e))) - 1.0;
+}
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    return vec2(tq1_0_val(ib, iqs, a_offset), tq1_0_val(ib, iqs + 1u, a_offset));
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
+#if defined(DATA_A_TQ2_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // elem e -> byte qs[(e/128)*32 + e%32], bits 2*((e%128)/32); w = q - 1 (d applied via get_dm)
+    const uint qsi   = (iqs / 128) * 32 + (iqs % 32);  // iqs even -> qsi, qsi+1 in same group/level
+    const uint shift = 2 * ((iqs % 128) / 32);
+
+    const uvec2 qs = uvec2(data_a[a_offset + ib].qs[qsi], data_a[a_offset + ib].qs[qsi + 1]);
+    return vec2((qs >> shift) & 3) - 1.0;
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
 #if defined(DATA_A_Q3_K)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     iqs /= 2;
@@ -730,8 +759,8 @@ vec2 get_dm(uint ib, uint a_offset) {
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // PolarQuant 3-bit centroids (Lloyd-Max for Gaussian)
     const float centroids[8] = float[8](
-        -0.190685, -0.117832, -0.065717, -0.021460,
-         0.021460,  0.065717,  0.117832,  0.190685
+        -0.190207, -0.118786, -0.066822, -0.021663,
+         0.021663,  0.066822,  0.118786,  0.190207
     );
 
     // iqs is the element index within the block (0..31), we decode 2 consecutive elements
@@ -758,8 +787,8 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // byte (4 per byte) and a single signs byte (iqs/8 constant over the range).
     // One qs load + one signs load instead of two of each via dequantize().
     const float centroids[8] = float[8](
-        -0.190685, -0.117832, -0.065717, -0.021460,
-         0.021460,  0.065717,  0.117832,  0.190685
+        -0.190207, -0.118786, -0.066822, -0.021663,
+         0.021663,  0.066822,  0.118786,  0.190207
     );
 
     const uint qs_byte  = uint(data_a[a_offset + ib].qs[iqs / 4]);
@@ -943,7 +972,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     return vec4(v0.x, v0.y, v1.x, v1.y);
 }
 vec2 get_dm(uint ib, uint a_offset) {
-    // No global scale/min — scales are applied per-element in dequantize()
+    // No global scale/min - scales are applied per-element in dequantize()
     return vec2(1, 0);
 }
 #endif

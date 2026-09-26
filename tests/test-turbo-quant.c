@@ -1,15 +1,20 @@
 #include "ggml.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
-extern void quantize_row_turbo3_0_ref(const float * x, void * y, long long k);
-extern void dequantize_row_turbo3_0(const void * x, float * y, long long k);
-extern void quantize_row_turbo4_0_ref(const float * x, void * y, long long k);
-extern void dequantize_row_turbo4_0(const void * x, float * y, long long k);
+extern void quantize_row_turbo3_0_ref(const float * x, void * y, int64_t k);
+extern void dequantize_row_turbo3_0(const void * x, float * y, int64_t k);
+extern void quantize_row_turbo4_0_ref(const float * x, void * y, int64_t k);
+extern void dequantize_row_turbo4_0(const void * x, float * y, int64_t k);
 extern void turbo_cpu_fwht_inverse(float * x, int group_size);
+
+_Static_assert(GGML_TYPE_TURBO2_0 == 43 && GGML_TYPE_TURBO3_0 == 44 && GGML_TYPE_TURBO4_0 == 45 &&
+               GGML_TYPE_TQ3_1S == 46 && GGML_TYPE_TQ4_1S == 47 && GGML_TYPE_Q8_CR == 48 &&
+               GGML_TYPE_Q5_CR == 49 && GGML_TYPE_Q6_CR == 50, "stable serialized type IDs");
 
 /* Must match GGML_TQ_DOT_CHUNK in ggml/src/ggml-cpu/ggml-cpu.c. */
 #define TQ_DOT_CHUNK 256
@@ -40,6 +45,8 @@ static int check_chunked_dequant(enum ggml_type type, const char * name, int64_t
     void  * q     = malloc(ggml_row_size(type, k));
     float * whole = malloc((size_t) k * sizeof(float));
     float * piece = malloc((size_t) k * sizeof(float));
+
+    assert(src && q && whole && piece);
 
     for (int64_t i = 0; i < k; i++) {
         src[i] = sinf((float) i * 0.037f) * 3.0f;

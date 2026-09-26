@@ -28,6 +28,11 @@ public:
 
     void clear(llama_seq_id seq_id, bool data);
     void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst);
+    // Queues a copy of one rollback snapshot plane (1..n_rs_seq) from src to dst,
+    // on top of whatever seq_cp() above already queued for the current plane.
+    // Caller is responsible for calling seq_cp() first so seq_id_dst's planes are
+    // cleared before this plane's real copy is queued.
+    void seq_cp_rollback(uint32_t rollback, llama_seq_id seq_id_src, llama_seq_id seq_id_dst);
     void apply_copies(const stream_copy_info & sc_info) const;
 
     uint32_t get_ratio()      const;
@@ -101,10 +106,7 @@ public:
                      uint32_t   n_pad,
                      uint32_t   n_rs_seq,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse,
-                          size_t kv_stream_stage_bytes = 0,
-                          void * kv_stream_phase_arena = nullptr,
-                          size_t kv_stream_maximum_pool_bytes = 0);
+        const  layer_reuse_cb & reuse);
 
     ~llama_kv_cache_dsv4() = default;
 
@@ -153,7 +155,15 @@ public:
 
     uint32_t get_n_rs_seq() const;
     const std::vector<uint32_t> & get_rs_idx() const;
-    void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+    // Called by the batch context once a ubatch's graph has fully completed:
+    // consumes the rollback markers that ubatch restored from and records its
+    // sequences' new committed positions. Never called on a failed ubatch, so a
+    // pending restore survives for the retry.
+    void commit_ubatch(const llama_ubatch & ubatch);
+
+    // Finalizes commit_ubatch() bookkeeping on success, undoes it when a later
+    // synchronize reports that the graphs it accounted for failed.
+    void on_graph_compute_synced(ggml_status status) override;
 
 private:
     llama_hparams hparams_raw;
@@ -165,6 +175,26 @@ private:
     const uint32_t n_rs_seq;
 
     std::vector<uint32_t> rs_idx;
+    // Per-seq raw-KV position of the last token whose compressor-state
+    // contribution was actually computed (-1: none). Any raw-KV token past it
+    // was slotted by a ubatch whose graph never completed; seq_rm() drops those
+    // first and never lets them feed the rollback distance or touch rs_idx.
+    std::vector<llama_pos> rs_pos;
+
+    // commit_ubatch() runs when a ubatch's graph has been enqueued, which on
+    // an asynchronous backend is before its outcome is known. A seq's first
+    // commit since the last resolution logs the values it overwrote so that
+    // on_graph_compute_synced() can put them back on failure. Explicit memory
+    // mutations settle a seq's entry: the caller is acting on the optimistic
+    // state, and only a decode outcome can contradict it.
+    struct commit_undo {
+        llama_seq_id seq_id;
+        uint32_t     rs_idx;
+        llama_pos    rs_pos;
+    };
+    std::vector<commit_undo> commit_log;
+
+    void commit_settle(llama_seq_id seq_id); // seq_id < 0: all
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
@@ -376,6 +406,9 @@ public:
 
 private:
     size_t i_next = 0;
+
+    // set only by the batch constructor; next() commits each finished ubatch through it
+    llama_kv_cache_dsv4 * kv = nullptr;
 
     std::vector<llama_ubatch> ubatches;
 

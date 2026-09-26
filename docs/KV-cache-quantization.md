@@ -1,74 +1,62 @@
-# KV Cache Quantization with TurboQuant
+# KV cache quantization with TurboQuant
 
-TurboQuant adds three runtime-only KV cache quantization types that compress
-the K/V cache far beyond the standard `q8_0` while keeping decode quality via a
-Walsh-Hadamard rotation (WHT) that Gaussianizes the cache vectors before
-quantization:
+This fork provides block-128 TurboQuant KV cache formats. The sizes below
+include the stored scales; compression compares the same number of values
+against f16, before head padding and cache metadata.
 
-| Type               | Enum                       | Size            | Compression vs f16 |
-|--------------------|----------------------------|-----------------|--------------------|
-| `turbo2`           | `GGML_TYPE_TURBO2_0` (43)  | 2 bits/value    | 6.4x               |
-| `turbo3`           | `GGML_TYPE_TURBO3_0` (44)  | 3.25 bits/value | 4.9x               |
-| `turbo4`           | `GGML_TYPE_TURBO4_0` (47)  | 4.25 bits/value | 3.8x               |
+| Runtime name | Type | Enum | Bytes / 128 values | Bits / value | Compression |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `turbo2` | `GGML_TYPE_TURBO2_0` | 43 | 34 | 2.125 | 7.53x |
+| `turbo3` | `GGML_TYPE_TURBO3_0` | 44 | 50 | 3.125 | 5.12x |
+| `turbo4` | `GGML_TYPE_TURBO4_0` | 45 | 68 | 4.25 | 3.76x |
 
-These are KV-cache-only types: they are never stored in model files. The
-corresponding model-weight quantization types are `TQ3_1S` (45) and `TQ4_1S`
-(46) - 3/4-bit WHT-rotated Lloyd-Max quantization, block size 32, exposed in
-`llama-quantize` as `TQ3_1S` / `TQ4_1S`.
+The layouts in `ggml/src/ggml-common.h` are authoritative. Turbo4 retains the
+fork's `rnorm` field. These formats are intended for runtime KV caches;
+model-weight formats `TQ3_1S` and `TQ4_1S` use enums 46 and 47, respectively,
+and 32-value blocks of 16 and 20 bytes. TheTom's enum assignments and Turbo4
+layout differ; GGUF files are not interchangeable merely because names match.
 
 ## Usage
 
-```bash
-llama-cli -m model.gguf -c 8192 -ngl 99 \
+```sh
+export ONEAPI_DEVICE_SELECTOR=level_zero:0
+llama-cli -m model.gguf -c 8192 -ngl 99 -fa on \
     --cache-type-k q8_0 --cache-type-v turbo3
 ```
 
-Any combination of `f16`, `q8_0`, `turbo2`, `turbo3`, `turbo4` for K and V is
-supported; mixing quantized V with unquantized K is the common configuration.
+The flags also apply to `llama-server`, `llama-bench`, and `llama-perplexity`.
+Use a backend and head shape that support the requested operations. Flash
+attention is recommended. With flash attention disabled, the fork permits
+TurboQuant through MUL_MAT attention and dequantizes turbo V to F32 at
+attention time. Other quantized V formats still require flash attention.
 
-Turbo KV types require flash attention. If a turbo cache type is requested
-with flash attention disabled, it is enabled automatically (a warning is
-printed). A quantized V cache with flash attention explicitly disabled is an
-error, matching upstream behavior for all quantized V types.
+## Rotation and policy
 
-The same flags work in `llama-server`, `llama-bench`, and `llama-perplexity`.
+The cache-write path applies a fixed Walsh-Hadamard transform before centroid
+quantization. The graph rotates Q for attention and inverse-rotates the V
+result. Heads are padded to a multiple of 128 where needed. MLA stores V as a
+view of latent K and skips separate V rotation and padding.
 
-## Model-specific quality
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TURBO_LAYER_ADAPTIVE` | `0` | Layer precision policy; mode 7 uses q8_0 V at boundary layers |
+| `TURBO_AUTO_ASYMMETRIC` | `1` | Downgrade symmetric turbo K to q8_0 for GQA >= 6, excluding MLA |
+| `LLAMA_ATTN_ROT_K_OVERRIDE` | off | Opt into the separate upstream K rotation path |
+| `LLAMA_ATTN_ROT_V_OVERRIDE` | off | Opt into the separate upstream V rotation path |
+| `LLAMA_ATTN_ROT_DISABLE` | `0` | Disable both upstream rotation overrides |
 
-Models with attention sinks can be unusually sensitive to K-cache quantization. GPT-OSS is a known case: even `q8_0` K changes the output distribution substantially, and lower-bit K types degrade it further despite normal codec and kernel accuracy. Use `f16` K for GPT-OSS and other sink-heavy models. Validate a quantized V cache separately against an `f16` K/V baseline before deploying it.
+The upstream rotation overrides are separate from TurboQuant's required WHT.
+The fork retains CPU, BLAS, SYCL, Vulkan, and OpenVINO backends. Operation
+coverage varies; the presence of a backend does not imply native TurboQuant
+kernels for every operation. CUDA, HIP, and Metal are not built in this fork.
 
-Short output samples are not a sufficient quality check for this class of model because the text can remain fluent while token probabilities move significantly. Use `llama-perplexity --kl-divergence` or an equivalent logit comparison when selecting cache types.
+## Weight quantization and validation
 
-## Rotation
-
-K and V vectors are rotated by a fixed 128x128 orthonormal Walsh-Hadamard
-matrix before quantization and inverse-rotated after dequantization. Head
-dimensions that are not multiples of 128 are zero-padded to the next multiple
-of 128 for turbo types. MLA models have no separate V cache (V is a view of
-K), so V rotation and padding are skipped for them.
-
-## Environment knobs
-
-| Variable                        | Default | Effect                                                          |
-|---------------------------------|---------|-----------------------------------------------------------------|
-| `TURBO_LAYER_ADAPTIVE`          | `0`     | Layer-adaptive KV precision; `7` = Boundary V (first/last layers in `q8_0`, middle in turbo) |
-| `TURBO_AUTO_ASYMMETRIC`         | `1`     | Auto-select asymmetric K/V types for large-GQA models (`0` disables) |
-| `TURBO_SPARSE_V`                | `1`     | Sparse-V dequant skip in flash attention (`0` disables)        |
-| `LLAMA_ATTN_ROT_K_OVERRIDE`     | off     | Enable upstream #21038 attention rotation for K                |
-| `LLAMA_ATTN_ROT_V_OVERRIDE`     | off     | Enable upstream #21038 attention rotation for V                |
-| `LLAMA_ATTN_ROT_DISABLE`        | `0`     | Hard lock-out: force rotation off on both sides (`1` disables) |
-
-Upstream attention rotation is off by default: TurboQuant manages rotation
-itself (the WHT applied at cache write is equivalent and interacts with the
-cache types). `LLAMA_ATTN_ROT_*` only affects the optional upstream rotation
-path for models that benefit from it.
-
-## Model-weight quantization (TQ3_1S / TQ4_1S)
-
-```bash
+```sh
 llama-quantize model-f16.gguf model-tq4.gguf TQ4_1S
 ```
 
-`TQ3_1S` and `TQ4_1S` are first-class weight types with CUDA/HIP (warp
-cooperative mmvq), Metal, and Vulkan kernels. MoE models disable CUDA graphs
-for TQ `MUL_MAT_ID` automatically.
+Compression ratios are layout facts, not speed or model-quality results.
+Use the synthetic correctness tests and model-level PPL/KLD probes described
+in [quality-benchmarks.md](quality-benchmarks.md) before drawing conclusions
+about a model, cache configuration, or backend.

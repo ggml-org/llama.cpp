@@ -18,6 +18,7 @@
 #include <numeric>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -235,7 +236,7 @@ std::vector<std::vector<int32_t>> select_anchors(const std::vector<observation> 
                                                  int64_t                          n_token,
                                                  int                              window,
                                                  int                              anchor_budget,
-                                                 const std::string &              mode,
+                                                 std::string_view                 mode,
                                                  uint32_t                         seed) {
     std::vector<std::vector<int32_t>> anchors((size_t(n_head)));
     const int64_t                     first_window = std::max<int64_t>(0, n_token - window);
@@ -583,7 +584,7 @@ utilities compute_utilities(const std::vector<observation> & observations,
 
 std::vector<size_t> rank_candidates(const std::vector<float> & utility,
                                     const projection &         p,
-                                    const std::string &        mode,
+                                    std::string_view           mode,
                                     uint32_t                   seed) {
     std::vector<size_t> order;
     order.reserve(utility.size());

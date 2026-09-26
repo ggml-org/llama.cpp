@@ -364,7 +364,7 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 
@@ -524,6 +524,11 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         logits_stream.write((const char *)&n_chunk, sizeof(n_chunk));
         logits_stream.write((const char *)tokens.data(), n_chunk*n_ctx*sizeof(tokens[0]));
         const int nv = 2*((n_vocab + 1)/2) + 4;
+        // size_t cast: int * int overflows on Qwen-class large-vocab models at
+        // n_ctx >= 16K (e.g. n_ctx=16384 * nv=151940 = 2.49B > INT32_MAX=2.15B);
+        // overflow wraps negative, sign-extends to a giant size_t when passed to
+        // resize(), trips vector::max_size and throws std::length_error. Matches
+        // the existing size_t cast on line 514 above for the same reason.
         log_probs.resize(size_t(n_ctx) * nv);
     }
 
@@ -550,7 +555,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -927,7 +932,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
             return;
         }
 
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1220,7 +1225,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
             return;
         }
 
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1599,7 +1604,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
             return;
         }
 
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         // decode all tasks [i0, i1)
         if (!decode_helper(ctx, batch, batch_logits, n_batch, n_vocab)) {
@@ -1800,7 +1805,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_memory_clear(llama_get_memory(ctx), true);
+        llama_memory_clear_data_only(llama_get_memory(ctx));
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -2023,7 +2028,6 @@ int llama_perplexity(int argc, char ** argv) {
     }
 
     const int32_t n_ctx = params.n_ctx;
-
     if (n_ctx <= 0) {
         LOG_ERR("%s: perplexity tool requires '--ctx-size' > 0\n", __func__);
         return 1;

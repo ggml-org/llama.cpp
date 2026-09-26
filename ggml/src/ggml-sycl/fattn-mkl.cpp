@@ -8,6 +8,7 @@
 
 #include "common.hpp"
 #include "fattn-common.hpp"
+#include "fattn-mkl.hpp"
 #include "fattn-buffers.hpp"
 #include "convert.hpp"
 #include "fattn.hpp"
@@ -43,7 +44,7 @@ static void mkl_fa_pack_q_fp16(
     dpct::queue_ptr stream,
     sycl::half * __restrict dst,
     const float * __restrict q_src,
-    int n_queries, int n_query_rows, int DKQ,
+    int n_queries, int DKQ,
     int gqa_ratio, int kvh_base_head,
     float q_scale, int64_t q_row_stride, int64_t q_head_stride,
     int64_t wg_size) {
@@ -121,7 +122,7 @@ static void mkl_fa_online_softmax_chunk(
     float * __restrict VKQ_accum,
     int q0, int q_rows, int n_queries, int DV,
     int chunk_size, int chunk_start,
-    int kvh_head, int gqa_ratio,
+    int kvh_head,
     const sycl::half * mask_data, int64_t mask_head_stride,
     int64_t mask_row_stride, int mask_n_heads,
     float logit_softcap, int64_t wg_size) {
@@ -258,10 +259,16 @@ enum mkl_fa_kv_desc_mode {
 
 struct mkl_fa_kv_desc {
     const char *         data = nullptr;
+    // Source tensor. The q8_0 converters select the row layout from its flags
+    // (canonical vs quants-first KV rows), so the dequant must pass K/V itself,
+    // never the dst tensor.
+    const ggml_tensor *  tensor = nullptr;
     ggml_type            type = GGML_TYPE_F16;
     int64_t              D    = 0;      // ne[0]
     int64_t              nb1  = 0;      // byte stride, seq dim
     int64_t              nb2  = 0;      // byte stride, head dim
+    int64_t              ne3  = 1;      // batch extent
+    int64_t              nb3  = 0;      // byte stride, batch dim
     mkl_fa_kv_desc_mode  mode = MKL_FA_KV_MODE_F16_DENSE;
     int64_t              ts   = 0;      // type size (mode 3 base offset)
     int64_t              s01  = 0;      // nc row stride in blocks (mode 3)
@@ -270,11 +277,14 @@ struct mkl_fa_kv_desc {
 
 static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, int n_kv_heads) {
     mkl_fa_kv_desc d;
-    d.data = (const char *)T->data;
-    d.type = T->type;
+    d.data   = (const char *)T->data;
+    d.tensor = T;
+    d.type   = T->type;
     d.D    = T->ne[0];
     d.nb1  = (int64_t)T->nb[1];
     d.nb2  = (int64_t)T->nb[2];
+    d.ne3  = T->ne[3];
+    d.nb3  = (int64_t)T->nb[3];
     d.ts   = (int64_t)ggml_type_size(T->type);
 
     if (T->type == GGML_TYPE_F16) {
@@ -304,19 +314,20 @@ static mkl_fa_kv_desc mkl_fa_make_desc(const ggml_tensor * T, bool interleaved, 
 
 // Dequant one KV-head chunk into a dense [this_chunk x D] fp16 buffer.
 static void mkl_fa_dequant_chunk(
-    dpct::queue_ptr stream, const mkl_fa_kv_desc & d, ggml_tensor * dst_ctx,
-    sycl::half * out, int ikvh, int chunk_start, int this_chunk) {
+    dpct::queue_ptr stream, const mkl_fa_kv_desc & d,
+    sycl::half * out, int ib, int ikvh, int chunk_start, int this_chunk) {
 
     const int64_t D = d.D;
+    const int64_t batch_offset = ggml_sycl_fattn_mkl_batch_offset(d.ne3, d.nb3, ib);
     switch (d.mode) {
         case MKL_FA_KV_MODE_F16_DENSE: {
-            const char * base = d.data + (int64_t)ikvh * d.nb2
+            const char * base = d.data + batch_offset + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
             stream->memcpy(out, base, (size_t)this_chunk * D * sizeof(sycl::half));
             break;
         }
         case MKL_FA_KV_MODE_F16_INTERLEAVED: {
-            const char * base = d.data + (int64_t)ikvh * d.nb2
+            const char * base = d.data + batch_offset + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
             const int64_t row_halfs = d.nb1 / (int64_t)sizeof(sycl::half);
             const sycl::half * src = (const sycl::half *)base;
@@ -330,17 +341,17 @@ static void mkl_fa_dequant_chunk(
             break;
         }
         case MKL_FA_KV_MODE_QUANT_CONTIG: {
-            const char * base = d.data + (int64_t)ikvh * d.nb2
+            const char * base = d.data + batch_offset + (int64_t)ikvh * d.nb2
                 + (int64_t)chunk_start * d.nb1;
-            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(d.type, dst_ctx);
+            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(d.type, d.tensor);
             to_fp16(base, out, (int64_t)this_chunk * D, stream);
             break;
         }
         default: {  // MKL_FA_KV_MODE_QUANT_NC
-            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(d.type);
+            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(d.type, d.tensor);
             const int64_t base_blocks = (int64_t)ikvh * d.s02
                 + (int64_t)chunk_start * d.s01;
-            const char * base = d.data + base_blocks * d.ts;
+            const char * base = d.data + batch_offset + base_blocks * d.ts;
             // ne02 = ne03 = 1 → s02/s03 inert; head+chunk offset carried by base.
             to_fp16(base, out, D, this_chunk, 1, 1, d.s01, d.s02, d.s02, stream);
             break;
@@ -388,6 +399,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     GGML_ASSERT(n_q_heads % n_kv_heads == 0);
     GGML_ASSERT(max_bias == 0.0f);  // ALiBi not supported
     GGML_ASSERT(Q->ne[3] == K->ne[3] || K->ne[3] == 1);
+    GGML_ASSERT(Q->ne[3] == V->ne[3] || V->ne[3] == 1);
 
     const int chunk_size = std::min(MKL_FA_CHUNK_SIZE_KV, n_kv);
 
@@ -408,9 +420,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const int64_t q_row_stride  = Q->nb[1] / sizeof(float);
     const int64_t q_head_stride = Q->nb[2] / sizeof(float);
 
-    const bool V_is_K_view = V->view_src
-        && (V->view_src == K || (V->view_src == K->view_src
-            && V->view_offs == K->view_offs));
+    const bool V_is_K_view = ggml_sycl_fattn_mkl_can_reuse_k_for_v(K, V);
 
     // Early interleaved detection for debug output.
     // True interleaved detection happens after dequant (nb12_fp16 == nb11_fp16),
@@ -473,7 +483,6 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     MKL_ACCUM(dequant_time_us, t_deq);
 
     // --- Resolve mask pointers ---
-    const sycl::half * mask_data = nullptr;
     int64_t mask_head_stride = 0;
     int64_t mask_row_stride  = 0;
     int     mask_n_heads     = 0;
@@ -547,7 +556,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
             // 1. Pack all GQA Q heads into fp16 (full n_query_rows)
             mkl_fa_pack_q_fp16(stream,
                 Q_head_f16_ptr, Q_batch,
-                n_queries, n_query_rows, DKQ,
+                n_queries, DKQ,
                 gqa_ratio, kvh_base_head,
                 q_scale, q_row_stride, q_head_stride, wg_size);
 
@@ -556,8 +565,11 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 KQ_max_ptr, KQ_sum_ptr, VKQ_accum_ptr,
                 n_query_rows, DV, wg_size);
 
-            // Sync before MKL GEMM (MKL may use an internal queue)
-            stream->wait();
+            // Host waits are invalid while recording a SYCL graph. The in-order
+            // queue captures the dependency between packing and oneMKL GEMM.
+            if (!ctx.graph_recording) {
+                stream->wait();
+            }
 
             // 3. KV chunk loop (OUTER): dequant each chunk once, then tile queries.
             for (int chunk_start = 0; chunk_start < n_kv; chunk_start += chunk_size) {
@@ -566,13 +578,15 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 // 3a. Dequant this KV chunk to dense fp16 (once per chunk)
                 {
                     MKL_TAKE_TIME(t0);
-                    mkl_fa_dequant_chunk(stream, K_desc, KQV,
-                        K_chunk_f16_ptr, ikvh, chunk_start, this_chunk);
+                    mkl_fa_dequant_chunk(stream, K_desc,
+                        K_chunk_f16_ptr, ib, ikvh, chunk_start, this_chunk);
                     if (!V_is_K_view) {
-                        mkl_fa_dequant_chunk(stream, V_desc, KQV,
-                            V_chunk_f16_ptr, ikvh, chunk_start, this_chunk);
+                        mkl_fa_dequant_chunk(stream, V_desc,
+                            V_chunk_f16_ptr, ib, ikvh, chunk_start, this_chunk);
                     }
-                    stream->wait();  // dequant must be ready before MKL GEMM
+                    if (!ctx.graph_recording) {
+                        stream->wait();  // dequant must be ready before MKL GEMM
+                    }
                     MKL_ACCUM(dequant_time_us, t0);
                 }
 
@@ -591,9 +605,11 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             Q_head_f16_ptr + (int64_t)q0 * DKQ, DKQ,
                             beta,
                             KQ_f32_ptr, this_chunk);
-                        try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                            GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
-                            GGML_ABORT("MKL GEMM KQ failed");
+                        if (!ctx.graph_recording) {
+                            try { ev.wait_and_throw(); } catch (sycl::exception & e) {
+                                GGML_LOG_INFO("[MKL-FA] GEMM KQ: %s\n", e.what());
+                                GGML_ABORT("MKL GEMM KQ failed");
+                            }
                         }
                         MKL_ACCUM(gemm_kq_time_us, t0);
                     }
@@ -605,11 +621,13 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             KQ_max_ptr, KQ_sum_ptr, VKQ_accum_ptr,
                             q0, q_rows, n_queries, DV,
                             this_chunk, chunk_start,
-                            kvh_base_head, gqa_ratio,
+                            kvh_base_head,
                             mask_batch, mask_head_stride,
                             mask_row_stride, mask_n_heads,
                             logit_softcap, wg_size);
-                        stream->wait();  // S_f16 must be ready for GEMM
+                        if (!ctx.graph_recording) {
+                            stream->wait();  // S_f16 must be ready for GEMM
+                        }
                         MKL_ACCUM(softmax_time_us, t0);
                     }
 
@@ -624,9 +642,11 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                             S_f16_ptr, this_chunk,
                             beta,
                             VKQ_chunk_ptr, DV);
-                        try { ev.wait_and_throw(); } catch (sycl::exception & e) {
-                            GGML_LOG_INFO("[MKL-FA] GEMM VKQ: %s\n", e.what());
-                            GGML_ABORT("MKL GEMM VKQ failed");
+                        if (!ctx.graph_recording) {
+                            try { ev.wait_and_throw(); } catch (sycl::exception & e) {
+                                GGML_LOG_INFO("[MKL-FA] GEMM VKQ: %s\n", e.what());
+                                GGML_ABORT("MKL GEMM VKQ failed");
+                            }
                         }
                         MKL_ACCUM(gemm_vkq_time_us, t0);
                     }

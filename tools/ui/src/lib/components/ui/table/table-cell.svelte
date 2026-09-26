@@ -3,20 +3,20 @@
 	import type { HTMLTdAttributes } from 'svelte/elements';
 
 	let {
-		ref = $bindable(null),
-		class: className,
 		children,
+		class: className,
+		ref = $bindable(null),
 		...restProps
 	}: WithElementRef<HTMLTdAttributes> = $props();
 </script>
 
 <td
 	bind:this={ref}
-	data-slot="table-cell"
 	class={cn(
 		'bg-clip-padding p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pe-0',
 		className
 	)}
+	data-slot="table-cell"
 	{...restProps}
 >
 	{@render children?.()}

@@ -399,7 +399,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     GGML_ASSERT(s->ne[0] == S_v && s->ne[1] == S_v && s->ne[2] == H_v      && s->ne[3] == n_seqs);
 
     // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
-    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1, /*emit_mode=*/0);
+    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, /*K=*/1);
     if (n_tokens == 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_AR, result, il});
     } else {
@@ -598,7 +598,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         const int64_t K = cparams.n_rs_seq + 1;
 
         // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
-        ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K, /*emit_mode=*/0);
+        ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
         if (n_seq_tokens > 1) {
             res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
         } else {
@@ -693,14 +693,14 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
             slot0_off + 3 * S_v * ingr_elemsize));
         ggml_tensor * q_dummy = ggml_scale(ctx0, k_batch, 0.0f); // q doesn't affect state, only the (discarded) attn output
 
-        ggml_tensor * replay_out = ggml_gated_delta_net(ctx0, q_dummy, k_batch, v_batch, g_batch, beta_batch, s_ckpt, /*K=*/1, /*emit_mode=*/0);
+        ggml_tensor * replay_out = ggml_gated_delta_net(ctx0, q_dummy, k_batch, v_batch, g_batch, beta_batch, s_ckpt, /*K=*/1);
         base_state = extract_state_k1(replay_out, /*ntok=*/(int64_t) m);
     }
 
     // main call: emit_mode=1 records ingredients (+ the trailing final-state block) instead of
     // K full snapshots.
     const int64_t K = n_rs_seq;
-    ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, base_state, K, /*emit_mode=*/1);
+    ggml_tensor * gdn_out = ggml_gated_delta_net_ext(ctx0, q, k, v, g, b, base_state, K, /*emit_mode=*/1);
     if (n_seq_tokens > 1) {
         res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
     } else {

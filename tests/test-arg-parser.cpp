@@ -2,7 +2,12 @@
 #include "common.h"
 #include "download.h"
 #include "llama.h"
+#include "speculative.h"
+#include "gguf.h"
 
+#include <cmath>
+#include <cstdio>
+#include <limits>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -14,6 +19,175 @@
 
 static void test(void) {
     common_params params;
+
+    auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
+                                   int32_t total, int32_t per_seq) {
+        const auto limits = common_speculative_get_output_limits(n_batch, n_parallel, n_draft);
+        assert(limits.total == total);
+        assert(limits.per_seq == per_seq);
+    };
+
+    assert_output_limits(16, 2,  3, 8, 4);
+    assert_output_limits(16, 2, -1, 2, 1);
+    assert_output_limits( 6, 2,  3, 6, 4);
+    assert_output_limits( 2, 1,  3, 2, 2);
+    assert_output_limits(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max());
+
+    {
+        common_params_speculative spec;
+        spec.synth_len = 3.4;
+
+        auto assert_invalid = [](const common_params_speculative & value, int32_t n_max) {
+            try {
+                common_speculative_synth_rates_resolve(&value, n_max);
+                assert(false);
+            } catch (const std::invalid_argument &) {
+            }
+        };
+
+        const auto rates = common_speculative_synth_rates_resolve(&spec, 4);
+        assert(rates.size() == 4);
+        assert(std::abs(rates[0] - 0.80581) < 1e-5);
+        assert(std::abs(rates[1] - 0.64933) < 1e-5);
+        assert(std::abs(rates[2] - 0.52323) < 1e-5);
+        assert(std::abs(rates[3] - 0.42163) < 1e-5);
+        assert(std::abs(1.0 + rates[0] + rates[1] + rates[2] + rates[3] - 3.4) < 1e-8);
+
+        spec.synth_len = 1.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({0.0, 0.0, 0.0, 0.0}));
+
+        spec.synth_len = 5.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({1.0, 1.0, 1.0, 1.0}));
+
+        spec.synth_len = 5.1;
+        assert_invalid(spec, 4);
+
+        spec.synth_len = std::numeric_limits<double>::quiet_NaN();
+        assert_invalid(spec, 4);
+
+        spec.synth_len = 0.0;
+        assert_invalid(spec, 4);
+
+        spec.synth_len = -1.0;
+        spec.synth_rates = {0.8, 0.6, 0.4};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == spec.synth_rates);
+
+        spec.synth_rates = {0.8, 0.9, 0.4, 0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, std::numeric_limits<double>::quiet_NaN(), 0.4, 0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, -0.2};
+        assert_invalid(spec, 4);
+
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        spec.synth_len = 3.0;
+        assert_invalid(spec, 4);
+    }
+    {
+        common_params_speculative spec_params;
+        spec_params.types                = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+        spec_params.ngram_mod.n_match    = 2;
+        spec_params.ngram_mod.n_min      = 1;
+        spec_params.ngram_mod.n_max      = 2;
+        spec_params.ngram_mod.n_dead_off = 2;
+
+        common_speculative_ptr spec(common_speculative_init(spec_params, 2));
+        const llama_tokens corpus = {1, 2, 3, 1, 2, 3};
+        common_speculative_begin(spec.get(), 0, corpus);
+        common_speculative_begin(spec.get(), 1, corpus);
+
+        const llama_tokens too_short = {1};
+        const llama_tokens live      = {9, 1};
+        std::vector<llama_tokens> draft_results(2);
+        auto draft = [&](llama_seq_id seq_id, const llama_tokens & prompt) {
+            auto & dp    = common_speculative_get_draft_params(spec.get(), seq_id);
+            dp.drafting  = true;
+            dp.id_last   = 2;
+            dp.prompt    = &prompt;
+            dp.result    = &draft_results.at(seq_id);
+            common_speculative_draft(spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        assert(draft(0, too_short).empty());
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 1);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live).empty());
+        assert(draft(1, live) == llama_tokens({3, 1}));
+
+        common_speculative_begin(spec.get(), 0, corpus);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+
+        common_params_speculative low_params = spec_params;
+        low_params.ngram_mod.n_dead_off = 0;
+        common_speculative_ptr low_spec(common_speculative_init(low_params, 1));
+        common_speculative_begin(low_spec.get(), 0, corpus);
+
+        llama_tokens low_draft_result;
+        auto draft_low = [&](const llama_tokens & prompt) {
+            auto & dp   = common_speculative_get_draft_params(low_spec.get(), 0);
+            dp.drafting = true;
+            dp.id_last  = 2;
+            dp.prompt   = &prompt;
+            dp.result   = &low_draft_result;
+            common_speculative_draft(low_spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            assert(draft_low(live) == llama_tokens({3, 1}));
+            common_speculative_accept(low_spec.get(), 0, 0);
+        }
+
+        common_speculative_begin(low_spec.get(), 0, corpus);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+        common_speculative_accept(low_spec.get(), 0, 0);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+    }
+
+    {
+        const char * path = "test-speculative-missing-block-count.gguf";
+        gguf_context * ctx = gguf_init_empty();
+        gguf_set_val_str(ctx, "general.architecture", "qwen3");
+        assert(gguf_write_to_file(ctx, path, false));
+        gguf_free(ctx);
+
+        assert(common_speculative_types_from_gguf(path).empty());
+        std::remove(path);
+    }
+
+    {
+        common_params base;
+        base.n_parallel = 4;
+        base.n_outputs_max_per_seq = 8;
+
+        const auto draft = common_base_params_to_speculative(base);
+        assert(draft.n_outputs_max == 4);
+        assert(draft.n_outputs_max_per_seq == 1);
+    }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
@@ -168,6 +342,25 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
 
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_len == 3.4);
+    }
+
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-rates", "0.8,0.6,0.2"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_rates == std::vector<double>({0.8, 0.6, 0.2}));
+    }
+
+    {
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4x"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+    }
     // speculative draft defaults and adaptive floor
     argv = {"binary_name", "-m", "model_file.gguf"};
     common_params spec_defaults;
@@ -424,34 +617,6 @@ static void test(void) {
     assert(params.model.path == "overwritten.gguf");
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
-
-    {
-        printf("test-arg-parser: test --kv-stream-arena-mib\n\n");
-        common_params kv_stream_params;
-        assert(kv_stream_params.kv_stream_arena_mib == 0);
-
-        argv = {"binary_name", "-m", "model.gguf", "--kv-stream-arena-mib", "4096"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), kv_stream_params, LLAMA_EXAMPLE_COMMON));
-        assert(kv_stream_params.kv_stream_arena_mib == 4096);
-
-        // legacy alias must set the same field
-        common_params kv_stream_alias_params;
-        argv = {"binary_name", "-m", "model.gguf", "--kv-stream-stage-mib", "2048"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), kv_stream_alias_params, LLAMA_EXAMPLE_COMMON));
-        assert(kv_stream_alias_params.kv_stream_arena_mib == 2048);
-
-        // negative values are rejected
-        argv = {"binary_name", "--kv-stream-arena-mib", "-1"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), kv_stream_params, LLAMA_EXAMPLE_COMMON));
-        argv = {"binary_name", "--kv-stream-stage-mib", "-1"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), kv_stream_params, LLAMA_EXAMPLE_COMMON));
-
-        // 0 explicitly disables it and is not rejected
-        common_params kv_stream_disabled_params;
-        argv = {"binary_name", "-m", "model.gguf", "--kv-stream-arena-mib", "0"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), kv_stream_disabled_params, LLAMA_EXAMPLE_COMMON));
-        assert(kv_stream_disabled_params.kv_stream_arena_mib == 0);
-    }
 
     printf("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";

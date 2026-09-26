@@ -1,0 +1,2367 @@
+{
+  "schema_version": 1,
+  "source_commit": "cadcd03934a5b1348d3314643e20e1a4119b0af7",
+  "baseline_commit": "d66649dae2f877a572269b84aaeefde9e8ad4780",
+  "held_stack": {
+    "oneapi": "2026.0.0.20260331",
+    "igc": "2.36.3",
+    "compute_runtime": "26.22.38646.4-1.1",
+    "level_zero_loader": "1.28.6-1.1",
+    "device": "Intel Arc A770 DG2/acm-g10",
+    "driver": "i915"
+  },
+  "normal": {
+    "model": "/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+    "ctx": 16384,
+    "repeats": 5,
+    "arms": [
+      {
+        "arm": {
+          "name": "none-q8_0",
+          "kv": "q8_0",
+          "spec_label": "none",
+          "extra": [
+            "--spec-type",
+            "none"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 21.675600602139337,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              147,
+              147,
+              147,
+              147,
+              147
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 22.050721661014936,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              97,
+              97,
+              97,
+              97,
+              97
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 21.83759618565437,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              256
+            ],
+            "token_hashes": [
+              "9862ffc665a286e3e9349c7d75ed74f3b471c1f8ff3c11d736b9ed2a3e5f191f"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              256,
+              256,
+              256,
+              256,
+              256
+            ]
+          }
+        ],
+        "rejection_records": []
+      },
+      {
+        "arm": {
+          "name": "ngrammod-q8_0",
+          "kv": "q8_0",
+          "spec_label": "ngram-mod",
+          "extra": [
+            "--spec-type",
+            "ngram-mod",
+            "--spec-ngram-mod-n-match",
+            "24",
+            "--spec-ngram-mod-n-min",
+            "48",
+            "--spec-ngram-mod-n-max",
+            "64"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 87.91818704325156,
+            "speedup_vs_target": 4.05609000908488,
+            "accept_rate_median": 0.640625,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              192,
+              192,
+              192,
+              192,
+              192
+            ],
+            "accepted": [
+              123,
+              123,
+              123,
+              123,
+              123
+            ],
+            "target_evaluations": [
+              216,
+              216,
+              216,
+              216,
+              216
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 55.20481841314034,
+            "speedup_vs_target": 2.503537945914075,
+            "accept_rate_median": 0.96875,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              64,
+              64,
+              64,
+              64,
+              64
+            ],
+            "accepted": [
+              22,
+              62,
+              62,
+              62,
+              62
+            ],
+            "target_evaluations": [
+              139,
+              99,
+              99,
+              99,
+              99
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 37.00821539012659,
+            "speedup_vs_target": 1.694701883645882,
+            "accept_rate_median": 0.6254734848484849,
+            "generated_counts": [
+              256,
+              251
+            ],
+            "token_hashes": [
+              "9862ffc665a286e3e9349c7d75ed74f3b471c1f8ff3c11d736b9ed2a3e5f191f",
+              "347be8cbc3c349b10959cc8dc24b18875b48a2b87d0aa3c53b77747505f8adc6",
+              "c1342854f7ed0a1d1fc6562ce12ef423a7c0ed5fd1ef8c9c79ded8bbb5daa194",
+              "d4839bc8c72300567a2ccdecaad9b4d6d0c04234075b27d722d62c646a0318fc"
+            ],
+            "exact_target_only": false,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              64,
+              192,
+              253,
+              241
+            ],
+            "accepted": [
+              null,
+              25,
+              118,
+              161,
+              241
+            ],
+            "target_evaluations": [
+              256,
+              295,
+              330,
+              343,
+              251
+            ]
+          }
+        ],
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 36,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 0,
+            "accepted": 25,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 87,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 87,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 112,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 112,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 137,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 137,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 162,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 162,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 187,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 187,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 212,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 288,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 324,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 360,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 396,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 689,
+            "accepted": 25,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 921,
+            "accepted": 48,
+            "drafted": 64,
+            "rejection_position": 113
+          },
+          {
+            "task": 921,
+            "accepted": 6,
+            "drafted": 64,
+            "rejection_position": 120
+          },
+          {
+            "task": 1060,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 152
+          },
+          {
+            "task": 1060,
+            "accepted": 11,
+            "drafted": 61,
+            "rejection_position": 164
+          }
+        ]
+      },
+      {
+        "arm": {
+          "name": "ngrammod+mapk4v-q8_0",
+          "kv": "q8_0",
+          "spec_label": "ngram-mod,ngram-map-k4v",
+          "extra": [
+            "--spec-type",
+            "ngram-mod,ngram-map-k4v",
+            "--spec-ngram-mod-n-match",
+            "24",
+            "--spec-ngram-mod-n-min",
+            "48",
+            "--spec-ngram-mod-n-max",
+            "64"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 89.91392118280234,
+            "speedup_vs_target": 4.148162850626064,
+            "accept_rate_median": 0.8978102189781022,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              176,
+              137,
+              137,
+              137,
+              137
+            ],
+            "accepted": [
+              123,
+              123,
+              123,
+              123,
+              123
+            ],
+            "target_evaluations": [
+              200,
+              161,
+              161,
+              161,
+              161
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 55.162310834503394,
+            "speedup_vs_target": 2.501610227661112,
+            "accept_rate_median": 0.96875,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              64,
+              64,
+              64,
+              64,
+              64
+            ],
+            "accepted": [
+              22,
+              62,
+              62,
+              62,
+              62
+            ],
+            "target_evaluations": [
+              139,
+              99,
+              99,
+              99,
+              99
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 36.10881277890884,
+            "speedup_vs_target": 1.6535159122792815,
+            "accept_rate_median": 0.5731736816642476,
+            "generated_counts": [
+              256,
+              251
+            ],
+            "token_hashes": [
+              "9862ffc665a286e3e9349c7d75ed74f3b471c1f8ff3c11d736b9ed2a3e5f191f",
+              "347be8cbc3c349b10959cc8dc24b18875b48a2b87d0aa3c53b77747505f8adc6",
+              "c1342854f7ed0a1d1fc6562ce12ef423a7c0ed5fd1ef8c9c79ded8bbb5daa194",
+              "d4839bc8c72300567a2ccdecaad9b4d6d0c04234075b27d722d62c646a0318fc"
+            ],
+            "exact_target_only": false,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              64,
+              212,
+              273,
+              241
+            ],
+            "accepted": [
+              null,
+              25,
+              118,
+              161,
+              241
+            ],
+            "target_evaluations": [
+              256,
+              295,
+              350,
+              363,
+              251
+            ]
+          }
+        ],
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 1,
+            "drafted": 48,
+            "rejection_position": 1
+          },
+          {
+            "task": 0,
+            "accepted": 37,
+            "drafted": 48,
+            "rejection_position": 88
+          },
+          {
+            "task": 62,
+            "accepted": 9,
+            "drafted": 48,
+            "rejection_position": 74
+          },
+          {
+            "task": 62,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 87,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 112,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 137,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 162,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 187,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 263,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 299,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 335,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 371,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 664,
+            "accepted": 25,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 896,
+            "accepted": 48,
+            "drafted": 64,
+            "rejection_position": 113
+          },
+          {
+            "task": 896,
+            "accepted": 6,
+            "drafted": 64,
+            "rejection_position": 120
+          },
+          {
+            "task": 896,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 121
+          },
+          {
+            "task": 1035,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 152
+          },
+          {
+            "task": 1035,
+            "accepted": 11,
+            "drafted": 61,
+            "rejection_position": 164
+          },
+          {
+            "task": 1035,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 165
+          }
+        ]
+      },
+      {
+        "arm": {
+          "name": "none-f16",
+          "kv": "f16",
+          "spec_label": "none",
+          "extra": [
+            "--spec-type",
+            "none"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 21.51306823769628,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              147,
+              147,
+              147,
+              147,
+              147
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 21.68926262991477,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              97,
+              97,
+              97,
+              97,
+              97
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 21.5301385355082,
+            "speedup_vs_target": 1,
+            "accept_rate_median": null,
+            "generated_counts": [
+              256
+            ],
+            "token_hashes": [
+              "08dc33de24fa73e04d497dff53917cb0ad457f582be76424006431ec397b9423"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "accepted": [
+              null,
+              null,
+              null,
+              null,
+              null
+            ],
+            "target_evaluations": [
+              256,
+              256,
+              256,
+              256,
+              256
+            ]
+          }
+        ],
+        "rejection_records": []
+      },
+      {
+        "arm": {
+          "name": "ngrammod-f16",
+          "kv": "f16",
+          "spec_label": "ngram-mod",
+          "extra": [
+            "--spec-type",
+            "ngram-mod",
+            "--spec-ngram-mod-n-match",
+            "24",
+            "--spec-ngram-mod-n-min",
+            "48",
+            "--spec-ngram-mod-n-max",
+            "64"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 88.2112557562345,
+            "speedup_vs_target": 4.100356805528385,
+            "accept_rate_median": 0.640625,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              192,
+              192,
+              192,
+              192,
+              192
+            ],
+            "accepted": [
+              123,
+              123,
+              123,
+              123,
+              123
+            ],
+            "target_evaluations": [
+              216,
+              216,
+              216,
+              216,
+              216
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 54.59483037611335,
+            "speedup_vs_target": 2.517136304155117,
+            "accept_rate_median": 0.96875,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              64,
+              64,
+              64,
+              64,
+              64
+            ],
+            "accepted": [
+              22,
+              62,
+              62,
+              62,
+              62
+            ],
+            "target_evaluations": [
+              139,
+              99,
+              99,
+              99,
+              99
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 235.8075626064473,
+            "speedup_vs_target": 10.952440562216813,
+            "accept_rate_median": 1,
+            "generated_counts": [
+              256
+            ],
+            "token_hashes": [
+              "08dc33de24fa73e04d497dff53917cb0ad457f582be76424006431ec397b9423"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              null,
+              248,
+              248,
+              248,
+              248
+            ],
+            "accepted": [
+              null,
+              248,
+              248,
+              248,
+              248
+            ],
+            "target_evaluations": [
+              256,
+              256,
+              256,
+              256,
+              256
+            ]
+          }
+        ],
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 36,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 0,
+            "accepted": 25,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 87,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 87,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 112,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 112,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 137,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 137,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 162,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 162,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 187,
+            "accepted": 9,
+            "drafted": 64,
+            "rejection_position": 74
+          },
+          {
+            "task": 187,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 212,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 288,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 324,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 360,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 396,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          }
+        ]
+      },
+      {
+        "arm": {
+          "name": "ngrammod+mapk4v-f16",
+          "kv": "f16",
+          "spec_label": "ngram-mod,ngram-map-k4v",
+          "extra": [
+            "--spec-type",
+            "ngram-mod,ngram-map-k4v",
+            "--spec-ngram-mod-n-match",
+            "24",
+            "--spec-ngram-mod-n-min",
+            "48",
+            "--spec-ngram-mod-n-max",
+            "64"
+          ]
+        },
+        "prompts": [
+          {
+            "id": "code_edit",
+            "tg_median": 90.01203222063357,
+            "speedup_vs_target": 4.184062971682949,
+            "accept_rate_median": 0.8978102189781022,
+            "generated_counts": [
+              147
+            ],
+            "token_hashes": [
+              "5514a93d30ae8fe3ea78d8ffd4559bfdc6ec747df1dd2ba4ce90a1f14fc09ae8"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              176,
+              137,
+              137,
+              137,
+              137
+            ],
+            "accepted": [
+              123,
+              123,
+              123,
+              123,
+              123
+            ],
+            "target_evaluations": [
+              200,
+              161,
+              161,
+              161,
+              161
+            ]
+          },
+          {
+            "id": "multi_turn",
+            "tg_median": 54.58579790086657,
+            "speedup_vs_target": 2.5167198549931094,
+            "accept_rate_median": 0.96875,
+            "generated_counts": [
+              97
+            ],
+            "token_hashes": [
+              "c9cb7c6f742d068ed98717560f3adfd6c1afb661a5cf4e848e517bbd739b87b7"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              64,
+              64,
+              64,
+              64,
+              64
+            ],
+            "accepted": [
+              22,
+              62,
+              62,
+              62,
+              62
+            ],
+            "target_evaluations": [
+              139,
+              99,
+              99,
+              99,
+              99
+            ]
+          },
+          {
+            "id": "free_prose",
+            "tg_median": 246.36941939581752,
+            "speedup_vs_target": 11.443002049870563,
+            "accept_rate_median": 1,
+            "generated_counts": [
+              256
+            ],
+            "token_hashes": [
+              "08dc33de24fa73e04d497dff53917cb0ad457f582be76424006431ec397b9423"
+            ],
+            "exact_target_only": true,
+            "verifier_invariant_ok": true,
+            "drafted": [
+              20,
+              249,
+              249,
+              249,
+              249
+            ],
+            "accepted": [
+              0,
+              249,
+              249,
+              249,
+              249
+            ],
+            "target_evaluations": [
+              276,
+              256,
+              256,
+              256,
+              256
+            ]
+          }
+        ],
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 1,
+            "drafted": 48,
+            "rejection_position": 1
+          },
+          {
+            "task": 0,
+            "accepted": 37,
+            "drafted": 48,
+            "rejection_position": 88
+          },
+          {
+            "task": 62,
+            "accepted": 9,
+            "drafted": 48,
+            "rejection_position": 74
+          },
+          {
+            "task": 62,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 125
+          },
+          {
+            "task": 87,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 112,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 137,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 162,
+            "accepted": 50,
+            "drafted": 64,
+            "rejection_position": 115
+          },
+          {
+            "task": 187,
+            "accepted": 22,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 263,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 299,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 335,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 371,
+            "accepted": 62,
+            "drafted": 64,
+            "rejection_position": 62
+          },
+          {
+            "task": 407,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 0
+          }
+        ]
+      }
+    ]
+  },
+  "hostile": {
+    "model": "/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+    "ctx": 16384,
+    "repeats": 5,
+    "params": {
+      "n_match": 4,
+      "n_min": 4,
+      "n_max": 64
+    },
+    "arms": [
+      {
+        "arm": {
+          "name": "none-q8_0",
+          "kv": "q8_0",
+          "spec_label": "none",
+          "extra": [
+            "--spec-type",
+            "none"
+          ]
+        },
+        "prompt": {
+          "id": "adversarial_divergent",
+          "tg_median": 21.81495799623963,
+          "speedup_vs_target": 1,
+          "accept_rate_median": null,
+          "exact_target_only": true,
+          "verifier_invariant_ok": true,
+          "drafted": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "accepted": [
+            null,
+            null,
+            null,
+            null,
+            null
+          ],
+          "target_evaluations": [
+            197,
+            197,
+            197,
+            197,
+            197
+          ]
+        },
+        "hard_off_trips": 0,
+        "rejection_records": []
+      },
+      {
+        "arm": {
+          "name": "deadoff0-q8_0",
+          "kv": "q8_0",
+          "spec_label": "ngram-mod (dead-off 0)",
+          "extra": [
+            "--spec-type",
+            "ngram-mod",
+            "--spec-ngram-mod-n-match",
+            "4",
+            "--spec-ngram-mod-n-min",
+            "4",
+            "--spec-ngram-mod-n-max",
+            "64",
+            "--spec-ngram-mod-dead-off",
+            "0"
+          ]
+        },
+        "prompt": {
+          "id": "adversarial_divergent",
+          "tg_median": 15.298344905457004,
+          "speedup_vs_target": 0.7012777612541847,
+          "accept_rate_median": 0.013094417643004824,
+          "exact_target_only": true,
+          "verifier_invariant_ok": true,
+          "drafted": [
+            1451,
+            1451,
+            1451,
+            1451,
+            1451
+          ],
+          "accepted": [
+            19,
+            19,
+            19,
+            19,
+            19
+          ],
+          "target_evaluations": [
+            1629,
+            1629,
+            1629,
+            1629,
+            1629
+          ]
+        },
+        "hard_off_trips": 0,
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 0
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 1
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 2
+          },
+          {
+            "task": 0,
+            "accepted": 1,
+            "drafted": 21,
+            "rejection_position": 4
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 5
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 6
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 7
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 9
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 10
+          },
+          {
+            "task": 0,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 12
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 13
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 14
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 15
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 16
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 18
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 19
+          },
+          {
+            "task": 0,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 21
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 22
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 25
+          },
+          {
+            "task": 195,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 195,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 29,
+            "rejection_position": 18
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 19
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 20
+          },
+          {
+            "task": 195,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 26
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 27
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 28
+          },
+          {
+            "task": 195,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 30
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 31
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 32
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 33
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 34
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 35
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 37
+          },
+          {
+            "task": 195,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 39
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 40
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 41
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 42
+          },
+          {
+            "task": 195,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 43
+          },
+          {
+            "task": 374,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 374,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 29,
+            "rejection_position": 18
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 19
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 20
+          },
+          {
+            "task": 374,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 26
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 27
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 28
+          },
+          {
+            "task": 374,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 30
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 31
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 32
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 33
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 34
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 35
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 37
+          },
+          {
+            "task": 374,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 39
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 40
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 41
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 42
+          },
+          {
+            "task": 374,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 43
+          },
+          {
+            "task": 553,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 553,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 29,
+            "rejection_position": 18
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 19
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 20
+          },
+          {
+            "task": 553,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 26
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 27
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 28
+          },
+          {
+            "task": 553,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 30
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 31
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 32
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 33
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 34
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 35
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 37
+          },
+          {
+            "task": 553,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 39
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 40
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 41
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 42
+          },
+          {
+            "task": 553,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 43
+          },
+          {
+            "task": 732,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 732,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 29,
+            "rejection_position": 18
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 19
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 20
+          },
+          {
+            "task": 732,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 26
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 27
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 28
+          },
+          {
+            "task": 732,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 30
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 31
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 32
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 33
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 34
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 35
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 37
+          },
+          {
+            "task": 732,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 39
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 40
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 41
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 42
+          },
+          {
+            "task": 732,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 43
+          },
+          {
+            "task": 911,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 8
+          },
+          {
+            "task": 911,
+            "accepted": 8,
+            "drafted": 64,
+            "rejection_position": 17
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 29,
+            "rejection_position": 18
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 20,
+            "rejection_position": 19
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 15,
+            "rejection_position": 20
+          },
+          {
+            "task": 911,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 22
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 23
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 24
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 25
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 26
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 27
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 28
+          },
+          {
+            "task": 911,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 30
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 31
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 32
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 33
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 34
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 35
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 36
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 37
+          },
+          {
+            "task": 911,
+            "accepted": 1,
+            "drafted": 64,
+            "rejection_position": 39
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 44,
+            "rejection_position": 40
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 41
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 64,
+            "rejection_position": 42
+          },
+          {
+            "task": 911,
+            "accepted": 0,
+            "drafted": 63,
+            "rejection_position": 43
+          }
+        ]
+      },
+      {
+        "arm": {
+          "name": "deadoff3-q8_0",
+          "kv": "q8_0",
+          "spec_label": "ngram-mod (dead-off 3)",
+          "extra": [
+            "--spec-type",
+            "ngram-mod",
+            "--spec-ngram-mod-n-match",
+            "4",
+            "--spec-ngram-mod-n-min",
+            "4",
+            "--spec-ngram-mod-n-max",
+            "64",
+            "--spec-ngram-mod-dead-off",
+            "3"
+          ]
+        },
+        "prompt": {
+          "id": "adversarial_divergent",
+          "tg_median": 27.873740163541036,
+          "speedup_vs_target": 1.2777352204091244,
+          "accept_rate_median": 0.37012987012987014,
+          "exact_target_only": true,
+          "verifier_invariant_ok": true,
+          "drafted": [
+            154,
+            154,
+            154,
+            154,
+            154
+          ],
+          "accepted": [
+            57,
+            57,
+            57,
+            57,
+            57
+          ],
+          "target_evaluations": [
+            294,
+            294,
+            294,
+            294,
+            294
+          ]
+        },
+        "hard_off_trips": 6,
+        "rejection_records": [
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 0
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 1
+          },
+          {
+            "task": 0,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 2
+          },
+          {
+            "task": 198,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 58
+          },
+          {
+            "task": 198,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 59
+          },
+          {
+            "task": 198,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 60
+          },
+          {
+            "task": 339,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 58
+          },
+          {
+            "task": 339,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 59
+          },
+          {
+            "task": 339,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 60
+          },
+          {
+            "task": 480,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 58
+          },
+          {
+            "task": 480,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 59
+          },
+          {
+            "task": 480,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 60
+          },
+          {
+            "task": 621,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 58
+          },
+          {
+            "task": 621,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 59
+          },
+          {
+            "task": 621,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 60
+          },
+          {
+            "task": 762,
+            "accepted": 0,
+            "drafted": 40,
+            "rejection_position": 58
+          },
+          {
+            "task": 762,
+            "accepted": 0,
+            "drafted": 31,
+            "rejection_position": 59
+          },
+          {
+            "task": 762,
+            "accepted": 0,
+            "drafted": 26,
+            "rejection_position": 60
+          }
+        ]
+      }
+    ]
+  },
+  "decision": {
+    "global_q8_0_deployment": false,
+    "reason": "q8_0 code_edit and multi_turn are exact and exceed 1.5x, but free_prose diverges from target-only and between repetitions; conservative global deployment is not promoted.",
+    "controlled_q8_0_copy_workloads": "PROMOTE ngram-mod,ngram-map-k4v only where prompt class is constrained to the exact code_edit/multi_turn suites.",
+    "global_f16_deployment": "PROMOTE ngram-mod,ngram-map-k4v for the fixed deployment suite: all hashes match target-only and all three prompt classes exceed 1.5x.",
+    "hard_off": "PASS: hostile output exactly matches target-only; hard-off trips; guarded tg exceeds target-only while disabled hard-off falls below it."
+  }
+}

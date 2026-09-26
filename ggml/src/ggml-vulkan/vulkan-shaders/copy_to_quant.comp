@@ -269,14 +269,14 @@ const float TS2[128] = float[128](
 const float TINV = 0.08838834764831845;  // 1 / sqrt(128)
 
 const float TC[8] = float[8](
-    -0.190685, -0.117832, -0.065717, -0.021460,
-     0.021460,  0.065717,  0.117832,  0.190685
+    -0.190207, -0.118786, -0.066822, -0.021663,
+     0.021663,  0.066822,  0.118786,  0.190207
 );
 
 const float TM[7] = float[7](
-    -0.154259, -0.091775, -0.043589,
+    -0.154496, -0.092804, -0.044243,
      0.0,
-     0.043589,  0.091775,  0.154259
+     0.044243,  0.092804,  0.154496
 );
 
 #if defined(SET_ROWS)
@@ -415,7 +415,7 @@ void main() {
     const uint gpr = p.ne00 / 128;
 
     if (gpr == 0) return;
-    if (g >= gpr * p.ne21 * p.ne22 * p.ne23) return;
+    if (g >= p.ne / 128) return;
 
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
@@ -431,7 +431,7 @@ void main() {
     const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
 
     // Step 1: load into shared memory
-    wht[t] = data_s[sb + t];
+    wht[t] = float(data_s[sb + t]);
     barrier();
 
     // Step 2: L2 norm via subgroup reduction
@@ -549,7 +549,7 @@ void main() {
     const uint gpr = p.ne00 / 128;
 
     if (gpr == 0) return;
-    if (g >= gpr * p.ne21 * p.ne22 * p.ne23) return;
+    if (g >= p.ne / 128) return;
 
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
@@ -564,7 +564,7 @@ void main() {
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
     const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
 
-    wht_t2[t] = data_s[sb + t];
+    wht_t2[t] = float(data_s[sb + t]);
     barrier();
 
     float v2 = wht_t2[t] * wht_t2[t];
@@ -626,7 +626,8 @@ void main() {
 #elif defined(SET_ROWS) && defined(DATA_A_TURBO4_0)
 // Mirror of the TURBO3_0 block above, adapted for turbo4 (16 centroids,
 // 4-bit nibble pack, no signs byte). WHT tables and reduction structure
-// are identical (QK = 128 for both).
+// are identical (QK = 128 for both). The block struct keeps a reserved
+// rnorm field for ABI parity with the legacy 3-bit + QJL layout.
 const float TS1_T4[128] = float[128](
     -1,  1,  1, -1, -1,  1, -1,  1, -1, -1,  1,  1,  1,  1,  1,  1,
      1, -1,  1, -1,  1, -1, -1,  1,  1,  1, -1,  1,  1, -1, -1, -1,
@@ -673,7 +674,7 @@ void main() {
     const uint gpr = p.ne00 / 128;
 
     if (gpr == 0) return;
-    if (g >= gpr * p.ne21 * p.ne22 * p.ne23) return;
+    if (g >= p.ne / 128) return;
 
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
@@ -688,7 +689,7 @@ void main() {
     const uint i1  = data_i[src1_idx(i01, fastmod(i02, p.ne11), fastmod(i03, p.ne12), 0) + get_boffset()] DATA_I_SWIZZLE;
     const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
 
-    wht_t4[t] = data_s[sb + t];
+    wht_t4[t] = float(data_s[sb + t]);
     barrier();
 
     float v2 = wht_t4[t] * wht_t4[t];
@@ -735,6 +736,11 @@ void main() {
         data_q[db].qs[t / 2u] = uint8_t(qs_byte);
     }
 
+    // Reset rnorm field (reserved in 4-bit mode)
+    if (t == 0u) {
+        data_q[db].rnorm = float16_t(0.0);
+    }
+
     // Reconstruction norm via subgroup reduction
     float rc = TC4[idx] * TC4[idx];
     rc = subgroupAdd(rc);
@@ -756,7 +762,7 @@ void main() {
     const uint gpr = p.ne00 / 32;  // blocks per row
 
     if (gpr == 0) return;
-    if (g >= gpr * p.ne21 * p.ne22 * p.ne23) return;
+    if (g >= p.ne / 32) return;
 
     uint tmp = g;
     const uint ig  = tmp % gpr; tmp /= gpr;
@@ -772,7 +778,7 @@ void main() {
     const uint db  = dst_idx(ig, i1, i02, i03) + get_doffset();
 
     // Step 1: load one f32 input per thread
-    float val = data_s[sb + t];
+    float val = float(data_s[sb + t]);
 
     // Step 2: Forward RHT via subgroup ops
     // Sign flip
@@ -794,7 +800,7 @@ void main() {
     float rms_lo = sqrt(sum_sq_lo / 16.0);
     float rms_hi = sqrt(sum_sq_hi / 16.0);
 
-    // Step 4: Scale search (9 points) — matches CPU quantize_row_tq4_1s_ref
+    // Step 4: Scale search (9 points) - matches CPU quantize_row_tq4_1s_ref
     const float SCALES[9] = float[9](0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5);
     float best_d0 = rms_lo;
     float best_d1 = rms_hi;
@@ -845,7 +851,7 @@ void main() {
         : ((best_d1 > 1e-10) ? 1.0 / best_d1 : 0.0);
     uint cidx = tq4_choose_index(val * inv_final);
 
-    // Step 7: Nibble packing — two 4-bit indices per byte
+    // Step 7: Nibble packing - two 4-bit indices per byte
     // Even element j: low nibble; odd element j: high nibble
     // Thread t pairs with thread t^1
     uint partner_idx = subgroupShuffle(cidx, t ^ 1u);

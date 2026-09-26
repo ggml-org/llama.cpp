@@ -1,0 +1,312 @@
+path	disposition
+.github/FUNDING.yml	source content present
+.github/actions/windows-setup-openvino/action.yml	fork content retained
+.github/labeler.yml	fork content retained
+.github/workflows/build-apple.yml	excluded or superseded path absent
+.github/workflows/build-cache.yml	fork content retained
+.github/workflows/build-cann.yml	excluded or superseded path absent
+.github/workflows/build-openvino.yml	fork content retained
+.github/workflows/build-self-hosted.yml	excluded or superseded path absent
+.github/workflows/build-wasm.yml	excluded or superseded path absent
+.github/workflows/build-webgpu.yml	excluded or superseded path absent
+.github/workflows/docker.yml	excluded or superseded path absent
+.github/workflows/hip-quality-check.yml	excluded or superseded path absent
+.github/workflows/release.yml	excluded or superseded path absent
+.github/workflows/server-self-hosted.yml	excluded or superseded path absent
+.github/workflows/tqp-linux-release.yml	excluded or superseded path absent
+.github/workflows/tqp-release.yml	excluded or superseded path absent
+.github/workflows/ui-publish.yml	fork content retained
+AGENTS.md	reconciled with fork
+common/arg.cpp	reconciled with fork
+common/chat-auto-parser-generator.cpp	fork content retained
+common/chat.cpp	fork content retained
+common/common.cpp	reconciled with fork
+common/common.h	reconciled with fork
+common/fit.cpp	reconciled with fork
+common/fit.h	reconciled with fork
+common/speculative-adaptive.h	source content present
+common/speculative.cpp	reconciled with fork
+conversion/__init__.py	reconciled with fork
+conversion/laguna.py	reconciled with fork
+conversion/muse_glimmer.py	fork content retained
+conversion/qwen.py	reconciled with fork
+conversion/qwen4exp.py	reconciled with fork
+docs/KV-cache-quantization.md	reconciled with fork
+docs/backend/MOE-CACHE.md	reconciled with fork
+docs/quality-benchmarks.md	reconciled with fork
+docs/speculative.md	reconciled with fork
+examples/CMakeLists.txt	source content present
+examples/turboanchorkv/CMakeLists.txt	source content present
+examples/turboanchorkv/README.md	reconciled with fork
+examples/turboanchorkv/make-needle-prompt.py	source content present
+examples/turboanchorkv/turboanchorkv.cpp	reconciled with fork
+ggml/include/ggml-rpc.h	excluded or superseded path absent
+ggml/include/ggml-vulkan.h	source content present
+ggml/include/ggml.h	reconciled with fork
+ggml/src/CMakeLists.txt	fork content retained
+ggml/src/ggml-backend-meta.cpp	reconciled with fork
+ggml/src/ggml-backend-moe-cache.h	source content present
+ggml/src/ggml-backend-reg.cpp	reconciled with fork
+ggml/src/ggml-backend.cpp	reconciled with fork
+ggml/src/ggml-common.h	reconciled with fork
+ggml/src/ggml-cpu/ggml-cpu.c	reconciled with fork
+ggml/src/ggml-cpu/ops.cpp	reconciled with fork
+ggml/src/ggml-cpu/ops.h	reconciled with fork
+ggml/src/ggml-cuda/CMakeLists.txt	excluded or superseded path absent
+ggml/src/ggml-cuda/chain.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/chain.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/common.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/convert.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/convrot.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/convrot.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/dequantize.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/dsv4-hc.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-common.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-mma-f16.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-mma-turbo.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-swizzle.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-tile.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-tile.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn-vec.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/fattn.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/gated_delta_net.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/getrows.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/ggml-cuda.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq-config-cdna.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq-config-rdna2.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq-config-rdna3.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq-load-tiles.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/mmq.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmv-cr.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/mmv-cr.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmvq-tq.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/mmvq-tq.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/mmvq.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/mmvq.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/moe-cache.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/moe-cache.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/moe-devsort.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/moe-devsort.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/quantize.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/set-rows.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-f16-instance-ncols1_1-ncols2_16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-f16-instance-ncols1_2-ncols2_16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-f16-instance-ncols1_4-ncols2_16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_1-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_2-ncols2_4.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_2-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_4-ncols2_2.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_4-ncols2_4.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_4-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq128-ncols1_8-ncols2_1.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_1-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_2-ncols2_4.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_2-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_4-ncols2_2.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_4-ncols2_4.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_4-ncols2_8.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-mma-turbo-instance-dkq256-ncols1_8-ncols2_1.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-tile-instance-dkq640-dv512.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-turbo2_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-turbo3_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-f16-turbo4_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo2_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo3_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-q8_0-turbo4_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-f16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-q8_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-turbo2_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-turbo3_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo2_0-turbo4_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-f16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-q8_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-turbo2_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-turbo3_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo3_0-turbo4_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-f16.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-q8_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-turbo2_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-turbo3_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/fattn-vec-instance-turbo4_0-turbo4_0.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/generate_cu_files.py	excluded or superseded path absent
+ggml/src/ggml-cuda/template-instances/mmq-instance-tq4_1s.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/turbo-innerq.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/turbo-innerq.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/turbo-quant.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/turbo-wht.cu	excluded or superseded path absent
+ggml/src/ggml-cuda/turbo-wht.cuh	excluded or superseded path absent
+ggml/src/ggml-cuda/vendors/hip.h	excluded or superseded path absent
+ggml/src/ggml-cuda/vendors/musa.h	excluded or superseded path absent
+ggml/src/ggml-hip/CMakeLists.txt	excluded or superseded path absent
+ggml/src/ggml-metal/CMakeLists.txt	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-device.cpp	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-device.h	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-device.m	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-impl.h	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-moe-cache.mm	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-ops.cpp	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal-ops.h	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal.cpp	excluded or superseded path absent
+ggml/src/ggml-metal/ggml-metal.metal	excluded or superseded path absent
+ggml/src/ggml-metal/turbo-matrices.h	excluded or superseded path absent
+ggml/src/ggml-metal/turbo-wht.h	excluded or superseded path absent
+ggml/src/ggml-moe-cache-common.h	reconciled with fork
+ggml/src/ggml-quants.c	reconciled with fork
+ggml/src/ggml-quants.h	source content present
+ggml/src/ggml-sycl/CMakeLists.txt	fork content retained
+ggml/src/ggml-sycl/common.hpp	fork content retained
+ggml/src/ggml-sycl/convert.cpp	fork content retained
+ggml/src/ggml-sycl/cpy.cpp	fork content retained
+ggml/src/ggml-sycl/fattn-common.hpp	fork content retained
+ggml/src/ggml-sycl/fattn-vec.hpp	fork content retained
+ggml/src/ggml-sycl/fattn.cpp	fork content retained
+ggml/src/ggml-sycl/ggml-sycl.cpp	reconciled with fork
+ggml/src/ggml-sycl/mmvq.cpp	reconciled with fork
+ggml/src/ggml-sycl/set_rows.cpp	fork content retained
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-f16-turbo2_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-f16-turbo3_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-f16-turbo4_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-q8_0-turbo2_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-q8_0-turbo3_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-q8_0-turbo4_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo2_0-f16.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo2_0-q8_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo2_0-turbo2_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo2_0-turbo3_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo2_0-turbo4_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo3_0-f16.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo3_0-q8_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo3_0-turbo2_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo3_0-turbo3_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo3_0-turbo4_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo4_0-f16.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo4_0-q8_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo4_0-turbo2_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo4_0-turbo3_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/template-instances/fattn-vec-instance-turbo4_0-turbo4_0.cpp	excluded or superseded path absent
+ggml/src/ggml-sycl/turbo-quant.hpp	excluded or superseded path absent
+ggml/src/ggml-sycl/turbo-wht.cpp	fork content retained
+ggml/src/ggml-sycl/turbo-wht.hpp	fork content retained
+ggml/src/ggml-turbo-quant.c	reconciled with fork
+ggml/src/ggml-vulkan/CMakeLists.txt	reconciled with fork
+ggml/src/ggml-vulkan/ggml-vulkan-moe-cache.cpp	reconciled with fork
+ggml/src/ggml-vulkan/ggml-vulkan.cpp	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/copy_from_quant.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/copy_to_quant.comp	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/dequant_funcs.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/dequant_funcs_cm2.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/dequant_tq3_1s.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/dequant_tq4_1s.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/dequant_turbo3_0.comp	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/flash_attn.comp	fork content retained
+ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_base.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_cm1.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/flash_attn_dequant.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/gated_delta_net.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/moe_cache_mv.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_tq3_1s.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/mul_mat_vec_tq4_1s.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/mul_mm_funcs.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/tq_rotate_act.comp	source content present
+ggml/src/ggml-vulkan/vulkan-shaders/turbo_wht.comp	fork content retained
+ggml/src/ggml-vulkan/vulkan-shaders/types.glsl	reconciled with fork
+ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp	reconciled with fork
+ggml/src/ggml.c	reconciled with fork
+gguf-py/gguf/constants.py	reconciled with fork
+gguf-py/gguf/gguf_writer.py	reconciled with fork
+gguf-py/gguf/quants.py	source content present
+gguf-py/gguf/tensor_mapping.py	reconciled with fork
+include/llama.h	reconciled with fork
+scripts/hip/gcn-cdna-vgpr-check.py	excluded or superseded path absent
+scripts/ppl_test.sh	excluded or superseded path absent
+skills/add-new-model/SKILL.md	fork content retained
+skills/code-review/SKILL.md	fork content retained
+src/CMakeLists.txt	fork content retained
+src/llama-arch.cpp	reconciled with fork
+src/llama-arch.h	reconciled with fork
+src/llama-batch.h	source content present
+src/llama-chat.cpp	reconciled with fork
+src/llama-chat.h	source content present
+src/llama-context.cpp	reconciled with fork
+src/llama-context.h	reconciled with fork
+src/llama-cparams.h	reconciled with fork
+src/llama-ext.h	reconciled with fork
+src/llama-graph.cpp	reconciled with fork
+src/llama-graph.h	reconciled with fork
+src/llama-hparams.cpp	reconciled with fork
+src/llama-hparams.h	reconciled with fork
+src/llama-impl.h	source content present
+src/llama-kv-cache-dsa-iswa.h	fork content retained
+src/llama-kv-cache-iswa.h	reconciled with fork
+src/llama-kv-cache.cpp	reconciled with fork
+src/llama-kv-cache.h	reconciled with fork
+src/llama-kv-cells.h	fork content retained
+src/llama-memory-hybrid-idx.cpp	reconciled with fork
+src/llama-memory-hybrid-idx.h	reconciled with fork
+src/llama-memory-hybrid-iswa.cpp	reconciled with fork
+src/llama-memory-hybrid-iswa.h	reconciled with fork
+src/llama-memory-hybrid.cpp	reconciled with fork
+src/llama-memory-hybrid.h	reconciled with fork
+src/llama-memory-recurrent.cpp	reconciled with fork
+src/llama-memory-recurrent.h	source content present
+src/llama-memory.h	fork content retained
+src/llama-mmap.cpp	source content present
+src/llama-mmap.h	source content present
+src/llama-model-loader.cpp	reconciled with fork
+src/llama-model-loader.h	reconciled with fork
+src/llama-model-saver.cpp	fork content retained
+src/llama-model-saver.h	source content present
+src/llama-model.cpp	reconciled with fork
+src/llama-model.h	reconciled with fork
+src/llama-quant.cpp	reconciled with fork
+src/llama-vocab.cpp	fork content retained
+src/llama-vocab.h	source content present
+src/llama.cpp	fork content retained
+src/models/deepseek4.cpp	reconciled with fork
+src/models/delta-net-base.cpp	source content present
+src/models/dflash.cpp	reconciled with fork
+src/models/eagle3.cpp	fork content retained
+src/models/gemma4.cpp	source content present
+src/models/glm-dsa.cpp	reconciled with fork
+src/models/laguna.cpp	source content present
+src/models/models.h	reconciled with fork
+src/models/muse-glimmer.cpp	source content present
+src/models/qwen35.cpp	reconciled with fork
+src/models/qwen35moe.cpp	reconciled with fork
+src/models/qwen4exp.cpp	reconciled with fork
+src/turbo-rotation-data-32.h	source content present
+src/turbo-rotation-data.h	source content present
+tests/CMakeLists.txt	reconciled with fork
+tests/test-arg-parser.cpp	reconciled with fork
+tests/test-backend-ops.cpp	reconciled with fork
+tests/test-gdn-ingredient-replay.cpp	source content present
+tests/test-llama-archs.cpp	fork content retained
+tests/test-moe-cache-fit.cpp	source content present
+tests/test-moe-cache.cpp	source content present
+tests/test-quantize-fns.cpp	fork content retained
+tests/test-save-load-state.cpp	reconciled with fork
+tests/test-speculative-adaptive.cpp	source content present
+tests/test-turbo-quant.c	reconciled with fork
+tools/cli/README.md	reconciled with fork
+tools/cli/cli-context.cpp	reconciled with fork
+tools/completion/README.md	fork content retained
+tools/fit-params/fit-params.cpp	reconciled with fork
+tools/llama-bench/README.md	reconciled with fork
+tools/llama-bench/llama-bench.cpp	reconciled with fork
+tools/mtmd/CMakeLists.txt	fork content retained
+tools/mtmd/clip-impl.h	fork content retained
+tools/mtmd/clip-model.h	fork content retained
+tools/mtmd/clip.cpp	fork content retained
+tools/mtmd/models/models.h	fork content retained
+tools/mtmd/models/muse-glimmer.cpp	source content present
+tools/mtmd/mtmd-image.cpp	fork content retained
+tools/mtmd/mtmd-image.h	fork content retained
+tools/mtmd/mtmd.cpp	fork content retained
+tools/quantize/quantize.cpp	reconciled with fork
+tools/server/README.md	reconciled with fork
+tools/server/server-chat.cpp	reconciled with fork
+tools/server/server-context.cpp	reconciled with fork
+tools/server/server-task.cpp	reconciled with fork
+tools/server/tests/unit/test_compat_anthropic.py	source content present
+vendor/cpp-httplib/CMakeLists.txt	fork content retained

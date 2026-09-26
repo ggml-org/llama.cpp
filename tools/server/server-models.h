@@ -9,6 +9,7 @@
 
 #include <mutex>
 #include <condition_variable>
+#include <thread>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -84,7 +85,7 @@ struct server_model_meta {
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
+    bool hidden = false; // hidden from GET /models, but still accept if requested
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -92,6 +93,10 @@ struct server_model_meta {
 
     bool is_running() const {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
+    }
+
+    bool is_ready_or_sleep() const {
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
     bool is_failed() const {
@@ -103,24 +108,29 @@ struct server_model_meta {
 };
 
 struct server_models_routes;
-struct server_subproc; // defined in server-models.cpp
+struct server_lru_sched; // defined in server-models.cpp
+struct server_monitor;   // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
+    friend struct server_lru_sched;
+    friend struct server_monitor;
 
 private:
     struct instance_t {
-        std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
-        std::thread th;
+        std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
+        int req_count = 0; // number of active proxy requests
+
+        // ask the child to exit (it handles the command on its stdin, see server_child::setup)
+        void request_exit() const;
     };
 
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
-    // for stopping models
-    std::condition_variable cv_stop;
+    // models asked to stop, still counted as running until the monitor records their exit
     std::set<std::string> stopping_models;
 
     // set to true while load_models() is executing a reload; load() will wait until clear
@@ -128,6 +138,10 @@ private:
 
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
+
+    // models marked with load-on-startup, unset once load_startup_models() drains it
+    // no value means the startup phase is over, so a reload must not queue anything
+    std::optional<std::vector<std::string>> startup_models{std::in_place};
 
     // conv_id -> model name that currently serves its stream session, lets the resumable stream
     // routes go straight to the owning child instead of polling every one. populated when
@@ -191,6 +205,12 @@ private:
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
 
+    // queue of requests waiting for a models_max slot
+    std::unique_ptr<server_lru_sched> sched;
+
+    // if true, add some delay to simulate works (useful for testing)
+    bool debug_fake_timing = false;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // unload least recently used models if the limit is reached
@@ -198,6 +218,13 @@ private:
 
     // not thread-safe, caller must hold mutex
     void add_model(server_model_meta && meta);
+
+    // ask the monitor to stop a running instance; send_exit is false for a child that was already force-killed
+    // not thread-safe, caller must hold mutex
+    void request_stop(const std::string & name, bool send_exit = true);
+
+    // called by the monitor once a child exited and was reaped
+    void on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code);
 
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
@@ -207,6 +234,7 @@ public:
     conv_model_tracker conv_models;
 
     server_models(const common_params & params, int argc, char ** argv);
+    ~server_models();
 
     server_response sse; // for real-time updates via SSE endpoint
 
@@ -216,6 +244,9 @@ public:
     //   - if a model is running but updated or removed from the source, it will be unloaded
     //   - if a model is not running, it will be added or updated according to the source
     void load_models();
+
+    // lazy-load startup_models, to be called after main() setup phase
+    void load_startup_models();
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
@@ -263,19 +294,25 @@ public:
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
-    bool ensure_model_ready(const std::string & name);
+    // if models_max is reached, the request waits in a queue until a slot frees up
+    // throws if the load fails, or if should_stop fires while waiting
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
 
     // proxy an HTTP request to the model instance
     server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
-    // this function is not thread-safe, must be called from instance's monitoring thread
+    // called from the monitor thread
     // payload per state:
     //     state = loading     -> payload = {} (TODO: add progress info)
     //     state = ready       -> payload = model_info (json), or {} if wakeup from sleeping
     //     state = sleeping    -> payload = {}
     void handle_child_state(const std::string & name, const std::string & raw_input);
+
+private:
+    // one thread watching every child; keep last, the destructor joins the thread
+    std::unique_ptr<server_monitor> monitor;
 };
 
 struct server_child {
@@ -343,7 +380,6 @@ struct server_models_routes {
  */
 struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
-public:
     server_http_proxy(const std::string & method,
                       const std::string & scheme,
                       const std::string & host,
@@ -357,11 +393,15 @@ public:
                       int32_t timeout_write
                       );
     ~server_http_proxy() {
+        if (cleanup_pipes) {
+            cleanup_pipes();
+        }
         if (cleanup) {
             cleanup();
         }
     }
 private:
+    std::function<void()> cleanup_pipes = nullptr;
     std::thread thread;
     struct msg_t {
         std::map<std::string, std::string> headers;

@@ -2,6 +2,26 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+### llama.cpp version
+set(LLAMA_VERSION_MAJOR 0)
+set(LLAMA_VERSION_MINOR 5)
+set(LLAMA_VERSION_PATCH 0)
+set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
+
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
+option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
+
+if (LLAMA_BUILD_IS_DEV)
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
+else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
+    set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
+endif()
+
+message(STATUS "llama.cpp version: ${LLAMA_VERSION}")
+
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
 
@@ -24,9 +44,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
 
     include(git-vars)
-
-    # configure project version
-    # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
@@ -118,12 +135,13 @@ option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                            
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
-option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
+option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available" ON)
 
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
 # 3rd party libs
+option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
@@ -139,7 +157,6 @@ endif()
 if (NOT DEFINED LLAMA_BUILD_COMMIT)
     set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
 endif()
-set(LLAMA_INSTALL_VERSION 0.0.${LLAMA_BUILD_NUMBER})
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -150,9 +167,6 @@ if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
 
-if (NOT DEFINED GGML_CUDA_GRAPHS)
-    set(GGML_CUDA_GRAPHS_DEFAULT ON)
-endif()
 
 # transition helpers
 function (llama_option_depr TYPE OLD)
@@ -167,19 +181,23 @@ function (llama_option_depr TYPE OLD)
     endif()
 endfunction()
 
-llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
-llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
 llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
-llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
 llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
-llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")
 license_add_file("llama.cpp" "LICENSE")
+
+#
+# compile options
+#
+
+# clang stores the modification time of the precompiled header sources inside the
+# header and rejects it when they differ, so the timestamp is left out of it
+add_compile_options(
+    "$<$<COMPILE_LANG_AND_ID:C,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>"
+    "$<$<COMPILE_LANG_AND_ID:CXX,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>")
 
 #
 # 3rd-party
@@ -198,6 +216,76 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
+if (GGML_SYCL_DEVICE_ARCH)
+    set(LLAMA_SYCL_BUILD_MODE "AOT")
+else()
+    set(LLAMA_SYCL_BUILD_MODE "JIT")
+endif()
+set(LLAMA_BUILD_COMMIT_FULL_RESULT 1)
+if (Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LLAMA_GIT_TOPLEVEL
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LLAMA_GIT_TOPLEVEL_RESULT
+    )
+    get_filename_component(LLAMA_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0)
+        get_filename_component(LLAMA_GIT_ROOT "${LLAMA_GIT_TOPLEVEL}" REALPATH)
+    endif()
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0 AND LLAMA_GIT_ROOT STREQUAL LLAMA_SOURCE_ROOT)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_BUILD_COMMIT_FULL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
+        )
+        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs logs/HEAD)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_METADATA_NAME}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_METADATA_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_METADATA_FILE "${LLAMA_GIT_METADATA_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_METADATA_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_METADATA_FILE}")
+            endif()
+        endforeach()
+
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_GIT_HEAD_REF_RESULT
+        )
+        if (LLAMA_GIT_HEAD_REF_RESULT EQUAL 0)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_HEAD_REF}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_HEAD_REF_FILE "${LLAMA_GIT_HEAD_REF_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_HEAD_REF_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_REF_FILE}")
+            endif()
+        endif()
+    endif()
+endif()
+if (NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
+    set(LLAMA_BUILD_COMMIT_FULL "unknown")
+endif()
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
+    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
+)
+
 #
 # build the library
 #
@@ -208,9 +296,10 @@ add_subdirectory(src)
 # utils, programs, examples and tests
 #
 
+add_subdirectory(vendor)
+
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
-    add_subdirectory(vendor/cpp-httplib)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
@@ -218,16 +307,25 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
+# IS_DIRECTORY guards: the generated lib branch (scripts/prune-to-lib.sh) removes
+# these directories; a standalone checkout of that branch must still configure
+# cleanly. IS_DIRECTORY rather than EXISTS so a stray file cannot satisfy the
+# guard, and the paths are quoted so a source tree containing spaces or
+# semicolons cannot word-split the condition.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+        add_subdirectory(examples)
+    endif()
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/pocs")
+        add_subdirectory(pocs)
+    endif()
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP)
+if (LLAMA_BUILD_APP AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/app")
     add_subdirectory(app)
 endif()
 
@@ -262,8 +360,22 @@ set_target_properties(llama
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
-if (LLAMA_BUILD_COMMON)
+# Shared builds only, and enforced rather than merely documented: with a static
+# llama-common the artifact is an ARCHIVE, so `install(TARGETS ... LIBRARY)`
+# would install no library while still installing the headers and vendored
+# nlohmann, leaving a header-only SDK surface with nothing to link against.
+# Installing ARCHIVE instead would not fix it either, since llama-common-base
+# is only folded into the shared object; a static llama-common.a would ship
+# without its objects.
+if (LLAMA_BUILD_COMMON AND BUILD_SHARED_LIBS)
     install(TARGETS llama-common LIBRARY)
+    # SDK surface for the helper library: headers land under include/llama-common,
+    # plus the nlohmann headers its public headers reference.
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 configure_package_config_file(
@@ -275,12 +387,12 @@ configure_package_config_file(
               LLAMA_BIN_INSTALL_DIR )
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
-    VERSION ${LLAMA_INSTALL_VERSION}
+        ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
+        VERSION ${LLAMA_VERSION}
     COMPATIBILITY SameMajorVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/llama-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/llama-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/llama-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/llama)
 
 configure_file(cmake/llama.pc.in

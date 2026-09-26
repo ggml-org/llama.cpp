@@ -1,0 +1,82 @@
+=== q8_0/q8_0 d4096 start 2026-08-13T10:00:34Z ===
+[cell 1 d=4096 kv=q8_0/q8_0 rep=0] arm=baseline
+[cell 1 d=4096 kv=q8_0/q8_0 rep=0] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=1] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=1] arm=baseline
+[cell 1 d=4096 kv=q8_0/q8_0 rep=2] arm=baseline
+[cell 1 d=4096 kv=q8_0/q8_0 rep=2] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=3] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=3] arm=baseline
+[cell 1 d=4096 kv=q8_0/q8_0 rep=4] arm=baseline
+[cell 1 d=4096 kv=q8_0/q8_0 rep=4] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=5] arm=candidate
+[cell 1 d=4096 kv=q8_0/q8_0 rep=5] arm=baseline
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d4096/product.json
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d4096/product.md
+=== q8_0/q8_0 d4096 exit 0 2026-08-13T10:04:21Z ===
+=== f16/f16 d8192 start 2026-08-13T10:04:21Z ===
+[cell 1 d=8192 kv=f16/f16 rep=0] arm=baseline
+[cell 1 d=8192 kv=f16/f16 rep=0] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=1] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=1] arm=baseline
+[cell 1 d=8192 kv=f16/f16 rep=2] arm=baseline
+[cell 1 d=8192 kv=f16/f16 rep=2] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=3] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=3] arm=baseline
+[cell 1 d=8192 kv=f16/f16 rep=4] arm=baseline
+[cell 1 d=8192 kv=f16/f16 rep=4] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=5] arm=candidate
+[cell 1 d=8192 kv=f16/f16 rep=5] arm=baseline
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-f16-f16-d8192/product.json
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-f16-f16-d8192/product.md
+=== f16/f16 d8192 exit 0 2026-08-13T10:11:58Z ===
+=== q8_0/q8_0 d8192 start 2026-08-13T10:11:58Z ===
+[cell 1 d=8192 kv=q8_0/q8_0 rep=0] arm=baseline
+[cell 1 d=8192 kv=q8_0/q8_0 rep=0] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=1] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=1] arm=baseline
+[cell 1 d=8192 kv=q8_0/q8_0 rep=2] arm=baseline
+[cell 1 d=8192 kv=q8_0/q8_0 rep=2] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=3] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=3] arm=baseline
+[cell 1 d=8192 kv=q8_0/q8_0 rep=4] arm=baseline
+[cell 1 d=8192 kv=q8_0/q8_0 rep=4] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=5] arm=candidate
+[cell 1 d=8192 kv=q8_0/q8_0 rep=5] arm=baseline
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d8192/product.json
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d8192/product.md
+=== q8_0/q8_0 d8192 exit 0 2026-08-13T10:19:35Z ===
+=== f16/f16 d16384 start 2026-08-13T10:19:35Z ===
+[cell 1 d=16384 kv=f16/f16 rep=0] arm=baseline
+[cell 1 d=16384 kv=f16/f16 rep=0] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=1] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=1] arm=baseline
+[cell 1 d=16384 kv=f16/f16 rep=2] arm=baseline
+[cell 1 d=16384 kv=f16/f16 rep=2] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=3] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=3] arm=baseline
+[cell 1 d=16384 kv=f16/f16 rep=4] arm=baseline
+[cell 1 d=16384 kv=f16/f16 rep=4] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=5] arm=candidate
+[cell 1 d=16384 kv=f16/f16 rep=5] arm=baseline
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-f16-f16-d16384/product.json
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-f16-f16-d16384/product.md
+=== f16/f16 d16384 exit 0 2026-08-13T10:39:29Z ===
+=== q8_0/q8_0 d16384 start 2026-08-13T10:39:29Z ===
+[cell 1 d=16384 kv=q8_0/q8_0 rep=0] arm=baseline
+[cell 1 d=16384 kv=q8_0/q8_0 rep=0] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=1] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=1] arm=baseline
+[cell 1 d=16384 kv=q8_0/q8_0 rep=2] arm=baseline
+[cell 1 d=16384 kv=q8_0/q8_0 rep=2] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=3] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=3] arm=baseline
+[cell 1 d=16384 kv=q8_0/q8_0 rep=4] arm=baseline
+[cell 1 d=16384 kv=q8_0/q8_0 rep=4] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=5] arm=candidate
+[cell 1 d=16384 kv=q8_0/q8_0 rep=5] arm=baseline
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d16384/product.json
+wrote /tmp/p63-fa-occupancy-80d52e708/cell-q8_0-q8_0-d16384/product.md
+=== q8_0/q8_0 d16384 exit 0 2026-08-13T10:58:41Z ===
+CELL_EXITS q8_0-d4096=0 f16-d8192=0 q8_0-d8192=0 f16-d16384=0 q8_0-d16384=0
+DMESG_FAULT_DELTA_BYTES=0

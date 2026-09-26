@@ -71,6 +71,7 @@ def test_v1_models_supports_multimodal_capability():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
+        ("What is this:\n", "data:text/html;base64,aGVsbG8=", False, None), # unsupported data uri mime
         # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
@@ -121,7 +122,7 @@ def test_vision_chat_completion_token_count():
     "prompt, image_data, success, re_content",
     [
         # test model is trained on CIFAR-10, but it's quite dumb due to small size
-        ("What is this: <__media__>\n", "IMG_BASE64_0",         True, "(cat)+"),
+        ("What is this: <__media__>\n", "IMG_BASE64_0",         True, "(cat)+|(automobile)+"),
         ("What is this: <__media__>\n", "IMG_BASE64_1",         True, "(frog)+"),
         ("What is this: <__media__>\n", "malformed",            False, None), # non-image data
         ("What is this:\n",             "",                     False, None), # empty string

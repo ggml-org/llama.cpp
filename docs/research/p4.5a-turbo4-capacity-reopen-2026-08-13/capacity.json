@@ -1,0 +1,36 @@
+{
+  "mistral": {
+    "q8_0": {
+      "k_type": "q8_0",
+      "v_type": "q8_0",
+      "k_mib": 544.00,
+      "v_mib": 544.00,
+      "total_mib": 1088
+    },
+    "turbo4": {
+      "k_type": "turbo4",
+      "v_type": "turbo4",
+      "k_mib": 272.00,
+      "v_mib": 272.00,
+      "total_mib": 544
+    },
+    "q8_over_turbo4": 2
+  },
+  "llama31": {
+    "q8_0": {
+      "k_type": "q8_0",
+      "v_type": "q8_0",
+      "k_mib": 544.00,
+      "v_mib": 544.00,
+      "total_mib": 1088
+    },
+    "turbo4": {
+      "k_type": "turbo4",
+      "v_type": "turbo4",
+      "k_mib": 272.00,
+      "v_mib": 272.00,
+      "total_mib": 544
+    },
+    "q8_over_turbo4": 2
+  }
+}

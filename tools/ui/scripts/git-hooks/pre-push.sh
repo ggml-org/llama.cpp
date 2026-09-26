@@ -8,7 +8,7 @@ needs_check=false
 
 # Read refs from stdin: local_ref local_sha remote_ref remote_sha
 while read local_ref local_sha remote_ref remote_sha; do
-    # New branch or force-push — always check
+    # New branch or force-push -- always check
     if [ "$local_sha" = "0000000000000000000000000000000000000000" ] || \
        [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
         needs_check=true
@@ -30,7 +30,7 @@ cd "$REPO_ROOT/tools/ui"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
-    echo "❌ node_modules not found. Run 'npm ci' first."
+    echo "ERROR: node_modules not found. Run 'npm ci' first."
     exit 1
 fi
 
@@ -54,14 +54,14 @@ if git stash list | grep -q "$stash_name"; then
 fi
 
 if [ $lint_ok -ne 0 ]; then
-    echo "❌ Lint failed"
+    echo "ERROR: Lint failed"
     exit 1
 fi
 
 if [ $test_ok -ne 0 ]; then
-    echo "❌ Tests failed"
+    echo "ERROR: Tests failed"
     exit 1
 fi
 
-echo "✅ Pre-push checks passed"
+echo "Pre-push checks passed"
 exit 0

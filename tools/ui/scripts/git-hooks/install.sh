@@ -9,7 +9,7 @@ HOOKS_DIR="$REPO_ROOT/$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
 
 # Verify package.json exists
 if [ ! -f "$REPO_ROOT/tools/ui/package.json" ]; then
-    echo "❌ package.json not found in tools/ui"
+    echo "ERROR: package.json not found in tools/ui"
     exit 1
 fi
 
@@ -20,9 +20,9 @@ for hook in pre-commit pre-push; do
     dst="$HOOKS_DIR/$hook"
 
     if cp "$src" "$dst" && chmod +x "$dst"; then
-        echo "  ✅ $hook"
+        echo "  Installed $hook"
     else
-        echo "  ❌ Failed to install $hook"
+        echo "  ERROR: Failed to install $hook"
         exit 1
     fi
 done

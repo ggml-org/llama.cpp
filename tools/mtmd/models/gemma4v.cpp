@@ -44,51 +44,31 @@ ggml_cgraph * clip_graph_gemma4v::build() {
 
     // similar to build_rope_2d, but use neox ordering
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-        const int64_t n_dim  = cur->ne[0];
-        const int64_t n_head = cur->ne[1];
-        const int64_t n_pos  = cur->ne[2];
+        const int64_t n_dim = cur->ne[0];
 
-        // first half
-        ggml_tensor * first;
-        {
-            first = ggml_view_4d(ctx0, cur,
-                n_dim/2, n_head, n_pos, n_batch,
-                cur->nb[1],
-                cur->nb[2],
-                cur->nb[3],
-                0);
-            first = ggml_rope_ext(
-                ctx0,
-                first,
-                pos_x,      // positions
-                nullptr,    // freq factors
-                n_dim/2,    // n_dims
-                GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta,
-                1.0f, 0.0f, 1.0f, 0.0f, 0.0f
-            );
-        }
+        // first half, dims [0, n_dim/2)
+        cur = ggml_rope_ext(
+            ctx0,
+            cur,
+            pos_x,      // positions
+            nullptr,    // freq factors
+            n_dim/2,    // n_dims
+            GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta,
+            1.0f, 0.0f, 1.0f, 0.0f, 0.0f
+        );
 
-        // second half
-        ggml_tensor * second;
-        {
-            second = ggml_view_4d(ctx0, cur,
-                n_dim/2, n_head, n_pos, n_batch,
-                cur->nb[1],
-                cur->nb[2],
-                cur->nb[3],
-                n_dim/2 * ggml_element_size(cur));
-            second = ggml_rope_ext(
-                ctx0,
-                second,
-                pos_y,      // positions
-                nullptr,    // freq factors
-                n_dim/2,    // n_dims
-                GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta,
-                1.0f, 0.0f, 1.0f, 0.0f, 0.0f
-            );
-        }
+        // second half, dims [n_dim/2, n_dim)
+        cur = ggml_rope_ext(
+            ctx0,
+            cur,
+            pos_y,      // positions
+            nullptr,    // freq factors
+            n_dim/2,    // n_dims
+            GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta,
+            1.0f, 0.0f, 1.0f, 0.0f, 0.0f
+        );
+        cur = ggml_rope_set_offset(cur, n_dim/2);
 
-        cur = ggml_concat(ctx0, first, second, 0);
         return cur;
     };
 

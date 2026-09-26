@@ -77,7 +77,7 @@ static std::vector<float> run_gdn(
     ggml_tensor * tstate = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S_v, S_v, H, 1);
 
     ggml_cgraph * gf = ggml_new_graph(ctx);
-    ggml_tensor * out = ggml_gated_delta_net(ctx, tq, tk, tv, tg, tbeta, tstate, K, emit_mode);
+    ggml_tensor * out = ggml_gated_delta_net_ext(ctx, tq, tk, tv, tg, tbeta, tstate, K, emit_mode);
     ggml_build_forward_expand(gf, out);
 
     // allocate AFTER the graph (including its output tensor) is fully built, so `out` gets

@@ -43,7 +43,10 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     // DSA lightning indexer uses MQA with single key head
     std::fill(hparams_lid.n_head_kv_arr.begin(), hparams_lid.n_head_kv_arr.end(), 1);
     hparams_lid.n_embd_head_k_full = model.hparams.indexer_head_size;
-    hparams_lid.rope_type          = LLAMA_ROPE_TYPE_NEOX;
+    hparams_lid.n_embd_head_v_full = model.hparams.indexer_head_size;
+    hparams_lid.n_embd_head_k_swa  = model.hparams.indexer_head_size;
+    hparams_lid.n_embd_head_v_swa  = model.hparams.indexer_head_size;
+    hparams_lid.rope_type           = LLAMA_ROPE_TYPE_NEOX;
 
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
@@ -56,6 +59,11 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
 void llama_kv_cache_dsa::clear(bool data) {
     kv_mla->clear(data);
     kv_lid->clear(data);
+}
+
+void llama_kv_cache_dsa::clear_data_only() {
+    kv_mla->clear_data_only();
+    kv_lid->clear_data_only();
 }
 
 bool llama_kv_cache_dsa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -168,7 +176,15 @@ void llama_kv_cache_dsa::state_write(llama_io_write_i & io, llama_seq_id seq_id,
 
 void llama_kv_cache_dsa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     kv_mla->state_read(io, seq_id, flags);
-    kv_lid->state_read(io, seq_id, flags);
+
+    try {
+        kv_lid->state_read(io, seq_id, flags);
+    } catch (...) {
+        // the MLA part is already restored - undo it, so that a failed restore leaves nothing behind
+        kv_mla->state_clear(seq_id);
+
+        throw;
+    }
 }
 
 llama_kv_cache * llama_kv_cache_dsa::get_mla() const {

@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("StableLmForCausalLM", "StableLMEpochForCausalLM", "LlavaStableLMEpochForCausalLM")
+@ModelBase.example("stabilityai/stablelm-2-1_6b")
 class StableLMModel(TextModel):
     model_arch = gguf.MODEL_ARCH.STABLELM
 

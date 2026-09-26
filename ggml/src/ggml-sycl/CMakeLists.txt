@@ -25,12 +25,20 @@ ggml_add_backend_library(ggml-sycl
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
+list(REMOVE_ITEM GGML_SOURCES_SYCL "${CMAKE_CURRENT_SOURCE_DIR}/sycl-mutable-command-list-probe.cpp")
 file(GLOB   SRCS "template-instances/fattn-tile*.cpp")
 list(APPEND GGML_SOURCES_SYCL ${SRCS})
 file(GLOB   SRCS "template-instances/fattn-vec*.cpp")
 list(APPEND GGML_SOURCES_SYCL ${SRCS})
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
+
+# LLAMA_BUILD_TESTS covers this fork's canonical build (a llama.cpp superproject
+# build, where GGML_BUILD_TESTS is off by default per docs/); GGML_BUILD_TESTS
+# covers a ggml-standalone test build, where LLAMA_BUILD_TESTS doesn't apply.
+if (LLAMA_BUILD_TESTS OR GGML_BUILD_TESTS)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_TESTING)
+endif()
 
 if (WIN32)
     # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
@@ -105,20 +113,67 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+if (GGML_SYCL_DEVICE_CODE_SPLIT)
+    target_compile_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+    target_link_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+endif()
+
+message(STATUS "GGML_SYCL_DEVICE_CODE_SPLIT ${GGML_SYCL_DEVICE_CODE_SPLIT}")
+
 message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.
-    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
+    find_path(LEVEL_ZERO_DEV_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
     find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
-    if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    if(ZE_LOADER_LIB AND LEVEL_ZERO_DEV_INCLUDE_DIR)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
         target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
-        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
+        message(STATUS "Level Zero development headers found: ${LEVEL_ZERO_DEV_INCLUDE_DIR}")
     else()
-        message(WARNING "Level Zero loader or headers not found, Level Zero support disabled")
+        message(WARNING "Level Zero loader or development headers not found, "
+                        "Level Zero API support disabled. "
+                        "Please install the Level Zero SDK/development package "
+                        "to support Level Zero API features. "
+                        "Level Zero API is not mandatory for SYCL backend, "
+                        "but it is required by the special features for better "
+                        "function & performance on Intel GPUs.")
+    endif()
+endif()
+
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API AND ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    get_filename_component(GGML_SYCL_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(GGML_SYCL_OPENCL_CLANG
+                 NAMES clang
+                 HINTS "${GGML_SYCL_COMPILER_BIN_DIR}/compiler"
+                 NO_DEFAULT_PATH)
+    find_program(GGML_SYCL_LLVM_SPIRV NAMES llvm-spirv)
+    if (GGML_SYCL_OPENCL_CLANG AND GGML_SYCL_LLVM_SPIRV)
+        set(MUTABLE_PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/sycl-mutable-command-list-probe.cl")
+        set(MUTABLE_PROBE_BITCODE "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.bc")
+        set(MUTABLE_PROBE_SPIRV "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.spv")
+        add_custom_command(
+            OUTPUT "${MUTABLE_PROBE_SPIRV}"
+            BYPRODUCTS "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_OPENCL_CLANG}" -cc1 -triple spir64 -cl-std=CL2.0
+                    -finclude-default-header -emit-llvm-bc "${MUTABLE_PROBE_SOURCE}"
+                    -o "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_LLVM_SPIRV}" "${MUTABLE_PROBE_BITCODE}" -o "${MUTABLE_PROBE_SPIRV}"
+            DEPENDS "${MUTABLE_PROBE_SOURCE}"
+            VERBATIM)
+        add_executable(sycl-mutable-command-list-probe EXCLUDE_FROM_ALL
+                       sycl-mutable-command-list-probe.cpp)
+        target_include_directories(sycl-mutable-command-list-probe PRIVATE "${LEVEL_ZERO_INCLUDE_DIR}")
+        target_link_libraries(sycl-mutable-command-list-probe PRIVATE "${ZE_LOADER_LIB}")
+        target_compile_definitions(
+            sycl-mutable-command-list-probe
+            PRIVATE MUTABLE_PROBE_SPIRV_PATH="${MUTABLE_PROBE_SPIRV}")
+        add_custom_target(sycl-mutable-command-list-probe-spirv DEPENDS "${MUTABLE_PROBE_SPIRV}")
+        add_dependencies(sycl-mutable-command-list-probe sycl-mutable-command-list-probe-spirv)
+    else()
+        message(STATUS "Mutable command-list probe disabled: OpenCL clang or llvm-spirv not found")
     endif()
 endif()
 
@@ -157,6 +212,7 @@ else()
     message(STATUS "oneDNN support disabled by the user")
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
+
 
 if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)

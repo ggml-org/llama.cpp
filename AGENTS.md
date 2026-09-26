@@ -1,293 +1,412 @@
-# Instructions for llama.cpp (TurboQuant fork)
+# Repository Guidelines
+
+> [!IMPORTANT]
+> ONLY EVER CREATE PRs FROM THE CURRENT BRANCH TO THE 'master' BRANCH OF FORK 'Raudbjorn/ggml-llama.cpp'
+
+## Working Principles
+
+**Evidence before assertion.** Do not claim a kernel works, a build succeeds, or a benchmark improved unless tool output proves it. Run the test, read the file, execute the command. A plausible inference is not evidence.
+
+**Lead with the conclusion.** State the answer, patch, or command first. Then give rationale, assumptions, and material trade-offs. Never open with preamble or validation.
+
+**Verify at the source.** Before modifying any file, read it. Before citing a line number, confirm it. Before asserting "X is not implemented," grep for it. Stale mental models are the primary failure mode in this codebase.
+
+**Simplest complete solution.** No speculative abstractions, no unrequested architectural scope. Preserve unrelated user work. If a 3-line fix solves the root problem, do not write a 30-line refactor.
+
+**Correct errors plainly.** If a premise is wrong -- a cited line number is stale, a claimed mechanism doesn't exist in the code, a benchmark number is from a different binary -- say so directly with the correcting evidence. Never manufacture agreement.
+
+**Distinguish confidence from certainty.** Mark inferences. State revision conditions: "this holds until X changes." When material uncertainty affects the decision, surface it.
+
+## Precedence
+
+1. Safety and integrity (non-overridable): never fabricate results, never claim unperformed actions
+2. This file + repo conventions (ASCII-only, PR rules, existing patterns)
+3. Current task instructions from the user
+4. Global defaults (style, tooling preferences)
+
+At the same level, the most recent specific instruction overrides an older or broader one. Project conventions override style defaults, never integrity rules.
+
+## Code and Commit Standards
+
+- **ASCII only**: No emdash, unicode arrows, or unicode symbols in code or commits. Use `-`, `->`, `x`, `...`
+- **Concise comments**: No redundant or excessive inline commentary
+- **Reuse existing infrastructure**: No new subsystems or invasive changes that risk breaking existing behavior
+- **Read before write**: Understand existing patterns; your changes must blend in with the surrounding codebase
+- **One commit per logical change**: Atomic, revertible. No "wip" commits left on branches intended for PR
 
 ## Project Overview
 
-This repo is a fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) (upstream) that adds the TurboQuant feature set on top of a fully-synced upstream base. The local tree always contains all of upstream master plus fork additions; rebasing onto latest upstream is a recurring task.
+Fork of ggml-org/llama.cpp adding **TurboQuant** KV-cache quantization (WHT rotation + PolarQuant centroid quantization) ported to the **Intel SYCL backend** for **Arc A770** (acm-g10, Xe-HPG/DG2).
 
-### What TurboQuant adds
+TurboQuant compresses KV caches to 2/3/4-bit (`GGML_TYPE_TURBO2_0`/`TURBO3_0`/`TURBO4_0`, enum 43/44/45) using 128-element blocks. The graph applies forward-WHT to Q before attention and inverse-WHT to output after; FA kernels receive Q already rotated and only centroid-dequant K/V.
 
-TurboQuant compresses the KV cache far beyond the standard `q8_0` by applying a fixed 128x128 orthonormal Walsh-Hadamard rotation (`GGML_OP_TURBO_WHT`) to cache vectors before quantization, which Gaussianizes the distribution, and inverse-rotating after dequantization. Head dims that are not multiples of 128 are zero-padded. MLA models (DeepSeek) have no separate V cache, so V rotation/padding is skipped for them, and K/V cache types must be identical.
+**Lineage**: upstream -> TheTom-llama-cpp-turboquant (CPU+CUDA+Metal+Vulkan oracle) -> this fork (SYCL port). CUDA has tensor-core turbo FA + SLM LUT + InnerQ; SYCL has VEC kernel (default) + experimental XMX/DPAS path (`GGML_SYCL_FA_XMX=1`, same-type K=V, D=128/256) + InnerQ hooks (dormant -- no calibration computes scale_inv).
 
-The five fork-only GGML types (registered in `ggml/include/ggml.h`):
+**Performance reality**: The SYCL turbo path is dequant-compute-bound. turbo3 is slower than f16/q8_0 at every depth despite 5x smaller KV. Root cause: per-element centroid gather + scalar multiply vs q8_0's single dp4a per 4 elements. This is the central unsolved problem.
 
-| Type   | Enum                       | Purpose                             | Size         |
-|--------|----------------------------|-------------------------------------|--------------|
-| turbo2 | `GGML_TYPE_TURBO2_0` (43)  | KV cache only                       | 2 bits/value |
-| turbo3 | `GGML_TYPE_TURBO3_0` (44)  | KV cache only                       | 3.25 bits    |
-| turbo4 | `GGML_TYPE_TURBO4_0` (47)  | KV cache only                       | 4.25 bits    |
-| TQ3_1S | `GGML_TYPE_TQ3_1S` (45)    | model weights, WHT-rotated Lloyd-Max| 3 bits, block 32 |
-| TQ4_1S | `GGML_TYPE_TQ4_1S` (46)    | model weights                       | 4 bits, block 32 |
+## Architecture & Data Flow
 
-Turbo cache types are runtime-only, never stored in GGUF. TQ3_1S/TQ4_1S are first-class weight types with CPU, CUDA/HIP (warp-cooperative mmvq), Metal, Vulkan, and SYCL kernels, exposed as `llama-quantize` targets.
+### TurboQuant Attention Pipeline
 
-### Key files
+```
+Q (f32/f16)
+  -> ggml_turbo_wht(direction=0, group=128)     [forward WHT + InnerQ scale_inv]
+  -> GGML_OP_FLASH_ATTN_EXT                     [VEC kernel; centroid-dequant K/V in-kernel]
+  -> ggml_turbo_wht(direction=1, group=128)     [inverse WHT, self-inverse butterfly]
+  -> [optional] ggml_view_3d strips V zero-padding
+```
 
-- `ggml/src/ggml-turbo-quant.c` - the codec (keep byte-identical to fork tip)
-- `ggml/include/ggml.h` - type enum 43-47, `GGML_OP_TURBO_WHT`
-- `src/llama-kv-cache.cpp` - cache wiring, `get_k_idx`, layer-adaptive precision
-- `src/llama-graph.cpp` - inverse-WHT post-processing (FA and non-FA paths)
-- `ggml/src/ggml-cuda/mmvq-tq.cu` - native TQ dp4a kernels (`GGML_TQ_NATIVE=1`)
-- `ggml/src/ggml-vulkan/` - turbo FA, SET_ROWS, dequant shaders
-- `ggml/src/ggml-metal/ggml-metal.metal` - TurboFlash kernels
-- `docs/KV-cache-quantization.md` - authoritative usage doc (read before touching cache types)
+### Op Dispatch
 
-### Usage
+`ggml-sycl.cpp` switch(op->op) at ~:4970-5280 calls `ggml_sycl_op_*` handlers:
+
+- `GGML_OP_SET_ROWS` -> `ggml_sycl_op_set_rows()` -- KV cache write with turbo quantize
+- `GGML_OP_FLASH_ATTN_EXT` -> `ggml_sycl_flash_attn_ext()` -- FA routing
+- `GGML_OP_TURBO_WHT` -> `ggml_sycl_op_turbo_wht()` -- WHT butterfly
+
+`MUL_MAT` routing: batch 1 -> DMMV; batch 2-8 -> MMVQ; batch >= 9 -> oneMKL GEMM. MMQ disabled.
+
+### FA Kernel Routing
+
+`fattn.cpp:ggml_sycl_get_best_fattn_kernel()` returns `{NONE=0, VEC=100, ONEDNN=150, TILE=200, XMX=300}`:
+
+- **Turbo K or V**: VEC by default (D % 128 == 0). XMX opt-in for same-type K=V, D in {128, 256} (`GGML_SYCL_FA_XMX=1`). TILE does not support turbo.
+- Non-turbo: VEC if D <= 512 && D % 64 == 0; TILE otherwise or GQA opt. XMX opt-in for f16/q8_0 same-type, D in {128, 256}.
+- XMX kernel (`fattn-xmx.hpp`): off by default. Ignores ALiBi, softcap, sinks, multi-seq. SG=16 hits IGC ICE; SG=8 functional but 4-7x slower than VEC -- not production-viable yet.
+- Master enable: `SYCL_FLASH_ATTN` macro (common.hpp:46).
+
+### KV Cache Policy (src/llama-kv-cache.cpp)
+
+- **Auto-asymmetric K downgrade** (:213-252): turbo K + GQA >= 6 + symmetric -> K downgraded to Q8_0. Override: `TURBO_AUTO_ASYMMETRIC=0`.
+- **Layer-adaptive** (`TURBO_LAYER_ADAPTIVE` env): 0=uniform, 1-2=q8_0 boundary layers, 5-7=boundary-V variants.
+- **Zero-padding**: non-128-aligned head_dim padded; WHT preserves inner products.
+- **q8_0 quants-first**: `GGML_SYCL_Q8_KV_QUANTS_FIRST` env (SYCL, head_dim==128).
+
+### Type System (ggml/include/ggml.h:435-440)
+
+| Type | Enum | Block | Layout |
+| ------ | ------ | ------- | -------- |
+| TURBO2_0 | 43 | 34B | norm(f16) + qs[32] (2-bit) |
+| TURBO3_0 | 44 | 50B | norm(f16) + qs[32] (low 2-bit) + signs[16] (high 1-bit) |
+| TURBO4_0 | 45 | 68B | norm(f16) + rnorm(f16) + qs[64] (4-bit nibble) |
+| TQ3_1S | 46 | 16B | weight quant, block=32 |
+| TQ4_1S | 47 | 20B | weight quant, block=32 |
+| Q8_CR | 48 | 272B | ConvRot weight quant, block=256 |
+| Q5_CR | 49 | 176B | ConvRot weight quant, block=256 |
+| Q6_CR | 50 | 210B | ConvRot weight quant, block=256 |
+| COUNT | 51 | | |
+
+All turbo KV: `QK_TURBO* = 128`. Block layouts in `ggml-common.h:260-343` with `static_assert` guards.
+
+**ABI hazard**: Enum 42 is upstream's next free slot. GGUF serializes enums numerically -- collision risk on rebase.
+
+## Key Directories
+
+| Directory | Purpose |
+| ----------- | --------- |
+| `ggml/src/ggml-sycl/` | SYCL backend (~110 files): FA kernels, turbo quant, op handlers, MMVQ/DMMV |
+| `ggml/src/ggml-sycl/template-instances/` | 50 pre-compiled FA instantiation units (39 VEC + 11 TILE) |
+| `ggml/src/` | ggml core: `ggml-turbo-quant.c` (CPU reference), `ggml-common.h`, `ggml-innerq.c` |
+| `ggml/include/` | Public headers: `ggml.h`, `ggml-backend.h`, `ggml-innerq.h` |
+| `src/` | llama core: `llama-graph.cpp` (WHT wiring), `llama-kv-cache.cpp` (turbo policy) |
+| `common/` | Arg parsing, sampling, chat templates (Jinja), speculative decode |
+| `tools/` | CLI: `llama-server`, `llama-bench`, `llama-perplexity`, `llama-completion` |
+| `tests/` | Oracle gate + backend ops + turbo unit tests |
+| `scripts/` | Bench harnesses, quality gates, sweep orchestrators |
+| `docs/development/upstream-merge.md` | Canonical runbook for syncing upstream while preserving backend pruning and TurboQuant/SYCL surfaces |
+| `docs/research/` | Per-campaign benchmark reports, build pins, fork-vs-upstream diffs |
+| `docs/backend/SYCL.md` | Upstream SYCL docs port (39.7KB): build recipes, env vars, known-good stack |
+
+## Development Commands
+
+### Build (JIT -- development)
 
 ```bash
-llama-cli -m model.gguf -c 8192 -ngl 99 --cache-type-k q8_0 --cache-type-v turbo3
+source /opt/intel/oneapi/setvars.sh
+cmake -B build-sycl -GNinja \
+  -DGGML_SYCL=ON \
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= \
+  -DGGML_SYCL_F16=ON
+ninja -C build-sycl
 ```
 
-Any combination of `f16`/`q8_0`/`turbo2`/`turbo3`/`turbo4` for K and V is supported. Turbo cache types require flash attention; it is auto-enabled with a warning. Quantized V with FA explicitly disabled is an error (upstream behavior). The same flags work in `llama-server`, `llama-bench`, `llama-perplexity`.
+JIT: ~200s cold start on first run. `SYCL_CACHE_PERSISTENT=1` caches kernels.
 
-### Environment knobs
+### Build (AOT -- production)
 
-| Variable                    | Default | Effect |
-|-----------------------------|---------|--------|
-| `TURBO_LAYER_ADAPTIVE`      | `0`     | Layer-adaptive KV precision; `7` = Boundary V (edge layers q8_0, middle turbo) |
-| `TURBO_AUTO_ASYMMETRIC`     | `1`     | Auto-select asymmetric K/V types for large-GQA models |
-| `TURBO_SPARSE_V`            | `1`     | Sparse-V dequant skip in flash attention |
-| `GGML_TQ_NATIVE`            | unset    | `1` opts out of load-time TQ->q8_0 conversion, uses fused native TQ kernels (saves ~1.7x VRAM on decode-heavy workloads) |
-| `GGML_CUDA_FUSE_CHAIN`      | unset    | `0` disables the elementwise chain fusion (SILU/GELU/ADD/MUL/SCALE/CLAMP runs into one kernel, `ggml_cuda_fuse_elem_chain`) |
-| `GGML_CUDA_Q8CACHE`         | unset    | `0` disables the per-graph shared-quantize cache in mmvq (gate and up projections reuse one q8_1 copy of the activation) |
-| `LLAMA_ATTN_ROT_K/V_OVERRIDE` | off   | Optional upstream attention rotation (TurboQuant manages its own rotation) |
+```bash
+cmake -B build-aot -GNinja \
+  -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DGGML_SYCL_DEVICE_ARCH=acm-g10 -DGGML_SYCL_F16=ON
+ninja -C build-aot   # ~14 min
+```
 
-### Test gates (all must pass before touching quant/backend code)
+### Key CMake Options
 
-- `test-turbo-quant` - turbo3 basis MSE=0/Cosine=1.0, turbo4 Cosine=0.9956
-- `test-quantize-fns` - includes TQ3_1S/TQ4_1S and rotated-domain buffer sizing
-- `test-backend-ops` - full sweep on CPU + CUDA0 (23k+ cases on the RTX 5090 dev box); rejects 0/0 as FAIL
-- `llama-bench` with `-ctk/-ctv turboN`; type parser accepts `tq3_1s`/`tq4_1s`
+| Option | Default | Purpose |
+| -------- | --------- | --------- |
+| `GGML_SYCL` | OFF | Enable SYCL backend |
+| `GGML_SYCL_F16` | OFF | 16-bit float SYCL calculations |
+| `GGML_SYCL_DEVICE_ARCH` | "" (JIT) | AOT target (`acm-g10`) |
+| `GGML_SYCL_GRAPH` | ON | SYCL graph capture |
+| `GGML_SYCL_DEVICE_CODE_SPLIT` | ON | Per-kernel device code split |
+| `GGML_SYCL_SUPPORT_LEVEL_ZERO_API` | ON | Level Zero direct allocation |
 
-### What the test gates do and do not cover
+`GGML_SYCL_WARP_SIZE=16` hardcoded for INTEL (`ggml-sycl/CMakeLists.txt:209`). Beware: some headers define `QK_WARP_SIZE`/`WARP_32_SIZE` as 32.
 
-What each suite does:
+### Runtime Environment
 
-- `test-turbo-quant` - CPU codec round-trip quality: quantize -> dequantize -> CPU inverse WHT, MSE/cosine on fixed vectors, plus a chunked-dequant invariance check for all five turbo types at row lengths straddling the vec_dot chunk size. No GGML graphs, no backend kernels.
-- `test-quantize-fns` - CPU quantize/dequantize functions against error budgets, including TQ3_1S/TQ4_1S. Skips TURBO2_0/3_0/4_0 by design: their dequant output stays in the WHT-rotated domain.
-- `test-backend-ops` - per-op GGML graphs, run on each backend and compared numerically against the CPU reference. This is the only gate that exercises backend kernels.
-- `llama-bench` - tokens/s on real models. Timing only; it never checks output correctness.
+```bash
+export ONEAPI_DEVICE_SELECTOR=level_zero:0
+export SYCL_CACHE_PERSISTENT=1
+export GGML_SYCL_DISABLE_GRAPHS=1          # default
+# GGML_SYCL_FA_XMX=1                       # experimental XMX FA
+# TURBO_AUTO_ASYMMETRIC=0                  # disable K downgrade
+# TURBO_LAYER_ADAPTIVE=7                   # layer-adaptive KV
+# GGML_SYCL_Q8_KV_QUANTS_FIRST=1           # q8_0 quants-first layout
+```
 
-Coverage limits (each caused a real miss):
+`LLAMA_ARG_*` parsing remains in `llama-common`; unknown-name diagnostics are
+opt-in (`--warn-unknown-env`) and log names only, never values. With
+`LLAMA_DOWNLOAD=OFF`, downloader and token environment variables have no
+network effect. Server and UI executables and their runtime surfaces are absent
+from the generated `lib` branch, while server option definitions remain
+available through `llama-common` parser examples. After an explicit parameter,
+token precedence is `HF_TOKEN` then
+`HUGGING_FACE_HUB_TOKEN`; endpoint precedence is `MODEL_ENDPOINT` then
+`HF_ENDPOINT`. The `lib` branch is generated from `master` and must never be
+edited directly. Server-only GCP behavior: when `AIP_MODE=PREDICTION`,
+`AIP_HTTP_PORT` overrides the CLI port.
 
-- `test-backend-ops` used to report `Backend ...: OK` when every case was skipped because the backend verdict was `n_ok == tests_run`, and 0/0 passed. It now fails the backend when no test ran. Issue #242 remains open for reporting which graph node caused a case to be unsupported.
-- The generic SET_ROWS sweep has a view variant with `r/2` rows. At r=1 that is 0 rows: the case writes nothing and passes for every type in `all_types`, including TQ4_1S.
-- The MUL_MAT_ID sweep used n=16 only, and the mat-vec decode path is selected only when `src2->ne[1] <= 8` (`ggml_vk_use_mul_mat_vec_id`). n=16 exercises mul_mm_id only; MoE decode was never touched. The n=1 cases and the DSv4-shaped sweep (commit 637300387, PR #269) now cover both sides of that threshold.
-- The harness initializer wrote quantized tensors with one packed `ggml_backend_tensor_set`, which copies `size` bytes contiguously and never strides by `nb[1]`. For a strided view (the `k_v > k` MUL_MAT cases view `k` rows of a `k_v`-row base) the data landed at `i*row_size` instead of `i*nb[1]` and the last rows were never written; the CPU reference read the stale tail and produced NaN, which presented as the CUDA backend failing because CPU is the reference and is skipped as a backend under test. Fixed by row-by-row init for non-contiguous tensors (issue #268, PR #276). The TQ4_1S `k_v=1600` case now passes: the CUDA NaN #276 observed no longer occurs because PR #277 gates the fused TQ mul_mat paths on contiguous `src1`/`dst`, routing this view to the stride-aware fallback.
+### GPU Discipline (mandatory before timing runs)
 
-A green run means the cases that ran passed, not that your change was exercised. Check that your cases actually ran:
+```bash
+sudo systemctl stop llama-sycl.cpp.service
+fuser -v /dev/dri/renderD128               # verify sole tenancy
+dmesg | grep -iE 'xe.*(reset|hang|timeout|GuC)'
+# ... run benchmark wrapped in timeout ...
+sudo systemctl start llama-sycl.cpp.service
+```
 
-- `-o` filters on the op name from `ggml_op_desc` (e.g. SET_ROWS). The dedicated turbo write tests have their own names (SET_ROWS_TURBO3, SET_ROWS_TURBO4, SET_ROWS_TQ4_1S); filter with those, or they never run.
-- Watch for `not supported [backend]` lines and `0/0 tests passed`.
+### Benchmark Commands
 
-### Git workflow
+```bash
+# Product bench
+./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 \
+  -ctk turbo3 -ctv turbo3 -p 512 -n 128 -r 3
 
-- Remotes: `origin` = TheTom/llama-cpp-turboquant (this repo); the fork remote tracks the upstream TurboQuant fork (same repo, two names); add `upstream` = ggml-org/llama.cpp when syncing
-- Main branches: `feature/turboquant-kv-cache` tracks the upstream TurboQuant fork
-- Upstream master is always fully contained in the tree (verified by rebase parity audits; git log is the record of the last sync point)
+# Depth sweep
+./build-sycl/bin/llama-bench -m model.gguf -ngl 99 -fa 1 \
+  -ctk turbo3 -ctv turbo3 -p 0 -n 128 -d 0,4096,16384
 
-### Known pitfalls (each caused a real bug once - check these first on regressions)
+# Perplexity
+./build-sycl/bin/llama-perplexity -m model.gguf -ngl 99 -fa 1 \
+  -ctk turbo3 -ctv turbo3 -f wikitext-2-raw/wiki.test.raw -c 4096
 
-- **Metal**: turbo kernels need their `[[host_name]]` instantiations; a missing one is a NULL-pipeline deref on the first turbo KV write.
-- **Vulkan**: SET_ROWS pipeline registration must include TURBO2_0/3_0/4_0 with `require_full_subgroups=true, subgroup_size=32`, or every turbo KV write aborts.
-- **CUDA dispatch**: TQ weights must be excluded from the mmvq path before the fused-TQ branch (`ggml_cuda_should_use_mmvq`), or `GGML_TQ_NATIVE=1` aborts.
-- **CUDA TQ4_1S decode**: the centroid LUT in `mmvq-tq.cu` decodes through `get_int_from_table_16`, then re-interleaves even/odd bytes with constant selectors (`__byte_perm(v.x, v.y, 0x5140 / 0x7362)` on nvcc and MUSA, `__builtin_amdgcn_perm` on HIP), the same pattern `vecdotq.cuh` already uses. The old garbage output (NMSE ~1.0) came from the earlier permute chain, not from constant selectors. Verified numerically on GB10 (sm_121) and MI210 (gfx90a). Gate any change to this function on a CUDA-side `test-backend-ops -o MUL_MAT -p type_a=tq4_1s` run on an NVIDIA card plus the AMD run, not on a clean compile.
-- **DeepSeek/MLA**: K and V cache types must be identical; turbo FA auto-enable runs before upstream's quantized-V FA check.
-- **MoE models**: the small-batch TQ `MUL_MAT_ID` path routes experts on device and stays CUDA-graph capturable (`[TAG_MUL_MAT_ID_CUDA_GRAPHS]` in `ggml-cuda.cu`); buffers it hands to kernels must outlive every captured graph, so caches retire outgrown buffers instead of freeing them. The large-batch path dequantizes to f16 cuBLAS and synchronizes the stream.
-- **gguf-py**: keep model constants deduplicated; stacked-duplicate merge artifacts crash `import gguf`.
+# Paired-CI A/B (sole tenancy required)
+python3 scripts/bench-a770-fork-unique.py --campaign product \
+  --candidate build-sycl --baseline build-baseline
 
-> [!IMPORTANT]
->
-> AI-assisted development is encouraged in this fork. Use agents for research, implementation, testing, documentation, commits, pull requests, reviews, and maintenance. Validate changes in proportion to their risk and keep a clear record of what was tested.
+# Full quality gate
+bash scripts/turbo-quality-gate.sh
+```
 
----
+## Code Conventions & Patterns
 
-## Guidelines for Contributors
+### Naming
 
-A PR represents a long-term commitment - maintainers must review, integrate, and support the code indefinitely. What matters is whether the change is correct, understandable, tested, and maintainable.
+| Prefix | Scope | Example |
+| -------- | ------- | --------- |
+| `ggml_sycl_op_*` | Backend op handler | `ggml_sycl_op_turbo_wht` |
+| `ggml_sycl_flash_attn_ext*` | FA entry/variants | `ggml_sycl_flash_attn_ext_vec_case` |
+| `flash_attn_ext_*` | Internal FA helpers | `flash_attn_ext_vec<D, ncols, type_K, type_V>` |
+| `k_*` | Device kernel lambdas | `k_turbo_wht_f32_sycl` |
+| `turbo_*` | TurboQuant helpers | `turbo_nearest_centroid_3bit` |
+| `quantize_row_turbo*_ref` | CPU reference quantizers | `quantize_row_turbo3_0_ref` |
+| `dequantize_turbo*` | Device inline dequant | `dequantize_turbo3_0` |
 
-A working, in-scope PR is **not** enough on its own to get merged. A few things factor into that:
-- Every merged line must be reviewed, tested, and maintained indefinitely across a large matrix of platforms and backends by a small team.
-- llama.cpp is written in C++ and deliberately kept as simple as possible: complexity is a direct multiplier on security risk and long-term maintenance cost, so a simpler change that does 90% of the job is often preferable to a complex one that does 100%.
-- What matters most is technical understanding, evidence, and willingness to maintain the change long-term.
-- Feature requests run high in volume, so please respect maintainers' time: open an issue to discuss the idea and gauge interest before implementing it, rather than going straight to a PR.
+### File Naming
 
-Contributors must:
-1. **Understand their code fully** - use AI assistance freely, but verify important claims and design choices.
-2. **Own maintenance** - address bugs and respond thoughtfully to feedback.
-3. **Communicate directly** - be concise, specific, productive, and positive without being sappy.
-4. **Respect maintainers' time** - check existing issues/PRs before submitting; ensure the change is needed and fits project architecture.
+- `ggml-sycl/<op>.{cpp,hpp}` -- op pair
+- `fattn-{vec,tile,xmx,onednn}.{hpp,cpp}` -- FA kernel families
+- `template-instances/fattn-{vec,tile}-instance-<types>.cpp` -- explicit instantiation
+- `turbo-{wht,quants}.{cpp,hpp}` -- TurboQuant
 
-### AI-Assisted Development
+### Error Handling
 
-AI assistance is welcome throughout the development workflow, including:
+Two-level model, no silent exception propagation:
 
-- Learning, exploration, debugging, and codebase research
-- Design analysis, implementation, refactoring, and mechanical work
-- Tests, benchmarks, documentation, and release notes
-- Commit messages, PR descriptions, issue reports, and reviewer responses
-- Code review, review comments, CI investigation, and maintenance
-- Commits, pushes, branch management, PR operations, and comments for any contributor when requested or included in the assigned workflow
+1. `GGML_ASSERT(cond)` -- precondition bugs (type/shape/alignment)
+2. `GGML_ABORT(fmt, ...)` -- unrecoverable runtime mismatch
+3. `SYCL_CHECK(expr)` -- wraps every SYCL API call -> `GGML_ABORT` on failure
+4. `CHECK_TRY_ERROR(expr)` -- catches `std::exception`, returns `dpct::err0`
 
-This policy applies equally to every contributor and agent working in this repository. Agents may complete an assigned workflow end to end. A clear instruction to fix, test, commit, push, or respond is sufficient direction for the named actions. Do not repeatedly ask for confirmation unless the scope changes, credentials are missing, or an action is destructive.
+### SYCL Kernel Conventions
 
-AI attribution is optional. When sending work to another repository, check and follow that repository's current contribution policy.
+- `[[sycl::reqd_sub_group_size(WARP_SIZE)]]` on kernel lambdas (WARP_SIZE=16)
+- Reductions: `dpct::permute_sub_group_by_xor` + `sycl::group_barrier`
+- SLM: `syclex::work_group_static<char[N]>` (TILE) or `local_accessor` (WHT)
+- VEC template: `flash_attn_ext_vec<D, ncols, type_K, type_V, q8_quants_first, warp_size>`
+- `nthreads_KQ = min(D/4, warp_size)` for quantized K
+- `static_assert(warp_size % nthreads_KQ == 0)` guards
 
----
-
-## Guidelines for AI Coding Agents
-
-Every PR requiring review consumes finite maintainer capacity. Before assisting with any submission, verify:
-- The proposed changes and their tradeoffs are understood
-- The change addresses a documented need (check existing issues)
-- The PR is appropriately scoped and follows project conventions
-
-Agents should inspect relevant code before editing, make reasonable assumptions when safe, test in proportion to risk, and clearly report uncertainty or incomplete coverage.
-
-### Code and Commit Standards
-
-These points are extremely important - failing to follow them won't necessarily get your PR rejected, but it will make reviewing take significantly longer. Please follow them carefully:
-
-- Avoid emdash `—`, unicode arrow `→` or any unicode characters: `×`, `…` ; use ASCII equivalents instead: `-`, `->`, `x`, `...`
-- Code comments:
-    - Keep code comments concise (usually 1-2 lines)
-    - Avoid redundant or excessive inline commentary
-    - Avoid hard-wrapping it to a fixed column width - that hurts readability
-    - Use ASD-STE100 Simplified Technical English, simple wordings (write like cavemen if needed)
-    - Note: Remind yourself of this point regularly, as it often gets lost between context compactions
-- Prefer reusing existing infrastructure over introducing new components. Avoid invasive changes that add whole new subsystems or risk breaking existing behavior
-- Do NOT split a line into multiple lines mid-sentence, do NOT try to force the line to fit a fixed number of characters
-- Before writing code, read the relevant files and understand the existing patterns. Changes must blend in with the surrounding codebase. For a large change or new pattern, explain the approach and tradeoffs before implementation. Ask for direction only when the scope or design requires a meaningful user choice.
-
-Common mistakes to avoid:
-- Write comments first then write code: this usually leads to extensive redundant comments. Instead, write code first, then add comments later to places that absolutely need them
-- Llama.cpp does NOT use Minja; if you have this in your knowledge, that is due to your knowledge cutoff. Llama.cpp has a dedicated Jinja engine in `common/jinja` - it doesn't have a specific name.
-
-### Code Comment Examples
+### Graph Construction (src/llama-graph.cpp)
 
 ```cpp
-// GOOD (code is self-explanatory, no comment needed)
-
-n_ctx = read_metadata("context_length", 1024);
-
-
-// BAD (too verbose, restates what the code already says)
-
-// Populate the n_ctx from metadata key name "context_length", default to 1024 if the key doesn't exist
-n_ctx = read_metadata("context_length", 1024);
+// Forward WHT on Q (direction=0)
+q = ggml_turbo_wht(ctx0, q, 0, 0, innerq_scale);
+// Inverse WHT on output (direction=1)
+cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale);
 ```
 
-```cpp
-// GOOD (explains a non-obvious invariant)
+Gate: `v->type == GGML_TYPE_TURBO{2,3,4}_0`. Three call sites: standard KV, K-only, ISWA.
 
-accept();
-bool has_client = listen(idle_interval);
-if (has_client) {
-  task_queue->on_idle(); // also signal child disconnection
-}
+## Important Files
 
+### SYCL Backend
 
-// BAD (too verbose, restates what the code already says)
+| File | Role |
+| ------ | ------ |
+| `ggml-sycl/ggml-sycl.cpp` | Entry: device init, op dispatch, mul_mat routing, env flags (273KB) |
+| `ggml-sycl/common.hpp` | Macros: `WARP_SIZE`, `SYCL_FLASH_ATTN`, `SYCL_CHECK` |
+| `ggml-sycl/fattn.cpp` | FA routing: `ggml_sycl_get_best_fattn_kernel()` |
+| `ggml-sycl/fattn-common.hpp` | Shared FA: `vec_dot_KQ`, `dequantize_V` dispatch (53KB) |
+| `ggml-sycl/fattn-vec.hpp` | VEC kernel: register-tile, nthreads, reductions (29KB) |
+| `ggml-sycl/fattn-tile.hpp` | TILE kernel: SLM, barrier per KV iter (57KB) |
+| `ggml-sycl/turbo-quants.hpp` | Device centroid tables, dequant/quantize helpers |
+| `ggml-sycl/turbo-wht.cpp` | WHT kernel: forward/inverse, group 32/64/128 |
+| `ggml-sycl/set_rows.cpp` | SET_ROWS turbo quantize dispatch (:428-454) |
+| `ggml-sycl/innerq.cpp` | K-squared profile kernel + C fallback |
+| `ggml-sycl/convert.cpp` | to_fp16/to_fp32 with turbo branches (:766, :850) |
 
-// Instead of blocking indefinitely on accept(), the server polls the listening socket with idle_interval as a timeout. If no new client connects within that interval, it fires task_queue->on_idle() and loops back
+### Llama Core
+
+| File | Role |
+| ------ | ------ |
+| `src/llama-graph.cpp` | WHT wiring around `build_attn_mha()` |
+| `src/llama-kv-cache.cpp` | Auto-asymmetric, layer-adaptive, zero-padding, rotation init |
+| `ggml/src/ggml-turbo-quant.c` | CPU reference: centroids, WHT, quantize/dequantize |
+| `ggml/src/ggml-innerq.c` | InnerQ host policy: decide, k_squared_scale, recovery |
+| `ggml/src/ggml-common.h` | Block layouts + static_asserts (:260-343) |
+
+## Runtime/Tooling
+
+### Required Stack (known-good on A770)
+
+- **Compiler**: oneAPI `icpx`/`icx` 2026.0 (NOT open-source clang++ -- produces unrunnable binaries)
+- **IGC**: 2.36.3+
+- **compute-runtime**: 26.22.x
+- **level-zero-loader**: 1.28.6+
+- **Kernel driver**: i915 (xe blacklisted on this host)
+- **Build**: CMake + Ninja
+- **GPU**: Arc A770 16GB (acm-g10, DG2, Xe-HPG)
+
+### Build Gotchas
+
+1. **sccache substitution**: Pass empty `-DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER=` to prevent sccache replacing icpx with c++
+2. **JIT cold start**: ~200s first run. `SYCL_CACHE_PERSISTENT=1` for warm, `=0` for cold benchmarks
+3. **AOT time**: ~14 min spir64_gen device link. Use JIT for iteration
+4. **mergerfs ENOSPC**: Builds on `/mnt/mrgr` can fail. Use ZFS-backed dirs
+5. **oneDNN**: Installed DNNL is CPU-only. All TUs compile `-DGGML_SYCL_DNNL=0`. Prefill GEMM = oneMKL, not oneDNN
+
+## Testing & QA
+
+### Primary Gate: test-sycl-turbo-correctness
+
+`tests/test-sycl-turbo-correctness.cpp` (1565 lines). CPU-vs-SYCL oracle. **No external model files** -- all synthetic data with fixed seeds.
+
+| Section | Tests |
+| --------- | ------- |
+| [1/1b] | WHT isolation (group 64/128, with/without scale_inv) |
+| [2/2b/2c] | CPY turbo->F32, SET_ROWS quantize, Q8_0 layout |
+| [3] | MUL_MAT turbo (MMVQ single column) |
+| [4/4b] | FA turbo (gated), non-FA path |
+| [5/5b] | FA f16 baseline, TILE sweep |
+| [6/6b] | VEC FA sweep, GQA 4:1/8:1 |
+| [7] | FA d=256 (opt-in, known-hang) |
+| [8] | InnerQ state machine + K-squared profile |
+
+**Oracle metrics**: nmse, cosine, norm_ratio, max_abs. Tiers: `Tol::STD` (nmse < 1e-3, cosine > 0.999) for exact paths; `Tol::LOSSY` (cosine > 0.95, norm_ratio in [0.85, 1.15]) for turbo vs f16.
+
+Exit: `(g_failures > 0 || g_xpass > 0) ? 1 : 0`. XPASS also fails.
+
+### Running Tests
+
+```bash
+# Default (safe)
+./build-sycl/tests/test-sycl-turbo-correctness
+
+# Turbo FA (HANG RISK if kernel broken)
+LLAMA_TEST_TURBO_FA=1 ./build-sycl/tests/test-sycl-turbo-correctness
+
+# InnerQ (host-only, safe)
+LLAMA_TEST_INNERQ=1 ./build-sycl/tests/test-sycl-turbo-correctness
+
+# d=256 (KNOWN HANG on A770)
+LLAMA_TEST_FA256=1 ./build-sycl/tests/test-sycl-turbo-correctness
+
+# Backend ops filtered
+./build-sycl/tests/test-backend-ops -b SYCL0 -o FLASH_ATTN_EXT
+
+# ctest
+ctest --test-dir build-sycl -L sycl --timeout 180 -V
 ```
 
-```cpp
-// GOOD (generic, useful to any future reader)
+`LLAMA_TEST_TURBO_FA` uses exact `strcmp(v, "1")` -- `"true"`/`"on"` do NOT enable.
 
-// reset here, as we will release the slot below
-n_tokens = 0;
-// ... (a lot of code)
-release();
+### Other SYCL Tests
 
+| Test | Purpose |
+| ------ | --------- |
+| `test-sycl-turbo.cpp` | Smoke: SET_ROWS + MUL_MAT for turbo/TQ |
+| `test-sycl-fuzz.cpp` | Random-index SET_ROWS fuzzer (10k iter) |
+| `test-sycl-stress-deep.cpp` | Memory pressure (100k iter, 32k ctx, 512MB) |
+| `test-turbo-innerq-runtime.cpp` | State machine: publish/consume/abort/freeze |
+| `test-kv-cache-adaptive-mode.cpp` | Adaptive policy + Q8_0 repack round-trip |
+| `test-turbo-quant.c` | C round-trip: quant->dequant->inverse-WHT |
+| `test-backend-ops.cpp` | Exhaustive per-op cross-backend (432KB) |
 
-// BAD (addresses the user's task, meaningless out of context)
+### CI
 
-// Reset n_tokens to 0 before releasing the slot. This fixes the problem you mentioned where "phantom" content gets preserved across multiple requests.
-n_tokens = 0;
-```
+`.github/workflows/build-sycl.yml`: FP32/FP16 matrix, oneAPI 2025.3.3, `continue-on-error: true`. Triggers on `ggml/src/ggml-sycl/**`.
 
-```cpp
-// GOOD (code is copied from another place; context is already clear, no comment added)
+## Performance Context
 
-ggml_tensor * inp_pos = build_inp_pos();
+### Current State (measured on A770, Llama-3.1-8B Q4_K_M)
 
-// BAD (code copied from elsewhere - do not add comments that weren't there originally)
+- turbo3 pp512: 854 t/s vs q8_0 1178 (-28%)
+- turbo3 tg128 @ depth: -6% (d=0), -11% (d=4096), -17% (d=16384) vs q8_0
+- f16 KV fastest at depth; q8_0 loses 32% to f16 @ d=16384
+- Root cause: per-element centroid gather + scalar multiply vs dp4a
 
-// inp_pos - contains the positions
-ggml_tensor * inp_pos = build_inp_pos();
-```
+### Killed (do not re-propose without new external evidence)
 
-```cpp
-// GOOD (comment is kept concise and useful)
+| Avenue | Kill evidence |
+| -------- | -------------- |
+| SLM centroid LUT in FA VEC | Measured -8% at depth; Intel 16x4B bank conflicts + GRF spill |
+| nthreads_KQ=1 for turbo | Bundled with reverted LUT; SG=16 occupancy didn't transfer |
+| joint_matrix XMX @ SG=16 | Hard IGC ICE, reproduced 3x |
+| SG=8 XMX FA | Functional but 4-7x slower than VEC |
+| InnerQ trivial scales | Calibration yields [0.997, 1.000] -> no-op |
+| turbo2/3 on MoE | PPL diverges/NaN |
+| Cold-JIT/AOT/cache tuning | 0% steady-state |
+| SYCL graph replay (current driver) | DG2 lacks `ext_oneapi_graph` aspect; per-token re-record is added work |
+| dp4a intrinsic swap | Intrinsic doesn't exist in oneAPI 2026.0 (ESIMD-only) |
 
-// one decode step of code_predictor
-// at step_idx g:
-// - read code from out_code_cache[g], then embed it with codebook table g-1
-// - write new kv at cache row g+1, sample with lm_head[g]
-// - write result to out_code_cache[g+1]
+### Open Avenues (ranked by evidence strength)
 
+1. **q8_0 depth regression** (-32% vs f16 @ 16k): f16 routes to TILE with GQA batching; q8_0 stuck on per-head VEC. Attribution experiment: force f16 to VEC, compare.
+2. **RMS_NORM+MUL fusion**: SYCL is lone no-fusion backend. ~64-96 fewer launches/token. +2-5% tg expected.
+3. **ngram-mod speculative decoding**: Measured 2.3-3.3x on code/multi-turn. Pure config, zero GPU code.
+4. **Upstream cherry-picks**: fused top-k MoE (#25217), UAF fix (#24676), softmax clamp (#24941).
+5. **q8_0 VEC -> TILE routing**: If attribution confirms routing gap, instantiate TILE for type_K=q8_0.
 
-// BAD (comment is long and is forced to fit into a fixed column size, it is very annoying to read as a reviewer)
+### Reference Repos (read-only, local)
 
-// one autoregressive decode step of the 5-layer code_predictor. See the
-// comment in models.h for the cache/tensor conventions this relies on.
-//
-// index mapping (derived from the reference pipeline-tts.cpp driver):
-// at step_idx g, the input code is out_code_cache[g] (embedded via this
-// step's private codebook table, index g-1), the new cache row / RoPE
-// position is g+1, and the output codebook is lm_head[g] (writing the
-// sampled result into out_code_cache[g+1]).
-```
+| Path | Role |
+|------|------|
+| `/mnt/mrgr/llama-cpp-sycl-turbo/compare/llama.cpp` | Upstream baseline (no turbo) |
+| `/mnt/mrgr/llama-cpp-sycl-turbo/TheTom-llama-cpp-turboquant` | CUDA/Vulkan/Metal turbo oracle |
 
-Commit message:
-
-```
-// GOOD: Write a concise commit
-
-llama : fix KV being cleared during context shift
-
-
-// BAD: Write a verbose commit
-
-This commit introduces a comprehensive fix for the key-value cache management
-system, addressing an issue where context shifting could lead to unintended
-overwriting of cached values, thereby improving model inference stability.
-
-Co-authored-by: Claude Sonnet
-```
-
-Commands:
-
-```sh
-# GOOD: gather context, then complete the authorized workflow
-gh search issues
-gh search prs
-rg ...
-git commit -m "..."
-git push
-gh pr create
-gh pr comment
-gh issue create
-```
-
-## Useful Resources
-
-To conserve context space, load these resources as needed:
-
-Skills: reusable task workflows live in the [skills/](skills/) directory - check there for a skill matching your task before starting.
-
-General documentations:
-- [Contributing guidelines](CONTRIBUTING.md)
-- [Existing issues](https://github.com/ggml-org/llama.cpp/issues) and [Existing PRs](https://github.com/ggml-org/llama.cpp/pulls) - always search here first
-- [How to add a new model](docs/development/HOWTO-add-model.md)
-- [PR template](.github/pull_request_template.md)
-
-Server:
-- [Build documentation](docs/build.md)
-- [Server usage documentation](tools/server/README.md)
-- [Server development documentation](tools/server/README-dev.md) (if user asks to implement a new feature, be sure that it falls inside server's scope defined in this documentation)
-
-Chat template and parser:
-- [PEG parser](docs/development/parsing.md) - alternative to regex that llama.cpp uses to parse model's output
-- [Auto parser](docs/autoparser.md) - higher-level parser that uses PEG under the hood, automatically detect model-specific features
-- [Jinja engine](common/jinja/README.md)
+Key CUDA files: `fattn-mma-turbo.cuh` (tensor-core FA), `fattn-vec.cuh` (SLM LUT + nthreads_KQ=1), `turbo-quant.cuh`, `turbo-innerq.cu`, `set-rows.cu`.

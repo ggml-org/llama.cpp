@@ -610,6 +610,10 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, c
     const auto & c2w = model.c2w;
     std::vector<c2w_state_slot> slots;
 
+    if (c2w.pre_conv_w == nullptr) {
+        return slots; // not a code2wav model, it keeps no state between calls
+    }
+
     slots.push_back({"tfm_pos", 1, 1});
 
     // prefix is (W-1) frames, the batch itself gives the other N=W frames (see tfm_layer_forward)

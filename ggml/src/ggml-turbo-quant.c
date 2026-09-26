@@ -9,6 +9,7 @@
 #include "ggml-quants.h"
 #include "ggml-common.h"
 #include "ggml-impl.h"
+#include "ggml-turbo-wht-signs.h"
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -77,7 +78,7 @@ static void turbo_init_rotation(void) {
     const int d = TURBO_D;
 
     /* Generate random Gaussian matrix directly into turbo_rotation.
-     * Previous code used a 64KB stack-local G[] then memcpy'd — this
+     * Previous code used a 64KB stack-local G[] then memcpy'd - this
      * caused stack overflow on llama.cpp worker threads with reduced
      * stack sizes. */
     turbo_prng_seed(TURBO_SEED_ROTATION);
@@ -204,27 +205,11 @@ static int nearest_centroid_4bit(float val) {
     return 15;
 }
 
-/* ---------- WHT sign arrays (must match CUDA/Metal, seed=42) ---------- */
-
-static const float turbo_cpu_s1[128] = {
-    -1,1,1,-1,-1,1,-1,1,-1,-1,1,1,1,1,1,1,1,-1,1,-1,1,-1,-1,1,1,1,-1,1,1,-1,-1,-1,
-    -1,1,1,-1,1,1,-1,1,-1,1,1,-1,-1,1,-1,1,1,1,1,-1,-1,-1,-1,-1,1,-1,1,1,1,1,-1,1,
-    -1,-1,1,-1,-1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,1,-1,-1,1,1,1,-1,-1,1,1,-1,1,1,-1,1,-1,
-    -1,1,1,-1,1,-1,1,-1,1,1,1,1,-1,1,-1,1,1,-1,1,1,-1,-1,-1,-1,-1,1,1,-1,1,1,-1,1
-};
-
-static const float turbo_cpu_s2[128] = {
-    1,1,1,1,-1,1,1,-1,1,-1,-1,-1,1,-1,-1,-1,1,1,-1,-1,1,-1,1,-1,1,-1,-1,1,-1,1,1,1,
-    1,1,-1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,1,-1,1,-1,1,1,1,-1,-1,1,-1,-1,-1,-1,-1,-1,1,1,
-    1,-1,1,-1,-1,-1,-1,1,-1,1,-1,1,-1,-1,1,1,-1,1,-1,1,1,-1,1,-1,-1,-1,-1,1,-1,-1,1,-1,
-    1,-1,1,1,1,-1,-1,1,-1,1,-1,1,1,-1,-1,1,-1,1,-1,1,1,-1,1,-1,1,-1,-1,-1,-1,-1,1,-1
-};
-
 /* ---------- CPU forward WHT (in-place, group_size elements) ---------- */
 
 static void turbo_cpu_fwht(float * x, int group_size) {
-    const float * s1 = turbo_cpu_s1;
-    const float * s2 = turbo_cpu_s2;
+    const float * s1 = TURBO_WHT_SIGNS1;
+    const float * s2 = TURBO_WHT_SIGNS2;
     const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
 
     // signs1
@@ -254,8 +239,8 @@ static void turbo_cpu_fwht(float * x, int group_size) {
  *     x = D(s1) * N * H * D(s2) * y
  */
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size) {
-    const float * s1 = turbo_cpu_s1;
-    const float * s2 = turbo_cpu_s2;
+    const float * s1 = TURBO_WHT_SIGNS1;
+    const float * s2 = TURBO_WHT_SIGNS2;
     const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;
 
     // signs2 (undoes the s2 that was applied last in the forward pass)
@@ -550,6 +535,7 @@ void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * G
         for (int i = 0; i < d; i++) {
             y[block].qs[i / 2] |= (uint8_t)((indices[i] & 0xF) << ((i % 2) * 4));
         }
+        y[block].rnorm = GGML_FP32_TO_FP16(0.0f);
 #else
         /* Legacy 3-bit + QJL: pack 3-bit indices + QJL signs */
         memset(y[block].qs, 0, d * 3 / 8);
@@ -581,8 +567,7 @@ void dequantize_row_turbo4_0(const block_turbo4_0 * GGML_RESTRICT x, float * GGM
     const int d  = QK_TURBO4;
 
 #if TURBO4_USE_4BIT
-    /* 4-bit PolarQuant: nibble unpack → centroid → inverse rotate → scale */
-    /* TODO: add proper 4-bit centroid table to C code (currently only in Metal) */
+    /* 4-bit PolarQuant: nibble unpack -> centroid -> inverse rotate -> scale */
     static const float CENTROIDS_4BIT[16] = {
         -0.241529f, -0.182877f, -0.143016f, -0.111036f,
         -0.083292f, -0.058050f, -0.034299f, -0.011349f,

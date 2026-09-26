@@ -1,0 +1,3 @@
+CMPLR_ROOT=/opt/intel/oneapi/compiler/latest
+MKLROOT=/opt/intel/oneapi/mkl/latest
+TBBROOT=/opt/intel/oneapi/tbb/latest

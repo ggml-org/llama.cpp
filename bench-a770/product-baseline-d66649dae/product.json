@@ -1,0 +1,1916 @@
+{
+  "all_cells_valid": false,
+  "baseline_env": {},
+  "baseline_label": "stock",
+  "bin_dir": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-perf-jit/bin",
+  "candidate_enabled": false,
+  "candidate_env": {},
+  "candidate_label": "candidate",
+  "cells": [
+    {
+      "cell": 1,
+      "depth": 0,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "f16",
+        "f16"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 2,
+      "depth": 0,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "q8_0",
+        "q8_0"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 3,
+      "depth": 2048,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "f16",
+        "f16"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 4,
+      "depth": 2048,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "q8_0",
+        "q8_0"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 5,
+      "depth": 4096,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "f16",
+        "f16"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 6,
+      "depth": 4096,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "q8_0",
+        "q8_0"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 7,
+      "depth": 8192,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "f16",
+        "f16"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 8,
+      "depth": 8192,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "q8_0",
+        "q8_0"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 9,
+      "depth": 16384,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "f16",
+        "f16"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    },
+    {
+      "cell": 10,
+      "depth": 16384,
+      "failures": [
+        "pp512 baseline rep=1 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=2 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=3 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=4 (missing or non-positive avg_ts)",
+        "pp512 baseline rep=5 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=1 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=2 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=3 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=4 (missing or non-positive avg_ts)",
+        "tg128 baseline rep=5 (missing or non-positive avg_ts)"
+      ],
+      "kv": [
+        "q8_0",
+        "q8_0"
+      ],
+      "metrics": {
+        "pp512": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        },
+        "tg128": {
+          "baseline_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "candidate_stats": {
+            "ci95": 0.0,
+            "mean": 0.0,
+            "median": 0.0,
+            "n": 0,
+            "stddev": 0.0
+          },
+          "paired": {
+            "n": 0,
+            "pct_ci95": 0.0,
+            "pct_mean": 0.0,
+            "pct_median": 0.0,
+            "pct_stddev": 0.0
+          },
+          "retained_baseline_ts": [],
+          "retained_candidate_ts": []
+        }
+      },
+      "samples": {
+        "baseline": [
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 0,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 1,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 2,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 3,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 4,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          },
+          {
+            "ok": false,
+            "pp512_ts": 0.0,
+            "rep": 5,
+            "returncode": 1,
+            "tg128_ts": 0.0
+          }
+        ]
+      },
+      "valid": false
+    }
+  ],
+  "depths": [
+    0,
+    2048,
+    4096,
+    8192,
+    16384
+  ],
+  "dmesg_after_hits": 0,
+  "dmesg_after_path": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/bench-a770/product-baseline-d66649dae/dmesg.after.txt",
+  "dmesg_before_hits": 0,
+  "dmesg_before_path": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/bench-a770/product-baseline-d66649dae/dmesg.before.txt",
+  "expected_retained_per_arm": 5,
+  "invalid_cell_count": 10,
+  "invalid_cell_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10
+  ],
+  "invalid_diagnostics": [
+    "cell 1 d=0 kv=f16/f16: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 1 d=0 kv=f16/f16: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 1 d=0 kv=f16/f16: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 2 d=0 kv=q8_0/q8_0: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 2 d=0 kv=q8_0/q8_0: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 3 d=2048 kv=f16/f16: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 3 d=2048 kv=f16/f16: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 4 d=2048 kv=q8_0/q8_0: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 4 d=2048 kv=q8_0/q8_0: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 5 d=4096 kv=f16/f16: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 5 d=4096 kv=f16/f16: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 6 d=4096 kv=q8_0/q8_0: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 6 d=4096 kv=q8_0/q8_0: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 7 d=8192 kv=f16/f16: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 7 d=8192 kv=f16/f16: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 8 d=8192 kv=q8_0/q8_0: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 8 d=8192 kv=q8_0/q8_0: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 9 d=16384 kv=f16/f16: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 9 d=16384 kv=f16/f16: tg128 baseline has 0 retained samples (expected 5)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline rep=1 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline rep=2 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline rep=3 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline rep=4 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline rep=5 (missing or non-positive avg_ts)",
+    "cell 10 d=16384 kv=q8_0/q8_0: pp512 baseline has 0 retained samples (expected 5)",
+    "cell 10 d=16384 kv=q8_0/q8_0: tg128 baseline has 0 retained samples (expected 5)"
+  ],
+  "kv_types": [
+    [
+      "f16",
+      "f16"
+    ],
+    [
+      "q8_0",
+      "q8_0"
+    ]
+  ],
+  "model_name": "Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+  "model_path": "/mnt/mrgr/models/llama31-8b-heretic/Meta-Llama-3.1-8B-Instruct-heretic.Q4_K_M.gguf",
+  "provenance": {
+    "baseline_effective_env": {
+      "ADVISOR_2026_DIR": "/opt/intel/oneapi/advisor/2026.0",
+      "ANDROID_NDK": "/opt/android-ndk",
+      "ANDROID_NDK_HOME": "/opt/android-ndk",
+      "ANDROID_NDK_ROOT": "/opt/android-ndk",
+      "APM": "/opt/intel/oneapi/advisor/2026.0/perfmodels",
+      "ARGOS_TOKEN": "<redacted>",
+      "ATUIN_AGENT_ID": "claude-code-1",
+      "ATUIN_HISTORY_ID": "019f7326c98b73228dd0b7935098895a",
+      "ATUIN_PREEXEC_BACKEND": "1:bash-preexec",
+      "ATUIN_SESSION": "019f72eb42bb71b3ace36a7e7dd27bb4",
+      "ATUIN_SHLVL": "1",
+      "ATUIN_TMUX_POPUP": "false",
+      "AWS_PAGER": "",
+      "BAT_PAGER": "cat",
+      "BUN_INSTALL": "/home/svnbjrn/.bun",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TERM_PROGRESS_WHEN": "never",
+      "CI": "1",
+      "CLASSPATH": "/opt/intel/oneapi/mpi/2021.18/share/java/mpi.jar",
+      "CLAUDECODE": "1",
+      "CLOJURE_HOME": "/usr/share/clojure",
+      "CLOUDSDK_CORE_DISABLE_PROMPTS": "1",
+      "CLOUDSDK_ROOT_DIR": "/opt/google-cloud-cli",
+      "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_PREFIX_PATH": "/opt/intel/oneapi/tbb/2023.0/env/..:/opt/intel/oneapi/mkl/2026.0/lib/cmake:/opt/intel/oneapi/ipp/2026.0/lib/cmake/ipp:/opt/intel/oneapi/dpl/2022.12/lib/cmake/oneDPL:/opt/intel/oneapi/compiler/2026.0",
+      "CMPLR_ROOT": "/opt/intel/oneapi/compiler/2026.0",
+      "COLORTERM": "truecolor",
+      "COMPOSER_NO_INTERACTION": "1",
+      "CPATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/dev-utilities/2026.0/include",
+      "CPLUS_INCLUDE_PATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/tbb/2023.0/env/../include:/opt/intel/oneapi/mpi/2021.18/include:/opt/intel/oneapi/mkl/2026.0/include:/opt/intel/oneapi/ipp/2026.0/include:/opt/intel/oneapi/dpl/2022.12/include",
+      "CSSTRNGS": "/usr/share/locale",
+      "C_INCLUDE_PATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/tbb/2023.0/env/../include:/opt/intel/oneapi/mpi/2021.18/include:/opt/intel/oneapi/mkl/2026.0/include:/opt/intel/oneapi/ipp/2026.0/include",
+      "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+      "DEBIAN_FRONTEND": "noninteractive",
+      "DEBUGINFOD_URLS": "https://debuginfod.archlinux.org ",
+      "DELTA_PAGER": "cat",
+      "DESKTOP_SESSION": "plasma",
+      "DEV_MANIFEST_PATH": "/home/svnbjrn/.ai/developer-memory-manifest.toon",
+      "DIAGUTIL_PATH": "/opt/intel/oneapi/compiler/2026.0/etc/compiler/sys_check/sys_check.sh",
+      "DISABLE_GAMESCOPE_WSI": "1",
+      "DISABLE_LAYER_MESA_ANTI_LAG": "1",
+      "DISPLAY": ":1",
+      "DOTNET_BUNDLE_EXTRACT_BASE_DIR": "/home/svnbjrn/.cache/dotnet_bundle_extract",
+      "DOTNET_ROOT": "/usr/share/dotnet",
+      "DOTNET_TOOLS_PATH": "/home/svnbjrn/.dotnet/tools",
+      "DPCPP_HOME": "/opt/sycl",
+      "DPLROOT": "/opt/intel/oneapi/dpl/2022.12",
+      "DPL_ROOT": "/opt/intel/oneapi/dpl/2022.12",
+      "DRI_PRIME": "pci-0000_0f_00_0",
+      "EDITOR": "true",
+      "ESBUILD_WORKER_THREADS": "8",
+      "FI_PROVIDER_PATH": "/opt/intel/oneapi/mpi/2021.18/opt/mpi/libfabric/lib/prov:/usr/lib64/libfabric",
+      "FS_SCAN_CACHE_MAX_ENTRIES": "32",
+      "FS_SCAN_CACHE_TTL_MS": "5000",
+      "FZF_ALT_C_COMMAND": "fd --type d --hidden --follow --exclude .git",
+      "FZF_ALT_C_OPTS": "\n  --preview 'eza --tree --color=always --level=2 --icons {} 2>/dev/null || tree -C {} 2>/dev/null || echo \"Directory: {}\"'\n  --preview-window=right:60%:wrap\n",
+      "FZF_CTRL_T_COMMAND": "fd --type f --hidden --follow --exclude .git",
+      "FZF_CTRL_T_OPTS": "\n  --preview 'bat --style=numbers --color=always --line-range=:500 {} 2>/dev/null || cat {} 2>/dev/null || eza --tree --color=always --level=2 --icons {} 2>/dev/null || echo \"No preview available\"'\n  --preview-window=right:60%:wrap\n",
+      "FZF_DEFAULT_COMMAND": "fd --type f --hidden --follow --exclude .git",
+      "FZF_DEFAULT_OPTS": "\n  --height 60%\n  --layout=reverse\n  --border=rounded\n  --info=inline\n  --preview-window=right:60%:wrap\n  --bind='ctrl-/:toggle-preview'\n  --bind='ctrl-u:preview-half-page-up'\n  --bind='ctrl-d:preview-half-page-down'\n  --bind='ctrl-f:preview-page-down'\n  --bind='ctrl-b:preview-page-up'\n  --bind='ctrl-g:preview-top'\n  --bind='ctrl-h:preview-bottom'\n  --bind='ctrl-a:toggle-all'\n  --bind='ctrl-y:execute-silent(echo -n {2..} | xclip -selection clipboard)+abort'\n  --bind='ctrl-v:execute(echo {2..} | xargs -o vim)'\n  --bind='alt-e:execute(echo {2..} | xargs -o ${EDITOR:-vim})'\n  --color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8\n  --color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc\n  --color=marker:#f5e0dc,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8\n  --prompt='> '\n  --pointer='\u25b6'\n  --marker='\u2713'\n",
+      "GDB_INFO": "/opt/intel/oneapi/debugger/2026.0/share/info/",
+      "GEMINI_CLI_ACP_TRACE": "1",
+      "GEMINI_SMOKE": "1",
+      "GGML_OPENVINO_CACHE_DIR": "/home/svnbjrn/.cache/ggml-openvino",
+      "GGML_OPENVINO_DEVICE": "GPU",
+      "GGML_OPENVINO_STATEFUL_EXECUTION": "1",
+      "GH_PAGER": "cat",
+      "GH_PROMPT_DISABLED": "1",
+      "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1",
+      "GIT_EDITOR": "true",
+      "GIT_PAGER": "cat",
+      "GIT_TERMINAL_PROMPT": "0",
+      "GLAB_PAGER": "cat",
+      "GOOGLE_CLOUD_PROJECT": "svnbjrn-ai",
+      "GOOGLE_CLOUD_SDK_HOME": "/opt/google-cloud-cli",
+      "GPG_TTY": "not a tty",
+      "GRADLE_HOME": "/usr/share/java/gradle",
+      "GSK_RENDERER": "cairo",
+      "GTK2_RC_FILES": "/etc/gtk-2.0/gtkrc:/home/svnbjrn/.gtkrc-2.0:/home/svnbjrn/.config/gtkrc-2.0",
+      "GTK_RC_FILES": "/etc/gtk/gtkrc:/home/svnbjrn/.gtkrc:/home/svnbjrn/.config/gtkrc",
+      "HG": "/usr/bin/hg",
+      "HISTCONTROL": "",
+      "HOME": "/home/svnbjrn",
+      "HOMEBREW_PAGER": "cat",
+      "ICEAUTHORITY": "<redacted>",
+      "INCEPTION_API_KEY": "<redacted>",
+      "INFOPATH": "/opt/intel/oneapi/debugger/2026.0/share/info",
+      "INTEL_OPENVINO_GENAI_DIR": "/opt/intel/openvino-genai",
+      "INTEL_PYTHONHOME": "/opt/intel/oneapi/debugger/2026.0/opt/debugger",
+      "INVOCATION_ID": "18948e7a0dba412db2604c1d620de8e5",
+      "IPPROOT": "/opt/intel/oneapi/ipp/2026.0",
+      "IPP_TARGET_ARCH": "intel64",
+      "I_MPI_ROOT": "/opt/intel/oneapi/mpi/2021.18",
+      "JOURNAL_STREAM": "10:36004",
+      "KAGI_API_KEY": "<redacted>",
+      "KDE_APPLICATIONS_AS_SCOPE": "1",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_UID": "1000",
+      "KDE_SESSION_VERSION": "6",
+      "KGLOBALACCELD_PLATFORM": "org.kde.kwin",
+      "KITTY_INSTALLATION_DIR": "/usr/lib/kitty",
+      "KITTY_LISTEN_ON": "unix:/tmp/kitty-702289",
+      "KITTY_PID": "702289",
+      "KITTY_PUBLIC_KEY": "<redacted>",
+      "KITTY_WINDOW_ID": "27",
+      "KUBECONFIG": "/home/svnbjrn/.kube/config",
+      "KWIN_RESTART_COUNT": "1",
+      "LANG": "en_US.UTF-8",
+      "LARCH_PATH": "/usr/share/splint/lib",
+      "LCLIMPORTDIR": "/usr/share/splint/imports",
+      "LC_MEASUREMENT": "en_DK.UTF-8",
+      "LC_PAPER": "en_DK.UTF-8",
+      "LC_TIME": "en_DK.UTF-8",
+      "LD_LIBRARY_PATH": "/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tcm/1.5/env/../lib:/opt/intel/oneapi/tbb/2023.0/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mpi/2021.18/opt/mpi/libfabric/lib:/opt/intel/oneapi/mpi/2021.18/lib:/opt/intel/oneapi/mkl/2026.0/lib:/opt/intel/oneapi/ipp/2026.0/lib:/opt/intel/oneapi/debugger/2026.0/opt/debugger/lib:/opt/intel/oneapi/compiler/2026.0/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.0/lib:/opt/intel/oneapi/tcm/latest/lib:/opt/intel/oneapi/umf/latest/lib:/opt/intel/oneapi/tbb/latest/lib/intel64/gcc4.8:/opt/intel/oneapi/compiler/latest/opt/compiler/lib:/opt/intel/oneapi/compiler/latest/lib:/opt/intel/oneapi/mkl/latest/lib",
+      "LESS": "FRX",
+      "LESSCOLORIZER": "bat",
+      "LESSOPEN": "| /home/svnbjrn/.local/bin/lessopen-wrapper %s",
+      "LIBRARY_PATH": "/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tbb/2023.0/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mpi/2021.18/lib:/opt/intel/oneapi/mkl/2026.0/lib:/opt/intel/oneapi/ipp/2026.0/lib:/opt/intel/oneapi/compiler/2026.0/lib",
+      "LOADEDMODULES": "",
+      "LOGNAME": "svnbjrn",
+      "MAIL": "/var/spool/mail/svnbjrn",
+      "MAKEFLAGS": "-j8",
+      "MANAGERPID": "4104",
+      "MANAGERPIDFDID": "94354",
+      "MANPAGER": "cat",
+      "MANPATH": "/opt/intel/oneapi/mpi/2021.18/share/man:/opt/intel/oneapi/debugger/2026.0/share/man:/opt/intel/oneapi/compiler/2026.0/share/man:",
+      "MANROFFOPT": "-c",
+      "MEMORY_PRESSURE_WATCH": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/session.slice/plasma-kwin_wayland.service/memory.pressure",
+      "MEMORY_PRESSURE_WRITE": "c29tZSAyMDAwMDAgMjAwMDAwMAA=",
+      "MESA_SHADER_CACHE_DISABLE": "false",
+      "MESA_SHADER_CACHE_MAX_SIZE": "10G",
+      "MKLROOT": "/opt/intel/oneapi/mkl/2026.0",
+      "MODULEPATH": "/etc/modules/modulefiles",
+      "MODULESHOME": "/etc/modules",
+      "MODULES_CMD": "/usr/lib/env-modules/modulecmd.tcl",
+      "MOTD_SHOWN": "pam",
+      "MYSQL_PAGER": "cat",
+      "NLSPATH": "/opt/intel/oneapi/compiler/2026.0/lib/compiler/locale/%l_%t/%N",
+      "NODE_OPTIONS": "--max-old-space-size=4096",
+      "NO_COLOR": "1",
+      "NVIDIA_API_KEY": "<redacted>",
+      "NVM_DIR": "/home/svnbjrn/.nvm",
+      "OCL_ICD_FILENAMES": "/opt/intel/oneapi/compiler/2026.0/lib/libintelocl.so",
+      "OMPCODE": "1",
+      "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+      "ONEAPI_ROOT": "/opt/intel/oneapi",
+      "OPCODE6DIR": "/usr/lib/csound/plugins64-6.0",
+      "OpenVINOGenAI_DIR": "/opt/intel/openvino-genai/lib/cmake",
+      "OpenVINO_DIR": "/opt/intel/openvino-genai/lib/cmake",
+      "PAGER": "cat",
+      "PATH": "/opt/intel/oneapi/mpi/2021.18/bin:/opt/intel/oneapi/mkl/2026.0/bin:/opt/intel/oneapi/dev-utilities/2026.0/bin:/opt/intel/oneapi/debugger/2026.0/opt/debugger/bin:/opt/intel/oneapi/compiler/2026.0/bin:/opt/intel/oneapi/advisor/2026.0/bin64:/home/svnbjrn/.local/bin:/home/svnbjrn/.cargo/bin:/home/svnbjrn/.npm-global/bin:/home/svnbjrn/.nvm/versions/node/v25.1.0/bin:/home/svnbjrn/.local/share/pnpm:/home/svnbjrn/.bun/bin:/home/svnbjrn/.local/bin:/opt/intel/oneapi/compiler/latest/bin:/opt/sycl/bin:./bin64:/usr/local/sbin:/usr/local/bin:/usr/bin:/opt/android-ndk:/opt/android-sdk/platform-tools:/usr/share/dotnet:/home/svnbjrn/.dotnet/tools:/usr/lib/jvm/default/bin:/opt/rocm/bin:/opt/rocm/hip/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/usr/lib/rustup/bin:/home/svnbjrn/.local/share/ngcli/ngc-cli:/home/svnbjrn/bin:/home/svnbjrn/gh-frk:/home/svnbjrn/.local/share/pnpm/bin:/home/svnbjrn/bin",
+      "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+      "PIP_NO_INPUT": "1",
+      "PI_PY": "both",
+      "PKG_CONFIG_PATH": "/opt/intel/oneapi/tbb/2023.0/env/../lib/pkgconfig:/opt/intel/oneapi/mpi/2021.18/lib/pkgconfig:/opt/intel/oneapi/mkl/2026.0/lib/pkgconfig:/opt/intel/oneapi/dpl/2022.12/lib/pkgconfig:/opt/intel/oneapi/compiler/2026.0/lib/pkgconfig:/opt/intel/oneapi/advisor/2026.0/include/pkgconfig/lib64:/opt/intel/openvino-genai/lib/pkgconfig:./include/pkgconfig/lib64:",
+      "PNPM_DISABLE_SELF_UPDATE_CHECK": "true",
+      "PNPM_HOME": "/home/svnbjrn/.local/share/pnpm",
+      "PNPM_UPDATE_NOTIFIER": "false",
+      "PSQL_PAGER": "cat",
+      "PWD": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork",
+      "PYTHONPATH": "/opt/intel/oneapi/advisor/2026.0/pythonapi:./pythonapi",
+      "PYTHONUNBUFFERED": "1",
+      "QT_WAYLAND_RECONNECT": "1",
+      "RAWWAVE_PATH": "/usr/share/stk/rawwaves",
+      "RUSTC_WRAPPER": "sccache",
+      "RUST_BACKTRACE": "1",
+      "SCCACHE_IDLE_TIMEOUT": "1800",
+      "SESSION_MANAGER": "local/vinbonesjr:@/tmp/.ICE-unix/4559,unix/vinbonesjr:/tmp/.ICE-unix/4559",
+      "SETVARS_COMPLETED": "1",
+      "SHARP_IGNORE_GLOBAL_LIBVIPS": "1",
+      "SHLVL": "1",
+      "SSH_ASKPASS": "/usr/bin/false",
+      "STARSHIP_LOG": "error",
+      "STARSHIP_SESSION_KEY": "<redacted>",
+      "STARSHIP_SHELL": "bash",
+      "SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS": "1",
+      "SYSTEMD_EXEC_PID": "4372",
+      "SYSTEMD_PAGER": "cat",
+      "TBBROOT": "/opt/intel/oneapi/tbb/2023.0/env/..",
+      "TCMROOT": "/opt/intel/oneapi/tcm/1.5/env/..",
+      "TCM_ROOT": "/opt/intel/oneapi/tcm/1.5",
+      "TERM": "dumb",
+      "TERMINFO": "/usr/lib/kitty/terminfo",
+      "TF_INPUT": "0",
+      "TF_IN_AUTOMATION": "1",
+      "TMPDIR": "/home/svnbjrn/.cache/tmp",
+      "TSC_WORKER_THREADS": "8",
+      "UMF_ROOT": "/opt/intel/oneapi/umf/1.1",
+      "USER": "svnbjrn",
+      "UV_THREADPOOL_SIZE": "8",
+      "VISUAL": "true",
+      "VITE_WORKER_THREADS": "8",
+      "VSSCRIPT_PATH": "/usr/lib/python3.14/site-packages/vapoursynth/libvsscript.so",
+      "WAYLAND_DISPLAY": "wayland-0",
+      "WINEDEBUG": "-all",
+      "WINEPREFIX": "/home/svnbjrn/wineprefixes/default",
+      "XAUTHORITY": "<redacted>",
+      "XDG_CONFIG_DIRS": "/home/svnbjrn/.config/kdedefaults:/etc/xdg",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "XDG_DATA_DIRS": "/home/svnbjrn/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share",
+      "XDG_MENU_PREFIX": "plasma-",
+      "XDG_RUNTIME_DIR": "/run/user/1000",
+      "XDG_SEAT": "seat0",
+      "XDG_SEAT_PATH": "/org/freedesktop/DisplayManager/Seat0",
+      "XDG_SESSION_CLASS": "user",
+      "XDG_SESSION_DESKTOP": "KDE",
+      "XDG_SESSION_ID": "2",
+      "XDG_SESSION_PATH": "/org/freedesktop/DisplayManager/Session1",
+      "XDG_SESSION_TYPE": "wayland",
+      "XDG_VTNR": "1",
+      "YARN_ENABLE_PROGRESS_BARS": "0",
+      "YARN_ENABLE_TELEMETRY": "0",
+      "_": "/usr/bin/python3",
+      "_JAVA_AWT_WM_NONREPARENTING": "1",
+      "__MODULES_LMINIT": "module use --append /etc/modules/modulefiles",
+      "__PI_NATIVE_VARIANT_CACHE": "modern",
+      "npm_config_audit": "false",
+      "npm_config_fund": "false",
+      "npm_config_progress": "false",
+      "npm_config_update_notifier": "false",
+      "npm_config_yes": "true"
+    },
+    "candidate_effective_env": {
+      "ADVISOR_2026_DIR": "/opt/intel/oneapi/advisor/2026.0",
+      "ANDROID_NDK": "/opt/android-ndk",
+      "ANDROID_NDK_HOME": "/opt/android-ndk",
+      "ANDROID_NDK_ROOT": "/opt/android-ndk",
+      "APM": "/opt/intel/oneapi/advisor/2026.0/perfmodels",
+      "ARGOS_TOKEN": "<redacted>",
+      "ATUIN_AGENT_ID": "claude-code-1",
+      "ATUIN_HISTORY_ID": "019f7326c98b73228dd0b7935098895a",
+      "ATUIN_PREEXEC_BACKEND": "1:bash-preexec",
+      "ATUIN_SESSION": "019f72eb42bb71b3ace36a7e7dd27bb4",
+      "ATUIN_SHLVL": "1",
+      "ATUIN_TMUX_POPUP": "false",
+      "AWS_PAGER": "",
+      "BAT_PAGER": "cat",
+      "BUN_INSTALL": "/home/svnbjrn/.bun",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_TERM_PROGRESS_WHEN": "never",
+      "CI": "1",
+      "CLASSPATH": "/opt/intel/oneapi/mpi/2021.18/share/java/mpi.jar",
+      "CLAUDECODE": "1",
+      "CLOJURE_HOME": "/usr/share/clojure",
+      "CLOUDSDK_CORE_DISABLE_PROMPTS": "1",
+      "CLOUDSDK_ROOT_DIR": "/opt/google-cloud-cli",
+      "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_PREFIX_PATH": "/opt/intel/oneapi/tbb/2023.0/env/..:/opt/intel/oneapi/mkl/2026.0/lib/cmake:/opt/intel/oneapi/ipp/2026.0/lib/cmake/ipp:/opt/intel/oneapi/dpl/2022.12/lib/cmake/oneDPL:/opt/intel/oneapi/compiler/2026.0",
+      "CMPLR_ROOT": "/opt/intel/oneapi/compiler/2026.0",
+      "COLORTERM": "truecolor",
+      "COMPOSER_NO_INTERACTION": "1",
+      "CPATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/dev-utilities/2026.0/include",
+      "CPLUS_INCLUDE_PATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/tbb/2023.0/env/../include:/opt/intel/oneapi/mpi/2021.18/include:/opt/intel/oneapi/mkl/2026.0/include:/opt/intel/oneapi/ipp/2026.0/include:/opt/intel/oneapi/dpl/2022.12/include",
+      "CSSTRNGS": "/usr/share/locale",
+      "C_INCLUDE_PATH": "/opt/intel/oneapi/umf/1.1/include:/opt/intel/oneapi/tbb/2023.0/env/../include:/opt/intel/oneapi/mpi/2021.18/include:/opt/intel/oneapi/mkl/2026.0/include:/opt/intel/oneapi/ipp/2026.0/include",
+      "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+      "DEBIAN_FRONTEND": "noninteractive",
+      "DEBUGINFOD_URLS": "https://debuginfod.archlinux.org ",
+      "DELTA_PAGER": "cat",
+      "DESKTOP_SESSION": "plasma",
+      "DEV_MANIFEST_PATH": "/home/svnbjrn/.ai/developer-memory-manifest.toon",
+      "DIAGUTIL_PATH": "/opt/intel/oneapi/compiler/2026.0/etc/compiler/sys_check/sys_check.sh",
+      "DISABLE_GAMESCOPE_WSI": "1",
+      "DISABLE_LAYER_MESA_ANTI_LAG": "1",
+      "DISPLAY": ":1",
+      "DOTNET_BUNDLE_EXTRACT_BASE_DIR": "/home/svnbjrn/.cache/dotnet_bundle_extract",
+      "DOTNET_ROOT": "/usr/share/dotnet",
+      "DOTNET_TOOLS_PATH": "/home/svnbjrn/.dotnet/tools",
+      "DPCPP_HOME": "/opt/sycl",
+      "DPLROOT": "/opt/intel/oneapi/dpl/2022.12",
+      "DPL_ROOT": "/opt/intel/oneapi/dpl/2022.12",
+      "DRI_PRIME": "pci-0000_0f_00_0",
+      "EDITOR": "true",
+      "ESBUILD_WORKER_THREADS": "8",
+      "FI_PROVIDER_PATH": "/opt/intel/oneapi/mpi/2021.18/opt/mpi/libfabric/lib/prov:/usr/lib64/libfabric",
+      "FS_SCAN_CACHE_MAX_ENTRIES": "32",
+      "FS_SCAN_CACHE_TTL_MS": "5000",
+      "FZF_ALT_C_COMMAND": "fd --type d --hidden --follow --exclude .git",
+      "FZF_ALT_C_OPTS": "\n  --preview 'eza --tree --color=always --level=2 --icons {} 2>/dev/null || tree -C {} 2>/dev/null || echo \"Directory: {}\"'\n  --preview-window=right:60%:wrap\n",
+      "FZF_CTRL_T_COMMAND": "fd --type f --hidden --follow --exclude .git",
+      "FZF_CTRL_T_OPTS": "\n  --preview 'bat --style=numbers --color=always --line-range=:500 {} 2>/dev/null || cat {} 2>/dev/null || eza --tree --color=always --level=2 --icons {} 2>/dev/null || echo \"No preview available\"'\n  --preview-window=right:60%:wrap\n",
+      "FZF_DEFAULT_COMMAND": "fd --type f --hidden --follow --exclude .git",
+      "FZF_DEFAULT_OPTS": "\n  --height 60%\n  --layout=reverse\n  --border=rounded\n  --info=inline\n  --preview-window=right:60%:wrap\n  --bind='ctrl-/:toggle-preview'\n  --bind='ctrl-u:preview-half-page-up'\n  --bind='ctrl-d:preview-half-page-down'\n  --bind='ctrl-f:preview-page-down'\n  --bind='ctrl-b:preview-page-up'\n  --bind='ctrl-g:preview-top'\n  --bind='ctrl-h:preview-bottom'\n  --bind='ctrl-a:toggle-all'\n  --bind='ctrl-y:execute-silent(echo -n {2..} | xclip -selection clipboard)+abort'\n  --bind='ctrl-v:execute(echo {2..} | xargs -o vim)'\n  --bind='alt-e:execute(echo {2..} | xargs -o ${EDITOR:-vim})'\n  --color=bg+:#313244,bg:#1e1e2e,spinner:#f5e0dc,hl:#f38ba8\n  --color=fg:#cdd6f4,header:#f38ba8,info:#cba6f7,pointer:#f5e0dc\n  --color=marker:#f5e0dc,fg+:#cdd6f4,prompt:#cba6f7,hl+:#f38ba8\n  --prompt='> '\n  --pointer='\u25b6'\n  --marker='\u2713'\n",
+      "GDB_INFO": "/opt/intel/oneapi/debugger/2026.0/share/info/",
+      "GEMINI_CLI_ACP_TRACE": "1",
+      "GEMINI_SMOKE": "1",
+      "GGML_OPENVINO_CACHE_DIR": "/home/svnbjrn/.cache/ggml-openvino",
+      "GGML_OPENVINO_DEVICE": "GPU",
+      "GGML_OPENVINO_STATEFUL_EXECUTION": "1",
+      "GH_PAGER": "cat",
+      "GH_PROMPT_DISABLED": "1",
+      "GIT_DISCOVERY_ACROSS_FILESYSTEM": "1",
+      "GIT_EDITOR": "true",
+      "GIT_PAGER": "cat",
+      "GIT_TERMINAL_PROMPT": "0",
+      "GLAB_PAGER": "cat",
+      "GOOGLE_CLOUD_PROJECT": "svnbjrn-ai",
+      "GOOGLE_CLOUD_SDK_HOME": "/opt/google-cloud-cli",
+      "GPG_TTY": "not a tty",
+      "GRADLE_HOME": "/usr/share/java/gradle",
+      "GSK_RENDERER": "cairo",
+      "GTK2_RC_FILES": "/etc/gtk-2.0/gtkrc:/home/svnbjrn/.gtkrc-2.0:/home/svnbjrn/.config/gtkrc-2.0",
+      "GTK_RC_FILES": "/etc/gtk/gtkrc:/home/svnbjrn/.gtkrc:/home/svnbjrn/.config/gtkrc",
+      "HG": "/usr/bin/hg",
+      "HISTCONTROL": "",
+      "HOME": "/home/svnbjrn",
+      "HOMEBREW_PAGER": "cat",
+      "ICEAUTHORITY": "<redacted>",
+      "INCEPTION_API_KEY": "<redacted>",
+      "INFOPATH": "/opt/intel/oneapi/debugger/2026.0/share/info",
+      "INTEL_OPENVINO_GENAI_DIR": "/opt/intel/openvino-genai",
+      "INTEL_PYTHONHOME": "/opt/intel/oneapi/debugger/2026.0/opt/debugger",
+      "INVOCATION_ID": "18948e7a0dba412db2604c1d620de8e5",
+      "IPPROOT": "/opt/intel/oneapi/ipp/2026.0",
+      "IPP_TARGET_ARCH": "intel64",
+      "I_MPI_ROOT": "/opt/intel/oneapi/mpi/2021.18",
+      "JOURNAL_STREAM": "10:36004",
+      "KAGI_API_KEY": "<redacted>",
+      "KDE_APPLICATIONS_AS_SCOPE": "1",
+      "KDE_FULL_SESSION": "true",
+      "KDE_SESSION_UID": "1000",
+      "KDE_SESSION_VERSION": "6",
+      "KGLOBALACCELD_PLATFORM": "org.kde.kwin",
+      "KITTY_INSTALLATION_DIR": "/usr/lib/kitty",
+      "KITTY_LISTEN_ON": "unix:/tmp/kitty-702289",
+      "KITTY_PID": "702289",
+      "KITTY_PUBLIC_KEY": "<redacted>",
+      "KITTY_WINDOW_ID": "27",
+      "KUBECONFIG": "/home/svnbjrn/.kube/config",
+      "KWIN_RESTART_COUNT": "1",
+      "LANG": "en_US.UTF-8",
+      "LARCH_PATH": "/usr/share/splint/lib",
+      "LCLIMPORTDIR": "/usr/share/splint/imports",
+      "LC_MEASUREMENT": "en_DK.UTF-8",
+      "LC_PAPER": "en_DK.UTF-8",
+      "LC_TIME": "en_DK.UTF-8",
+      "LD_LIBRARY_PATH": "/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tcm/1.5/env/../lib:/opt/intel/oneapi/tbb/2023.0/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mpi/2021.18/opt/mpi/libfabric/lib:/opt/intel/oneapi/mpi/2021.18/lib:/opt/intel/oneapi/mkl/2026.0/lib:/opt/intel/oneapi/ipp/2026.0/lib:/opt/intel/oneapi/debugger/2026.0/opt/debugger/lib:/opt/intel/oneapi/compiler/2026.0/opt/compiler/lib:/opt/intel/oneapi/compiler/2026.0/lib:/opt/intel/oneapi/tcm/latest/lib:/opt/intel/oneapi/umf/latest/lib:/opt/intel/oneapi/tbb/latest/lib/intel64/gcc4.8:/opt/intel/oneapi/compiler/latest/opt/compiler/lib:/opt/intel/oneapi/compiler/latest/lib:/opt/intel/oneapi/mkl/latest/lib",
+      "LESS": "FRX",
+      "LESSCOLORIZER": "bat",
+      "LESSOPEN": "| /home/svnbjrn/.local/bin/lessopen-wrapper %s",
+      "LIBRARY_PATH": "/opt/intel/oneapi/tcm/1.5/lib:/opt/intel/oneapi/umf/1.1/lib:/opt/intel/oneapi/tbb/2023.0/env/../lib/intel64/gcc4.8:/opt/intel/oneapi/mpi/2021.18/lib:/opt/intel/oneapi/mkl/2026.0/lib:/opt/intel/oneapi/ipp/2026.0/lib:/opt/intel/oneapi/compiler/2026.0/lib",
+      "LOADEDMODULES": "",
+      "LOGNAME": "svnbjrn",
+      "MAIL": "/var/spool/mail/svnbjrn",
+      "MAKEFLAGS": "-j8",
+      "MANAGERPID": "4104",
+      "MANAGERPIDFDID": "94354",
+      "MANPAGER": "cat",
+      "MANPATH": "/opt/intel/oneapi/mpi/2021.18/share/man:/opt/intel/oneapi/debugger/2026.0/share/man:/opt/intel/oneapi/compiler/2026.0/share/man:",
+      "MANROFFOPT": "-c",
+      "MEMORY_PRESSURE_WATCH": "/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/session.slice/plasma-kwin_wayland.service/memory.pressure",
+      "MEMORY_PRESSURE_WRITE": "c29tZSAyMDAwMDAgMjAwMDAwMAA=",
+      "MESA_SHADER_CACHE_DISABLE": "false",
+      "MESA_SHADER_CACHE_MAX_SIZE": "10G",
+      "MKLROOT": "/opt/intel/oneapi/mkl/2026.0",
+      "MODULEPATH": "/etc/modules/modulefiles",
+      "MODULESHOME": "/etc/modules",
+      "MODULES_CMD": "/usr/lib/env-modules/modulecmd.tcl",
+      "MOTD_SHOWN": "pam",
+      "MYSQL_PAGER": "cat",
+      "NLSPATH": "/opt/intel/oneapi/compiler/2026.0/lib/compiler/locale/%l_%t/%N",
+      "NODE_OPTIONS": "--max-old-space-size=4096",
+      "NO_COLOR": "1",
+      "NVIDIA_API_KEY": "<redacted>",
+      "NVM_DIR": "/home/svnbjrn/.nvm",
+      "OCL_ICD_FILENAMES": "/opt/intel/oneapi/compiler/2026.0/lib/libintelocl.so",
+      "OMPCODE": "1",
+      "ONEAPI_DEVICE_SELECTOR": "level_zero:0",
+      "ONEAPI_ROOT": "/opt/intel/oneapi",
+      "OPCODE6DIR": "/usr/lib/csound/plugins64-6.0",
+      "OpenVINOGenAI_DIR": "/opt/intel/openvino-genai/lib/cmake",
+      "OpenVINO_DIR": "/opt/intel/openvino-genai/lib/cmake",
+      "PAGER": "cat",
+      "PATH": "/opt/intel/oneapi/mpi/2021.18/bin:/opt/intel/oneapi/mkl/2026.0/bin:/opt/intel/oneapi/dev-utilities/2026.0/bin:/opt/intel/oneapi/debugger/2026.0/opt/debugger/bin:/opt/intel/oneapi/compiler/2026.0/bin:/opt/intel/oneapi/advisor/2026.0/bin64:/home/svnbjrn/.local/bin:/home/svnbjrn/.cargo/bin:/home/svnbjrn/.npm-global/bin:/home/svnbjrn/.nvm/versions/node/v25.1.0/bin:/home/svnbjrn/.local/share/pnpm:/home/svnbjrn/.bun/bin:/home/svnbjrn/.local/bin:/opt/intel/oneapi/compiler/latest/bin:/opt/sycl/bin:./bin64:/usr/local/sbin:/usr/local/bin:/usr/bin:/opt/android-ndk:/opt/android-sdk/platform-tools:/usr/share/dotnet:/home/svnbjrn/.dotnet/tools:/usr/lib/jvm/default/bin:/opt/rocm/bin:/opt/rocm/hip/bin:/usr/bin/site_perl:/usr/bin/vendor_perl:/usr/bin/core_perl:/usr/lib/rustup/bin:/home/svnbjrn/.local/share/ngcli/ngc-cli:/home/svnbjrn/bin:/home/svnbjrn/gh-frk:/home/svnbjrn/.local/share/pnpm/bin:/home/svnbjrn/bin",
+      "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+      "PIP_NO_INPUT": "1",
+      "PI_PY": "both",
+      "PKG_CONFIG_PATH": "/opt/intel/oneapi/tbb/2023.0/env/../lib/pkgconfig:/opt/intel/oneapi/mpi/2021.18/lib/pkgconfig:/opt/intel/oneapi/mkl/2026.0/lib/pkgconfig:/opt/intel/oneapi/dpl/2022.12/lib/pkgconfig:/opt/intel/oneapi/compiler/2026.0/lib/pkgconfig:/opt/intel/oneapi/advisor/2026.0/include/pkgconfig/lib64:/opt/intel/openvino-genai/lib/pkgconfig:./include/pkgconfig/lib64:",
+      "PNPM_DISABLE_SELF_UPDATE_CHECK": "true",
+      "PNPM_HOME": "/home/svnbjrn/.local/share/pnpm",
+      "PNPM_UPDATE_NOTIFIER": "false",
+      "PSQL_PAGER": "cat",
+      "PWD": "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork",
+      "PYTHONPATH": "/opt/intel/oneapi/advisor/2026.0/pythonapi:./pythonapi",
+      "PYTHONUNBUFFERED": "1",
+      "QT_WAYLAND_RECONNECT": "1",
+      "RAWWAVE_PATH": "/usr/share/stk/rawwaves",
+      "RUSTC_WRAPPER": "sccache",
+      "RUST_BACKTRACE": "1",
+      "SCCACHE_IDLE_TIMEOUT": "1800",
+      "SESSION_MANAGER": "local/vinbonesjr:@/tmp/.ICE-unix/4559,unix/vinbonesjr:/tmp/.ICE-unix/4559",
+      "SETVARS_COMPLETED": "1",
+      "SHARP_IGNORE_GLOBAL_LIBVIPS": "1",
+      "SHLVL": "1",
+      "SSH_ASKPASS": "/usr/bin/false",
+      "STARSHIP_LOG": "error",
+      "STARSHIP_SESSION_KEY": "<redacted>",
+      "STARSHIP_SHELL": "bash",
+      "SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS": "1",
+      "SYSTEMD_EXEC_PID": "4372",
+      "SYSTEMD_PAGER": "cat",
+      "TBBROOT": "/opt/intel/oneapi/tbb/2023.0/env/..",
+      "TCMROOT": "/opt/intel/oneapi/tcm/1.5/env/..",
+      "TCM_ROOT": "/opt/intel/oneapi/tcm/1.5",
+      "TERM": "dumb",
+      "TERMINFO": "/usr/lib/kitty/terminfo",
+      "TF_INPUT": "0",
+      "TF_IN_AUTOMATION": "1",
+      "TMPDIR": "/home/svnbjrn/.cache/tmp",
+      "TSC_WORKER_THREADS": "8",
+      "UMF_ROOT": "/opt/intel/oneapi/umf/1.1",
+      "USER": "svnbjrn",
+      "UV_THREADPOOL_SIZE": "8",
+      "VISUAL": "true",
+      "VITE_WORKER_THREADS": "8",
+      "VSSCRIPT_PATH": "/usr/lib/python3.14/site-packages/vapoursynth/libvsscript.so",
+      "WAYLAND_DISPLAY": "wayland-0",
+      "WINEDEBUG": "-all",
+      "WINEPREFIX": "/home/svnbjrn/wineprefixes/default",
+      "XAUTHORITY": "<redacted>",
+      "XDG_CONFIG_DIRS": "/home/svnbjrn/.config/kdedefaults:/etc/xdg",
+      "XDG_CURRENT_DESKTOP": "KDE",
+      "XDG_DATA_DIRS": "/home/svnbjrn/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share",
+      "XDG_MENU_PREFIX": "plasma-",
+      "XDG_RUNTIME_DIR": "/run/user/1000",
+      "XDG_SEAT": "seat0",
+      "XDG_SEAT_PATH": "/org/freedesktop/DisplayManager/Seat0",
+      "XDG_SESSION_CLASS": "user",
+      "XDG_SESSION_DESKTOP": "KDE",
+      "XDG_SESSION_ID": "2",
+      "XDG_SESSION_PATH": "/org/freedesktop/DisplayManager/Session1",
+      "XDG_SESSION_TYPE": "wayland",
+      "XDG_VTNR": "1",
+      "YARN_ENABLE_PROGRESS_BARS": "0",
+      "YARN_ENABLE_TELEMETRY": "0",
+      "_": "/usr/bin/python3",
+      "_JAVA_AWT_WM_NONREPARENTING": "1",
+      "__MODULES_LMINIT": "module use --append /etc/modules/modulefiles",
+      "__PI_NATIVE_VARIANT_CACHE": "modern",
+      "npm_config_audit": "false",
+      "npm_config_fund": "false",
+      "npm_config_progress": "false",
+      "npm_config_update_notifier": "false",
+      "npm_config_yes": "true"
+    },
+    "cmake_cache": {
+      "CMAKE_BUILD_TYPE": "Release",
+      "CMAKE_CXX_COMPILER": "/opt/intel/oneapi/compiler/2026.0/bin/icpx",
+      "CMAKE_CXX_COMPILER-ADVANCED": "1",
+      "CMAKE_CXX_COMPILER_AR": "/opt/intel/oneapi/compiler/2026.0/bin/compiler/llvm-ar",
+      "CMAKE_CXX_COMPILER_AR-ADVANCED": "1",
+      "CMAKE_CXX_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_CXX_COMPILER_RANLIB": "/opt/intel/oneapi/compiler/2026.0/bin/compiler/llvm-ranlib",
+      "CMAKE_CXX_COMPILER_RANLIB-ADVANCED": "1",
+      "CMAKE_C_COMPILER": "/opt/intel/oneapi/compiler/2026.0/bin/icx",
+      "CMAKE_C_COMPILER-ADVANCED": "1",
+      "CMAKE_C_COMPILER_AR": "/opt/intel/oneapi/compiler/2026.0/bin/compiler/llvm-ar",
+      "CMAKE_C_COMPILER_AR-ADVANCED": "1",
+      "CMAKE_C_COMPILER_LAUNCHER": "sccache",
+      "CMAKE_C_COMPILER_RANLIB": "/opt/intel/oneapi/compiler/2026.0/bin/compiler/llvm-ranlib",
+      "CMAKE_C_COMPILER_RANLIB-ADVANCED": "1",
+      "GGML_SYCL": "ON",
+      "GGML_SYCL_DEVICE_ARCH": "",
+      "GGML_SYCL_DNN": "OFF",
+      "GGML_SYCL_F16": "ON",
+      "GGML_SYCL_GRAPH": "ON",
+      "GGML_SYCL_HOST_MEM_FALLBACK": "ON",
+      "GGML_SYCL_SUPPORT_LEVEL_ZERO": "ON",
+      "GGML_SYCL_TARGET": "INTEL",
+      "LLAMA_ALL_WARNINGS": "ON",
+      "LLAMA_ALL_WARNINGS_3RD_PARTY": "OFF",
+      "LLAMA_BIN_INSTALL_DIR": "bin",
+      "LLAMA_BUILD_APP": "ON",
+      "LLAMA_BUILD_COMMON": "ON",
+      "LLAMA_BUILD_EXAMPLES": "ON",
+      "LLAMA_BUILD_SERVER": "ON",
+      "LLAMA_BUILD_TESTS": "ON",
+      "LLAMA_BUILD_TOOLS": "ON",
+      "LLAMA_BUILD_UI": "ON",
+      "LLAMA_CURL": "OFF",
+      "LLAMA_FATAL_WARNINGS": "OFF",
+      "LLAMA_INCLUDE_INSTALL_DIR": "include",
+      "LLAMA_LIB_INSTALL_DIR": "lib",
+      "LLAMA_LLGUIDANCE": "OFF",
+      "LLAMA_OPENSSL": "ON",
+      "LLAMA_SANITIZE_ADDRESS": "OFF",
+      "LLAMA_SANITIZE_THREAD": "OFF",
+      "LLAMA_SANITIZE_UNDEFINED": "OFF",
+      "LLAMA_TESTS_INSTALL": "ON",
+      "LLAMA_TOOLS_INSTALL": "ON",
+      "LLAMA_UI_GZIP": "ON",
+      "LLAMA_UI_HF_BUCKET": "ggml-org/llama-ui",
+      "LLAMA_USE_PREBUILT_UI": "ON",
+      "LLAMA_USE_SYSTEM_GGML": "OFF",
+      "LLAMA_WASM_MEM64": "ON"
+    },
+    "compute_runtime": {
+      "argv": [
+        "pacman",
+        "-Q",
+        "intel-compute-runtime",
+        "intel-graphics-compiler",
+        "level-zero-loader"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "intel-compute-runtime 26.22.38646.4-1.1\nintel-graphics-compiler 1:2.36.3-1.1\nlevel-zero-loader 1.28.6-1.1\n"
+    },
+    "kernel": {
+      "argv": [
+        "uname",
+        "-a"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "Linux vinbonesjr 7.1.3-273-tkg-bore #1 SMP PREEMPT_DYNAMIC TKG Mon, 06 Jul 2026 19:15:37 +0000 x86_64 GNU/Linux\n"
+    },
+    "llama_cli_version": {
+      "argv": [
+        "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-perf-jit/bin/llama-cli",
+        "--version"
+      ],
+      "returncode": 0,
+      "stderr": "version: 10060 (d66649dae)\nbuilt with IntelLLVM 2026.0.0 for Linux x86_64\n",
+      "stdout": ""
+    },
+    "repository_commit": {
+      "argv": [
+        "git",
+        "-C",
+        "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork",
+        "rev-parse",
+        "HEAD"
+      ],
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "d66649dae2f877a572269b84aaeefde9e8ad4780\n"
+    },
+    "sha256": {
+      "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-perf-jit/bin/libggml-sycl.so": "9bed35f5d03cbc744c559784d4617378f69fc514872e90b70d0cdcf82ef4e990",
+      "/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/build-perf-jit/bin/llama-bench": "84a8143422560ca04bd2c0cae430f44bf77ff6c54d6f9153ae03b66358ef011f"
+    },
+    "sycl_ls": {
+      "argv": [
+        "sycl-ls"
+      ],
+      "returncode": 0,
+      "stderr": "INFO: Output filtered by ONEAPI_DEVICE_SELECTOR environment variable, which is set to level_zero:0.\nTo see device ids, use the --ignore-device-selectors CLI option.\n\n",
+      "stdout": "[level_zero:gpu] Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.15.38646]\n"
+    }
+  },
+  "repetitions": 6
+}
