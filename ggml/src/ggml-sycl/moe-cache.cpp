@@ -149,6 +149,7 @@ static bool sycl_moe_wtype_dispatchable(ggml_type wtype) {
         case GGML_TYPE_Q5_0:
         case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
@@ -283,6 +284,16 @@ static moe_cache_pool * sycl_moe_find_or_create_pool(
         return nullptr;
     }
 
+    // Reserve capacity up front so the push_backs below (after the slab is
+    // already allocated) cannot throw and desync these two parallel vectors -
+    // every other access indexes pool_slabs[i] assuming it tracks pools[i].
+    try {
+        dev.pools.reserve(dev.pools.size() + 1);
+        dev.pool_slabs.reserve(dev.pool_slabs.size() + 1);
+    } catch (...) {
+        return nullptr;
+    }
+
     size_t slots = budget_bytes / expert_size;
     if (slots < moe_cache_pool_slots_min) {
         return nullptr;
@@ -323,9 +334,9 @@ static moe_cache_pool * sycl_moe_find_or_create_pool(
         for (int index = (int)slots - 1; index >= 0; index--) {
             pool->free_slots.push_back(index);
         }
-        dev.allocated_bytes += slab_bytes;
         dev.pools.push_back(std::move(pool));
         dev.pool_slabs.push_back(slab);
+        dev.allocated_bytes += slab_bytes;
         MOE_CACHE_LOG("[moe-cache] SYCL%d pool[%d]: type=%s expert=%zu KiB slots=%zu entries=%lld coverage=%s total=%zu MiB\n",
                 dev.physical, (int)dev.pools.size() - 1,
                 ggml_type_name((ggml_type)wtype), expert_size >> 10,
@@ -376,6 +387,17 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
             config.minimum_slab_bytes = supplied_config->minimum_slab_bytes;
             config.min_expert_bytes = supplied_config->min_expert_bytes;
             config.min_expert_explicit = supplied_config->min_expert_explicit;
+            if (!config.min_expert_explicit) {
+                // moe_cache_apply_mode_defaults() (in query_config) ties the
+                // 512 KiB/1 MiB default floor to automatic vs. forced mode,
+                // a distinction meant for real compute-capability gaps. SYCL
+                // has none - sycl_moe_query_device() always reports the
+                // Ampere-equivalent 800 - so forced mode otherwise ends up
+                // stricter (1 MiB) than what query_device (and any fit logic
+                // consulting it) already advertised as cacheable (512 KiB),
+                // silently rejecting experts placement already counted on.
+                config.min_expert_bytes = moe_cache_default_min_expert_bytes(800);
+            }
             config.max_batch = supplied_config->max_batch;
             config.min_compute_capability = supplied_config->min_compute_capability;
             config.overlap_cpu_rows = supplied_config->overlap_cpu_rows;
@@ -605,7 +627,13 @@ static void * sycl_moe_begin(const char * name, const void * host_base,
     }
 
     moe_cache_log_configuration(*session);
-    const size_t budget_bytes = session->config.budget_mb << 20;
+    const size_t total_budget_bytes = session->config.budget_mb << 20;
+    // Each pool draws from what's left of the per-device budget, not the
+    // full figure again - a model with several (expert_size, wtype) shapes
+    // (e.g. mixed q3_K/q4_K experts across layers) would otherwise let every
+    // new pool independently claim the entire configured cap.
+    const size_t budget_bytes = total_budget_bytes > dev.allocated_bytes
+        ? total_budget_bytes - dev.allocated_bytes : 0;
     moe_cache_pool * pool = sycl_moe_find_or_create_pool(
             dev, *session, expert_size, wtype, n_expert, budget_bytes);
     if (!pool) {
@@ -718,6 +746,17 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
             hits++;
             continue;
         }
+        // Same expert already queued for fill earlier in this same plan() -
+        // a routed batch commonly picks one popular expert for several
+        // tokens at once. Ride along on the pending fill instead of
+        // emplace()-ing a second map entry for the same key (a silent no-op
+        // that would leak a second slot: copied and promoted, but never
+        // reachable from pool.map again).
+        if (found != pool.map.end() &&
+            pool.slots[found->second].state == moe_cache_slot_state::copying) {
+            pending.push_back({found->second, index});
+            continue;
+        }
 
         dev.misses++;
         if (moe_cache_fail(session, "insert")) {
@@ -786,8 +825,16 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
         if (copy_ok) {
             for (const pending_fill & fill : pending) {
                 moe_cache_slot & pslot = pool.slots[fill.slot];
-                pslot.state = moe_cache_slot_state::valid;
-                moe_cache_lru_push_back(pool, fill.slot);
+                // Coalesced duplicate experts (above) can list the same slot
+                // more than once here. Only transition state/LRU membership
+                // once per slot - a second moe_cache_lru_push_back on an
+                // already-linked slot corrupts the LRU list (self-loop).
+                // Every entry still gets its own reader/pin, same as two
+                // independent hits on an already-valid slot would.
+                if (pslot.state != moe_cache_slot_state::valid) {
+                    pslot.state = moe_cache_slot_state::valid;
+                    moe_cache_lru_push_back(pool, fill.slot);
+                }
                 pslot.readers++;
                 node->pins[node->n_pins++] = {&pool, fill.slot};
                 slot_indices[fill.index] = fill.slot;
@@ -799,9 +846,14 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
         } else {
             // Slab contents are unknown after a failed transfer; roll back
             // and disable this device's cache so no later node reads stale
-            // entries.
+            // entries. Coalesced duplicate experts (above) can put the same
+            // slot in `pending` more than once - guard against resetting an
+            // already-freed slot a second time, which would push it onto
+            // free_slots twice and let two future fills claim the same slot.
             for (const pending_fill & fill : pending) {
-                moe_cache_slot_reset(pool, fill.slot, true);
+                if (pool.slots[fill.slot].state != moe_cache_slot_state::free) {
+                    moe_cache_slot_reset(pool, fill.slot, true);
+                }
                 dev.fill_failures++;
             }
             dev.dead.store(true);
@@ -842,8 +894,10 @@ static int sycl_moe_dispatch(void * opaque, int wtype, int64_t n_in, int64_t n_o
         dev.dispatch_failures++;
         return 0;
     }
-    const size_t pool_index = (size_t)node->pool_index >= 0
-        ? (size_t)node->pool_index : 0;
+    if (node->pool_index < 0) {
+        return 0;
+    }
+    const size_t pool_index = (size_t)node->pool_index;
     if (dev.pool_slabs.empty() || pool_index >= dev.pool_slabs.size()) {
         return 0;
     }
@@ -861,17 +915,29 @@ static int sycl_moe_dispatch(void * opaque, int wtype, int64_t n_in, int64_t n_o
             dev.h_act.resize(act_bytes);
         }
         if (ids_bytes > dev.d_ids_cap) {
-            if (dev.d_ids) sycl::free(dev.d_ids, *dev.stream);
+            if (dev.d_ids) {
+                sycl::free(dev.d_ids, *dev.stream);
+                dev.d_ids = nullptr;
+                dev.d_ids_cap = 0;
+            }
             dev.d_ids = sycl::malloc_device(ids_bytes, *dev.stream);
             dev.d_ids_cap = dev.d_ids ? ids_bytes : 0;
         }
         if (act_bytes > dev.d_act_cap) {
-            if (dev.d_act) sycl::free(dev.d_act, *dev.stream);
+            if (dev.d_act) {
+                sycl::free(dev.d_act, *dev.stream);
+                dev.d_act = nullptr;
+                dev.d_act_cap = 0;
+            }
             dev.d_act = sycl::malloc_device(act_bytes, *dev.stream);
             dev.d_act_cap = dev.d_act ? act_bytes : 0;
         }
         if (out_bytes > dev.d_out_cap) {
-            if (dev.d_out) sycl::free(dev.d_out, *dev.stream);
+            if (dev.d_out) {
+                sycl::free(dev.d_out, *dev.stream);
+                dev.d_out = nullptr;
+                dev.d_out_cap = 0;
+            }
             dev.d_out = sycl::malloc_device(out_bytes, *dev.stream);
             dev.d_out_cap = dev.d_out ? out_bytes : 0;
         }
@@ -886,6 +952,10 @@ static int sycl_moe_dispatch(void * opaque, int wtype, int64_t n_in, int64_t n_o
 
     block_q8_1 * act_q8 = (block_q8_1 *)dev.h_act.data();
     for (int i = 0; i < n_hits; i++) {
+        if (!act_rows[i]) {
+            dev.dispatch_failures++;
+            return 0;
+        }
         sycl_moe_quantize_act_q8_1(act_rows[i], act_q8 + (size_t)i * n_blocks,
                 n_in, padded_n_in);
     }
@@ -900,20 +970,22 @@ static int sycl_moe_dispatch(void * opaque, int wtype, int64_t n_in, int64_t n_o
     }
 
     const size_t row_stride_bytes = (size_t)n_blocks * sizeof(block_q8_1);
-    const bool ok = ggml_sycl_mul_mat_vec_q_id(
-            (ggml_type)wtype, slab, dev.d_act, (const int32_t *)dev.d_ids,
-            (float *)dev.d_out, (int)n_in, (int)n_out, n_hits,
-            /*expert_weight_stride=*/ node->expert_size,
-            /*dst_row_stride=*/ (size_t)n_out * sizeof(float),
-            /*src1_row_stride=*/ row_stride_bytes,
-            dev.stream);
-    if (!ok) {
-        dev.dispatch_failures++;
-        return 0;
-    }
+    bool ok = false;
     try {
-        dev.stream->wait_and_throw();
+        ok = ggml_sycl_mul_mat_vec_q_id(
+                (ggml_type)wtype, slab, dev.d_act, (const int32_t *)dev.d_ids,
+                (float *)dev.d_out, (int)n_in, (int)n_out, n_hits,
+                /*expert_weight_stride=*/ node->expert_size,
+                /*dst_row_stride=*/ (size_t)n_out * sizeof(float),
+                /*src1_row_stride=*/ row_stride_bytes,
+                dev.stream);
+        if (ok) {
+            dev.stream->wait_and_throw();
+        }
     } catch (...) {
+        ok = false;
+    }
+    if (!ok) {
         dev.dispatch_failures++;
         return 0;
     }
@@ -1037,9 +1109,10 @@ static void sycl_moe_invalidate(const void * base, size_t size) {
         for (auto & dev_ptr : session->devices) {
             for (auto & pool_ptr : dev_ptr->pools) {
                 for (int i = 0; i < pool_ptr->n_slots; i++) {
-                    if (pool_ptr->slots[i].key.tensor &&
+                    const moe_cache_key & key = pool_ptr->slots[i].key;
+                    if (key.tensor &&
                         moe_cache_ranges_overlap(
-                            pool_ptr->slots[i].key.tensor,
+                            (const char *)key.tensor + (size_t)key.expert * pool_ptr->expert_size,
                             pool_ptr->expert_size, base, size)) {
                         moe_cache_slot_reset(*pool_ptr, i, true);
                     }

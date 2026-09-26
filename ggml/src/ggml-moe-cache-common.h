@@ -193,6 +193,12 @@ struct moe_cache_pin {
 
 struct moe_cache_device {
     moe_cache_device(int logical, int physical) : logical(logical), physical(physical) {}
+    // Backends subclass this and store instances as
+    // std::unique_ptr<moe_cache_device> (moe_cache_session::devices) holding
+    // a derived pointer - without a virtual destructor, that unique_ptr's
+    // deleter calls ~moe_cache_device() only, which is undefined behavior
+    // and silently skips any derived cleanup (e.g. freeing GPU resources).
+    virtual ~moe_cache_device() = default;
 
     int logical;
     int physical;

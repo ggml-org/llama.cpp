@@ -28,7 +28,7 @@ by `llama-server --list-devices`:
     --device Vulkan0 --fit on --moe-cache auto -ngl 99 -c 8192
 
 ~/build-sycl/bin/llama-server -m /path/to/model.gguf \
-    --device SYCL0 --cpu-moe --moe-cache on -ngl 99 -c 8192
+    --device SYCL0 --cpu-moe --moe-cache 4096 -ngl 99 -c 8192
 ```
 
 The cache needs canonical CPU-resident expert weights. A fully GPU-resident
@@ -46,6 +46,14 @@ Fit includes target and draft model memory before budgeting cache capacity.
 Look for the provider's cache activation and pool messages, not just acceptance
 of `--moe-cache`. Use `-lv 4` for diagnostic detail. Missing providers, unsupported
 shapes, inadequate capacity, or fully resident weights can leave caching dormant.
+
+`on`/`auto`/`soft` without `--fit` currently reach the provider with a zero
+budget (`arg.cpp` sets `budget_mib=0` for all three unless a positive integer
+follows `--moe-cache`, and neither provider resolves that to a real free-VRAM
+figure on its own) - both providers reject a zero budget outright rather than
+guessing, so the cache silently stays dormant. Use `--fit on` (which computes
+a real figure before calling into the provider) or a positive integer MiB
+value until that resolution path is filled in.
 
 ## Vulkan and SYCL implementation limits
 
