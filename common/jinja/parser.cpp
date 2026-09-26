@@ -435,7 +435,7 @@ private:
                     (is(token::identifier) && !is_identifier("and") && !is_identifier("or") && !is_identifier("else"))) {
                 size_t call_pos = current;
                 statements args;
-                args.push_back(std::move(parse_unary_expression()));
+                args.push_back(parse_unary_expression());
                 test_id = mk_stmt<call_expression>(call_pos, std::move(test_id), std::move(args));
             }
             operand = mk_stmt<test_expression>(start_pos, std::move(operand), negate, std::move(test_id));
