@@ -31,8 +31,10 @@ layout (push_constant) uniform parameter
   uint qkRatio;
   uint qkSubGroups;
   uint flag;
-  uint kvStride1;
-  uint kvStride2;
+  uint kStrideTok;
+  uint kStrideHead;
+  uint vStrideTok;
+  uint vStrideHead;
   uint batchStrideQ;
   uint batchStrideK;
   uint batchStrideV;
@@ -105,11 +107,11 @@ void main() {
   const uint splitIdx = localLinearId;
   const uint maxDim = (p.kvSeqLen + MATP_REDUCE - 1) / MATP_REDUCE;
   const uint pDim = maxDim * MATP_REDUCE;
-  const uint kvDim = p.kvStride1;
+  const uint kvDim = p.vStrideTok;
   const uint oDim = p.qHead * HEAD_DIM;
   const uint offsetBaseP = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * pDim / 4;
   const uint offsetBaseMax = (d * p.activationLength * p.qHead + v * GQA_RATIO + outTokIdx * N_TOKS_PER_GROUP * p.qHead) * maxDim;
-  const uint offsetBaseV = (d * p.batchStrideV + v * p.kvStride2 + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim);
+  const uint offsetBaseV = (d * p.batchStrideV + v * p.vStrideHead + vWarpIdx * WARP_V_DIM + splitIdx * TK * kvDim);
   const uint offsetSlmP = (SLM_OFFSET_P + wgLane * 4);
   const float fp32Min = uintBitsToFloat(0xFEFFFFFF);
   const float fp32Max = uintBitsToFloat(0x7EFFFFFF);
