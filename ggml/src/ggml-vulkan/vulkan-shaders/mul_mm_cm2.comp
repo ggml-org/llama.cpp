@@ -180,6 +180,13 @@ f16vec4 mmDecodeA_v(const in decodeBufA bl_in, const in uint blockCoords[2], con
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
 
+// src1 prescaled by s1_inv in the copy; result upscaled by s1_scale on store
+#ifdef MMID_RESCALE
+layout (constant_id = 9) const bool MMID_RESCALE_ON = false;
+layout (binding = 5) readonly buffer Amax {float data_amax[];};
+float mmid_s1_scale = 1.0f;
+#endif
+
 shared u16vec4 row_ids[BN];
 
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufB {
@@ -228,7 +235,11 @@ D_TYPE perElemOpD(const in uint32_t r, const in uint32_t c, const in D_TYPE elem
     if (dr < p.M && dc < _ne1) {
         uint row_i = c;
         const u16vec4 row_idx = row_ids[row_i];
+#ifdef MMID_RESCALE
+        data_d[row_idx.y * p.batch_stride_d + row_idx.z * p.stride_d + dr] = D_TYPE(float(elem) * mmid_s1_scale);
+#else
         data_d[row_idx.y * p.batch_stride_d + row_idx.z * p.stride_d + dr] = elem;
+#endif
     }
     return elem;
 }
@@ -273,6 +284,12 @@ void main() {
 
 #if defined(NEEDS_INIT_IQ_SHMEM) || defined(MULMAT_QUANT)
     init_iq_shmem(gl_WorkGroupSize);
+#endif
+
+#ifdef MMID_RESCALE
+    if (MMID_RESCALE_ON) {
+        mmid_s1_scale = data_amax[1];
+    }
 #endif
 
 #ifndef MUL_MAT_ID

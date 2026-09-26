@@ -221,7 +221,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
 
-// [TAG_GGML_PREC] number of partial reductions in the MUL_MAT_ID src1 amax pre-pass
+// partial reductions in the MUL_MAT_ID src1 amax pre-pass
 #define GGML_VK_MM_ID_AMAX_NPARTS 256
 
 struct vk_pipeline_struct;
@@ -262,7 +262,7 @@ struct vk_matmul_pipeline_key {
     ggml_type type_b;
     bool mul_mat_id;
     bool f16acc;
-    bool amax = false; // [TAG_GGML_PREC] src1 power-of-two rescale variant (MUL_MAT_ID, f32-B)
+    bool amax = false; // src1 rescale variant (MUL_MAT_ID, f32-B)
 
     bool operator<(const vk_matmul_pipeline_key & o) const {
         return std::tie(type_a, type_b, mul_mat_id, f16acc, amax)
@@ -843,6 +843,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_repeat_i16;
     vk_pipeline pipeline_cpy_32, pipeline_cpy_f32_f16, pipeline_cpy_16, pipeline_cpy_f16_f32, pipeline_cpy_f32_bf16, pipeline_cpy_bf16_f32, pipeline_cpy_bf16_f16, pipeline_cpy_f32_i32, pipeline_cpy_i32_f32;
     vk_pipeline pipeline_contig_cpy_32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_bf16_f32, pipeline_contig_cpy_bf16_f16, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
+    vk_pipeline pipeline_cpy_f32_f16_rescale, pipeline_contig_cpy_f32_f16_rescale;
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;

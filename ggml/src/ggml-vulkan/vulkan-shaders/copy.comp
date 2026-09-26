@@ -5,6 +5,10 @@
 
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
+#ifdef RESCALE
+layout (binding = 2) readonly buffer S {float data_s[];};
+#endif
+
 void main() {
     const uint idx = get_idx();
 
@@ -12,13 +16,19 @@ void main() {
         return;
     }
 
+#ifdef RESCALE
+    const float rescale = data_s[0];
+#else
+    const float rescale = 1.0f;
+#endif
+
 #if defined(DATA_A_BF16)
     data_d[get_doffset() + dst_idx(idx)] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + src0_idx(idx)])));
 #elif defined(DATA_D_BF16)
-    float f = float(data_a[get_aoffset() + src0_idx(idx)]);
+    float f = float(data_a[get_aoffset() + src0_idx(idx)]) * rescale;
     data_d[get_doffset() + dst_idx(idx)] = D_TYPE(fp32_to_bf16(f));
 #elif !defined(OPTIMIZATION_ERROR_WORKAROUND)
-    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
+    data_d[get_doffset() + dst_idx(idx)] = D_TYPE(float(data_a[get_aoffset() + src0_idx(idx)]) * rescale);
 #else
     data_d[get_doffset() + dst_idx(idx)] = data_a[get_aoffset() + src0_idx(idx)];
 #endif

@@ -126,7 +126,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 layout (binding = 4) readonly buffer RowMap {uint data_row_map[];};
 #ifdef MMID_RESCALE
-// [TAG_GGML_PREC] src1 power-of-two rescale factors: [0]=s1_inv, [1]=s1_scale
+// src1 rescale factors: [0]=s1_inv, [1]=s1_scale
 layout (binding = 5) readonly buffer Amax {float data_amax[];};
 #endif
 #endif
@@ -163,12 +163,14 @@ layout (push_constant) uniform parameter
 } p;
 
 #ifdef MMID_RESCALE
-// [TAG_GGML_PREC] per-pipeline toggle: 0 = normal (no rescale, folded away), 1 = src1 rescale.
 // constant_id 13 is reserved for this on all paths (coopmat SHMEM/APPLY were shifted to 14/15).
 layout (constant_id = 13) const bool MMID_RESCALE_ON = false;
-float mmid_s1_inv   = 1.0f; // applied to src1 on shmem load
 float mmid_s1_scale = 1.0f; // applied to the result on store
 #define D_STORE(v) D_TYPE(mmid_s1_scale * float(v))
+// f32-B only: src1 is downscaled on shmem load. For f16-B the copy already applied s1_inv.
+#ifdef MMID_RESCALE_LOAD
+float mmid_s1_inv = 1.0f;
+#endif
 #else
 #define D_STORE(v) D_TYPE(v)
 #endif
@@ -237,8 +239,10 @@ void main() {
 
 #ifdef MMID_RESCALE
     if (MMID_RESCALE_ON) {
-        mmid_s1_inv   = data_amax[0];
         mmid_s1_scale = data_amax[1];
+#ifdef MMID_RESCALE_LOAD
+        mmid_s1_inv = data_amax[0];
+#endif
     }
 #endif
 

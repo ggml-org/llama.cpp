@@ -10,11 +10,25 @@ layout (binding = 1)          buffer D {float data_d[];};
 layout (push_constant) uniform parameter {
     uint ne;
     uint nparts;
+    uint strided;
+    uint ne0; uint ne1; uint ne2;
+    uint nb0; uint nb1; uint nb2; uint nb3;
 } p;
 
 shared float sh[256];
 
-// [TAG_GGML_PREC] power-of-two rescale factors for src1 of MUL_MAT_ID.
+#ifdef AMAX_REDUCE
+uint amax_offset(uint i) {
+    if (p.strided == 0) {
+        return i;
+    }
+    uint i0 = i % p.ne0; uint r = i / p.ne0;
+    uint i1 = r % p.ne1; r /= p.ne1;
+    uint i2 = r % p.ne2; uint i3 = r / p.ne2;
+    return i0 * p.nb0 + i1 * p.nb1 + i2 * p.nb2 + i3 * p.nb3;
+}
+#endif
+
 // dst layout: [0]=s1_inv, [1]=s1_scale, [2 .. 2+nparts)=per-workgroup partials.
 
 #ifdef AMAX_REDUCE
@@ -25,7 +39,7 @@ void main() {
 
     float lmax = 0.0f;
     for (uint i = wg * nthreads + tid; i < p.ne; i += p.nparts * nthreads) {
-        lmax = max(lmax, abs(data_a[i]));
+        lmax = max(lmax, abs(data_a[amax_offset(i)]));
     }
 
     sh[tid] = lmax;
