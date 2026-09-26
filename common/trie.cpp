@@ -4,7 +4,7 @@
 
 #include <deque>
 
-common_trie::step common_trie::next_symbol(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const {
+common_trie::step common_trie::next(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const {
     if (!tokens.empty() && pos < token_map.size()) {
         const int32_t id = token_map[pos];
         if (id >= 0 && tokens.find(id) != tokens.end()) {
@@ -31,19 +31,19 @@ common_trie::match_result common_trie::check_at(std::string_view sv, const std::
     // LOG_DBG("%s: checking at pos %zu, sv='%s'\n", __func__, start_pos, std::string(sv).c_str());
 
     while (pos < sv.size()) {
-        auto next = next_symbol(sv, token_map, pos);
-        if (next.status != utf8_parse_result::SUCCESS) {
+        auto step = next(sv, token_map, pos);
+        if (step.status != utf8_parse_result::SUCCESS) {
             break;
         }
 
-        auto it = nodes[current].children.find(next.symbol);
+        auto it = nodes[current].children.find(step.symbol);
         if (it == nodes[current].children.end()) {
             // Can't continue matching
             return match_result{match_result::NO_MATCH};
         }
 
         current = it->second;
-        pos += next.bytes_consumed;
+        pos += step.bytes_consumed;
 
         // Check if we've matched a complete word
         if (nodes[current].pattern >= 0) {
