@@ -2727,26 +2727,52 @@ private:
         return true;
     }
 
+    void iterate(server_slot & slot, const std::function<void(server_slot &)> & callback) {
+        const auto n_tokens = batch.tokens.size();
+        const auto n_embd = batch.embd.size();
+        const auto has_embd = batch.has_embd;
+        auto * const slot_batched = batch.slot_batched;
+        const auto alora_scale = batch.alora_scale;
+        const auto alora_disabled_id = batch.alora_disabled_id;
+
+        try {
+            callback(slot);
+        } catch (const std::exception & e) {
+            if (!batch.batch_rendered) {
+                batch.tokens.resize(n_tokens);
+                batch.embd.resize(n_embd);
+                batch.has_embd = has_embd;
+                batch.slot_batched = slot_batched == &slot ? nullptr : slot_batched;
+
+                if (batch.alora_scale > 0.0f &&
+                        (batch.alora_scale != alora_scale || batch.alora_disabled_id != alora_disabled_id)) {
+                    slot.lora[batch.alora_disabled_id].scale = batch.alora_scale;
+                }
+                batch.alora_scale = alora_scale;
+                batch.alora_disabled_id = alora_disabled_id;
+
+                if (spec) {
+                    common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
+                }
+                slot.prompt_clear();
+            }
+
+            SLT_ERR(slot, "got exception: %s\n", e.what());
+            send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
+            slot.release();
+        }
+    }
+
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
         for (auto & slot : slots) {
-            try {
-                callback(slot);
-            } catch (const std::exception & e) {
-                SLT_ERR(slot, "got exception: %s\n", e.what());
-                send_error(slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
-                slot.release();
-            }
+            iterate(slot, callback);
         }
     }
 
     void iterate(std::vector<server_slot *> & slots, std::function<void(server_slot &)> callback) {
         for (auto & slot : slots) {
-            try {
-                callback(*slot);
-            } catch (const std::exception & e) {
-                SLT_ERR(*slot, "got exception: %s\n", e.what());
-                send_error(*slot, std::string("got exception: ") + e.what(), ERROR_TYPE_SERVER);
-                slot->release();
+            if (slot->is_processing()) {
+                iterate(*slot, callback);
             }
         }
     }
@@ -2907,6 +2933,8 @@ private:
     }
 
     void pre_decode() {
+        batch.clear();
+
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
@@ -2970,9 +2998,6 @@ private:
                 slot.truncated = true;
             }
         });
-
-        // start populating the batch for this iteration
-        batch.clear();
 
         // track if given slot can be batched with slots already in the batch
         auto & slot_batched = batch.slot_batched;
@@ -3098,6 +3123,10 @@ private:
         // update the batch with the sampled/drafted tokens
         iterate(generating, [&](server_slot & slot) {
             slot.handle_last_sampled_token(batch);
+
+            if (!slot_batched) {
+                slot_batched = &slot;
+            }
         });
 
         // process in chunks of params.n_batch
