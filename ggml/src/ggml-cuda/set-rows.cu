@@ -307,6 +307,26 @@ static void set_rows_cuda(ggml_backend_cuda_context & ctx, const ggml_tensor * s
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_IQ2_NL) {
+        set_rows_cuda_quant<idx_t, block_iq2_nl, QK2_NL, quantize_f32_iq2_nl_block>(
+            src0_d, src1_d, (block_iq2_nl*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
+    } else if (dst->type == GGML_TYPE_IQ3_NL) {
+        set_rows_cuda_quant<idx_t, block_iq3_nl, QK3_NL, quantize_f32_iq3_nl_block>(
+            src0_d, src1_d, (block_iq3_nl*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
     } else if (dst->type == GGML_TYPE_IQ4_NL) {
         set_rows_cuda_quant<idx_t, block_iq4_nl, QK4_NL, quantize_f32_iq4_nl_block>(
             src0_d, src1_d, (block_iq4_nl*)dst->data,
