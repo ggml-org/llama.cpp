@@ -710,7 +710,7 @@ static __device__ __forceinline__ uint32_t __hgt2_mask(const half2 a, const half
 
 static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, int c) {
 #if defined(GGML_USE_HIP)
-#if defined(CDNA) || defined(RDNA2) || defined(__gfx906__)
+#if defined(CDNA) || defined(RDNA2) || defined(__gfx906__) || defined(__gfx1012__)
     c = __builtin_amdgcn_sdot4(a, b, c, false);
 #elif defined(RDNA3) || defined(RDNA4)
     c = __builtin_amdgcn_sudot4( true, a, true, b, c, false);
@@ -757,9 +757,9 @@ static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const float2 v
     acc += v.y*u.y;
 }
 
-#if defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#if defined(GGML_USE_HIP) && (defined(__gfx1012__) || defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
 #define V_DOT2_F32_F16_AVAILABLE
-#endif // defined(GGML_USE_HIP) && (defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
+#endif // defined(GGML_USE_HIP) && (defined(__gfx1012__) || defined(RDNA2) || defined(RDNA3) || defined(RDNA4) || defined(__gfx906__) || defined(CDNA))
 
 static __device__ __forceinline__ void ggml_cuda_mad(float & acc, const half2 v, const half2 u) {
 #ifdef V_DOT2_F32_F16_AVAILABLE
