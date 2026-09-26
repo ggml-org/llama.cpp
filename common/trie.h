@@ -7,7 +7,6 @@
 #include <set>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 // Trie for matching multiple literals.
@@ -46,7 +45,7 @@ struct common_trie {
     std::vector<node> nodes;
 
     // every token id used by a pattern, the input is split so these match as single symbols
-    std::unordered_set<int32_t> tokens;
+    std::set<int32_t> tokens;
 
     common_trie() {
         create_node(); // root node
@@ -61,7 +60,7 @@ struct common_trie {
     enum match_result { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH };
 
     // Read the symbol at pos, a token in the trie up to the next token or else a UTF-8 codepoint
-    step next_symbol(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const;
+    step next(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const;
 
     // Check if a delimiter starts at the given position
     match_result check_at(std::string_view sv, size_t start_pos) const;

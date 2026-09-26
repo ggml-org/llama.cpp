@@ -798,7 +798,7 @@ struct parser_executor {
         std::vector<common_peg_invalid_utf8> invalid_utf8;
 
         while (pos < ctx.input.size()) {
-            auto step = matcher.next_symbol(ctx.input, ctx.token_map, pos);
+            auto step = matcher.next(ctx.input, ctx.token_map, pos);
 
             if (step.status == utf8_parse_result::INCOMPLETE && ctx.is_lenient()) {
                 // The rest of the sequence may still arrive, return what we have so far
