@@ -658,7 +658,9 @@ static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
     return find_best_sibling(files, model, "dspark-", tag);
 }
 
-static bool gguf_filename_is_model(const std::string & filepath) {
+static const char * ROLE_KEYWORDS[] = {"mtp-", "eagle3-", "dflash-", "dspark-"};
+
+static bool gguf_filename_is_model(const std::string & filepath, bool allow_role_infix = false) {
     if (!string_ends_with(filepath, ".gguf")) {
         return false;
     }
@@ -668,12 +670,18 @@ static bool gguf_filename_is_model(const std::string & filepath) {
         filename = filename.substr(pos + 1);
     }
 
-    return filename.find("mmproj")  == std::string::npos &&
-           filename.find("imatrix") == std::string::npos &&
-           filename.find("mtp-")    == std::string::npos &&
-           filename.find("eagle3-") == std::string::npos &&
-           filename.find("dflash-") == std::string::npos &&
-           filename.find("dspark-") == std::string::npos;
+    if (filename.find("mmproj")  != std::string::npos ||
+        filename.find("imatrix") != std::string::npos) {
+        return false;
+    }
+    for (const char * keyword : ROLE_KEYWORDS) {
+        bool excluded = allow_role_infix ? filename.rfind(keyword, 0) == 0
+                                         : filename.find(keyword) != std::string::npos;
+        if (excluded) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
@@ -688,9 +696,14 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
 
     for (const auto & t : tags) {
         std::regex pattern(t + "[.-]", std::regex::icase);
-        for (const auto & f : files) {
-            if (gguf_filename_is_model(f.path) &&
-                std::regex_search(f.path, pattern)) {
+
+        // prefer unambiguous model names before allowing role keywords after the basename prefix
+        for (int pass = 0; pass < 2; pass++) {
+            for (const auto & f : files) {
+                if (!gguf_filename_is_model(f.path, pass == 1) ||
+                    !std::regex_search(f.path, pattern)) {
+                    continue;
+                }
                 auto split = get_gguf_split_info(f.path);
                 if (split.count > 1 && split.index != 1) {
                     continue;
