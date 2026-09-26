@@ -93,6 +93,8 @@ struct buffer_view {
     }
 };
 
+void llama_clear_tensor_data(ggml_tensor * t, size_t offset, size_t size);
+
 void replace_all(std::string & s, const std::string & search, const std::string & replace);
 
 // TODO: rename to llama_format ?
