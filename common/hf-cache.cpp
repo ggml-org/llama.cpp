@@ -2,16 +2,21 @@
 
 #include "build-info.h"
 #include "common.h"
+#include "file-lock.h"
 #include "log.h"
 #include "http.h"
 #include "json.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <atomic>
 #include <string>
 #include <string_view>
 #include <stdexcept>
+
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -20,11 +25,14 @@
 #endif
 #define HOME_DIR "USERPROFILE"
 #include <windows.h>
+#include <io.h>
 #else
 #define HOME_DIR "HOME"
 #include <unistd.h>
 #include <pwd.h>
 #endif
+
+#include <cerrno>
 
 namespace hf_cache {
 
@@ -162,6 +170,14 @@ static bool is_valid_oid(const std::string & oid) {
     return is_hex_string(oid, 40) || is_hex_string(oid, 64);
 }
 
+std::string get_lock_path(const std::string & repo_id, const std::string & oid) {
+    if (!is_valid_repo_id(repo_id) || !is_valid_oid(oid)) {
+        return {};
+    }
+    fs::path lock_path = fs::path(get_cache_path()) / ".locks" / repo_to_folder_name(repo_id) / (oid + ".lock");
+    return lock_path.string();
+}
+
 static bool is_valid_subpath(const fs::path & path, const fs::path & subpath) {
     if (subpath.is_absolute()) {
         return false; // never do a / b with b absolute
@@ -174,24 +190,71 @@ static bool is_valid_subpath(const fs::path & path, const fs::path & subpath) {
 }
 
 static void safe_write_file(const fs::path & path, const std::string & data) {
-    fs::path path_tmp = path.string() + ".tmp";
+    // pids are not unique across containers sharing the cache, so two processes
+    // can derive the same temp name: create it exclusively and try the next name on collision
+    static std::atomic<uint32_t> counter{0};
 
     if (path.has_parent_path()) {
         fs::create_directories(path.parent_path());
     }
 
-    std::ofstream file(path_tmp);
-    file << data;
-    file.close();
+    const std::string path_str = path.string();
+    std::string path_tmp;
+    int fd = -1;
+
+    for (int attempt = 0; attempt < 64; ++attempt) {
+#if defined(_WIN32)
+        const uint64_t id = ((uint64_t) GetCurrentProcessId() << 32) | counter++;
+#else
+        const uint64_t id = ((uint64_t) getpid() << 32) | counter++;
+#endif
+        path_tmp = path_str + "." + std::to_string(id) + ".tmp";
+
+#if defined(_WIN32)
+        fd = _open(path_tmp.c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY | _O_NOINHERIT,
+                   _S_IREAD | _S_IWRITE);
+#else
+        fd = open(path_tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+#endif
+        if (fd >= 0) {
+            break;
+        }
+        if (errno != EEXIST) {
+            break; // report the failure below, retrying cannot fix it
+        }
+    }
+
+    if (fd < 0) {
+        throw std::runtime_error("failed to write file: " + path_str);
+    }
+
+    size_t written = 0;
+    while (written < data.size()) {
+#if defined(_WIN32)
+        const int n = _write(fd, data.data() + written, (unsigned int) (data.size() - written));
+#else
+        const ssize_t n = write(fd, data.data() + written, data.size() - written);
+#endif
+        if (n <= 0) {
+            break;
+        }
+        written += (size_t) n;
+    }
+
+    // delayed write errors surface only at close: the rename must not publish them
+#if defined(_WIN32)
+    const int close_ret = _close(fd);
+#else
+    const int close_ret = close(fd);
+#endif
 
     std::error_code ec;
-
-    if (!file.fail()) {
+    if (written == data.size() && close_ret == 0) {
         fs::rename(path_tmp, path, ec);
     }
-    if (file.fail() || ec) {
+    if (written != data.size() || close_ret != 0 || ec) {
         fs::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + path.string());
+        throw std::runtime_error("failed to write file: " + path_str);
     }
 }
 
@@ -452,7 +515,7 @@ hf_files get_cached_files(const std::string & repo_id) {
     return files;
 }
 
-std::string finalize_file(const hf_file & file) {
+std::string finalize_file(const hf_file & file, const std::function<bool()> & keep_waiting) {
     static std::atomic<bool> symlinks_disabled{false};
 
     std::error_code ec;
@@ -464,6 +527,24 @@ std::string finalize_file(const hf_file & file) {
     }
 
     if (!fs::exists(local_path, ec)) {
+        return file.final_path;
+    }
+
+    // the lock file is shared with huggingface_hub: another process may be
+    // finalizing the same blob
+    common_file_lock lock(get_lock_path(file.repo_id, file.oid));
+    if (!lock.acquire(keep_waiting)) {
+        // without the lock, another process could move the blob while we check it
+        throw std::runtime_error("failed to lock cache for finalization: " + file.final_path);
+    }
+
+    // acquire() only polls keep_waiting while waiting for a busy lock
+    if (keep_waiting && !keep_waiting()) {
+        throw std::runtime_error("download cancelled before finalization: " + file.final_path);
+    }
+
+    // re-check under the lock: the winner may have created the link already
+    if (fs::exists(final_path, ec)) {
         return file.final_path;
     }
 
