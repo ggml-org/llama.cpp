@@ -3055,8 +3055,8 @@ static void launch_mul_mat_vec_q_reorder_glu(const void * vx, const void * vgate
                                              const int ncols, const int nrows, const int stride_col_y_bytes,
                                              const int stride_col_dst, const ggml_glu_op glu_op,
                                              dpct::queue_ptr stream) {
-    // q4_K pairs rows for 3..4 columns, q5_K for every ncols_dst >= 3
-    constexpr int row_pair_max = reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q5_K ? MMVQ_MAX_BATCH_SIZE : 4;
+    // q4_K pairs rows for 3..4 columns, q5_K for 3..5
+    constexpr int row_pair_max = reorder_vec_dot_q_sycl::gtype == GGML_TYPE_Q5_K ? 5 : 4;
     constexpr int rows_per_sg =
         reorder_vec_dot_shared_activations<reorder_vec_dot_q_sycl::gtype>::value && ncols_dst >= 3 &&
                 ncols_dst <= row_pair_max
