@@ -2341,6 +2341,9 @@ static webgpu_encoded_op ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor 
         float clamp_max = ggml_get_op_params_f32(dst, 1);
         params.push_back(ggml_webgpu_u32_from_f32(clamp_min));
         params.push_back(ggml_webgpu_u32_from_f32(clamp_max));
+    } else if (dst->op == GGML_OP_LEAKY_RELU) {
+        float negative_slope = ggml_get_op_params_f32(dst, 0);
+        params.push_back(ggml_webgpu_u32_from_f32(negative_slope));
     } else if (dst->op == GGML_OP_FILL) {
         float fill_val = ggml_get_op_params_f32(dst, 0);
         params.push_back(ggml_webgpu_u32_from_f32(fill_val));
@@ -3410,6 +3413,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_soft_max(ctx, src0, src1, src2, node);
         case GGML_OP_UNARY:
         case GGML_OP_CLAMP:
+        case GGML_OP_LEAKY_RELU:
         case GGML_OP_FILL:
         case GGML_OP_LOG:
         case GGML_OP_SQR:
@@ -4679,6 +4683,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
             break;
         case GGML_OP_CLAMP:
+        case GGML_OP_LEAKY_RELU:
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
             break;
         case GGML_OP_FILL:

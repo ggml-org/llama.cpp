@@ -38,6 +38,9 @@ struct Params {
 #ifdef FILL
     fill_val: f32,
 #endif
+#ifdef LEAKY_RELU
+    negative_slope: f32,
+#endif
 #ifdef XIELU
     alpha_n: f32,
     alpha_p: f32,
@@ -108,6 +111,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>,
 #endif
 #ifdef RELU
     let res = select(0.0, src[params.offset_src + src_idx], src[params.offset_src + src_idx] > 0.0);
+#endif
+#ifdef LEAKY_RELU
+    let val = f32(src[params.offset_src + src_idx]);
+    let res = TYPE(select(0.0, val, val > 0.0) + params.negative_slope * select(0.0, val, val < 0.0));
 #endif
 #ifdef ELU
     let res = select(exp(src[params.offset_src + src_idx]) - 1.0, src[params.offset_src + src_idx], src[params.offset_src + src_idx] > 0.0);
