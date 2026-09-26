@@ -6572,7 +6572,7 @@ struct test_concat : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int64_t ne_b_d;
     const int dim;
-    const int v; // view (1 << 0: non-cont a (first 3 dim), 1 << 1: non-cont b (first 3 dim), 1 << 2: non-cont a (last 2 dim), 1 << 3: non-cont b (last 2 dim))
+    const int v; // view (1 << 0: non-cont a (first 3 dim), 1 << 1: non-cont b (first 3 dim), 1 << 2: non-cont a (last 2 dim), 1 << 3: non-cont b (last 2 dim), 1 << 4: transposed b)
 
     std::string vars() override {
         return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
@@ -6583,6 +6583,14 @@ struct test_concat : public test_case {
             int64_t ne_b_d = 5,
             int dim = 2, int v = 0)
         : type(type), ne_a(ne_a), ne_b_d(ne_b_d), dim(dim), v(v) {}
+
+    double max_nmse_err() override {
+        return v & 16 ? 0.0 : test_case::max_nmse_err();
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        return v & 16 ? (std::memcmp(a, b, n * sizeof(float)) == 0 ? 0.0 : 1.0) : test_case::err(a, b, n);
+    }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         auto ne_b = ne_a;
@@ -6621,6 +6629,14 @@ struct test_concat : public test_case {
 
             b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(b, "view_of_b");
+        } else if (v & 16) {
+            GGML_ASSERT(dim == 0);
+            std::swap(ne_b[0], ne_b[1]);
+            b = ggml_new_tensor(ctx, type, 4, ne_b.data());
+            ggml_set_name(b, "b");
+
+            b = ggml_transpose(ctx, b);
+            ggml_set_name(b, "transpose_of_b");
         } else {
             b = ggml_new_tensor(ctx, type, 4, ne_b.data());
             ggml_set_name(b, "b");
@@ -10665,6 +10681,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (int64_t state_width : { 1, 3, 4 }) {
+        for (int64_t ne_b_d : { 512, 1024, 2048 }) {
+            for (int64_t channels : { 31, 32, 33, 64, 65, 96, 97, 128, 129 }) {
+                test_cases.emplace_back(new test_concat(
+                    GGML_TYPE_F32, {state_width, channels, 1, 1}, ne_b_d, 0, 16));
+            }
+        }
+    }
+    for (int64_t state_width : { 1, 3, 4 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {state_width, 64, 2, 1}, 2048, 0, 16));
+    }
+    for (int64_t ne_b_d : { 512, 1024, 2048 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 8192, 1, 1}, ne_b_d, 0, 16));
+    }
+    for (int64_t ne_b_d : { 1, 31, 32, 511, 513, 1537 }) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 64, 1, 1}, ne_b_d, 0, 16));
+    }
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 64, 1, 1}, 2048, 0, 0));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F16, {3, 64, 1, 1}, 2048, 0, 16));
+
     for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0 }) {
         for (int v : { 0, 4, 8, 12 }) {
             for (int dim : { 0, 1, 2, 3, }) {
@@ -11435,6 +11471,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         for (int bs : {1, 2, 3, 4, 8}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, bs, 4096, {1, 1}, {1, 1}));
         }
+    }
+
+    for (int64_t ne_b_d : {512, 1024, 2048}) {
+        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 8192, 1, 1}, ne_b_d, 0, 16));
     }
 
     // qwen3-30b-a3b
