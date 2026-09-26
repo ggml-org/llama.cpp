@@ -215,8 +215,7 @@ class MiniCPMV4_7TextModel(Qwen3_5TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        # canvas M-RoPE: the time component is constant across an image, so carry it in the
-        # 4th position slot (RoPE sections are [11, 11, 10, 0]) and keep slot 0 increasing
+        # canvas M-RoPE: the time component is constant across an image, so carry it in the 4th position slot (RoPE sections are [11, 11, 10, 0]) and keep slot 0 increasing
         self.gguf_writer.add_rope_mrope_time_slot(3)
 
     def __init__(self, dir_model, ftype, fname_out, *, hparams: dict | None = None, **kwargs):
