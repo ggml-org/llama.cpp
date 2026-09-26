@@ -1,0 +1,7 @@
+# Generated deterministic draft SDK artifacts (canonical sources are under include/)
+/include/deterministic_draft_plugin.h
+/include/deterministic_draft_capabilities.h
+/include/llama_deterministic_draft.h
+/lib/libdeterministic_draft_spec.so
+/lib/*.dylib
+/lib/*.dll
