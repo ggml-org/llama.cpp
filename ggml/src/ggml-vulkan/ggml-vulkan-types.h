@@ -717,6 +717,7 @@ struct vk_device_struct {
     bool shader_int64;
     bool buffer_device_address;
     bool vulkan_memory_model;
+    bool shader_clock;
 
     bool add_rms_fusion;
     uint32_t partials_binding_alignment;
@@ -909,6 +910,8 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_fill_f32;
     vk_pipeline pipeline_fill_f16;
+
+    vk_pipeline pipeline_sleep;
 
     vk_pipeline pipeline_geglu[2];
     vk_pipeline pipeline_reglu[2];
