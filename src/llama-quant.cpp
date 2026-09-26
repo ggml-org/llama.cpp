@@ -10,6 +10,7 @@
 #include <cinttypes>
 #include <fstream>
 #include <mutex>
+#include <numeric>
 #include <regex>
 #include <thread>
 #include <unordered_map>
@@ -1126,11 +1127,35 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::vector<std::thread> workers;
     workers.reserve(nthread);
 
-    std::vector<no_init<uint8_t>> read_data;
-    std::vector<no_init<uint8_t>> work;
-    std::vector<no_init<float>> f32_conv_buf;
-
     const size_t max_buf_size = params->max_buf_size ? params->max_buf_size : LLAMA_QUANT_MAX_BUF_SIZE;
+
+    ggml_backend_ptr        backend;
+    ggml_context_ptr        ctx;
+    ggml_backend_buffer_ptr buf;       // src (when not mmapped), f32 and dst slabs
+    ggml_backend_buffer_ptr buf_mmap;  // the mapped bytes of the current tensor
+
+    if (!params->dry_run) {
+        backend.reset(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+        if (!backend) {
+            throw std::runtime_error("failed to initialize CPU backend");
+        }
+
+        // src, f32 and dst tensors of the current slab
+        ggml_init_params ctx_params = { 3*ggml_tensor_overhead(), nullptr, true };
+        ctx.reset(ggml_init(ctx_params));
+    }
+
+    // grow the buffer when a slab does not fit
+    auto ensure_buf = [&](size_t size) {
+        if (!buf || ggml_backend_buffer_get_size(buf.get()) < size) {
+            buf.reset();
+            buf.reset(ggml_backend_alloc_buffer(backend.get(), size));
+            if (!buf) {
+                throw std::runtime_error(format("failed to allocate buffer of size %zu", size));
+            }
+            GGML_ASSERT(ggml_backend_buffer_is_host(buf.get()));
+        }
+    };
 
     int cur_split = -1;
     std::ofstream fout;
@@ -1182,12 +1207,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         const size_t tensor_size = ggml_nbytes(tensor);
 
-        // read a byte range of the current tensor
-        auto load_range = [&](size_t offs, size_t size) -> const void * {
-            if (!ml.use_mmap && read_data.size() < size) {
-                read_data.resize(size);
-            }
-            return ml.load_data_range(weight, offs, size, read_data.data());
+        // read rows [ir, ir + nrows) of the current tensor into a tensor in the mapping, or at the start of buf
+        auto load_rows = [&](int64_t ir, int64_t nrows) -> ggml_tensor * {
+            ggml_tensor * src = ggml_new_tensor_2d(ctx.get(), tensor->type, tensor->ne[0], nrows);
+            const size_t  offs = ir*ggml_row_size(tensor->type, tensor->ne[0]);
+            uint8_t *     addr = ml.use_mmap ? (uint8_t *) ggml_backend_buffer_get_base(buf_mmap.get()) + offs :
+                                               (uint8_t *) ggml_backend_buffer_get_base(buf.get());
+            const void *  data = ml.load_data_range(weight, offs, ggml_nbytes(src), addr);
+            GGML_ASSERT(data == addr);
+            ggml_backend_tensor_alloc(ml.use_mmap ? buf_mmap.get() : buf.get(), src, addr);
+            return src;
         };
 
         LLAMA_LOG_INFO("[%4d/%4d] %-36s - [%s], type = %6s, ",
@@ -1225,17 +1254,35 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             continue;
         } else {
             // no --dry-run, perform quantization
+            if (ml.use_mmap) {
+                void * addr = (uint8_t *) ml.mappings.at(weight.idx)->addr() + weight.offs;
+                if ((uintptr_t) addr % ggml_backend_get_alignment(backend.get()) != 0) {
+                    throw std::runtime_error(format("tensor '%s' is not aligned in the input file", ggml_get_name(tensor)));
+                }
+                buf_mmap.reset(ggml_backend_cpu_buffer_from_ptr(addr, tensor_size));
+            }
+
             if (!quantize) {
                 new_size = tensor_size;
                 LLAMA_LOG_INFO("size = %8.3f MiB\n", tensor_size/1024.0/1024.0);
 
                 // copy in slabs of whole rows, so that each slab can be validated
-                const size_t row_size   = ggml_row_size(tensor->type, tensor->ne[0]);
-                const size_t slab_size  = std::max<size_t>(row_size, (max_buf_size/row_size)*row_size);
+                // the slabs are only written to the file, so they do not need to be aligned
+                const size_t  row_size    = ggml_row_size(tensor->type, tensor->ne[0]);
+                const int64_t nrows_total = ggml_nrows(tensor);
+                const int64_t nrows_slab  = std::max<int64_t>(1, std::min<int64_t>(nrows_total, max_buf_size/row_size));
 
-                for (size_t offs = 0; offs < tensor_size; offs += slab_size) {
-                    const size_t size = std::min(slab_size, tensor_size - offs);
-                    fout.write((const char *) load_range(offs, size), size);
+                if (!ml.use_mmap) {
+                    ensure_buf(nrows_slab*row_size);
+                }
+
+                for (int64_t ir = 0; ir < nrows_total; ir += nrows_slab) {
+                    const int64_t nrows_cur = std::min(nrows_slab, nrows_total - ir);
+
+                    ggml_reset(ctx.get());
+                    ggml_tensor * src = load_rows(ir, nrows_cur);
+
+                    fout.write((const char *) src->data, ggml_nbytes(src));
                 }
             } else {
                 const float * imatrix = nullptr;
@@ -1282,10 +1329,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
                 const size_t row_size_src = ggml_row_size(tensor->type, n_per_row);
                 const size_t row_size_dst = ggml_row_size(new_type,     n_per_row);
+                const size_t row_size_f32 = tensor->type == GGML_TYPE_F32 ? 0 : n_per_row*sizeof(float);
 
                 // process the rows in slabs, so that the buffers stay below max_buf_size
-                const size_t bytes_per_row = row_size_src + row_size_dst + (tensor->type == GGML_TYPE_F32 ? 0 : n_per_row*sizeof(float));
-                const int64_t nrows_slab = std::max<int64_t>(1, std::min<int64_t>(nrows_total, max_buf_size/bytes_per_row));
+                const size_t bytes_per_row = row_size_src + row_size_dst + row_size_f32;
+                int64_t nrows_slab = std::max<int64_t>(1, std::min<int64_t>(nrows_total, max_buf_size/bytes_per_row));
+
+                // backends require aligned tensor data, so start each slab at an aligned offset in the mapping
+                const size_t  buf_align   = ggml_backend_get_alignment(backend.get());
+                const int64_t nrows_align = buf_align/std::gcd(row_size_src, buf_align);
+                nrows_slab                = std::max<int64_t>(1, nrows_slab - nrows_slab % nrows_align);
+
+                const size_t offs_f32 = ml.use_mmap ? 0 : GGML_PAD(nrows_slab*row_size_src, buf_align);
+                const size_t offs_dst = GGML_PAD(offs_f32 + nrows_slab*row_size_f32, buf_align);
+
+                ensure_buf(offs_dst + nrows_slab*row_size_dst);
+                uint8_t * base = (uint8_t *) ggml_backend_buffer_get_base(buf.get());
 
                 static const int64_t min_chunk_size = 32 * 512;
                 const int64_t chunk_size = (n_per_row >= min_chunk_size ? n_per_row : n_per_row * ((min_chunk_size + n_per_row - 1)/n_per_row));
@@ -1296,29 +1355,28 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     const int64_t nrows_cur = std::min(nrows_slab, nrows_total - ir);
                     const int64_t nelements_cur = nrows_cur * n_per_row;
 
-                    const void * src = load_range(ir*row_size_src, nrows_cur*row_size_src);
+                    ggml_reset(ctx.get());
+                    ggml_tensor * src = load_rows(ir, nrows_cur);
+                    ggml_tensor * dst = ggml_new_tensor_2d(ctx.get(), new_type, n_per_row, nrows_cur);
+                    ggml_backend_tensor_alloc(buf.get(), dst, base + offs_dst);
 
                     const float * f32_data;
                     if (tensor->type == GGML_TYPE_F32) {
-                        f32_data = (const float *) src;
+                        f32_data = (const float *) src->data;
                     } else {
-                        if (f32_conv_buf.size() < (size_t) nelements_cur) {
-                            f32_conv_buf.resize(nelements_cur);
-                        }
-                        llama_tensor_dequantize_impl(tensor->type, src, (float *) f32_conv_buf.data(), workers, nelements_cur, nthread);
-                        f32_data = (const float *) f32_conv_buf.data();
-                    }
-
-                    if (work.size() < nrows_cur*row_size_dst) {
-                        work.resize(nrows_cur*row_size_dst);
+                        ggml_tensor * f32 = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_per_row, nrows_cur);
+                        ggml_backend_tensor_alloc(buf.get(), f32, base + offs_f32);
+                        llama_tensor_dequantize_impl(tensor->type, src->data, (float *) f32->data, workers, nelements_cur, nthread);
+                        f32_data = (const float *) f32->data;
                     }
 
                     const int64_t nchunk = (nelements_cur + chunk_size - 1)/chunk_size;
                     const int64_t nthread_use = nthread > 1 ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk)) : 1;
 
-                    const size_t size_cur = llama_tensor_quantize_impl(new_type, f32_data, work.data(), chunk_size, ir, nrows_cur, nrows_per_expert, n_per_row, imatrix, workers, nthread_use);
+                    const size_t size_cur = llama_tensor_quantize_impl(new_type, f32_data, dst->data, chunk_size, ir, nrows_cur,
+                                                                       nrows_per_expert, n_per_row, imatrix, workers, nthread_use);
 
-                    fout.write((const char *) work.data(), size_cur);
+                    fout.write((const char *) dst->data, size_cur);
                     new_size += size_cur;
                 }
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
@@ -1334,7 +1392,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             zeros(fout, GGML_PAD(new_size, align) - new_size);
 
             // unmap the tensor to free memory
-            if (ml.use_mmap) { ml.unmap_weight(weight); }
+            if (ml.use_mmap) {
+                buf_mmap.reset();
+                ml.unmap_weight(weight);
+            }
 
         } // no --dry-run
     } // main loop
