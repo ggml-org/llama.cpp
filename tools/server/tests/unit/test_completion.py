@@ -2,6 +2,7 @@ import pytest
 import requests
 import time
 import random
+from contextlib import ExitStack
 
 from openai import OpenAI
 from utils import *
@@ -370,6 +371,122 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
         assert len(res.body["content"]) > 10
         # FIXME: the result is not deterministic when using other slot than slot 0
         # assert match_regex(re_content, res.body["content"])
+
+
+@pytest.mark.parametrize("phase", ["prompt", "generation"])
+@pytest.mark.parametrize("n_slots,failed_slot", [(1, 0), (3, 0), (3, 1), (3, 2)])
+def test_completion_batch_exception(monkeypatch, tmp_path, phase: str, n_slots: int, failed_slot: int):
+    global server
+    monkeypatch.delenv("LLAMA_SERVER_DEBUG_FAIL_SLOT", raising=False)
+    monkeypatch.delenv("LLAMA_SERVER_DEBUG_FAIL_AFTER", raising=False)
+    prefix = [1, 10, 20, 30]
+    prompt = prefix + [40, 50, 60, 70]
+    server.n_slots = n_slots
+    server.n_ctx = 512 * n_slots
+    server.n_batch = 32
+    server.n_predict = 256
+    server.n_threads = 1
+    server.kv_unified = True
+    server.server_continuous_batching = True
+    server.server_slots = True
+    server.cache_ram = 0
+    server.log_path = str(tmp_path / "server.log")
+
+    request = {
+        "prompt": prompt,
+        "n_predict": 8,
+        "temperature": 0.0,
+        "seed": 42,
+        "ignore_eos": True,
+        "cache_prompt": True,
+        "return_tokens": True,
+    }
+    server.start()
+    reference = server.make_request("POST", "/completion", {**request, "id_slot": failed_slot})
+    assert reference.status_code == 200
+    assert len(reference.body["tokens"]) == request["n_predict"]
+    healthy_reference = None
+    if n_slots > 1:
+        healthy_reference = server.make_request("POST", "/completion", {
+            **request, "id_slot": (failed_slot + 1) % n_slots, "n_predict": 256,
+        })
+        assert healthy_reference.status_code == 200
+        assert len(healthy_reference.body["tokens"]) == 256
+    server.stop()
+
+    fail_after = len(prefix) + 2 if phase == "prompt" else len(prompt) + 2
+    monkeypatch.setenv("LLAMA_SERVER_DEBUG_FAIL_SLOT", str(failed_slot))
+    monkeypatch.setenv("LLAMA_SERVER_DEBUG_FAIL_AFTER", str(fail_after))
+    server.start()
+    warmup = server.make_request("POST", "/completion", {
+        **request, "id_slot": failed_slot, "prompt": prefix, "n_predict": 1,
+    })
+    assert warmup.status_code == 200
+
+    with ExitStack() as streams:
+        healthy_streams = []
+        for id_slot in range(n_slots):
+            if id_slot == failed_slot:
+                continue
+            response = streams.enter_context(requests.post(
+                server.make_url("/completion"),
+                json={**request, "id_slot": id_slot, "n_predict": 256, "stream": True},
+                stream=True,
+                timeout=60,
+            ))
+            assert response.status_code == 200
+            events = (
+                json.loads(line[6:])
+                for line in response.iter_lines(chunk_size=1, decode_unicode=True)
+                if line.startswith("data: ")
+            )
+            first = next(events)
+            assert "error" not in first
+            assert not first["stop"]
+            healthy_streams.append((first, events))
+
+        slots = server.make_request("GET", "/slots")
+        assert slots.status_code == 200
+        assert sum(slot["is_processing"] for slot in slots.body) == n_slots - 1
+
+        failed = server.make_request("POST", "/completion", {**request, "id_slot": failed_slot})
+        assert failed.status_code == 500
+        assert "got exception:" in failed.body["error"]["message"]
+
+        for first, events in healthy_streams:
+            chunks = [first, *events]
+            assert all("error" not in chunk for chunk in chunks)
+            assert chunks[-1]["stop"]
+            assert chunks[-1]["timings"]["predicted_n"] == 256
+            tokens = [token for chunk in chunks for token in chunk["tokens"]]
+            assert healthy_reference is not None
+            assert tokens == healthy_reference.body["tokens"]
+
+    assert server.make_request("GET", "/health").status_code == 200
+    slots = server.make_request("GET", "/slots")
+    assert slots.status_code == 200
+    assert all(not slot["is_processing"] for slot in slots.body)
+    assert slots.body[failed_slot]["n_prompt_tokens"] == 0
+
+    retry = server.make_request("POST", "/completion", {**request, "id_slot": failed_slot})
+    assert retry.status_code == 200
+    assert retry.body["tokens"] == reference.body["tokens"]
+    assert retry.body["timings"]["prompt_n"] == len(prompt)
+
+    cached = server.make_request("POST", "/completion", {**request, "id_slot": failed_slot})
+    assert cached.status_code == 200
+    assert cached.body["tokens"] == reference.body["tokens"]
+    assert cached.body["timings"]["prompt_n"] == 1
+
+    server.stop()
+    injections = re.findall(
+        r"injecting batch allocation failure: id_slot = (\d+), other_tokens = (\d+)",
+        (tmp_path / "server.log").read_text(encoding="utf-8", errors="replace"),
+    )
+    assert len(injections) == 1
+    assert int(injections[0][0]) == failed_slot
+    if n_slots > 1 and (phase == "prompt" or failed_slot > 0):
+        assert int(injections[0][1]) > 0
 
 
 @pytest.mark.parametrize(

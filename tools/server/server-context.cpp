@@ -22,6 +22,7 @@
 #include <cinttypes>
 #include <exception>
 #include <memory>
+#include <new>
 #include <filesystem>
 #include <random>
 #include <utility>
@@ -134,8 +135,18 @@ struct server_batch {
     float  alora_scale       = -1.0f;
     size_t alora_disabled_id = 0;
 
+    int debug_fail_slot  = -1;
+    int debug_fail_after = 0;
+
     server_batch() {
         batch.pos = nullptr; // sentinel: uninitialized batch
+
+        const auto fail_slot = common_get_env("LLAMA_SERVER_DEBUG_FAIL_SLOT");
+        const auto fail_after = common_get_env("LLAMA_SERVER_DEBUG_FAIL_AFTER");
+        if (!fail_slot.empty() && !fail_after.empty()) {
+            debug_fail_slot = std::stoi(fail_slot);
+            debug_fail_after = std::stoi(fail_after);
+        }
     }
 
     ~server_batch() {
@@ -153,6 +164,16 @@ struct server_batch {
         tokens.reserve(n_tokens_alloc);
     }
 
+    void debug_check_allocation(int32_t id_slot) {
+        if (id_slot == debug_fail_slot && debug_fail_after > 0 && --debug_fail_after == 0) {
+            const auto other_tokens = std::count_if(tokens.begin(), tokens.end(), [id_slot](const token & t) {
+                return t.id_slot != id_slot;
+            });
+            SRV_WRN("injecting batch allocation failure: id_slot = %d, other_tokens = %d\n", id_slot, (int) other_tokens);
+            throw std::bad_alloc();
+        }
+    }
+
     bool add(int32_t id_slot, llama_token token, llama_pos pos, bool output, bool is_prompt) {
         GGML_ASSERT(!has_embd); // cannot mix tokens + embd in same batch
         GGML_ASSERT(batch.pos != nullptr);
@@ -160,6 +181,7 @@ struct server_batch {
             return false;
         }
         tokens.push_back({ id_slot, token, pos, output, is_prompt });
+        debug_check_allocation(id_slot);
         return true;
     }
 
@@ -170,6 +192,7 @@ struct server_batch {
         }
         tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
         has_embd = true;
+        debug_check_allocation(id_slot);
         embd.insert(embd.end(), embd_in.begin(), embd_in.end());
         return true;
     }
