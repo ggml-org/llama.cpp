@@ -17,6 +17,7 @@ struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
 
+struct llama_lazy_reader;
 struct llama_cparams;
 struct llama_layer;
 struct llama_prec_policy;
@@ -98,6 +99,27 @@ struct llm_graph_params;
 //
 // llm_graph_input
 //
+
+// gathers rows from a resident or lazy table
+class llm_graph_lazy_rows {
+public:
+    ggml_tensor * build(ggml_context * ctx0, ggml_tensor * table, const llama_lazy_reader * reader, int64_t n_rows);
+
+    void set_rows(const int32_t * idx, int64_t n);
+
+    bool can_reuse(int64_t n_rows) const;
+
+private:
+    const ggml_tensor * table = nullptr;
+    const llama_lazy_reader * reader = nullptr;
+
+    // I32 row indices or staged rows in the table type
+    ggml_tensor * t = nullptr;
+    ggml_tensor * t_indices = nullptr;
+
+    std::vector<uint8_t> staging;
+    std::vector<int32_t> identity;
+};
 
 class llm_graph_input_i {
 public:
@@ -782,6 +804,7 @@ struct llm_graph_params {
 
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
+    const llama_lazy_reader * lazy_reader = nullptr;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
@@ -1024,6 +1047,9 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
+    const llama_lazy_reader * lazy_reader_ctx;
+
+    const llama_lazy_reader * lazy_reader(const ggml_tensor * t) const;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;

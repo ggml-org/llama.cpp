@@ -320,6 +320,10 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.lazy.mode = params.lazy_mode;
+        if (ml.lazy.mode != LLAMA_LAZY_MODE_OFF && (file || params.check_tensors || params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK)) {
+            LLAMA_LOG_WARN("%s: disabling lazy reads for file pointer, tensor validation, or mmap+mlock load\n", __func__);
+            ml.lazy.mode = LLAMA_LAZY_MODE_OFF;
+        }
 
         ml.print_info();
         std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));
@@ -496,6 +500,10 @@ struct llama_model * llama_model_load_from_file_ptr(FILE * file, struct llama_mo
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {
+    if (model->lazy_reader_factory) {
+        LLAMA_LOG_ERROR("%s: saving a model with lazy tensors is not supported\n", __func__);
+        return;
+    }
     llama_model_saver ms(model);
     ms.add_kv_from_model();
     ms.add_tensors_from_model();
@@ -617,4 +625,3 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
-

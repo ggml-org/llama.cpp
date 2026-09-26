@@ -19,6 +19,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 //
@@ -88,6 +89,10 @@ llama_context::llama_context(
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
+    if (model.lazy_reader_factory) {
+        const int n_readers = (int) std::max(1u, std::thread::hardware_concurrency());
+        lazy_reader = model.lazy_reader_factory->create(n_readers);
+    }
     // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
     //     may need to be backend-dependent
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
@@ -1446,7 +1451,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
-        res->set_inputs(&ubatch);
+        try {
+            res->set_inputs(&ubatch);
+        } catch (const std::exception & e) {
+            LLAMA_LOG_ERROR("%s: failed to set graph inputs: %s\n", __func__, e.what());
+            ret = GGML_STATUS_FAILED;
+            return nullptr;
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -2551,6 +2562,7 @@ llm_graph_params llama_context::graph_params(
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
+        /*.lazy_reader =*/ lazy_reader.get(),
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
