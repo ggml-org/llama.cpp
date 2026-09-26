@@ -1,3 +1,8 @@
+#include <algorithm>
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <string>
 #include "sampling.h"
 
 #include "common.h"
@@ -184,6 +189,54 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
+bool common_reasoning_budget_parse(const std::string & value, int32_t & out_fixed, common_reasoning_budget_expr & out_expr) {
+    out_fixed = -1;
+    out_expr = common_reasoning_budget_expr{};
+    const size_t b = value.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) { return false; }
+    const size_t e = value.find_last_not_of(" \t\r\n");
+    const std::string t = value.substr(b, e - b + 1);
+    size_t sep = std::string::npos;
+    for (size_t i = 1; i < t.size(); i++) {
+        if (t[i] == '+' || t[i] == '-') { sep = i; break; }
+    }
+    if (t.find('.') == std::string::npos) {
+        if (sep != std::string::npos) { return false; }
+        try {
+            size_t pos = 0;
+            long v = std::stol(t, &pos);
+            if (pos != t.size() || v < -1) { return false; }
+            out_fixed = (int32_t) v;
+            return true;
+        } catch (...) { return false; }
+    }
+    const std::string frac_str = t.substr(0, sep == std::string::npos ? t.size() : sep);
+    errno = 0;
+    char * endp = nullptr;
+    const double frac = strtod(frac_str.c_str(), &endp);
+    if (errno != 0 || endp != frac_str.c_str() + frac_str.size() || frac < 0.0 || frac > 1.0) { return false; }
+    int64_t offset = 0;
+    if (sep != std::string::npos) {
+        const std::string off_str = t.substr(sep);
+        errno = 0;
+        char * endp2 = nullptr;
+        const long long v = strtoll(off_str.c_str(), &endp2, 10);
+        if (errno != 0 || endp2 != off_str.c_str() + off_str.size()) { return false; }
+        offset = v;
+    }
+    out_expr.frac = (float) frac;
+    out_expr.offset = (int32_t) std::min<int64_t>(INT32_MAX, std::max<int64_t>(INT32_MIN, offset));
+    return true;
+}
+
+int32_t common_reasoning_budget_eval(const common_reasoning_budget_expr & expr, int32_t ref_len) {
+    if (!expr.is_set() || ref_len <= 0) { return -1; }
+    double budget = llround((double) expr.frac * (double) ref_len + (double) expr.offset);
+    if (budget < 0.0) { budget = 0.0; }
+    if (budget > (double) INT32_MAX) { budget = (double) INT32_MAX; }
+    return (int32_t) budget;
+}
+
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
         struct common_params_sampling & params) {
@@ -304,6 +357,31 @@ struct common_sampler * common_sampler_init(
             LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
                 common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
             throw e;
+        }
+    }
+
+    // resolve fractional reasoning budgets (issue #27571) against reference lengths
+    if (params.reasoning_budget_tokens < 0) {
+        if (params.reasoning_budget_expr_current.is_set()) {
+            const int32_t ref = params.reasoning_budget_ref_current > 0 ?
+                params.reasoning_budget_ref_current : params.reasoning_budget_ref_conversation;
+            if (ref > 0) {
+                params.reasoning_budget_tokens = common_reasoning_budget_eval(params.reasoning_budget_expr_current, ref);
+                LOG_DBG("%s: budget(current): %g * %d %+d -> %d\n", __func__,
+                        params.reasoning_budget_expr_current.frac, ref,
+                        params.reasoning_budget_expr_current.offset, params.reasoning_budget_tokens);
+            } else {
+                LOG_WRN("%s: fractional budget requested but current prompt length unknown - ignoring\n", __func__);
+            }
+        } else if (params.reasoning_budget_expr.is_set()) {
+            if (params.reasoning_budget_ref_conversation > 0) {
+                params.reasoning_budget_tokens = common_reasoning_budget_eval(params.reasoning_budget_expr, params.reasoning_budget_ref_conversation);
+                LOG_DBG("%s: budget(conversation): %g * %d %+d -> %d\n", __func__,
+                        params.reasoning_budget_expr.frac, params.reasoning_budget_ref_conversation,
+                        params.reasoning_budget_expr.offset, params.reasoning_budget_tokens);
+            } else {
+                LOG_WRN("%s: fractional budget requested but conversation length unknown - ignoring\n", __func__);
+            }
         }
     }
 
