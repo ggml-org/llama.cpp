@@ -36,8 +36,23 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     if (!ml.get_arr(LLM_KV_TARGET_LAYERS, target_layer_ids, false)) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
+    if (target_layer_ids.empty() || target_layer_ids.size() > 64) {
+        throw std::runtime_error("DFlash 'target_layers' must have between 1 and 64 entries, got " +
+                                 std::to_string(target_layer_ids.size()));
+    }
+    for (const auto & id : target_layer_ids) {
+        if (id < 0) {
+            throw std::runtime_error("DFlash 'target_layers' entries must be non-negative");
+        }
+    }
 
-    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
+    // the width sizes the encoder input buffers, so keep it in 64 bits until it is checked
+    const uint64_t n_embd_inp_enc = (uint64_t) target_layer_ids.size() * hparams.n_embd;
+    if (n_embd_inp_enc == 0 || n_embd_inp_enc > (1u << 20)) {
+        throw std::runtime_error("DFlash encoder input width " + std::to_string(n_embd_inp_enc) +
+                                 " is out of range (max 1048576)");
+    }
+    hparams.n_embd_inp_enc_impl = (uint32_t) n_embd_inp_enc;
 
     std::string layers;
     const char * sep = "";
