@@ -628,7 +628,19 @@ static void process_handler_response(server_http_req_ptr && request, server_http
 
         const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
             std::string chunk;
-            const bool has_next = response->next(chunk);
+            bool has_next = false;
+            // next() serializes the result to JSON; a result carrying invalid UTF-8
+            // (e.g. binary over a text tool stream) makes dump() throw. That throw would
+            // otherwise escape this lambda (httplib thread, no enclosing handler try/catch)
+            // and terminate the whole server. Catch it, log the offending payload, and end
+            // the stream cleanly instead of crashing.
+            try {
+                has_next = response->next(chunk);
+            } catch (const std::exception & e) {
+                SRV_ERR("http: stream serialization failed, ending stream: %s\n", e.what());
+                sink.done();
+                return false;
+            }
             if (!chunk.empty()) {
                 if (!sink.write(chunk.data(), chunk.size())) {
                     return false;
