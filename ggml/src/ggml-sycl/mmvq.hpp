@@ -24,6 +24,13 @@ void ggml_sycl_op_mul_mat_vec_q(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
+// Whether ggml_sycl_mul_mat_vec_q_id() has a dispatch case for src0_type.
+// Keep in sync with that function's switch - callers that need to decide
+// ahead of time whether the fused path will dispatch (e.g. graph-capture
+// eligibility) must not call ggml_sycl_mul_mat_vec_q_id() itself to find out,
+// since it already does real GPU work before it can return false.
+bool ggml_sycl_mul_mat_vec_q_id_supports_type(enum ggml_type src0_type);
+
 // Requires standard (non-reorder) block layout for src0.
 // Returns false if src0_type isn't handled; caller should fall back.
 bool ggml_sycl_mul_mat_vec_q_id(

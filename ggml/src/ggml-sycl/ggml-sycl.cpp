@@ -911,6 +911,9 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 static void memcpy_host_forward(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                          const void *ptr_src, size_t size) {
     char *host_buf = (char *)malloc(size);
+    if (host_buf == nullptr) {
+        GGML_ABORT("memcpy_host_forward: failed to allocate host buffer of size %zu\n", size);
+    }
     q_src.memcpy(host_buf, (const char *)ptr_src, size).wait();
     q_dst.memcpy((char *)ptr_dst, host_buf, size).wait();
     free(host_buf);
@@ -6747,6 +6750,7 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 const ggml_tensor * mmid_src1 = mmid_dst->src[1];
                 const ggml_tensor * mmid_ids  = mmid_dst->src[2];
                 const bool fused_dispatchable =
+                    ggml_sycl_mul_mat_vec_q_id_supports_type(mmid_src0->type) &&
                     mmid_src1->ne[2] == 1 &&
                     mmid_src1->type == GGML_TYPE_F32 && mmid_dst->type == GGML_TYPE_F32 &&
                     mmid_src1->ne[0] == mmid_src0->ne[0] && mmid_src1->ne[0] % QK8_1 == 0 &&
