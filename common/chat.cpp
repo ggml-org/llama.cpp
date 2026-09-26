@@ -1447,37 +1447,37 @@ void common_chat_input::append(const std::string & piece, llama_token token) {
     if (piece.empty()) {
         return;
     }
-    token_map.push_back(token);
-    token_map.resize(token_map.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
+    tokens.push_back(token);
+    tokens.resize(tokens.size() + piece.size() - 1, LLAMA_TOKEN_NULL);
     text += piece;
 }
 
 void common_chat_input::append(const common_chat_input & chunk) {
-    token_map.insert(token_map.end(), chunk.token_map.begin(), chunk.token_map.end());
+    tokens.insert(tokens.end(), chunk.tokens.begin(), chunk.tokens.end());
     text += chunk.text;
 }
 
 void common_chat_input::truncate(size_t pos) {
     if (pos < text.size()) {
         text.erase(pos);
-        token_map.resize(pos);
+        tokens.resize(pos);
     }
 }
 
 common_chat_input common_chat_input::substr(size_t pos, size_t n) const {
     common_chat_input out;
     out.text = text.substr(pos, n);
-    out.token_map.assign(token_map.begin() + pos, token_map.begin() + pos + out.size());
+    out.tokens.assign(tokens.begin() + pos, tokens.begin() + pos + out.size());
     return out;
 }
 
 void common_chat_input::prepend(const std::string & prefix) {
-    token_map.insert(token_map.begin(), prefix.size(), LLAMA_TOKEN_NULL);
+    tokens.insert(tokens.begin(), prefix.size(), LLAMA_TOKEN_NULL);
     text = prefix + text;
 }
 
 void common_chat_input::prepend(const common_chat_input & prefix) {
-    token_map.insert(token_map.begin(), prefix.token_map.begin(), prefix.token_map.end());
+    tokens.insert(tokens.begin(), prefix.tokens.begin(), prefix.tokens.end());
     text = prefix.text + text;
 }
 
@@ -1509,7 +1509,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         flags |= COMMON_PEG_PARSE_FLAG_DEBUG;
     }
 
-    common_peg_parse_context ctx(std::move(effective_input.text), std::move(effective_input.token_map), flags);
+    common_peg_parse_context ctx(std::move(effective_input.text), std::move(effective_input.tokens), flags);
     auto result = parser.parse(ctx);
 
     if (result.fail()) {
