@@ -119,6 +119,7 @@
 #define FC_NORM                        1700
 #define FC_TOPK_MOE                    1800
 #define FC_MOE_REDUCE                  1900
+#define FC_DSV4_HC                     2000
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -1233,6 +1234,11 @@ typedef struct {
     uint64_t nb03;
     int32_t  top_k;  // k
 } ggml_metal_kargs_top_k;
+
+// widths at or above this use the threadgroup FWHT kernel, one row per threadgroup
+// with GGML_METAL_FWHT_TG_NT threads, instead of one row per simdgroup
+#define GGML_METAL_FWHT_TG_MIN_N 1024
+#define GGML_METAL_FWHT_TG_NT    256
 
 typedef struct {
     int32_t  ne01;      // n_tokens

@@ -158,8 +158,8 @@ if [ ! -z ${GG_BUILD_WEBGPU} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then
-    # Use qy1 by default (MTT S80)
-    MUSA_ARCH=${MUSA_ARCH:-21}
+    # Use ph1 by default (MTT S5000)
+    MUSA_ARCH=${MUSA_ARCH:-31}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
 

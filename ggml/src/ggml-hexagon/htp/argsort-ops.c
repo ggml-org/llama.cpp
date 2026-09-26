@@ -9,7 +9,7 @@
 #include "ggml.h"
 
 #include "hvx-utils.h"
-#include "hex-dma.h"
+#include "dma-queue.h"
 
 #include "hex-common.h"
 #include "htp-ctx.h"
@@ -590,6 +590,10 @@ int op_argsort(struct htp_ops_context * octx) {
 
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * dst  = octx->dst;
+
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
 
     const uint32_t total_rows  = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const size_t dst_row_size  = dst->ne[0]  * sizeof(int32_t);
