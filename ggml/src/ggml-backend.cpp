@@ -1958,9 +1958,34 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
     sched->is_alloc = false;
 }
 
+// Grow the scheduler's hash table (and its per-tensor arrays) to fit a graph.
+// The hash set is sized once at sched init (to graph_size), but a speculative
+// decode graph (draft-mtp / draft-dspark / draft-eagle3) can exceed that —
+// measure_graph grows with --spec-draft-n-max, and the old code asserted and
+// died instead of growing. Fix for ggml-org/llama.cpp#28614 (DSpark n_max=9
+// crashes, n_max=8 fits): the graph is one node over the hash capacity.
+static void ggml_backend_sched_ensure_graph_capacity(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
+    const size_t needed = graph->n_nodes + graph->n_leafs;
+    if (sched->hash_set.size >= needed) {
+        return;
+    }
+    const size_t new_size = needed + needed / 4; // 25% margin, same as gallocr
+    ggml_hash_set_free(&sched->hash_set);
+    sched->hash_set = ggml_hash_set_new(new_size);
+    GGML_ASSERT(sched->hash_set.keys != NULL);
+
+    free(sched->hv_tensor_backend_ids);
+    sched->hv_tensor_backend_ids = (int *) malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
+    GGML_ASSERT(sched->hv_tensor_backend_ids != NULL);
+
+    free(sched->hv_tensor_copies);
+    sched->hv_tensor_copies = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+    GGML_ASSERT(sched->hv_tensor_copies != NULL);
+}
+
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
     GGML_ASSERT(sched);
-    GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
+    ggml_backend_sched_ensure_graph_capacity(sched, measure_graph);
     GGML_ASSERT(sizes);
 
     ggml_backend_sched_reset(sched);
@@ -1974,7 +1999,7 @@ void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgr
 
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
     GGML_ASSERT(sched);
-    GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
+    ggml_backend_sched_ensure_graph_capacity(sched, measure_graph);
 
     ggml_backend_sched_synchronize(sched);
 
@@ -1991,7 +2016,7 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
-    GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
+    ggml_backend_sched_ensure_graph_capacity(sched, graph);
     GGML_ASSERT(!sched->is_alloc);
 
     sched->cur_copy = sched->next_copy;
