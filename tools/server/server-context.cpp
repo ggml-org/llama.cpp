@@ -1,3 +1,5 @@
+#include <cstdlib>
+#include <sstream>
 #include "server-context.h"
 #include "server-chat.h"
 #include "server-common.h"
@@ -830,6 +832,34 @@ static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch
 // server_context_impl (private implementation)
 //
 
+// PATCH(ckpt-net): configurable prompt checkpoints, see /opt/qwen/patches/ckpt-net.md
+struct ckpt_net_cfg {
+    bool custom    = false;     // LLAMA_CKPT_OFFSETS set
+    bool last_user = true;      // LLAMA_CKPT_LAST_USER != "0"
+    std::vector<int> offs;      // -1 => 4 + n_ubatch
+};
+
+static const ckpt_net_cfg & ckpt_net_get() {
+    static const ckpt_net_cfg cfg = [] {
+        ckpt_net_cfg c;
+        if (const char * e = std::getenv("LLAMA_CKPT_OFFSETS")) {
+            c.custom = true;
+            std::string s(e), tok;
+            std::stringstream ss(s);
+            while (std::getline(ss, tok, ',')) {
+                if (tok.empty()) continue;
+                if (tok == "u") { c.offs.push_back(-1); } else { c.offs.push_back(std::max(1, std::atoi(tok.c_str()))); }
+            }
+        }
+        if (const char * e = std::getenv("LLAMA_CKPT_LAST_USER")) {
+            c.last_user = std::string(e) != "0";
+        }
+        fprintf(stderr, "ckpt-net: custom=%d n_offsets=%zu last_user=%d\n", (int) c.custom, c.offs.size(), (int) c.last_user);
+        return c;
+    }();
+    return cfg;
+}
+
 struct server_context_impl {
     friend struct server_context;
 
@@ -1129,6 +1159,9 @@ private:
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
+                // PATCH: o assistant do Gemma4 (e drafts que compartilham memoria)
+                // exigem ctx_other apontando para o contexto do alvo.
+                params_dft.speculative.draft.ctx_tgt = ctx_tgt;
                 spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
@@ -3562,7 +3595,12 @@ private:
                         //  - 4
                         // ref: https://github.com/ggml-org/llama.cpp/pull/20288
                         if (do_checkpoint) {
-                            static const int checkpoint_offsets[] = {4 + n_ubatch, 4};
+                            // PATCH(ckpt-net): offsets are configurable
+                            std::vector<int> checkpoint_offsets = {4 + n_ubatch, 4};
+                            if (ckpt_net_get().custom) {
+                                checkpoint_offsets.clear();
+                                for (int o : ckpt_net_get().offs) { checkpoint_offsets.push_back(o < 0 ? 4 + n_ubatch : o); }
+                            }
 
                             bool should_break = false;
                             for (int offset : checkpoint_offsets) {
@@ -3607,6 +3645,27 @@ private:
                         if (!is_user_start && !near_prompt_end) {
                             do_checkpoint = false;
                         }
+                    }
+
+                    // PATCH(ckpt-net): in custom mode keep only checkpoints whose batch *starts* exactly at a
+                    // configured offset from the prompt end (upstream keys on the batch end, which would
+                    // just move the checkpoint earlier instead of dropping it), or at a user message start.
+                    if (do_checkpoint && ckpt_net_get().custom) {
+                        const int64_t n_task = slot.task->n_tokens();
+                        bool keep = false;
+                        for (int o : ckpt_net_get().offs) {
+                            const int64_t off   = o < 0 ? 4 + n_ubatch : o;
+                            const int64_t n_last = std::min<int64_t>(n_batch, off);
+                            if ((int64_t) n_tokens_start == n_task - n_last) { keep = true; }
+                        }
+                        if (is_user_start) {
+                            keep = keep || (is_last_user_message ? ckpt_net_get().last_user : true);
+                        }
+                        if (!keep) {
+                            do_checkpoint = false;
+                        }
+                    } else if (do_checkpoint && !ckpt_net_get().last_user && is_last_user_message && !near_prompt_end) {
+                        do_checkpoint = false;
                     }
 
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
