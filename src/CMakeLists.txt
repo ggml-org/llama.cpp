@@ -38,6 +38,7 @@ set(LLAMA_CORE_SOURCES
     llama-model.cpp
     llama-quant.cpp
     llama-sampler.cpp
+	llama-speculative.cpp
     llama-vocab.cpp
     unicode-data.cpp
     unicode.cpp
