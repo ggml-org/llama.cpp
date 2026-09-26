@@ -1291,6 +1291,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             buft_bytes_by_bid[tn.bid][buft] += ggml_nbytes(t_meta);
         }
 
+        // record the final placement of the output tensor (see buft_output)
+        if (buft && tn.tensor == LLM_TENSOR_OUTPUT) {
+            buft_output = buft;
+        }
+
         return buft;
     };
 

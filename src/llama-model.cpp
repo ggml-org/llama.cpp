@@ -1798,6 +1798,19 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             pimpl->dev_layer[il].dev = dev;
             pimpl->dev_layer[il].buft_list = (dev == cpu_dev) ? &pimpl->cpu_buft_list : &pimpl->gpu_buft_list.at(dev);
         }
+
+        // the output layer is the same story: dev_output drives the sampler scratch and the
+        // logits (output) transfer buffer placement (see llama-context.cpp), re-sync it with
+        // the actual placement of output.weight
+        if (ml.buft_output) {
+            const ggml_backend_dev_t out_dev = ggml_backend_buft_get_device(ml.buft_output);
+            if (out_dev && out_dev != pimpl->dev_output.dev) {
+                LLAMA_LOG_INFO("%s: output layer device re-synced %s -> %s (tensor buft override)\n",
+                        __func__, ggml_backend_dev_name(pimpl->dev_output.dev), ggml_backend_dev_name(out_dev));
+                pimpl->dev_output.dev = out_dev;
+                pimpl->dev_output.buft_list = (out_dev == cpu_dev) ? &pimpl->cpu_buft_list : &pimpl->gpu_buft_list.at(out_dev);
+            }
+        }
     }
 
     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
