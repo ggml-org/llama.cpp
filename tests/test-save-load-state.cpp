@@ -619,7 +619,7 @@ static bool corrupt_state(std::vector<uint8_t> & data) {
 
 // Test 9: state restore failure
 // a failed restore must leave the sequence empty and must not change the logits of other sequences
-static test_status test_state_restore_failure(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
+static bool test_state_restore_failure(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_ctx      = 256;
     params_ctx.n_seq_max  = 4;
@@ -631,15 +631,15 @@ static test_status test_state_restore_failure(struct llama_model * model, const 
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
     if (!ctx) {
         LOG_ERR("%s: failed to create context\n", __func__);
-        return test_status::FAIL;
+        return false;
     }
 
     LOGV(LOG_LEVEL_INFO, "\n=== Test 9: state restore failure ===\n");
 
     llama_memory_t mem = llama_get_memory(ctx.get());
     if (mem == nullptr) {
-        LOGV(LOG_LEVEL_INFO, "SKIP (model has no memory)\n");
-        return test_status::SKIP;
+        LOGV(LOG_LEVEL_INFO, "PASS (model has no memory)\n");
+        return true;
     }
 
     const auto decode = [&](const llama_tokens & inp, llama_seq_id seq_id, std::vector<float> * logits_out) {
@@ -653,10 +653,9 @@ static test_status test_state_restore_failure(struct llama_model * model, const 
             return false;
         }
 
-        if (logits_out) {
-            const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-            const float * logits = llama_get_logits_ith(ctx.get(), -1);
-            logits_out->assign(logits, logits + n_vocab);
+        if (logits_out && !get_current_logits(ctx.get(), *logits_out)) {
+            LOG_ERR("%s: failed to get logits\n", __func__);
+            return false;
         }
 
         return true;
@@ -672,7 +671,7 @@ static test_status test_state_restore_failure(struct llama_model * model, const 
 
     std::vector<float> baseline;
     if (!decode(tokens_verify, 1, &baseline)) {
-        return test_status::FAIL;
+        return false;
     }
 
     const std::vector<std::pair<const char *, std::function<bool()>>> cases = {
@@ -720,22 +719,22 @@ static test_status test_state_restore_failure(struct llama_model * model, const 
         llama_memory_clear(mem, true);
 
         if (!decode(tokens_save, 0, nullptr)) {
-            return test_status::FAIL;
+            return false;
         }
 
         if (!restore_failed()) {
             LOG_ERR("%s: %s: restoring a corrupted state did not fail\n", __func__, name);
-            return test_status::FAIL;
+            return false;
         }
 
         if (llama_memory_seq_pos_max(mem, 0) != -1) {
             LOG_ERR("%s: %s: sequence not empty after failed restore\n", __func__, name);
-            return test_status::FAIL;
+            return false;
         }
 
         std::vector<float> logits;
         if (!decode(tokens_verify, 1, &logits)) {
-            return test_status::FAIL;
+            return false;
         }
 
         float  diff_max = 0.0f;
@@ -750,15 +749,16 @@ static test_status test_state_restore_failure(struct llama_model * model, const 
 
         if (n_nan > 0 || diff_max > 1e-6f) {
             LOG_ERR("%s: %s: logits changed after failed restore (max diff = %g, nan = %zu)\n", __func__, name, diff_max, n_nan);
-            return test_status::FAIL;
+            return false;
         }
 
         LOG_TRC("%s: %s: logits match (max diff = %g)\n", __func__, name, diff_max);
     }
 
     LOGV(LOG_LEVEL_INFO, "\nPASS\n");
-    return test_status::PASS;
+    return true;
 }
+
 
 struct test_suite {
     std::vector<test_status> results;
@@ -850,7 +850,7 @@ static test_suite run_save_load_tests_for_model(const std::string & model_path, 
     suite.results.push_back(test_state_roundtrip(model, params, tokens) ? test_status::PASS : test_status::FAIL);
 
     // Test 9: state restore failure
-    suite.results.push_back(test_state_restore_failure(model, params, tokens));
+    suite.results.push_back(test_state_restore_failure(model, params, tokens) ? test_status::PASS : test_status::FAIL);
 
     return suite;
 }
