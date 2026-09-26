@@ -26,17 +26,23 @@ fn sbyte_of(v: u32, b: u32) -> i32 {
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(dot(SRC1_TYPE(src0_val), src1_val));
 }
-#endif
+#endif // VEC
 
 #ifdef SCALAR
 #define VEC_SIZE 1u
 #define SRC0_TYPE SRC0_INNER_TYPE
 #define SRC1_TYPE SRC1_INNER_TYPE
 
+#ifdef TYPE_BF16
+fn inner_dot(src0_val: f32, src1_val: SRC1_TYPE) -> f32 {
+    return src0_val * f32(src1_val);
+}
+#else
 fn inner_dot(src0_val: SRC0_TYPE, src1_val: SRC1_TYPE) -> f32 {
     return f32(src0_val) * f32(src1_val);
 }
 #endif
+#endif // SCALAR
 
 #ifdef MUL_ACC_FLOAT
 fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src1_idx_base: u32) -> array<array<f32, OUTPUTS_PER_WG>, NUM_COLS> {
@@ -56,7 +62,12 @@ fn accumulate_vec_dot(thread_id: u32, row_base: u32, src0_batch_offset: u32, src
             let output_row = row_base + row;
             if (output_row < params.m) {
                 let src0_idx = (src0_batch_offset + output_row * params.stride_01) / VEC_SIZE + k;
+#if defined(TYPE_F16) || defined(TYPE_F32)
                 let w = SRC0[src0_idx];
+#endif
+#ifdef TYPE_BF16
+                let w = bf16_word_to_f32(SRC0[src0_idx / 2u], src0_idx & 1u);
+#endif
                 for (var col = 0u;col < NUM_COLS;col += 1) {
                     acc[col][row] += inner_dot(w, x_vals[col]);
                 }
