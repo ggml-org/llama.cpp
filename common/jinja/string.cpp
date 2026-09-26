@@ -151,10 +151,10 @@ string string::titlecase() {
             if (isspace(static_cast<unsigned char>(c))) {
                 capitalize_next = true;
             } else if (capitalize_next) {
-                c = ::toupper(static_cast<unsigned char>(c));
+                c = std::toupper(static_cast<unsigned char>(c));
                 capitalize_next = false;
             } else {
-                c = ::tolower(static_cast<unsigned char>(c));
+                c = std::tolower(static_cast<unsigned char>(c));
             }
         }
         return res;
