@@ -1,5 +1,6 @@
 #include "server-mcp.h"
 
+#include "common.h"
 #include "subproc.h"
 
 #include <atomic>
@@ -349,43 +350,21 @@ struct server_mcp_stdio::process_handle {
 
 #if defined(_WIN32)
 // config strings are UTF-8 (from JSON) and subprocess.h converts them with CP_UTF8, so inputs must be UTF-8, not the active code page
-static std::wstring windows_utf8_to_wide(const std::string & s) {
-    if (s.empty()) {
-        return std::wstring();
-    }
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), NULL, 0);
-    if (n <= 0) {
-        return std::wstring();
-    }
-    std::wstring w((size_t) n, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), &w[0], n);
-    return w;
-}
-
-static std::string windows_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
-    int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
-    if (n <= 0) {
-        return std::string();
-    }
-    std::string out((size_t) n, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, s, len, &out[0], n, NULL, NULL);
-    if (len == -1 && !out.empty() && out.back() == '\0') {
-        out.pop_back(); // drop the terminator WideCharToMultiByte counts for -1
-    }
-    return out;
+static std::string wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
+    return wstring_to_utf8(len == -1 ? std::wstring(s) : std::wstring(s, s + len));
 }
 #endif
 
 static std::string mcp_resolve_command(const std::string & command) {
 #if defined(_WIN32)
     // For Windows: make sure we handle ".exe" correctly, as well as UTF-8
-    std::wstring wcmd = windows_utf8_to_wide(command);
+    std::wstring wcmd = utf8_to_wstring(command);
     wchar_t      buf[MAX_PATH * 4];
     const DWORD  cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
 
     auto search = [&](const wchar_t * ext) -> std::string {
         DWORD n = SearchPathW(NULL, wcmd.c_str(), ext, cap, buf, NULL);
-        return (n > 0 && n < cap) ? windows_wide_to_utf8(buf, (int) n) : std::string();
+        return (n > 0 && n < cap) ? wide_to_utf8(buf, (int) n) : std::string();
     };
 
     std::string found = search(NULL); // exact path / already-extensioned / .exe on PATH
@@ -429,7 +408,7 @@ static std::vector<std::string> mcp_parent_env() {
     LPWCH block = GetEnvironmentStringsW();
     if (block) {
         for (LPWCH e = block; *e; e += wcslen(e) + 1) {
-            env.emplace_back(windows_wide_to_utf8(e, -1));
+            env.emplace_back(wide_to_utf8(e, -1));
         }
         FreeEnvironmentStringsW(block);
     }

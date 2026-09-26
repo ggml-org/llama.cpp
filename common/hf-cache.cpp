@@ -30,8 +30,8 @@ namespace hf_cache {
 
 namespace fs = std::filesystem;
 
-std::string get_cache_path() {
-    static const std::string cache = []() {
+static fs::path get_cache_directory() {
+    static const fs::path cache = []() {
         struct {
             const char * var;
             fs::path path;
@@ -46,20 +46,24 @@ std::string get_cache_path() {
         for (const auto & entry : entries) {
             if (auto * p = std::getenv(entry.var); p && *p) {
                 fs::path base(p);
-                return (entry.path.empty() ? base : base / entry.path).string();
+                return entry.path.empty() ? base : base / entry.path;
             }
         }
 #ifndef _WIN32
         const struct passwd * pw = getpwuid(getuid());
 
         if (pw && pw->pw_dir && *pw->pw_dir) {
-            return (fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub").string();
+            return fs::path(pw->pw_dir) / ".cache" / "huggingface" / "hub";
         }
 #endif
         throw std::runtime_error("Failed to determine HF cache directory");
     }();
 
     return cache;
+}
+
+std::string get_cache_path() {
+    return fs_path_to_utf8(get_cache_directory());
 }
 
 static std::string folder_name_to_repo(const std::string & folder) {
@@ -80,7 +84,7 @@ static std::string repo_to_folder_name(const std::string & repo_id) {
 }
 
 static fs::path get_repo_path(const std::string & repo_id) {
-    return fs::path(get_cache_path()) / repo_to_folder_name(repo_id);
+    return get_cache_directory() / repo_to_folder_name(repo_id);
 }
 
 static bool is_hex_char(const char c) {
@@ -393,7 +397,7 @@ static std::string get_cached_ref(const fs::path & repo_path) {
 }
 
 hf_files get_cached_files(const std::string & repo_id) {
-    const fs::path cache_path = get_cache_path();
+    const fs::path cache_path = get_cache_directory();
     if (!fs::exists(cache_path)) {
         return {};
     }

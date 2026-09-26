@@ -467,7 +467,6 @@ static std::filesystem::path get_server_exec_path() {
 }
 
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
-    preset.unset_option("LLAMA_ARG_LOG_FILE");
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
     preset.unset_option("LLAMA_API_KEY");
@@ -484,25 +483,6 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
-#ifdef _WIN32
-static std::string wide_to_utf8(const wchar_t * ws) {
-    if (!ws || !*ws) {
-        return {};
-    }
-
-    const int len = static_cast<int>(std::wcslen(ws));
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
-    if (bytes == 0) {
-        return {};
-    }
-
-    std::string utf8(bytes, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
-
-    return utf8;
-}
-#endif
-
 static std::vector<std::string> get_environment() {
     std::vector<std::string> env;
 
@@ -512,7 +492,7 @@ static std::vector<std::string> get_environment() {
         return env;
     }
     for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
-        env.emplace_back(wide_to_utf8(e));
+        env.emplace_back(wstring_to_utf8(e));
     }
     FreeEnvironmentStringsW(env_block);
 #else
@@ -585,11 +565,15 @@ server_models::server_models(
               base_preset(ctx_preset.load_from_args(argc, argv)),
               sched(std::make_unique<server_lru_sched>(*this)),
               monitor(std::make_unique<server_monitor>(*this)) {
-    // clean up base preset
+    // propagate base params to child
     unset_reserved_args(base_preset, true);
+
+    // do not propagate these options, but allow preset to explicitly set them
+    base_preset.unset_option("LLAMA_ARG_LOG_FILE");
+
     // set binary path
     try {
-        bin_path = get_server_exec_path().string();
+        bin_path = fs_path_to_utf8(get_server_exec_path());
     } catch (const std::exception & e) {
         bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
