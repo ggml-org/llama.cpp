@@ -12,6 +12,7 @@
 #define REQD_SUBGROUP_SIZE_128 __attribute__((qcom_reqd_sub_group_size("full")))
 #endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 //------------------------------------------------------------------------------
 // norm
 //------------------------------------------------------------------------------
@@ -83,9 +84,17 @@ kernel void kernel_norm(
     }
 }
 
+#endif // GGML_CL_ONLY == 1
+
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 //------------------------------------------------------------------------------
 // norm_mul_add
 //------------------------------------------------------------------------------
+// NOTE: this kernel calls subgroup builtins. On the older Adreno compiler (E031.38) a
+// program is miscompiled if ANY kernel is defined after one that does, so it must never
+// stop being the last kernel here -- and the GGML_CL_ONLY guards let that compiler build
+// it in a program of its own, which removes the ordering constraint altogether. Do not
+// append a kernel below this one without keeping the guards intact.
 #ifdef INTEL_GPU
 REQD_SUBGROUP_SIZE_32
 #elif defined (ADRENO_GPU)
@@ -162,3 +171,5 @@ kernel void kernel_norm_mul_add(
         y[i00] = mad(norm_x, w[w_idx], b[b_idx]);
     }
 }
+
+#endif // GGML_CL_ONLY == 2
