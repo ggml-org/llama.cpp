@@ -1280,6 +1280,12 @@ class GGUFWriter:
     def add_precompiled_charsmap(self, charsmap: bytes) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
+    def add_system_one_labels(self, value: Sequence[str]) -> None:
+        self.add_array(Keys.SystemOne.LABELS, value)
+
+    def add_system_one_segment_separator(self, value: str) -> None:
+        self.add_string(Keys.SystemOne.SEGMENT_SEPARATOR, value)
+
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]] | None) -> None:
         if value is None:
             self.remove_key(Keys.Tokenizer.CHAT_TEMPLATE)

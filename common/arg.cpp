@@ -4436,6 +4436,91 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     //
+    // System One params
+    //
+
+    add_opt(common_arg(
+        {"--state"}, "TEXT",
+        "the state the questions are asked about",
+        [](common_params & params, const std::string & value) {
+            params.so_state = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--state-file"}, "FNAME",
+        "read the state from a file instead",
+        [](common_params & params, const std::string & value) {
+            params.so_state_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--noul"}, "KEY:INSTRUCTIONS",
+        "a true/false question; repeatable",
+        [](common_params & params, const std::string & value) {
+            params.so_questions.push_back({"noul", value});
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--choice"}, "KEY:INSTRUCTIONS:opt[=desc][,...]",
+        "pick one of the declared options; repeatable",
+        [](common_params & params, const std::string & value) {
+            params.so_questions.push_back({"choice", value});
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--score"}, "KEY:INSTRUCTIONS:level[,...]",
+        "a distribution over ordered levels, and its expectation; repeatable",
+        [](common_params & params, const std::string & value) {
+            params.so_questions.push_back({"score", value});
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--system-one-request"}, "FNAME",
+        "read the request as the JSON body /v1/systemone takes, instead of the flags above",
+        [](common_params & params, const std::string & value) {
+            params.so_request_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--system-one-template-file"}, "JINJA_TEMPLATE_FILE",
+        "set a custom System One jinja template file\n"
+        "(default: tokenizer.chat_template.system_one from the model's metadata).\n"
+        "this is not the chat template: a System One template is rendered with state,\n"
+        "questions and option labels, never with a message list",
+        [](common_params & params, const std::string & value) {
+            params.so_template_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--labels"}, "A,B,C",
+        "the labels an answer is read at, overriding the checkpoint's (default: A-Za-z).\n"
+        "a template override usually needs this too: the labels say where the answer is read,\n"
+        "so a format that writes (1)(2)(3) has to say so or it is read at A, B, C instead",
+        [](common_params & params, const std::string & value) {
+            params.so_labels = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--system-one-temperature"}, "T",
+        "rescale every answer's logits by T before the probabilities are taken (default: 1,\n"
+        "which is skipped entirely; overrides a \"temperature\" in the request body). The\n"
+        "checkpoint's own calibration is already in its weights; this is for recalibrating\n"
+        "on a distribution of your own.\n"
+        "not --temp, which is the sampling temperature and means nothing here: nothing is\n"
+        "sampled and no token is generated",
+        [](common_params & params, const std::string & value) {
+            params.so_temperature = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+    add_opt(common_arg(
+        {"--json"},
+        "print the answers as the JSON the /v1/systemone route returns",
+        [](common_params & params) {
+            params.so_json = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SYSTEM_ONE}));
+
+    //
     // diffusion params
     //
 
