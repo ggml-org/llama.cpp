@@ -3742,10 +3742,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
-            // whole-head V=128 (gmem state mirror): binding 7 -> 8 total.
+            // whole-head V=128 with the state mirror in shared (NVIDIA opt-in shared budget
+            // fits [D x 128]): 7 bindings, no gmem scratch. Kills the CU-grid tail for head
+            // counts that need 2 blocks/head at V=64 (e.g. 48-head 27B). Pipeline may fail to
+            // create if the device's shared budget is too small; the dispatch guards on null.
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2_v128,
-                "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
-                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+                "gated_delta_net_f32_cm2_v128sh", gated_delta_net_f32_cm2_v128sh_len, gated_delta_net_f32_cm2_v128sh_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
@@ -10308,17 +10311,17 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const bool use_cm2 = ctx->device->pipeline_gated_delta_net_cm2 != nullptr &&
         src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
 
-    // Adaptive value tiling for the chunked path: V=64 (shared state mirror, 2
-    // blocks/head) vs whole-head V=128 (gmem state mirror, 1 block/head). Pick the
-    // tiling that better fills the CU grid; V=128 shares the value-independent work
-    // (gram/pmat/inversion) and fills a single wave for head counts that tail at V=64.
-    // Only the coopmat1 (RDNA) path benefits: coopmat2 (NVIDIA) is mma-product-bound so
-    // whole-head's extra gmem traffic regresses it. GGML_VK_GDN_V128 forces it for tests.
+    // Adaptive value tiling for the chunked path: V=64 (2 blocks/head) vs whole-head
+    // V=128 (1 block/head). Pick the tiling that better fills the CU/SM grid; V=128 shares
+    // the value-independent work (gram/pmat/inversion) and fills a single wave for head
+    // counts that tail at V=64. The state mirror lives in shared on coopmat2 (NVIDIA opt-in
+    // shared budget fits [D x 128]) and in a gmem scratch on coopmat1 (RDNA, 64KB LDS cap).
+    // GGML_VK_GDN_V128 forces it / GGML_VK_GDN_NO_V128 disables it for tests.
     bool use_v128 = false;
     if (use_cm2 && ctx->device->pipeline_gated_delta_net_cm2_v128 != nullptr && !getenv("GGML_VK_GDN_NO_V128")) {
         if (getenv("GGML_VK_GDN_V128")) {
             use_v128 = true;
-        } else if (!ctx->device->coopmat2) {
+        } else {
             const uint32_t nsm = ctx->device->shader_core_count;
             if (nsm != 0) {
                 const uint32_t wg64  = 2u * H * n_seqs;
@@ -10332,7 +10335,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     }
 
     const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM2_V;
-    const bool     cm_gmem  = use_v128;
+    const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;  // coopmat2 v128 mirrors to shared
 
     vk_pipeline pipeline = use_v128
         ? ctx->device->pipeline_gated_delta_net_cm2_v128
