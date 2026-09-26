@@ -1,7 +1,7 @@
 <script lang="ts">
 	import BackendForm from './BackendForm.svelte';
 	import BackendPresetCard from './BackendPresetCard.svelte';
-	import { CheckCircle2, Loader2, XCircle } from '@lucide/svelte';
+	import { CheckCircle2, Loader2, PlugZap, XCircle } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -287,27 +287,56 @@
 				/>
 			</div>
 
-			{#if testing || testResult}
-				<div class="flex items-center gap-2 pb-2 text-xs">
-					{#if testing}
-						<Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin" />
+			<!-- the last thing before the actions: what the endpoint said when asked -->
+			<div
+				aria-live="polite"
+				class="mb-3 flex items-start gap-2.5 rounded-lg border border-border/60 bg-muted/30 p-3"
+			>
+				{#if testing}
+					<Loader2 class="mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
 
-						<span class="text-muted-foreground">Testing connection...</span>
-					{:else if testResult?.ok}
-						<CheckCircle2 class="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Testing connection</p>
 
-						<span class="text-muted-foreground">
-							Connected.
+						<p class="text-xs text-muted-foreground">
+							Asking {hostOf(draft.baseUrl)} for the models it serves.
+						</p>
+					</div>
+				{:else if testResult?.ok}
+					<CheckCircle2 class="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Connected</p>
+
+						<p class="text-xs text-muted-foreground">
 							{testResult.modelCount ?? 0}
 							model{(testResult.modelCount ?? 0) === 1 ? '' : 's'} available.
-						</span>
-					{:else}
-						<XCircle class="h-3.5 w-3.5 shrink-0 text-destructive" />
+						</p>
+					</div>
+				{:else if testResult}
+					<XCircle class="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
 
-						<span class="text-destructive">{testResult?.error ?? 'Connection failed'}</span>
-					{/if}
-				</div>
-			{/if}
+					<div class="min-w-0">
+						<p class="text-sm font-medium text-destructive">Connection failed</p>
+
+						<p class="text-xs break-words text-muted-foreground">
+							{testResult.error ?? 'The endpoint did not answer.'}{testResult.status
+								? ` (HTTP ${testResult.status})`
+								: ''}
+						</p>
+					</div>
+				{:else}
+					<PlugZap class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Connection not tested</p>
+
+						<p class="text-xs text-muted-foreground">
+							Test it to list the models this provider serves.
+						</p>
+					</div>
+				{/if}
+			</div>
 
 			<Dialog.Footer>
 				<Button onclick={() => handleOpenChange(false)} size="sm" variant="secondary">
