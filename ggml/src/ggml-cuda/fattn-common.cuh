@@ -416,9 +416,14 @@ static __device__ __forceinline__ void dequantize_V_q4_0(const void * __restrict
     int q;
     static_assert(ne == 2 || ne == 4, "bad ne");
     ggml_cuda_memcpy_1<ne, 2>(&q, x[ib].qs + iqs);
+#if defined(GGML_USE_HIP)
+    // Keep this VMEM read close to its packed-byte dequantization. Hoisting it too far
+    // increases VGPR pressure substantially in some FlashAttention vector kernels.
+    __builtin_amdgcn_sched_group_barrier(0x20, 1, 0);
+#endif // defined(GGML_USE_HIP)
     q >>= 4*shift;
     q &= 0x0F0F0F0F;
-    q = __vsubss4(q, 0x08080808);
+    q = ggml_cuda_vsubss4_nonnegative(q, 0x08080808);
 
     const int8_t * q8 = (const int8_t *) &q;
 
@@ -508,7 +513,7 @@ static __device__ __forceinline__ void dequantize_V_q5_0(const void * __restrict
         }
     }
 
-    q = __vsubss4(q, 0x10101010);
+    q = ggml_cuda_vsubss4_nonnegative(q, 0x10101010);
 
     const int8_t * q8 = (const int8_t *) &q;
 
