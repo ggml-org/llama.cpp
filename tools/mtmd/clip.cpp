@@ -1414,10 +1414,12 @@ struct clip_model_loader {
             // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
             get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
-            for (const auto & v : hparams.feature_layers) {
-                if (v > (int) hparams.n_layer) {
-                    throw std::runtime_error(string_format("%s: feature layer index %d is out of range (n_layer: %d)",
-                                                           __func__, v, hparams.n_layer));
+            for (const auto & feature_layer : hparams.feature_layers) {
+                if (feature_layer < 0 || feature_layer > (int) hparams.n_layer) {
+                    throw std::runtime_error(string_format(
+                        "%s: invalid feature layer index %d in '%s', must be in [0, %d] (clip.%s.block_count)\n",
+                        __func__, feature_layer, string_format(KEY_FEATURE_LAYERS, prefix).c_str(),
+                        hparams.n_layer, prefix));
                 }
             }
 
@@ -5865,17 +5867,21 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
     }
     if (params->state_out != nullptr) {
         auto & state_out = *params->state_out;
+        const auto slots = list_gen_state_slots(hparams, model);
+        std::vector<ggml_tensor *> tensors;
+        tensors.reserve(slots.size());
         size_t total = 0;
-        for (const auto & slot : list_gen_state_slots(hparams, model)) {
-            total += (size_t) (slot.ne0 * slot.ne1) * sizeof(float);
-        }
-        state_out.resize(total);
-        size_t offset = 0;
-        for (const auto & slot : list_gen_state_slots(hparams, model)) {
+        for (const auto & slot : slots) {
             ggml_tensor * t = ggml_graph_get_tensor(gf, ("state_out_" + slot.name).c_str());
             if (t == nullptr) {
                 GGML_ABORT("state_out requested but graph has no \"state_out_%s\" tensor", slot.name.c_str());
             }
+            tensors.push_back(t);
+            total += ggml_nbytes(t);
+        }
+        state_out.resize(total);
+        size_t offset = 0;
+        for (ggml_tensor * t : tensors) {
             const size_t nb = ggml_nbytes(t);
             ggml_backend_tensor_get(t, state_out.data() + offset, 0, nb);
             offset += nb;
