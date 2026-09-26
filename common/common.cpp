@@ -895,6 +895,28 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
+bool fs_validate_path_in_directory(const std::string & filename, const std::string & base_directory) {
+    if (filename.empty() || !fs_validate_filename(filename, true)) {
+        return false;
+    }
+    try {
+        namespace fs = std::filesystem;
+        fs::path base = fs::weakly_canonical(base_directory);
+        fs::path target = fs::weakly_canonical(base / filename);
+        auto base_it = base.begin();
+        auto target_it = target.begin();
+        while (base_it != base.end()) {
+            if (target_it == target.end() || *target_it != *base_it) {
+                return false;
+            }
+            ++base_it; ++target_it;
+        }
+        return target_it != target.end();
+    } catch (...) {
+        return false;
+    }
+}
+
 #include <iostream>
 
 
