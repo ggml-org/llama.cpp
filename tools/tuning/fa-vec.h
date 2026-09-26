@@ -16,3 +16,4 @@ struct tuner_opts {
 
 // Returns false only when the required Metal proc bridges are unavailable.
 bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_opts & opts);
+bool tuner_fa_run    (ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_opts & opts);

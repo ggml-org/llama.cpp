@@ -906,6 +906,19 @@ static int ggml_backend_metal_tuning_fa_vec_baseline_ne(int dk, int dv) {
     return ggml_metal_tuning::fa_vec_baseline_ne(dk, dv);
 }
 
+// test/tune-only override for the FA (non-vec) (Q, NSG) selection, reached via proc_address.
+static void ggml_backend_metal_tuning_set_fa_override(int Q, int NSG) {
+    ggml_metal_tuning::fa_set_override({ (int8_t) Q, (int8_t) NSG });
+}
+
+static void ggml_backend_metal_tuning_clear_fa_override(void) {
+    ggml_metal_tuning::fa_clear_override();
+}
+
+static int ggml_backend_metal_tuning_fa_ne11_bucket(int64_t ne11) {
+    return ggml_metal_tuning::fa_ne11_bucket(ne11);
+}
+
 static const char * ggml_backend_metal_tuning_device_token(ggml_backend_dev_t dev) {
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
@@ -954,6 +967,15 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const 
     }
     if (strcmp(name, "ggml_backend_metal_tuning_fa_vec_baseline_ne") == 0) {
         return (void *)ggml_backend_metal_tuning_fa_vec_baseline_ne;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_set_fa_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_set_fa_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_clear_fa_override") == 0) {
+        return (void *)ggml_backend_metal_tuning_clear_fa_override;
+    }
+    if (strcmp(name, "ggml_backend_metal_tuning_fa_ne11_bucket") == 0) {
+        return (void *)ggml_backend_metal_tuning_fa_ne11_bucket;
     }
     if (strcmp(name, "ggml_backend_metal_tuning_device_token") == 0) {
         return (void *)ggml_backend_metal_tuning_device_token;
