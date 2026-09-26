@@ -406,7 +406,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
                     }
                 } else if (file.name.find("-00001-of-") != std::string::npos) {
                     first_shard_file = file;
-                } else {
+                } else if (model_file.name != name + ".gguf") {
                     model_file = file;
                 }
             }
