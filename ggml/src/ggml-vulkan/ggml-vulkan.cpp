@@ -4883,6 +4883,10 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         device->serialize_submissions = getenv("GGML_VK_SERIALIZE_SUBMISSIONS") != nullptr;
 
+        if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) { // Asynchronous submissions in development on PowerVR GPUs
+            device->serialize_submissions = true;
+        }
+
         device->disable_fusion = getenv("GGML_VK_DISABLE_FUSION") != nullptr;
 
         device->add_rms_fusion = !device->disable_fusion &&
@@ -15377,6 +15381,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) { // Flash attention in development on Imagination GPUs
+                    return false;
+                }
                 bool coopmat2 = device->coopmat2;
                 uint32_t HSK = op->src[1]->ne[0];
                 uint32_t HSV = op->src[2]->ne[0];
@@ -15641,6 +15648,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->src[0]->type == op->src[1]->type && op->src[0]->type == op->type &&
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_I32);
         case GGML_OP_CONCAT: {
+            if (device->vendor_id == VK_VENDOR_ID_IMAGINATION) { // CONCAT in development on Imagination devices
+                    return false;
+            }
             return ggml_vk_concat_supported(op->src[0], op->src[1], op);
         }
         case GGML_OP_ADD1:
