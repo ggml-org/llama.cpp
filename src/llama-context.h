@@ -389,6 +389,10 @@ private:
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 
+    // true if a GPU backend reads the CPU backend's (host) buffer in place, e.g. integrated GPUs
+    // in that case set_inputs must not overwrite graph inputs while a previous compute is in flight
+    bool sync_host_inputs = false;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;
