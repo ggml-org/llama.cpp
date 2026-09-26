@@ -677,7 +677,9 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     if (!plan.preset.local_path.empty()) {
         tasks.emplace_back(plan.preset, opts, [&]() {
             // if HF repo is a preset repo, we simply run server in router mode with the preset.ini file
-            params.models_preset_hf = params.model.hf_repo; // only for showing a warning
+            // mark the preset as remote: shown in the startup warning, and used to
+            // restrict which keys the preset may set (see set_remote_allowed_keys())
+            params.models_preset_hf = params.model.hf_repo;
             params.models_preset    = hf_cache::finalize_file(plan.preset);
             params.model = common_params_model{}; // make sure to clear model, so server starts in router mode
         });
