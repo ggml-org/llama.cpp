@@ -72,6 +72,7 @@ export const SETTINGS_KEYS = {
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
+	TRANSCRIPTION_MODEL: 'transcriptionModel',
 	TYP_P: 'typ_p',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
