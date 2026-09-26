@@ -1212,6 +1212,12 @@ static void test_tests(testing & t) {
         "yes"
     );
 
+    test_template(t, "is lower if",
+        "{{ x is lower if x is string }}",
+        {{"x", "lowercase"}},
+        "True"
+    );
+
     test_template(t, "is sameas boolean",
         "{{ 'yes' if x is sameas(false) }}",
         {{"x", false}},
