@@ -185,17 +185,47 @@ jobs:
           # a valid python environment for testing
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
-  # TODO: provision AMD GPU machine
-  # amd-vulkan:
-  #   runs-on: [self-hosted, Linux, AMD]
+  gpu-vulkan-amd:
+    runs-on: [self-hosted, Linux, gfx1201]
+    container: "ubuntu:26.04"
 
-  #   steps:
-  #     - name: Clone
-  #       id: checkout
-  #       uses: actions/checkout@v6
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
 
-  #     - name: Test
-  #       id: ggml-ci
-  #       run: |
-  #         vulkaninfo --summary
-  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+      - name: Install dependencies
+        run: |
+          apt update
+          apt install -y build-essential git git-lfs jq cmake libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc spirv-headers vulkan-tools mesa-vulkan-drivers libglvnd0 libgl1 libglx0 libegl1 libgles2 libssl-dev time unzip wget python3 python3-venv python3-pip
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-vulkan-amd
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          vulkaninfo --summary
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-vulkan-amd
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
