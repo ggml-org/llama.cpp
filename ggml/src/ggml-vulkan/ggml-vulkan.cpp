@@ -3669,7 +3669,9 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
             uint32_t lanes_per_column;
             if (S_V >= 128u && device->subgroup_clustered) {
-                lanes_per_column = 8u;
+                // Target COLS_PER_WG=8: 8 concurrent per-column reductions hide the reduction
+                // latency. Measured optimum on Ampere (sg32->4) and Vega20 (sg64->8).
+                lanes_per_column = std::max(1u, device->subgroup_size / 8u);
             } else {
                 // Use largest power-of-two that divides both S_V and subgroup_size so that
                 // (1) S_V % lanes_per_column == 0 and (2) S_V % (subgroup_size / lanes_per_column) == 0.
@@ -3687,6 +3689,16 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                     break;
                 }
                 lanes_per_column >>= 1u;
+            }
+
+            if (const char * gdn_lanes_env = getenv("GGML_VK_GDN_LANES")) {
+                const long v = atol(gdn_lanes_env);
+                if (v > 0 && is_pow2((uint32_t)v) &&
+                    (device->subgroup_size % (uint32_t)v) == 0 &&
+                    (S_V % (uint32_t)v) == 0 &&
+                    (S_V % (device->subgroup_size / (uint32_t)v)) == 0) {
+                    lanes_per_column = (uint32_t)v;
+                }
             }
 
             GGML_ASSERT((device->subgroup_size % lanes_per_column) == 0);
