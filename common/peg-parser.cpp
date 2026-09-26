@@ -208,7 +208,7 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
-common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
+common_peg_tokens::common_peg_tokens(const llama_vocab * vocab) {
     const llama_token n_tokens = llama_vocab_n_tokens(vocab);
     for (llama_token id = 0; id < n_tokens; ++id) {
         const auto attr = llama_vocab_get_attr(vocab, id);
@@ -220,7 +220,7 @@ common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
     }
 }
 
-llama_token common_peg_token_table::token_id(const std::string & text) const {
+llama_token common_peg_tokens::token_id(const std::string & text) const {
     auto it = ids.find(text);
     return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
 }
@@ -1206,8 +1206,8 @@ common_peg_parser operator|(const std::string & str, const common_peg_parser & p
 
 common_peg_parser_builder::common_peg_parser_builder() {}
 
-common_peg_parser_builder::common_peg_parser_builder(common_peg_token_table token_table) {
-    arena_.token_table_ = std::move(token_table);
+common_peg_parser_builder::common_peg_parser_builder(common_peg_tokens tokens) {
+    arena_.tokens_ = std::move(tokens);
 }
 
 common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
@@ -1227,7 +1227,7 @@ common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_
 }
 
 common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
-    auto token = arena_.token_table_.token_id(piece);
+    auto token = arena_.tokens_.token_id(piece);
     if (token == LLAMA_TOKEN_NULL) {
         // Return a literal if the token is not registered with the builder
         return literal(piece);
