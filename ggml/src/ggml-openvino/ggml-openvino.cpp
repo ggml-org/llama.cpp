@@ -99,7 +99,7 @@ struct ggml_backend_openvino_buffer_context {
         const auto & device_name = ggml_openvino_get_device_name();
 
         if (is_remote) {
-            GGML_ASSERT(device_name == "GPU");
+            GGML_ASSERT(ggml_openvino_is_gpu());
             auto remote_context = ggml_openvino_get_remote_context();
             auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
             ov::intel_gpu::ocl::USMTensor usm_tensor =
@@ -294,7 +294,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
     // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache)
-    if (strncmp(tensor->name, "cache_", 6) == 0 && !ctx->is_remote && ggml_openvino_get_device_name() == "GPU" &&
+    if (strncmp(tensor->name, "cache_", 6) == 0 && !ctx->is_remote && ggml_openvino_is_gpu() &&
         !is_stateful_enabled()) {
         GGML_ASSERT(ctx->tensor_extras.empty());
         auto device = ctx->device;
@@ -1136,7 +1136,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->type == GGML_TYPE_I64) {
             return {false, "CONCAT with I64 type is not supported"};
         }
-        if (ggml_openvino_get_device_name() == "GPU" && op->type == GGML_TYPE_BF16 && has_view_op_input(op)) {
+        if (ggml_openvino_is_gpu() && op->type == GGML_TYPE_BF16 && has_view_op_input(op)) {
             return {false, "CONCAT with BF16 type and VIEW input is not supported on GPU"};
         }
         break;
@@ -1164,7 +1164,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             op->src[0]->view_src != nullptr && op->src[0]->view_offs != 0) {
             return {false, "GET_ROWS with a nonzero quantized src0 view offset is not supported"};
         }
-        if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
+        if (op->op == GGML_OP_GET_ROWS && ggml_openvino_is_gpu() &&
             op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "GET_ROWS with BF16 src0 is not supported on GPU"};
         }
@@ -1217,7 +1217,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // The GPU plugin can fuse broadcast DIV into the preceding FFN GEMM path
         // and produce infs for per-channel scale vectors. Keep those DIVs on CPU
         // until the fused GPU kernel is reliable. (falied case llama-arch-test mpt)
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[1]->ne[0] == op->ne[0] &&
+        if (ggml_openvino_is_gpu() && op->src[1]->ne[0] == op->ne[0] &&
             op->src[1]->ne[1] == 1 && op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1) {
             return {false, "DIV per-channel scale broadcast is not supported on GPU"};
         }
@@ -1225,7 +1225,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
     }
     case GGML_OP_POOL_2D: {
         const auto& name = ggml_openvino_get_device_name();
-        if (name == "GPU") {
+        if (ggml_openvino_is_gpu()) {
             const int32_t * params = op->op_params;
             const int k0 = params[1];
             const int k1 = params[2];
@@ -1274,7 +1274,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_PERMUTE: {
-        if (op->type == GGML_TYPE_BF16 && ggml_openvino_get_device_name() == "GPU") {
+        if (op->type == GGML_TYPE_BF16 && ggml_openvino_is_gpu()) {
             return {false, "PERMUTE with BF16 type is not supported on GPU"};
         }
         break;
@@ -1308,13 +1308,13 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT: {
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[0] != nullptr && op->src[1] != nullptr &&
+        if (ggml_openvino_is_gpu() && op->src[0] != nullptr && op->src[1] != nullptr &&
             ggml_is_quantized(op->src[0]->type) && strcmp(op->src[0]->name, "a") == 0 &&
             strcmp(op->src[1]->name, "b") == 0 && op->src[0]->ne[1] == 1 && op->src[1]->ne[1] == 64 &&
             op->src[0]->ne[0] == 256 && op->src[1]->ne[0] == 256) {
             return {false, "MUL_MAT quantized benchmark test case on GPU is not supported"};
         }
-        if (ggml_openvino_get_device_name() == "GPU" && op->type == GGML_TYPE_F32 && op->ne[0] == 1 && op->ne[1] == 1 &&
+        if (ggml_openvino_is_gpu() && op->type == GGML_TYPE_F32 && op->ne[0] == 1 && op->ne[1] == 1 &&
             (op->src[0]->buffer == nullptr || op->src[0]->buffer->usage != GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
             return {false, "MUL_MAT scalar dot product with non-weight src[0] on GPU is not supported"};
         }
@@ -1334,7 +1334,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             return {false, "MUL_MAT_ID with single-expert or empty ne[2] <= 1 (ne[2]=" +
                            std::to_string(op->src[0]->ne[2]) + ") is not supported"};
         }
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[0] != nullptr && !ggml_is_quantized(op->src[0]->type)) {
+        if (ggml_openvino_is_gpu() && op->src[0] != nullptr && !ggml_is_quantized(op->src[0]->type)) {
             return {false, "MUL_MAT_ID with non-quantized weights on GPU is not supported"};
         }
         // The GPU plugin's GatherMatmul returns wrong values for the layouts test-backend-ops
@@ -1343,12 +1343,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         // The same graph is correct on the CPU plugin, and correct on GPU for every real model,
         // which always feeds experts from a bound tensor buffer. Standalone op-test tensors have
         // no buffer at all, so use that to exclude them and let the scheduler run them on CPU.
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[0] != nullptr && op->src[0]->buffer == nullptr) {
+        if (ggml_openvino_is_gpu() && op->src[0] != nullptr && op->src[0]->buffer == nullptr) {
             return {false, "MUL_MAT_ID with unbound expert tensors on GPU is not supported"};
         }
         // Only MXFP4 still needs the large-temporary guard; every other quantized type goes
         // through GatherMatmul, which never materializes the selected expert weights.
-        if (ggml_openvino_get_device_name() == "GPU" && op->src[0] != nullptr && op->src[0]->type == GGML_TYPE_MXFP4 &&
+        if (ggml_openvino_is_gpu() && op->src[0] != nullptr && op->src[0]->type == GGML_TYPE_MXFP4 &&
             mul_mat_id_requires_large_tmp(op)) {
             return {false, "MUL_MAT_ID with MXFP4 weights requires large temporary on GPU"};
         }
@@ -1401,7 +1401,7 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_REPEAT: {
-        if (ggml_openvino_get_device_name() == "GPU" && op->type == GGML_TYPE_BF16) {
+        if (ggml_openvino_is_gpu() && op->type == GGML_TYPE_BF16) {
             return {false, "REPEAT with BF16 type is not supported on GPU"};
         }
         break;

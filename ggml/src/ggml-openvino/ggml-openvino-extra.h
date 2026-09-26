@@ -64,10 +64,12 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
 struct ggml_openvino_device_config {
     std::string device_name = "CPU";
     bool is_npu = false;
+    bool is_gpu = false;
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
     ov::AnyMap compile_config;
     std::unordered_map<std::string, std::string> environment_variables;
+    cl_platform_id cl_platform = nullptr;
     cl_command_queue cl_queue = nullptr;
 
     void init();
@@ -102,10 +104,13 @@ int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 // Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella
 // switch; the fine-grained env vars still override it when explicitly set.
 bool ggml_openvino_reduce_compile_mem_enabled();
-bool ggml_openvino_release_weights_enabled(const std::string & device);
+bool ggml_openvino_release_weights_enabled();
 
 // Check if running on NPU
 bool ggml_openvino_is_npu();
+
+// Check if running on GPU
+bool ggml_openvino_is_gpu();
 
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
 // register: record a host weight buffer (idempotent per data pointer).
