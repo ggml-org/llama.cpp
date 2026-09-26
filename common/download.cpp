@@ -175,19 +175,38 @@ public:
         }
         int lines_up = max_line - lines[this];
 
-        size_t bar = (55 - len) * 2;
+        constexpr double kKiB = 1024.0;
+        constexpr double kMiB = kKiB * 1024.0;
+        constexpr double kGiB = kMiB * 1024.0;
+
+        const char * unit = "KiB";
+        double scale = kKiB;
+        if (p.total >= kGiB) {
+            unit = "GiB";
+            scale = kGiB;
+        } else if (p.total >= kMiB) {
+            unit = "MiB";
+            scale = kMiB;
+        }
+
+        // 80 cols: 13 prefix + len + bar + 27 suffix
+        size_t bar_cols = 40 - len;
         size_t pct = (100 * p.downloaded) / p.total;
-        size_t pos = (bar * p.downloaded) / p.total;
+        size_t pos = bar_cols ? (bar_cols * p.downloaded) / p.total : 0;
 
         if (lines_up > 0) {
             std::cout << "\033[" << lines_up << "A";
         }
-        std::cout << '\r' << "Downloading " << filename << " ";
 
-        for (size_t i = 0; i < bar; i += 2) {
-            std::cout << (i + 1 < pos ? "─" : (i < pos ? "╴" : " "));
+        std::cout << '\r' << "Downloading " << filename << ' ';
+        for (size_t i = 0; i < bar_cols; ++i) {
+            std::cout << (i < pos ? (i + 1 == pos ? "╴" : "─") : " ");
         }
-        std::cout << std::setw(4) << pct << "%\033[K";
+        std::cout << std::setw(4) << pct << "% ["
+                  << std::fixed << std::setprecision(2)
+                  << std::setw(7) << p.downloaded / scale << '/'
+                  << std::setw(7) << p.total      / scale << ' ' << unit << ']'
+                  << std::defaultfloat << "\033[K";
 
         if (lines_up > 0) {
             std::cout << "\033[" << lines_up << "B";
