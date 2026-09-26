@@ -163,6 +163,11 @@ struct llama_hparams {
 
     std::array<int, 4> rope_sections;
 
+    // M-RoPE: position slot that holds the time component; -1 keeps the default layout
+    // where the first slot feeds RoPE section 0. Canvas M-RoPE (MiniCPM-V 4.7) needs this
+    // because its time component is constant across the tiles of one image.
+    int32_t rope_mrope_time_slot = -1;
+
     // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
     // by default, all layers use RoPE (controlled by rope_finetuned)
     std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;

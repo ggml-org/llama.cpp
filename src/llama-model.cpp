@@ -1485,6 +1485,12 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
 
     hparams.rope_type = llama_model_rope_type(this);
+
+    // the time slot must be in range and its dimension section empty
+    if (hparams.rope_mrope_time_slot >= 0) {
+        GGML_ASSERT(hparams.rope_mrope_time_slot < 4);
+        GGML_ASSERT(hparams.rope_sections[hparams.rope_mrope_time_slot] == 0);
+    }
 }
 
 void llama_model_base::load_vocab(llama_model_loader & ml) {
