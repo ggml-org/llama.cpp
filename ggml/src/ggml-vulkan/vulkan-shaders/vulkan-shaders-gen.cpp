@@ -1161,12 +1161,19 @@ void process_shaders() {
 
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}}), true, false, true);
+    // whole-head V=128 (gmem state mirror): Vulkan caps coopmat2 shared at 48KB, so
+    // the [D x 128] mirror won't fit in LDS here either.
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"GMEM_MIRROR", "1"}, {"V", "128"}}), true, false, true, false, "_v128");
 #endif
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}}), true, true, false, false, "_bf16acc");
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", base_dict, true, true, false);
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_bf16acc_wave64");
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"SUBGROUP_SIZE", "64"}}), true, true, false, false, "_wave64");
+    // whole-head V=128 variant: state mirror in a gmem scratch buffer (won't fit LDS).
+    // For head counts that tail the CU grid at V=64 (e.g. 48-head 27B on 64 CUs).
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}, {"SUBGROUP_SIZE", "64"}, {"GMEM_MIRROR", "1"}, {"V", "128"}}), true, true, false, false, "_bf16acc_wave64_v128");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"SUBGROUP_SIZE", "64"}, {"GMEM_MIRROR", "1"}, {"V", "128"}}), true, true, false, false, "_wave64_v128");
 #endif
 
     string_to_spv("opt_step_adamw_f32", "opt_step_adamw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));

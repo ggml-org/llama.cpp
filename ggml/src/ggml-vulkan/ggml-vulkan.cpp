@@ -3742,6 +3742,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+            // whole-head V=128 (gmem state mirror): binding 7 -> 8 total.
+            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2_v128,
+                "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
+                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
@@ -3765,8 +3769,18 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 spv = w64 ? (const void *)gated_delta_net_f32_cm1_wave64_data : (const void *)gated_delta_net_f32_cm1_data;
                 spvlen = w64 ? gated_delta_net_f32_cm1_wave64_len : gated_delta_net_f32_cm1_len;
             }
+            // default cm1 (V=64) keeps the state mirror in shared: 7 bindings.
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2, nm, spvlen, spv,
                 "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
+            // whole-head V=128 cm1: mirror in a gmem scratch buffer (binding 7 -> 8 total).
+            // wave64 only; used for head counts that tail the CU grid at V=64.
+            if (w64) {
+                const char * nm128  = device->coopmat_bf16_acc_support ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128";
+                const void * spv128 = device->coopmat_bf16_acc_support ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data;
+                size_t spvlen128    = device->coopmat_bf16_acc_support ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len;
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm2_v128, nm128, spvlen128, spv128,
+                    "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, rsg);
+            }
         }
 #endif
     }
@@ -10294,9 +10308,36 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const bool use_cm2 = ctx->device->pipeline_gated_delta_net_cm2 != nullptr &&
         src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= 64;
 
-    vk_pipeline pipeline = use_cm2
-        ? ctx->device->pipeline_gated_delta_net_cm2
-        : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op);
+    // Adaptive value tiling for the chunked path: V=64 (shared state mirror, 2
+    // blocks/head) vs whole-head V=128 (gmem state mirror, 1 block/head). Pick the
+    // tiling that better fills the CU grid; V=128 shares the value-independent work
+    // (gram/pmat/inversion) and fills a single wave for head counts that tail at V=64.
+    // Only the coopmat1 (RDNA) path benefits: coopmat2 (NVIDIA) is mma-product-bound so
+    // whole-head's extra gmem traffic regresses it. GGML_VK_GDN_V128 forces it for tests.
+    bool use_v128 = false;
+    if (use_cm2 && ctx->device->pipeline_gated_delta_net_cm2_v128 != nullptr && !getenv("GGML_VK_GDN_NO_V128")) {
+        if (getenv("GGML_VK_GDN_V128")) {
+            use_v128 = true;
+        } else if (!ctx->device->coopmat2) {
+            const uint32_t nsm = ctx->device->shader_core_count;
+            if (nsm != 0) {
+                const uint32_t wg64  = 2u * H * n_seqs;
+                const uint32_t wg128 = H * n_seqs;
+                const uint32_t waves64  = (wg64  + nsm - 1) / nsm;
+                const uint32_t waves128 = (wg128 + nsm - 1) / nsm;
+                // occupancy = wgs / (waves * nsm); prefer v128 when at least as good.
+                use_v128 = (uint64_t)wg128 * waves64 >= (uint64_t)wg64 * waves128;
+            }
+        }
+    }
+
+    const uint32_t cm_V     = use_v128 ? 128u : GGML_VK_GDN_CM2_V;
+    const bool     cm_gmem  = use_v128;
+
+    vk_pipeline pipeline = use_v128
+        ? ctx->device->pipeline_gated_delta_net_cm2_v128
+        : (use_cm2 ? ctx->device->pipeline_gated_delta_net_cm2
+                   : ggml_vk_op_get_pipeline(ctx, dst->src[0], dst->src[1], dst->src[2], dst, dst->op));
     GGML_ASSERT(pipeline != nullptr);
 
     ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
@@ -10305,6 +10346,21 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     vk_subbuffer src_buf[6] = {};
     for (int i = 0; i < 6; i++) {
         src_buf[i] = ggml_vk_tensor_subbuffer(ctx, dst->src[i]);
+    }
+
+    vk_subbuffer mirror_buf{};
+    if (cm_gmem) {
+        const uint32_t LDP = GGML_VK_GDN_CM2_LDP;
+        const uint32_t blocks = (S_v / cm_V) * n_seqs * H;
+        const size_t scratch_size = (size_t)blocks * LDP * cm_V * 2u * sizeof(uint16_t);
+        if (ctx->prealloc_size_x < scratch_size) {
+            ctx->prealloc_size_x = scratch_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->prealloc_x_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
+        mirror_buf = vk_subbuffer{ ctx->prealloc_x, 0, ctx->prealloc_x->size };
     }
 
     const uint32_t sq1 = (uint32_t)(src_q->nb[1] / sizeof(float));
@@ -10331,9 +10387,16 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         K
     };
 
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-        {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
-        pc, use_cm2 ? std::array<uint32_t, 3>{ S_v / GGML_VK_GDN_CM2_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
+    if (cm_gmem) {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf, mirror_buf},
+            pc, std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H });
+        ctx->prealloc_x_need_sync = true;
+    } else {
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
+            {src_buf[0], src_buf[1], src_buf[2], src_buf[3], src_buf[4], src_buf[5], dst_buf},
+            pc, use_cm2 ? std::array<uint32_t, 3>{ S_v / cm_V, n_seqs, H } : std::array<uint32_t, 3>{ H, n_seqs, S_v });
+    }
 }
 
 void ggml_vk_ssm_scan(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
