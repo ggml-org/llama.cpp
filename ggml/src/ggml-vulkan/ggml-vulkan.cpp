@@ -7389,10 +7389,11 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
 
     GGML_ASSERT(mmp_map != nullptr);
 
-    const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, nei1, true));
-    const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && nei1 > 8;
+    const uint32_t n_per_expert = (uint32_t)CEIL_DIV(nei0 * nei1, n_as);
+    const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, n_per_expert, true));
+    const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && n_per_expert > 8;
 
-    vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, nei1, aligned, true);
+    vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, n_per_expert, aligned, true);
 
     if (ggml_nbytes(src0) > ctx->device->properties.limits.maxStorageBufferRange) {
         pipeline = ggml_vk_get_64b_indexing_pipeline(ctx, pipeline);
