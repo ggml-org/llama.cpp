@@ -832,7 +832,94 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-template <fattn_kernel_t fattn_kernel, int warp_size>
+// dispatch by tag: a function pointer NTTP embeds the kernel mangled name into the
+// generated kernel image name, and IGC in the driver fails to compile such images
+enum fattn_kernel_tag {
+    FATTN_KERNEL_VEC,
+    FATTN_KERNEL_TILE,
+};
+
+// defined in fattn-vec.hpp / fattn-tile.hpp, which are included after this header
+template <int D, int ncols, int type_K, int type_V, bool use_logit_softcap, int warp_size, int nthreads>
+static void flash_attn_ext_vec(const char* __restrict__ Q,
+                               const char* __restrict__ K,
+                               const char* __restrict__ V,
+                               const char* __restrict__ mask,
+                               const char* __restrict__ sinks,
+                               const int* __restrict__ KV_max,
+                               float* __restrict__ dst,
+                               sycl::float2* __restrict__ dst_meta,
+                               const float scale,
+                               const float max_bias,
+                               const float m0,
+                               const float m1,
+                               const uint32_t n_head_log2,
+                               const float logit_softcap,
+                               const int32_t ne00,
+                               const sycl::uint3 ne01,
+                               const int32_t ne02,
+                               const int32_t ne03,
+                               const int32_t nb01,
+                               const int32_t nb02,
+                               const int32_t nb03,
+                               const int32_t ne10,
+                               const int32_t ne11,
+                               const int32_t ne12,
+                               const int32_t ne13,
+                               const int32_t nb11,
+                               const int32_t nb12,
+                               const int64_t nb13,
+                               const int32_t nb21,
+                               const int32_t nb22,
+                               const int64_t nb23,
+                               const int32_t ne31,
+                               const int32_t ne32,
+                               const int32_t ne33,
+                               const int32_t nb31,
+                               const int32_t nb32,
+                               const int64_t nb33);
+
+template <int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, int warp_size>
+static void flash_attn_tile(const char * Q,
+                            const char * K,
+                            const char * V,
+                            const char * mask,
+                            const char * sinks,
+                            const int * KV_max,
+                            float * dst,
+                            sycl::float2 * dst_meta,
+                            const float scale,
+                            const float max_bias,
+                            const float m0,
+                            const float m1,
+                            const uint32_t n_head_log2,
+                            const float logit_softcap,
+                            const int32_t ne00,
+                            const sycl::uint3 ne01,
+                            const int32_t ne02,
+                            const int32_t ne03,
+                            const int32_t nb01,
+                            const int32_t nb02,
+                            const int32_t nb03,
+                            const int32_t ne10,
+                            const int32_t ne11,
+                            const int32_t ne12,
+                            const int32_t ne13,
+                            const int32_t nb11,
+                            const int32_t nb12,
+                            const int64_t nb13,
+                            const int32_t nb21,
+                            const int32_t nb22,
+                            const int64_t nb23,
+                            const int32_t ne31,
+                            const int32_t ne32,
+                            const int32_t ne33,
+                            const int32_t nb31,
+                            const int32_t nb32,
+                            const int64_t nb33);
+
+template <fattn_kernel_tag kernel_tag, int DV, int ncols1, int ncols2, int DKQ, int type_K, int type_V,
+          bool use_logit_softcap, int warp_size, int nthreads>
 static void lauch_kernel(
     dpct::dim3 group_range,
     dpct::dim3 local_range,
@@ -883,16 +970,25 @@ static void lauch_kernel(
                 static_cast<sycl::range<3>>(local_range)),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
                 GGML_UNUSED(item_ct1);
-                fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
-                             max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
-                             ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
-                             ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
-                             ne31, ne32, ne33, nb31, nb32, nb33);
+                if constexpr (kernel_tag == FATTN_KERNEL_VEC) {
+                    flash_attn_ext_vec<DV, ncols1, type_K, type_V, use_logit_softcap, warp_size, nthreads>(
+                        Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale, max_bias, m0, m1,
+                        n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03,
+                        ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
+                        ne31, ne32, ne33, nb31, nb32, nb33);
+                } else {
+                    flash_attn_tile<DKQ, DV, ncols1, ncols2, use_logit_softcap, warp_size>(
+                        Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale, max_bias, m0, m1,
+                        n_head_log2, logit_softcap, ne00, ne01, ne02, ne03, nb01, nb02, nb03,
+                        ne10, ne11, ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
+                        ne31, ne32, ne33, nb31, nb32, nb33);
+                }
             });
     });
 }
 
-template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size>
+template <fattn_kernel_tag kernel_tag, int DV, int ncols1, int ncols2, int DKQ, int type_K, int type_V,
+          bool use_logit_softcap, int warp_size, int nthreads>
 void launch_fattn(
     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
@@ -1128,7 +1224,7 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-    lauch_kernel<fattn_kernel, warp_size>(
+    lauch_kernel<kernel_tag, DV, ncols1, ncols2, DKQ, type_K, type_V, use_logit_softcap, warp_size, nthreads>(
         blocks_num, block_dim, main_stream, (unsigned int) nbytes_shared, (const char *) Q->data, K_data, V_data,
         mask ? ((const char *) mask->data) : nullptr, sinks ? ((const char *) sinks->data) : nullptr, KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, (sycl::float2 *)dst_tmp_meta.ptr, scale, max_bias, m0, m1,
