@@ -1,7 +1,7 @@
 #ifndef HTP_CTX_H
 #define HTP_CTX_H
 
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hmx-queue.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
@@ -17,16 +17,16 @@
 #ifndef HTP_MAX_NTHREADS
 #define HTP_MAX_NTHREADS 10
 #endif
-#define HTP_MAX_MMAPS    16
 
-#define HTP_MAX_DIRTY_RANGES 32
+#define HTP_MAX_MMAPS        64
+#define HTP_MAX_DIRTY_RANGES 64
 
 // Memory mapping
 struct htp_mmap {
     uint64_t size;
     uint64_t base;
     uint32_t fd;
-    uint32_t reserved;
+    uint32_t flags;
 };
 
 struct htp_dirty_range {
@@ -68,9 +68,6 @@ struct htp_ops_context {
         const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
     };
 
-    dma_queue **    src_dma[HTP_OP_MAX_INPUTS];
-    dma_queue **    dst_dma[HTP_OP_MAX_OUTPUTS];
-
     // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
@@ -90,7 +87,6 @@ struct htp_context {
 
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
     dma_queue_t            dma[HTP_MAX_NTHREADS];
-    dma_queue_t            dma_cached[HTP_MAX_NTHREADS];
     struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
     work_queue_t           work_queue;
     hmx_queue_t            hmx_queue;
@@ -165,6 +161,7 @@ int op_get_rows(struct htp_ops_context * octx);
 int op_cpy(struct htp_ops_context * octx);
 int op_repeat(struct htp_ops_context * octx);
 int op_argsort(struct htp_ops_context * octx);
+int op_top_k(struct htp_ops_context * octx);
 int op_ssm_conv(struct htp_ops_context * octx);
 int op_cumsum(struct htp_ops_context * octx);
 int op_fill(struct htp_ops_context * octx);
