@@ -134,6 +134,112 @@ void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
+void ggml_quantize_mat_q8_K_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK_K == 256);
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
+
+#if defined(__ARM_NEON)
+    float32x4_t srcv[4][64];
+    float id[4];
+
+    for (int i = 0; i < nb; i++) {
+        for (int row_iter = 0; row_iter < 4; row_iter++) {
+            for (int j = 0; j < 64; j++) srcv[row_iter][j] = vld1q_f32(x + row_iter * k + i * 256 + 4 * j);
+
+            float32x4_t amaxv[4] =
+                {srcv[row_iter][0], srcv[row_iter][1], srcv[row_iter][2], srcv[row_iter][3]};
+            float32x4_t aminv[4] =
+                {srcv[row_iter][0], srcv[row_iter][1], srcv[row_iter][2], srcv[row_iter][3]};
+            for (int j = 4; j < 64; j += 4) {
+                amaxv[0] = vmaxq_f32(srcv[row_iter][j + 0], amaxv[0]);
+                amaxv[1] = vmaxq_f32(srcv[row_iter][j + 1], amaxv[1]);
+                amaxv[2] = vmaxq_f32(srcv[row_iter][j + 2], amaxv[2]);
+                amaxv[3] = vmaxq_f32(srcv[row_iter][j + 3], amaxv[3]);
+
+                aminv[0] = vminq_f32(srcv[row_iter][j + 0], aminv[0]);
+                aminv[1] = vminq_f32(srcv[row_iter][j + 1], aminv[1]);
+                aminv[2] = vminq_f32(srcv[row_iter][j + 2], aminv[2]);
+                aminv[3] = vminq_f32(srcv[row_iter][j + 3], aminv[3]);
+            }
+            amaxv[0] = vmaxq_f32(amaxv[0], amaxv[1]);
+            amaxv[2] = vmaxq_f32(amaxv[2], amaxv[3]);
+            amaxv[0] = vmaxq_f32(amaxv[0], amaxv[2]);
+
+            aminv[0] = vminq_f32(aminv[0], aminv[1]);
+            aminv[2] = vminq_f32(aminv[2], aminv[3]);
+            aminv[0] = vminq_f32(aminv[0], aminv[2]);
+
+            const float max = vmaxvq_f32(amaxv[0]);
+            const float min = vminvq_f32(aminv[0]);
+
+            const float mx = max >= -min ? max : min;
+
+            id[row_iter] = mx ? -127.f / mx : 0.0f;
+
+            y[i].d[row_iter] = mx ? 1.0f / id[row_iter] : 0.0f;
+        }
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+
+        for (int j = 0; j < 64; j++) {
+            float32x4_t v = vmulq_n_f32(srcv[0][j], id[0]);
+            int32x4_t vi = vcvtnq_s32_f32(v);
+            acc0 = vaddq_s32(acc0, vi);
+            y[i].qs[16 * j + 0] = vgetq_lane_s32(vi, 0);
+            y[i].qs[16 * j + 1] = vgetq_lane_s32(vi, 1);
+            y[i].qs[16 * j + 2] = vgetq_lane_s32(vi, 2);
+            y[i].qs[16 * j + 3] = vgetq_lane_s32(vi, 3);
+
+            v = vmulq_n_f32(srcv[1][j], id[1]);
+            vi = vcvtnq_s32_f32(v);
+            acc1 = vaddq_s32(acc1, vi);
+            y[i].qs[16 * j + 4] = vgetq_lane_s32(vi, 0);
+            y[i].qs[16 * j + 5] = vgetq_lane_s32(vi, 1);
+            y[i].qs[16 * j + 6] = vgetq_lane_s32(vi, 2);
+            y[i].qs[16 * j + 7] = vgetq_lane_s32(vi, 3);
+
+            v = vmulq_n_f32(srcv[2][j], id[2]);
+            vi = vcvtnq_s32_f32(v);
+            acc2 = vaddq_s32(acc2, vi);
+            y[i].qs[16 * j + 8] = vgetq_lane_s32(vi, 0);
+            y[i].qs[16 * j + 9] = vgetq_lane_s32(vi, 1);
+            y[i].qs[16 * j + 10] = vgetq_lane_s32(vi, 2);
+            y[i].qs[16 * j + 11] = vgetq_lane_s32(vi, 3);
+
+            v = vmulq_n_f32(srcv[3][j], id[3]);
+            vi = vcvtnq_s32_f32(v);
+            acc3 = vaddq_s32(acc3, vi);
+            y[i].qs[16 * j + 12] = vgetq_lane_s32(vi, 0);
+            y[i].qs[16 * j + 13] = vgetq_lane_s32(vi, 1);
+            y[i].qs[16 * j + 14] = vgetq_lane_s32(vi, 2);
+            y[i].qs[16 * j + 15] = vgetq_lane_s32(vi, 3);
+
+            if (j % 4 == 3) {
+                const int l = j / 4;
+                const int idx = (l / 4) * 16 + (l % 4);
+                y[i].bsums[idx +  0] = vaddvq_s32(acc0);
+                y[i].bsums[idx +  4] = vaddvq_s32(acc1);
+                y[i].bsums[idx +  8] = vaddvq_s32(acc2);
+                y[i].bsums[idx + 12] = vaddvq_s32(acc3);
+                acc0 = vdupq_n_s32(0);
+                acc1 = vdupq_n_s32(0);
+                acc2 = vdupq_n_s32(0);
+                acc3 = vdupq_n_s32(0);
+            }
+        }
+    }
+#else
+    UNUSED(nb);
+    UNUSED(y);
+    ggml_quantize_mat_q8_K_4x4_generic(x, vy, k);
+#endif
+}
+
 void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -224,6 +330,113 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
     UNUSED(nb);
     UNUSED(y);
     ggml_quantize_mat_q8_0_4x8_generic(x, vy, k);
+#endif
+}
+
+void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK_K == 256);
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
+
+#if defined(__ARM_NEON)
+    float32x4_t srcv[4][64];
+    float id[4];
+
+    for (int i = 0; i < nb; i++) {
+        for (int row_iter = 0; row_iter < 4; row_iter++) {
+            for (int j = 0; j < 64; j++) srcv[row_iter][j] = vld1q_f32(x + row_iter * k + i * 256 + 4 * j);
+
+            float32x4_t amaxv[4] =
+                {srcv[row_iter][0], srcv[row_iter][1], srcv[row_iter][2], srcv[row_iter][3]};
+            float32x4_t aminv[4] =
+                {srcv[row_iter][0], srcv[row_iter][1], srcv[row_iter][2], srcv[row_iter][3]};
+            for (int j = 4; j < 64; j += 4) {
+                amaxv[0] = vmaxq_f32(srcv[row_iter][j + 0], amaxv[0]);
+                amaxv[1] = vmaxq_f32(srcv[row_iter][j + 1], amaxv[1]);
+                amaxv[2] = vmaxq_f32(srcv[row_iter][j + 2], amaxv[2]);
+                amaxv[3] = vmaxq_f32(srcv[row_iter][j + 3], amaxv[3]);
+
+                aminv[0] = vminq_f32(srcv[row_iter][j + 0], aminv[0]);
+                aminv[1] = vminq_f32(srcv[row_iter][j + 1], aminv[1]);
+                aminv[2] = vminq_f32(srcv[row_iter][j + 2], aminv[2]);
+                aminv[3] = vminq_f32(srcv[row_iter][j + 3], aminv[3]);
+            }
+            amaxv[0] = vmaxq_f32(amaxv[0], amaxv[1]);
+            amaxv[2] = vmaxq_f32(amaxv[2], amaxv[3]);
+            amaxv[0] = vmaxq_f32(amaxv[0], amaxv[2]);
+
+            aminv[0] = vminq_f32(aminv[0], aminv[1]);
+            aminv[2] = vminq_f32(aminv[2], aminv[3]);
+            aminv[0] = vminq_f32(aminv[0], aminv[2]);
+
+            const float max = vmaxvq_f32(amaxv[0]);
+            const float min = vminvq_f32(aminv[0]);
+
+            const float mx = max >= -min ? max : min;
+
+            id[row_iter] = mx ? -127.f / mx : 0.0f;
+
+            y[i].d[row_iter] = mx ? 1.0f / id[row_iter] : 0.0f;
+        }
+        int32x4_t acc0 = vdupq_n_s32(0);
+        int32x4_t acc1 = vdupq_n_s32(0);
+        int32x4_t acc2 = vdupq_n_s32(0);
+        int32x4_t acc3 = vdupq_n_s32(0);
+
+        for (int j = 0; j < 32; ++j) {
+            for (int l = 0; l < 2; ++l) {
+                float32x4_t v = vmulq_n_f32(srcv[0][2 * j + l], id[0]);
+                int32x4_t vi = vcvtnq_s32_f32(v);
+                acc0 = vaddq_s32(acc0, vi);
+                y[i].qs[32 * j + 4 * l + 0] = vgetq_lane_s32(vi, 0);
+                y[i].qs[32 * j + 4 * l + 1] = vgetq_lane_s32(vi, 1);
+                y[i].qs[32 * j + 4 * l + 2] = vgetq_lane_s32(vi, 2);
+                y[i].qs[32 * j + 4 * l + 3] = vgetq_lane_s32(vi, 3);
+
+                v = vmulq_n_f32(srcv[1][2 * j + l], id[1]);
+                vi = vcvtnq_s32_f32(v);
+                acc1 = vaddq_s32(acc1, vi);
+                y[i].qs[32 * j + 4 * l + 8] = vgetq_lane_s32(vi, 0);
+                y[i].qs[32 * j + 4 * l + 9] = vgetq_lane_s32(vi, 1);
+                y[i].qs[32 * j + 4 * l + 10] = vgetq_lane_s32(vi, 2);
+                y[i].qs[32 * j + 4 * l + 11] = vgetq_lane_s32(vi, 3);
+
+                v = vmulq_n_f32(srcv[2][2 * j + l], id[2]);
+                vi = vcvtnq_s32_f32(v);
+                acc2 = vaddq_s32(acc2, vi);
+                y[i].qs[32 * j + 4 * l + 16] = vgetq_lane_s32(vi, 0);
+                y[i].qs[32 * j + 4 * l + 17] = vgetq_lane_s32(vi, 1);
+                y[i].qs[32 * j + 4 * l + 18] = vgetq_lane_s32(vi, 2);
+                y[i].qs[32 * j + 4 * l + 19] = vgetq_lane_s32(vi, 3);
+
+                v = vmulq_n_f32(srcv[3][2 * j + l], id[3]);
+                vi = vcvtnq_s32_f32(v);
+                acc3 = vaddq_s32(acc3, vi);
+                y[i].qs[32 * j + 4 * l + 24] = vgetq_lane_s32(vi, 0);
+                y[i].qs[32 * j + 4 * l + 25] = vgetq_lane_s32(vi, 1);
+                y[i].qs[32 * j + 4 * l + 26] = vgetq_lane_s32(vi, 2);
+                y[i].qs[32 * j + 4 * l + 27] = vgetq_lane_s32(vi, 3);
+            }
+            if (j % 2) {
+                const int l = j / 2;
+                const int idx = (l / 4) * 16 + (l % 4);
+                y[i].bsums[idx +  0] = vaddvq_s32(acc0);
+                y[i].bsums[idx +  4] = vaddvq_s32(acc1);
+                y[i].bsums[idx +  8] = vaddvq_s32(acc2);
+                y[i].bsums[idx + 12] = vaddvq_s32(acc3);
+                acc0 = vdupq_n_s32(0);
+                acc1 = vdupq_n_s32(0);
+                acc2 = vdupq_n_s32(0);
+                acc3 = vdupq_n_s32(0);
+            }
+        }
+    }
+#else
+    UNUSED(nb);
+    UNUSED(y);
+    ggml_quantize_mat_q8_K_4x8_generic(x, vy, k);
 #endif
 }
 
