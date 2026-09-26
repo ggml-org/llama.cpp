@@ -452,6 +452,30 @@ void test_basic(testing & t) {
             t.assert_equal("result_is_fail", true, result.fail());
         });
 
+        // rule_name() collapses runs of characters outside [a-zA-Z0-9-] to a
+        // single '-', so distinct parameter names can sanitize to the same
+        // rule name ("my-param" and "my_param" both become "my-param").
+        // add_rule() is a map assignment, so the second registration
+        // silently replaces the first and refs to the first rule end up
+        // resolving to the second one.
+        t.test("rule_name_collision", [](testing &t) {
+            // "my-param" and "my_param" sanitize to the same rule name; the
+            // second registration must fail loudly instead of silently
+            // replacing the first rule.
+            bool threw = false;
+            try {
+                auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                    auto arg_a = p.rule("tool-t-arg-my-param", p.literal("A"));
+                    auto arg_b = p.rule("tool-t-arg-my_param", p.literal("B"));
+                    return p.choice({arg_a, arg_b}) + p.end();
+                });
+                (void)parser;
+            } catch (const std::exception &) {
+                threw = true;
+            }
+            t.assert_true("colliding_rule_registration_throws", threw);
+        });
+
         // Test markers
         t.test("marker", [](testing &t) {
             auto bracket_parser = build_peg_parser([](common_peg_parser_builder & p) {
