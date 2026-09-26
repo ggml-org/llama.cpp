@@ -144,6 +144,11 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (ctx == NULL) {
+        LOG_ERR("%s: unable to create context\n", __func__);
+        return 1;
+    }
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     const int n_ctx_train = llama_model_n_ctx_train(model);
