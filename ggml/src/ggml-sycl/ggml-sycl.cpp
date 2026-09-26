@@ -4940,9 +4940,14 @@ static bool ggml_sycl_mul_mat_glu_mmvq_fused(ggml_backend_sycl_context & ctx, gg
     }
 
     // quant pairs the reorder kernel cannot serve (mixed gate/up types) take the
-    // standard-layout fused path instead; q4_K keeps the reorder path below
-    if (wg->type != GGML_TYPE_Q4_K || wu->type != GGML_TYPE_Q4_K) {
+    // standard-layout fused path instead; same-type q4_K / q5_K keep the reorder path below
+    if (wg->type != wu->type || (wu->type != GGML_TYPE_Q4_K && wu->type != GGML_TYPE_Q5_K)) {
         return ggml_sycl_mul_mat_glu_mmvq_plain(ctx, glu, gate, up, wu, wg, act);
+    }
+
+    // past 5 columns the two unfused q5_K GEMVs are faster than the fused kernel
+    if (wu->type == GGML_TYPE_Q5_K && act->ne[1] > 5) {
+        return false;
     }
 
     // install the reorder (SoA) layout the fused kernel needs, as the unfused mmvq path would;
