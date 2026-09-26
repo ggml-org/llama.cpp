@@ -100,6 +100,67 @@ static __global__ void dsv4_hc_comb_f32(
     }
 }
 
+static __global__ void dsv4_hc_comb_clamp_f32(
+        const float * mixes,
+        const float * scale,
+        const float * base,
+        float * dst,
+        int64_t n_tokens,
+        int64_t sm0,
+        int64_t sm1,
+        int64_t ss0,
+        int64_t sb0,
+        int64_t sd0,
+        int64_t sd1,
+        int64_t sd2,
+        float eps,
+        float limit,
+        int32_t n_iter) {
+    constexpr int comb_offset = 2*DSV4_HC;
+
+    ggml_cuda_pdl_lc();
+    const int64_t it = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (it >= n_tokens) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+
+    const float scale_comb = scale[2*ss0];
+    float comb[DSV4_HC*DSV4_HC];
+
+    for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
+        float max = -INFINITY;
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
+            const float v = mixes[(comb_offset + idx)*sm0 + it*sm1] * scale_comb + base[(comb_offset + idx)*sb0];
+            comb[idx] = fminf(fmaxf(v, -limit), limit);
+            max = fmaxf(max, comb[idx]);
+        }
+
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
+            comb[idx] = expf(comb[idx] - max);
+        }
+    }
+
+    // with_clamp runs every sinkhorn normalization inside the loop, dst first;
+    // the exp(-max) step above is NOT sum-normalized (no softmax division), so
+    // the first norm_dst below applies eps to the denominator as well.
+    for (int32_t i = 0; i < n_iter; ++i) {
+        dsv4_hc_comb_norm_rows(comb, eps);
+        dsv4_hc_comb_norm_cols(comb, eps);
+    }
+
+    for (int isrc = 0; isrc < DSV4_HC; ++isrc) {
+        for (int idst = 0; idst < DSV4_HC; ++idst) {
+            const int idx = idst + DSV4_HC*isrc;
+            dst[idst*sd0 + isrc*sd1 + it*sd2] = comb[idx];
+        }
+    }
+}
+
 template <bool gated>
 static __global__ void dsv4_hc_pre_f32(
         const float * x,
@@ -221,20 +282,32 @@ void ggml_cuda_op_dsv4_hc_comb(ggml_backend_cuda_context & ctx, ggml_tensor * ds
     const int64_t n_tokens = mixes->ne[1];
     const float eps = ggml_get_op_params_f32(dst, 0);
     const int32_t n_iter = ggml_get_op_params_i32(dst, 1);
+    const float limit = ggml_get_op_params_f32(dst, 2);
 
     const int block_size = 256;
     const dim3 block_dims(block_size, 1, 1);
     const dim3 grid_dims((n_tokens + block_size - 1) / block_size, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
 
-    ggml_cuda_kernel_launch(dsv4_hc_comb_f32, launch_params,
-            (const float *) mixes->data, (const float *) scale->data, (const float *) base->data, (float *) dst->data,
-            n_tokens,
-            nbm0 / sizeof(float), nbm1 / sizeof(float),
-            nbs0 / sizeof(float),
-            nbb0 / sizeof(float),
-            nbd0 / sizeof(float), nbd1 / sizeof(float), nbd2 / sizeof(float),
-            eps, n_iter);
+    if (limit == 0) {
+        ggml_cuda_kernel_launch(dsv4_hc_comb_f32, launch_params,
+                (const float *) mixes->data, (const float *) scale->data, (const float *) base->data, (float *) dst->data,
+                n_tokens,
+                nbm0 / sizeof(float), nbm1 / sizeof(float),
+                nbs0 / sizeof(float),
+                nbb0 / sizeof(float),
+                nbd0 / sizeof(float), nbd1 / sizeof(float), nbd2 / sizeof(float),
+                eps, n_iter);
+    } else {
+        ggml_cuda_kernel_launch(dsv4_hc_comb_clamp_f32, launch_params,
+                (const float *) mixes->data, (const float *) scale->data, (const float *) base->data, (float *) dst->data,
+                n_tokens,
+                nbm0 / sizeof(float), nbm1 / sizeof(float),
+                nbs0 / sizeof(float),
+                nbb0 / sizeof(float),
+                nbd0 / sizeof(float), nbd1 / sizeof(float), nbd2 / sizeof(float),
+                eps, limit, n_iter);
+    }
 }
 
 void ggml_cuda_op_dsv4_hc_pre(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

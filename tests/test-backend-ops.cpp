@@ -4377,7 +4377,6 @@ struct test_dsv4_hc_post : public test_dsv4_hc {
     }
 };
 
-
 // GGML_OP_SSM_CONV
 struct test_ssm_conv : public test_case {
     const ggml_type type;

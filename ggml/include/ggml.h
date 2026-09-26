@@ -2695,6 +2695,18 @@ extern "C" {
             float                 eps,
             int32_t               n_iter);
 
+    //
+    // hc_comb variant with clamp to [-limit, limit] before softmax
+    //
+    GGML_API struct ggml_tensor * ggml_dsv4_hc_comb_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            float                 eps,
+            float                 limit,
+            int32_t               n_iter);
+
     // hc_pre: x [n_embd, hc, n_tokens], weights [hc, n_tokens] -> [n_embd, n_tokens]
     //   result[i, t] = sum_h x[i, h, t]*weights[h, t]
     //
@@ -2725,6 +2737,21 @@ extern "C" {
             struct ggml_tensor  * residual,
             struct ggml_tensor  * post,
             struct ggml_tensor  * comb);
+
+    // Xing4_0 hyper-connections (DeepSeek-V2 MLA + 4-stream MHC). Same shape
+    // contract as the dsv4 variants, but the comb is [src_hc, dst_hc] (ne0 =
+    // src) and the reference "with_clamp" semantics differ:
+    //   * logits are clamped to [-30, 30] before the Softmax;
+    //   * the Softmax runs over src (not dst);
+    //   * eps is only added to the normalization denominators, never to values;
+    //   * the Sinkhorn first normalizes over src, then alternates (src, dst).
+    GGML_API struct ggml_tensor * ggml_xing4_0_hc_comb(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mixes,
+            struct ggml_tensor  * scale,
+            struct ggml_tensor  * base,
+            float                 eps,
+            int32_t               n_iter);
 
     // custom operators
 
