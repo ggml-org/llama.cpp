@@ -475,6 +475,10 @@ struct server_slot {
     // logged one time instead of on every request.
     mutable bool state_save_unsupported = false;
 
+    // Allocate a prompt-cache entry and request target/draft state serialization.
+    // Return false for an empty prompt, disabled saving, or a declined allocation.
+    // A zero target-state size disables future saves for this slot. True means the
+    // entry was allocated and serialization attempted; returned byte counts are not checked.
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0 || state_save_unsupported) {
             return false;

@@ -722,6 +722,11 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
 }
 
 // outer wrapper: determine the ggml_type that this tensor should be quantized to
+// Preserve excluded tensors' types. For quantized defaults, apply overrides or mixture
+// rules, raise sub-8-bit hyper-connection injection types to Q8_0, then check shape
+// compatibility. Dedicated embedding/output overrides can return before these checks.
+// Selection can advance qs's mixture/fallback counters and propagates std::runtime_error
+// for invalid expert layer names/indices or an incompatible type with no defined fallback.
 static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
         return tensor->type;

@@ -950,6 +950,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
 
+    // Initialize per-sequence DFlash/DSpark drafting and enable the required target
+    // feature extraction. Clamp draft lengths to the trained block's capacity and
+    // configure draft embeddings, attention, and optional backend sampling.
+    // Throws std::runtime_error if DSpark confidence filtering is requested without
+    // a confidence head. Target/draft contexts and target layer IDs are required.
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
         : common_speculative_impl(type, n_seq, params.draft.n_max)
@@ -1114,6 +1119,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
     }
 
+    // Encode features from the just-evaluated target batch and inject draft KV at
+    // the target positions. Each token must have one sequence ID, with each sequence's
+    // tokens contiguous in the batch. Empty or embedding batches are skipped successfully.
+    // Replace NaN features with zero and infinities with signed 65504 before encoding.
+    // Return false on a nonzero encoder/decoder status; earlier chunks may already be cached.
+    // Missing extracted features or encoder output abort instead of returning false.
     bool process(const llama_batch & batch_in) override {
         if (batch_in.n_tokens <= 0) {
             return true;
@@ -1463,6 +1474,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         return std::min(defer_max, std::max(0, decode_capacity - draft_rows));
     }
 
+    // Initialize per-sequence MTP drafting and enable target/draft hidden-state output.
+    // Shared KV requires a matching target context and an architecture that shares KV.
+    // Adaptive mode starts at n_min_adaptive and aborts unless it is in [1, n_max],
+    // after any limit imposed by the number of MTP heads. Contexts must be non-null
+    // and their output embedding widths must match.
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq, bool adaptive = false)
         : common_speculative_impl(adaptive ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE : COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)

@@ -133,6 +133,7 @@ LLAMA_API bool llama_model_uses_shared_position_draft(const struct llama_model *
 // weights (tok_embd/lm_head) or embeddings, and still allocates its own independent
 // KV cache - do not infer KV sharing from `ctx_other == ctx_tgt` alone, since ctx_other
 // is set unconditionally for every draft context regardless of architecture.
+// Returns false for a null model; this checks architecture, not a live context's memory.
 LLAMA_API bool llama_model_shares_target_kv(const struct llama_model * model);
 
 // Run the DECODER_MTP graph in chained mode: the batch's first row carries the

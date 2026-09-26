@@ -1602,6 +1602,9 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
+// Build normalization followed by optional scale mw and bias mb, returning the final
+// tensor. Use the model's epsilon/group settings; il identifies the layer for callbacks.
+// Scale and bias are cast to F32 when the normalized activation is F32.
 ggml_tensor * llm_graph_context::build_norm(
          ggml_tensor * cur,
          ggml_tensor * mw,

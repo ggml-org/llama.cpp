@@ -25,6 +25,9 @@ struct llama_context;
 // the llama_kv_cache constructor will use, instead of the raw requested
 // type; the two must never diverge or the caller ends up validating (or
 // sizing) for a type the cache doesn't use.
+// Return type_k unchanged for non-turbo K, MLA, or DeepSeek4. Otherwise return
+// Q8_0 for symmetric K/V on Qwen-family models or a layer-0 GQA ratio >= 6, unless
+// TURBO_AUTO_ASYMMETRIC starts with '0'. Layer-adaptive overrides are applied separately.
 ggml_type llama_kv_cache_resolve_stream_type_k(
         const llama_model & model, const llama_hparams & hparams,
         ggml_type type_k, ggml_type type_v);
@@ -33,10 +36,21 @@ ggml_type llama_kv_cache_resolve_stream_type_k(
 // var - see llama-kv-cache.cpp for the mode legend). Exposed, like the
 // resolver above, so a caller can predict whether a model will actually get
 // non-uniform per-layer KV types before the llama_kv_cache constructor runs.
+// Accept exact env values "1", "2", "5", "6", or "7"; other set values return 0
+// (uniform). With the env unset, return 7 for turbo2 V with at least 8 layers,
+// otherwise 0. Explicit modes are returned even for fewer than 8 layers.
 int llama_kv_cache_turbo_layer_adaptive_mode(ggml_type type_v, uint32_t n_layer);
 
+// Return K's type for zero-based layer il, using type_k after auto-asymmetric resolution.
+// With turbo K and at least 8 layers, mode 1 uses Q8_0 for the first/last 4 layers
+// and mode 2 for the last 8. Otherwise return type_k. type_v is unused.
 ggml_type llama_kv_cache_turbo_layer_adaptive_type_k(
         int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
+// Return V's type for zero-based layer il; type_k is the resolved K type before
+// per-layer overrides. Fewer than 8 layers keep type_v. Modes 1/2 use Q8_0 at the same
+// boundaries as K when type_k is turbo. For turbo V, modes 5/6 use turbo4 at the
+// first/last 2 or last 8 layers, respectively, and turbo2 elsewhere; mode 7 uses
+// Q8_0 at the first/last 2 and turbo2 elsewhere. Otherwise return type_v.
 ggml_type llama_kv_cache_turbo_layer_adaptive_type_v(
         int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
 

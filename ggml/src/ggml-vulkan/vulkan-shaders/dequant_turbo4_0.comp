@@ -9,6 +9,8 @@ layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
 layout (binding = 0) readonly buffer A {block_turbo4_0 data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
 
+// Write norm-scaled centroids to data_b for the complete 128-element blocks in p.nel.
+// Output remains in the rotated domain; rnorm is unused and no inverse WHT is applied.
 void main() {
     const float centroids[16] = float[16](
         -0.241529, -0.182877, -0.143016, -0.111036,

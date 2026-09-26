@@ -1001,6 +1001,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);
 
+// Return whether device-memory auto-fit was requested through params.fit_params.
 bool common_params_should_fit_device_memory(const common_params & params);
 
 // clear LoRA adapters from context, then apply new list of adapters

@@ -562,6 +562,10 @@ extern "C" {
 
     LLAMA_API void llama_model_free(struct llama_model * model);
 
+    // Create a context for model; release it with llama_free().
+    // Returns NULL for a null model, rejected parameters, or a caught initialization
+    // exception. Quantized cache validation uses the effective per-layer KV types.
+    // Custom YaRN scaling may update model's training context length.
     LLAMA_API struct llama_context * llama_init_from_model(
                      struct llama_model * model,
             struct llama_context_params   params);

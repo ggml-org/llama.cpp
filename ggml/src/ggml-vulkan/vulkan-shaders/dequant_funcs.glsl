@@ -808,6 +808,9 @@ vec2 get_dm(uint ib, uint a_offset) {
 #endif
 
 #if defined(DATA_A_TURBO2_0)
+// Return two unscaled centroids at iqs and iqs+1 in data_a[a_offset+ib].
+// Block offsets are in blocks; iqs must be <= 126. The caller applies get_dm()
+// scaling; values remain in the rotated domain.
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // 2-bit centroids, must match CENTROIDS_2BIT in ggml/src/ggml-turbo-quant.c
     const float centroids[4] = float[4](-0.133462, -0.039994, 0.039994, 0.133462);
@@ -821,6 +824,8 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 
     return vec2(centroids[idx0], centroids[idx1]);
 }
+// Return four unscaled centroids starting at iqs in data_a[a_offset+ib].
+// iqs must be a multiple of 4 in [0, 124]; scaling and inverse rotation are left to the caller.
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // Optimized path for the vec4 case: iqs%4==0 (guaranteed by every caller),
     // so elements iqs..iqs+3 share a single qs byte (4 per byte). One qs load
@@ -836,12 +841,16 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 
     return vec4(centroids[idx0], centroids[idx1], centroids[idx2], centroids[idx3]);
 }
+// Return (norm, 0) for scaling centroids from block a_offset+ib.
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].norm), 0);
 }
 #endif
 
 #if defined(DATA_A_TURBO4_0)
+// Return two unscaled centroids at iqs and iqs+1 in data_a[a_offset+ib].
+// Block offsets are in blocks; iqs must be <= 126. The caller applies get_dm()
+// scaling; values remain in the rotated domain.
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // 4-bit centroids, must match CENTROIDS_4BIT in ggml/src/ggml-turbo-quant.c
     const float centroids[16] = float[16](
@@ -861,6 +870,8 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
 
     return vec2(centroids[idx0], centroids[idx1]);
 }
+// Return four unscaled centroids starting at iqs in data_a[a_offset+ib].
+// iqs must be even and <= 124; scaling and inverse rotation are left to the caller.
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     // Optimized path for the vec4 case: iqs%4==0 (guaranteed by every caller),
     // so elements iqs..iqs+3 span exactly 2 consecutive qs bytes (2 per byte,
@@ -882,6 +893,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 
     return vec4(centroids[idx0], centroids[idx1], centroids[idx2], centroids[idx3]);
 }
+// Return (norm, 0) for scaling centroids from block a_offset+ib; rnorm is unused.
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].norm), 0);
 }

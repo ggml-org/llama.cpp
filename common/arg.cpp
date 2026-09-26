@@ -251,7 +251,10 @@ std::vector<std::string> common_arg::get_env() const {
 // utils
 //
 
-// Helper function to parse tensor buffer override strings
+// Append comma-separated tensor-pattern=buffer-type overrides, loading available backends
+// and accepting both device and pinned host buffer names. Stored pattern strings outlive
+// the call. Throws std::invalid_argument for a missing '=' or unknown buffer type;
+// overrides appended before an error remain in the output.
 static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
     ggml_backend_load_all();
 
