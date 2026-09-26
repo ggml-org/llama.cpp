@@ -664,6 +664,10 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 
 
 
+// Launch vector flash attention into dst from its source tensors on ctx's stream.
+// Select the work-group size using the current SYCL device; head dimensions D
+// above 256 always use 128 threads. K/V are converted to F16 when required by the
+// selected template types. Exceptions from launch_fattn propagate to the caller.
 template <int D, int cols_per_block, int type_K, int type_V, bool q8_quants_first, bool use_logit_softcap>
 void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 

@@ -908,6 +908,9 @@ static bool ggml_sycl_is_l0_discrete_gpu(int device) {
 }
 #endif
 
+// Copy size bytes from ptr_src to ptr_dst through a temporary host buffer, waiting
+// for both transfers to finish. q_src and q_dst access the source and destination.
+// Aborts if host allocation fails; exceptions from SYCL copies or waits propagate.
 static void memcpy_host_forward(sycl::queue &q_dst, sycl::queue &q_src, void *ptr_dst,
                          const void *ptr_src, size_t size) {
     char *host_buf = (char *)malloc(size);
@@ -919,6 +922,11 @@ static void memcpy_host_forward(sycl::queue &q_dst, sycl::queue &q_src, void *pt
     free(host_buf);
 }
 
+// Copy size bytes between devices, waiting for completion. The configured copy
+// mode selects Level Zero, SYCL peer access, or host staging. Unavailable direct
+// paths and Level Zero command-list creation or copy failures use host staging.
+// SYCL peer-copy failures and host allocation failures abort; other SYCL
+// exceptions propagate.
 static void dev2dev_memcpy(int device_dst, sycl::queue &q_dst, int device_src, sycl::queue &q_src, void *ptr_dst,
                     const void *ptr_src, size_t size) {
 
@@ -6710,6 +6718,10 @@ static uint64_t ggml_sycl_elapsed_us(std::chrono::steady_clock::time_point start
 }
 
 #ifdef GGML_SYCL_GRAPH
+// Return whether cgraph passes the backend's graph-capture eligibility checks.
+// Rejects multiple devices, contiguous dim-3 CONCAT, non-fused MUL_MAT_ID, and
+// matrix multiplication paths that require unavailable async memory operations.
+// Device graph support is checked separately by the caller.
 static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     if (ggml_sycl_info().device_count > 1) {
         // A sycl_ex::command_graph object can only be created for a single device
