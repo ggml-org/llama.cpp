@@ -6761,8 +6761,19 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 const ggml_tensor * mmid_src0 = mmid_dst->src[0];
                 const ggml_tensor * mmid_src1 = mmid_dst->src[1];
                 const ggml_tensor * mmid_ids  = mmid_dst->src[2];
+                // src0's optimized_feature.reorder flag could in principle be poisoned by the
+                // *generic* opt_for_reorder() (which supports a wider type set than the
+                // ID-specific reorder dispatcher) if a dense MUL_MAT ever ran against the same
+                // extra. That requires ggml_can_mul_mat()'s t1->ne[2] % t0->ne[2] == 0 to hold
+                // with should_reorder_tensor()'s src1->ne[2] == 1, which is only satisfiable when
+                // t0->ne[2] (n_expert) == 1 - and reorder_qw() itself only supports Q4_K/Q5_K/Q6_K
+                // once ne[2] > 1, so the wider-type poisoning path never reaches a real (n_expert
+                // > 1) multi-expert tensor. Requiring ne[2] > 1 here closes the theoretical n_expert
+                // == 1 edge case for free; a single-expert MUL_MAT_ID isn't worth graph-capturing
+                // anyway.
                 const bool fused_dispatchable =
                     ggml_sycl_mul_mat_vec_q_id_supports_type(mmid_src0->type) &&
+                    mmid_src0->ne[2] > 1 &&
                     mmid_src1->ne[2] == 1 &&
                     mmid_src1->type == GGML_TYPE_F32 && mmid_dst->type == GGML_TYPE_F32 &&
                     mmid_src1->ne[0] == mmid_src0->ne[0] && mmid_src1->ne[0] % QK8_1 == 0 &&
