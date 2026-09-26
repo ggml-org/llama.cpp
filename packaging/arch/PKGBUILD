@@ -1,0 +1,90 @@
+# Maintainer: Sveinbjorn Geirsson <claude@sveinbjorn.dev>
+#
+# Builds this fork's SYCL backend for Intel Arc (acm-g10 / Xe-HPG), JIT by default.
+# See CLAUDE.md and docs/backend/SYCL.md in the source tree for the rationale behind
+# every non-obvious flag below - do not "simplify" this file without reading those first.
+pkgname=llama-cpp-turboquant-sycl-git
+pkgver=0.5.0.r0.g0000000
+pkgrel=1
+pkgdesc="llama.cpp fork with TurboQuant+ KV/weight codecs, SYCL backend for Intel Arc"
+arch=('x86_64')
+url="https://github.com/Raudbjorn/ggml-llama.cpp"
+license=('MIT')
+depends=('intel-oneapi-compiler-shared-runtime' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'curl' 'openssl')
+makedepends=('git' 'cmake' 'ninja' 'python' 'npm' 'intel-dpcpp-cpp-compiler' 'intel-oneapi-mkl')
+provides=('llama-cpp')
+conflicts=('llama-cpp')
+source=("${pkgname%-git}::git+${url}.git#branch=master")
+sha256sums=('SKIP')
+
+# CRITICAL: host CFLAGS/CXXFLAGS injected by makepkg's buildflags leak into the SYCL
+# device compile and produce garbage GPU output (docs/backend/SYCL.md, "Known Issues").
+# Do not remove this without replacing it with an equivalent CFLAGS/CXXFLAGS reset in
+# build(). LTO is also disabled: it has not been validated against the icpx/SYCL toolchain
+# here.
+options=('!buildflags' '!lto')
+
+pkgver() {
+    cd "${pkgname%-git}"
+    git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
+        || printf "0.5.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    # Reset host flags even with options=(!buildflags) set, in case makepkg.conf still
+    # exports something into the environment - belt and suspenders per the SYCL doc's
+    # warning that host -march flags corrupt the device pipeline.
+    unset CFLAGS CXXFLAGS LDFLAGS
+
+    local OA=/opt/intel/oneapi
+    source "$OA/setvars.sh" --force > /dev/null
+    export CMPLR_ROOT="$OA/compiler/latest" MKLROOT="$OA/mkl/latest" TBBROOT="$OA/tbb/latest"
+    export PATH="$OA/compiler/latest/bin:$PATH"
+    export LD_LIBRARY_PATH="$OA/compiler/latest/lib:$OA/compiler/latest/opt/compiler/lib:$OA/mkl/latest/lib:$OA/tbb/latest/lib/intel64/gcc4.8:${LD_LIBRARY_PATH:-}"
+
+    cmake -S "${pkgname%-git}" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_SHARED_LIBS=ON \
+        -DGGML_NATIVE=OFF \
+        -DGGML_SYCL=ON \
+        -DGGML_SYCL_TARGET=INTEL \
+        -DGGML_SYCL_F16=ON \
+        -DGGML_SYCL_GRAPH=ON \
+        -DCMAKE_C_COMPILER=icx \
+        -DCMAKE_CXX_COMPILER=icpx \
+        -DMKL_DIR="$MKLROOT/lib/cmake/mkl" \
+        -DTBB_DIR="$TBBROOT/lib/cmake/tbb" \
+        -DIntelSYCL_DIR="$CMPLR_ROOT/lib/cmake/IntelSYCL" \
+        -DLLAMA_CURL=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DGGML_BUILD_TESTS=OFF
+    cmake --build build --target llama-server llama-completion llama-bench -j "$(nproc)"
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+
+    install -Dm644 "${pkgname%-git}/packaging/arch/llama-sycl.env" \
+        "$pkgdir/usr/lib/systemd/system/llama-server.service.d/sycl-graph.conf.example"
+}
+
+post_install() {
+    cat <<'EOF'
+==> This package compiles the SYCL graph-capture path in (GGML_SYCL_GRAPH=ON at build
+    time), but it stays disabled at runtime unless you opt in:
+
+        export GGML_SYCL_ENABLE_GRAPH=1
+
+    For a systemd unit, drop this in an override
+    (systemctl edit llama-server.service) or copy the shipped example at
+    /usr/lib/systemd/system/llama-server.service.d/sycl-graph.conf.example:
+
+        [Service]
+        Environment=GGML_SYCL_ENABLE_GRAPH=1
+
+    Benefit is batch-1 decode only, and has not been benchmarked end-to-end on this
+    fork yet - see PR #58's review discussion before assuming a speedup.
+EOF
+}
