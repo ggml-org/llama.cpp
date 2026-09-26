@@ -1209,43 +1209,16 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     }
                 }
 
-                // fuse extracted features through DFlash encoder
-                // M-RoPE drafts read 4 position rows per token from embd batches, so pass them explicitly
-                std::vector<llama_pos> enc_pos;
-                if (is_mrope) {
-                    enc_pos.resize((size_t) 4 * n_chunk);
-                    for (int32_t i = 0; i < n_chunk; ++i) {
-                        const llama_pos p = batch_in.pos[i_batch_beg[seq_id] + offset + i];
-                        enc_pos[0 * n_chunk + i] = p;
-                        enc_pos[1 * n_chunk + i] = p;
-                        enc_pos[2 * n_chunk + i] = p;
-                        enc_pos[3 * n_chunk + i] = 0;
-                    }
-                }
-
-                llama_batch enc_batch = {
-                    /*.n_tokens =*/ n_chunk,
-                    /*.token    =*/ nullptr,
-                    /*.embd     =*/ features_buf.data(),
-                    /*.pos      =*/ is_mrope ? enc_pos.data() : nullptr,
-                    /*.n_seq_id =*/ nullptr,
-                    /*.seq_id   =*/ nullptr,
-                    /*.logits   =*/ nullptr,
-                };
-
-                int32_t rc = llama_encode(ctx_dft, enc_batch);
-                if (rc != 0) {
-                    LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                            __func__, rc, (int) n_chunk, (int) offset);
-                    return false;
-                }
-
-                const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
-                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
-
-                // inject the DFlash decoder K/V cache at the tokens' target positions
+                // inject the DFlash decoder K/V cache at the tokens' target positions.
+                // The injection graph (see the "KV cache injection" branches in
+                // src/models/dflash.cpp) applies build_dflash_features() itself, so
+                // batch_inject.embd must carry the same raw, n_embd_enc-sized target
+                // features as features_buf - not a separately fused n_embd_dec-sized
+                // encoder output, which would be fused a second time and also
+                // overrun/underrun the n_embd_enc-sized row allocation.
+                int32_t rc;
                 batch_inject.n_tokens = n_chunk;
-                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+                std::memcpy(batch_inject.embd, features_buf.data(), (size_t) n_chunk * n_embd_enc * sizeof(float));
 
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     const llama_pos p = batch_in.pos[i_batch_beg[seq_id] + offset + i];

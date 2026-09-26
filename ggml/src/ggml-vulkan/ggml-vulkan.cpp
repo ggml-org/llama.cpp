@@ -7522,6 +7522,19 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     // tq_rotate stages and rotates in f32, so the matmul must read f32.
     const ggml_type effective_src1_type = quantize_y ? GGML_TYPE_Q8_1 : ((y_f32_kernel || tq_rotate) ? GGML_TYPE_F32 : src1->type);
 
+    // mmp_map above was selected against src1's original type, before tq_rotate
+    // was known. If tq_rotate forces the activation to f32 (just above) but the
+    // originally-selected pipeline expects a different type (e.g. f16), it would
+    // reinterpret the rotated f32 bytes as that type - re-select against the
+    // effective type so the pipeline actually matches what gets staged.
+    if (tq_rotate) {
+        const std::vector<vk_matmul_pipeline_pair> * tq_rotate_map =
+            ggml_vk_get_mul_mat_mat_pipeline_map(ctx, src0->type, GGML_TYPE_F32, (ggml_prec)dst->op_params[0], true);
+        if (tq_rotate_map != nullptr) {
+            mmp_map = tq_rotate_map;
+        }
+    }
+
     GGML_ASSERT(mmp_map != nullptr);
 
     const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, nei1, true));
