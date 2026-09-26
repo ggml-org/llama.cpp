@@ -969,6 +969,10 @@ struct mtmd_context {
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_granite_speech>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_GRANITE_SPEECH_5:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_granite_speech_5>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_GEMMA4A:
                 {
                     aud_beg = "<|audio>";

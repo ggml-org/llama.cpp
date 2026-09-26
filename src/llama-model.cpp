@@ -254,6 +254,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_granite_hybrid(params);
         case LLM_ARCH_GRANITE_SWA:
             return new llama_model_granite_swa(params);
+        case LLM_ARCH_GRANITE_SPEECH_5:
+            return new llama_model_granite_speech_5(params);
         case LLM_ARCH_CHAMELEON:
             return new llama_model_chameleon(params);
         case LLM_ARCH_WAVTOKENIZER_DEC:
@@ -1379,6 +1381,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.is_swa_impl.begin(),   hparams.is_swa_impl.end(), 0);
     std::fill(hparams.is_recr_impl.begin(),  hparams.is_recr_impl.end(),  llm_arch_is_recurrent(ml.get_arch()) ? 1 : 0);
     std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 0);
+    std::fill(hparams.subsample_factor_impl.begin(), hparams.subsample_factor_impl.end(), 1); // factor 1 => noop
 
     std::fill(hparams.xielu_alpha_n.begin(), hparams.xielu_alpha_n.end(), 0.0f);
     std::fill(hparams.xielu_alpha_p.begin(), hparams.xielu_alpha_p.end(), 0.0f);
@@ -2358,6 +2361,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
+        case LLM_ARCH_GRANITE_SPEECH_5:
             {
                 res = nullptr;
             } break;
@@ -2990,6 +2994,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_GRANITE_SPEECH_5:
             return LLAMA_ROPE_TYPE_NONE;
 
         // use what we call a normal RoPE, operating on pairs of consecutive head values
@@ -3263,8 +3268,9 @@ bool llama_model_has_encoder(const llama_model * model) {
 
 bool llama_model_has_decoder(const llama_model * model) {
     switch (model->arch) {
-        case LLM_ARCH_T5ENCODER: return false;
-        default:                 return true;
+        case LLM_ARCH_T5ENCODER:
+        case LLM_ARCH_GRANITE_SPEECH_5: return false;
+        default:                        return true;
     }
 }
 

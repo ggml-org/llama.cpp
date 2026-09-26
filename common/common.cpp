@@ -1887,6 +1887,40 @@ std::string common_detokenize(const struct llama_vocab * vocab, const std::vecto
 }
 
 //
+// CTC utils
+//
+
+std::string common_ctc_greedy_decode(const struct llama_vocab * vocab, struct llama_context * ctx) {
+    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    const int32_t n_outputs = llama_n_outputs(ctx);
+
+    std::vector<llama_token> collapsed;
+    collapsed.reserve(n_outputs);
+
+    llama_token prev = LLAMA_TOKEN_NULL;
+    for (int32_t i = 0; i < n_outputs; i++) {
+        const float * logits = llama_get_logits_ith(ctx, i);
+        GGML_ASSERT(logits != nullptr);
+
+        llama_token best = 0;
+        float best_v = logits[0];
+        for (int32_t v = 1; v < n_vocab; v++) {
+            if (logits[v] > best_v) {
+                best_v = logits[v];
+                best = v;
+            }
+        }
+
+        if (best != prev && best != 0) { // id 0 is the CTC blank token
+            collapsed.push_back(best);
+        }
+        prev = best;
+    }
+
+    return common_detokenize(vocab, collapsed, true);
+}
+
+//
 // Embedding utils
 //
 

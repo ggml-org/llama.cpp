@@ -312,6 +312,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_norm         = nullptr;
     struct ggml_tensor * ffn_norm_b       = nullptr;
     struct ggml_tensor * ffn_post_norm    = nullptr;
+    struct ggml_tensor * ffn_post_norm_b  = nullptr;
     struct ggml_tensor * ffn_post_norm_1  = nullptr; // gemma4
     struct ggml_tensor * ffn_post_norm_2  = nullptr; // gemma4
     struct ggml_tensor * ffn_pre_norm_2   = nullptr; // gemma4
@@ -586,6 +587,24 @@ struct llama_layer {
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
+    // granite_speech_5
+    struct ggml_tensor * attn_rel_pos   = nullptr;
+    struct ggml_tensor * conv_norm      = nullptr;
+    struct ggml_tensor * conv_norm_b    = nullptr;
+    struct ggml_tensor * conv_pw1       = nullptr;
+    struct ggml_tensor * conv_pw1_b     = nullptr;
+    struct ggml_tensor * conv_pw2       = nullptr;
+    struct ggml_tensor * conv_pw2_b     = nullptr;
+    struct ggml_tensor * conv_dw        = nullptr;
+    struct ggml_tensor * conv_dw_norm   = nullptr;
+    struct ggml_tensor * conv_dw_norm_b = nullptr;
+    struct ggml_tensor * ffn_norm_1     = nullptr;
+    struct ggml_tensor * ffn_norm_1_b   = nullptr;
+    struct ggml_tensor * ffn_up_1       = nullptr;
+    struct ggml_tensor * ffn_up_1_b     = nullptr;
+    struct ggml_tensor * ffn_down_1     = nullptr;
+    struct ggml_tensor * ffn_down_1_b   = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -677,6 +696,10 @@ struct llama_model {
 
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
+
+    // granite_speech_5: mid-stack self-conditioning back-projection
+    struct ggml_tensor * ctc_out_mid   = nullptr;
+    struct ggml_tensor * ctc_out_mid_b = nullptr;
 
     // gemma3n altup
     struct ggml_tensor * altup_proj           = nullptr;

@@ -49,6 +49,13 @@ struct llama_hparams_convnext {
     uint32_t n_layer;
 };
 
+struct llama_hparams_ctc {
+    uint32_t context_size; // Shaw rel-pos block attention size
+    uint32_t max_pos_emb;  // Shaw rel-pos embedding table size
+    uint32_t conv_kernel;
+    uint32_t conv_expansion_factor; // conv module inner_dim = n_embd * this
+};
+
 struct llama_hparams {
     // note: use the `_impl` suffix to avoid name conflict between members and getters
     //       for example: n_embd_out() vs n_embd_out_impl
@@ -92,6 +99,9 @@ struct llama_hparams {
     // for WavTokenizer
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
+
+    // for granite_speech_5 / ctc encoder
+    struct llama_hparams_ctc ctc;
 
     uint32_t n_shortconv_l_cache  = 0;
 
@@ -184,6 +194,9 @@ struct llama_hparams {
 
     // for hybrid state space models
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_recr_impl;
+
+    // granite_speech_5: integer temporal subsample factor per-layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> subsample_factor_impl;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -398,6 +411,9 @@ struct llama_hparams {
 
     // whether or not the given layer is recurrent (for hybrid models)
     bool is_recr(uint32_t il) const;
+
+    // per-layer subsample factor
+    uint32_t subsample_factor(uint32_t il) const;
 
     uint32_t n_head(uint32_t il = 0) const;
 

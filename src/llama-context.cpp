@@ -248,6 +248,22 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
+
+    // decoder-less encoder-only architectures (e.g. CTC transcription) have no
+    // incremental generation to split across ubatches - their one-shot encode()
+    // pass must fit the whole input in a single ubatch. Raise the physical/
+    // micro batch size ceiling to n_ctx by default instead of the (much
+    // smaller) generation-oriented default, so a typical input fits.
+    if (!llama_model_has_decoder(&model)) {
+        cparams.n_batch  = std::max(cparams.n_batch,  cparams.n_ctx);
+        cparams.n_ubatch = std::max(cparams.n_ubatch, cparams.n_batch);
+    }
+
+    // an encoder pass (real encoder-decoder hybrids, or a decoder-less architecture whose only
+    // pass *is* an encode(), e.g. CTC transcription) can produce up to n_batch output rows in one
+    // shot - size for that instead of the (possibly much smaller) generation-oriented default
+    cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) || !llama_model_has_decoder(&model)
+        ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
             cparams.n_outputs_max : std::min(params.n_outputs_max_per_seq, cparams.n_outputs_max);
 
@@ -961,6 +977,10 @@ float * llama_context::get_logits_ith(int32_t i) {
     }
 }
 
+int32_t llama_context::get_n_outputs() const {
+    return n_outputs;
+}
+
 float * llama_context::get_embeddings() {
     output_reorder();
 
@@ -1547,13 +1567,22 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     auto * t_embd    = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
     auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn() : nullptr;
 
+    // most encoder graphs produce exactly one output per input token, but an
+    // architecture is free to change the sequence length internally (e.g. time
+    // subsampling) - read the actual length off whichever output tensor the
+    // graph produced instead of assuming it matches n_tokens.
+    // `output_reserve(n_tokens)` above already sized the buffers to the upper
+    // bound, since a graph can only ever shrink the sequence, not grow it
+    const int64_t n_outputs_enc = t_logits ? t_logits->ne[1] : t_embd ? t_embd->ne[1] : n_tokens;
+    n_outputs = n_outputs_enc;
+
     // extract logits
     if (logits.data && t_logits) {
         ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits.data != nullptr);
 
-        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_tokens*n_vocab*sizeof(float));
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0, n_outputs_enc*n_vocab*sizeof(float));
     }
 
     // extract embeddings
@@ -1568,8 +1597,8 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
                     GGML_ASSERT(embd.data != nullptr);
                     const uint32_t n_embd_out = hparams.n_embd_out();
 
-                    GGML_ASSERT(n_tokens*n_embd_out <= (int64_t) embd.size);
-                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_tokens*n_embd_out*sizeof(float));
+                    GGML_ASSERT(n_outputs_enc*n_embd_out <= (int64_t) embd.size);
+                    ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_outputs_enc*n_embd_out*sizeof(float));
                 } break;
             case LLAMA_POOLING_TYPE_MEAN:
             case LLAMA_POOLING_TYPE_CLS:
@@ -3939,6 +3968,10 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+int32_t llama_n_outputs(const llama_context * ctx) {
+    return ctx->get_n_outputs();
 }
 
 float * llama_get_logits(llama_context * ctx) {

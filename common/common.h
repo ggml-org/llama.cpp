@@ -1100,6 +1100,16 @@ std::string common_detokenize(
                                   bool   special = true);
 
 //
+// CTC utils
+//
+
+// greedy CTC decode: argmax per output row, collapse consecutive repeats, drop
+// blank (id 0), detokenize the survivors.
+std::string common_ctc_greedy_decode(
+        const struct llama_vocab * vocab,
+              struct llama_context * ctx);
+
+//
 // Embedding utils
 //
 

@@ -16,6 +16,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_TRANSCRIBE,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
@@ -197,6 +198,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
+            case SERVER_TASK_TYPE_TRANSCRIBE:
                 return true;
             default:
                 return false;
@@ -470,6 +472,18 @@ struct server_task_result_rerank : server_task_result {
     float score = -1e6;
 
     int32_t n_tokens;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_transcribe : server_task_result {
+    std::string text;
+
+    // input frame count, for parity with embd/rerank results
+    int32_t n_tokens;
+
+    // response formatting
+    task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
 
     virtual json to_json() override;
 };
