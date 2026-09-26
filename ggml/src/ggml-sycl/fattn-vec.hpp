@@ -589,6 +589,9 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
     const bool need_f16_V = type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
 
+    // D=512 does not fit the default register file; it spills up to 343 bytes per thread, against at most 57 for D <= 256. This kernel is decode only, so thread occupancy is not the limit. It is 1.9x faster at every KV depth on Battlemage.
+    constexpr bool use_large_grf = D >= 512;
+
     const auto arch = ggml_sycl_info().devices[ctx.device].hw_info.arch;
     const int nthreads = ggml_sycl_fattn_vec_get_nthreads_device(arch);
     if constexpr (D <= 256) {
@@ -597,7 +600,7 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
             constexpr int nwarps = nthreads_hw / warp_size;
             launch_fattn<D, cols_per_block, 1,
                          flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                            use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+                                            use_logit_softcap, warp_size, nthreads_hw>, warp_size, use_large_grf>(
                 ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
             return;
         }
@@ -607,7 +610,7 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
     constexpr int nwarps = nthreads_hw / warp_size;
     launch_fattn<D, cols_per_block, 1,
                  flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                    use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+                                    use_logit_softcap, warp_size, nthreads_hw>, warp_size, use_large_grf>(
         ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
