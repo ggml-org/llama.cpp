@@ -1669,12 +1669,22 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         // copy the input tensors to the split backend
+        // user inputs first, then the outputs of other splits. Without pipeline parallelism (no events) the
+        // user-input path synchronizes the whole stream of the split backend; once a cross-device wait for the previous
+        // split has been queued on that stream, the host blocks until the previous device finishes its entire graph,
+        // which serializes host and GPU at every split boundary.
+        for (int pass = 0; pass < 2; pass++)
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
             struct ggml_tensor * input = split->inputs[input_id];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
 
-            if (input->flags & GGML_TENSOR_FLAG_INPUT) {
+            const bool is_user_input = (input->flags & GGML_TENSOR_FLAG_INPUT) != 0;
+            if ((pass == 0) != is_user_input) {
+                continue;
+            }
+
+            if (is_user_input) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
