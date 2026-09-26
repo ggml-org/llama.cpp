@@ -270,6 +270,36 @@ static int sycl_moe_query_shape(int wtype, int64_t n_in, int64_t n_out,
 // Pool lifecycle
 // ---------------------------------------------------------------------------
 
+// Grow an existing pool by up to `extra_slots` more slots (bounded by what
+// budget_bytes allows), preserving every existing slot's index, data, and
+// LRU/map linkage untouched: the new slab is bulk-copied from the old one at
+// the same byte offsets, so no slot moves and nothing needs re-indexing. This
+// is what lets a pool keyed by (expert_size, wtype) actually hold the working
+// set of every tensor that shares that shape, rather than staying capped at
+// whichever tensor's n_expert happened to create it first - the ID dispatcher
+// this provider reuses (ggml_sycl_mul_mat_vec_q_id) takes one contiguous
+// vx_base and does its own base+id*stride addressing, so growth must extend a
+// single allocation rather than add separate segments.
+// Sizing note (documented debt, not fixed here): a pool is keyed by
+// (expert_size, wtype) alone, so every tensor with that shape shares it - but
+// its slot count is capped by whichever tensor's n_expert happened to create
+// it, not the aggregate demand of every tensor that will end up sharing it. A
+// model with many layers using the same expert shape can therefore thrash a
+// pool sized for just one layer's worth of experts (confirmed empirically:
+// this fork's smoke test showed evictions roughly matching fills). A prior
+// version of this function grew the pool incrementally as new tensors were
+// discovered via dev.seen_tensors (already present in the shared header for
+// exactly this purpose), preserving every existing slot's data via a single
+// bulk device-to-device copy - safe on its own, but it turned pool sizing
+// into a greedy, discovery-order-dependent race between (expert_size, wtype)
+// shapes for a shared per-device budget: whichever shape's tensors are
+// discovered first can grow to consume most of the budget before a
+// later-discovered shape ever gets a chance, potentially starving it below
+// moe_cache_pool_slots_min. The correct fix needs the aggregate shape
+// inventory known in advance (or a second pass) to size every pool fairly
+// against the whole model's demand at once, not per-discovery; that's a
+// larger, shared design change and is left as documented debt rather than
+// shipped as a heuristic that trades one imbalance for another.
 static moe_cache_pool * sycl_moe_find_or_create_pool(
         moe_cache_sycl_device & dev, moe_cache_session & session,
         size_t expert_size, int wtype, int64_t n_expert, size_t budget_bytes) {
@@ -405,7 +435,16 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
         if (!config.enabled) {
             return nullptr;
         }
-        // A zero budget can never create a pool; bail before touching the device.
+        // A zero budget can never create a pool; bail before touching the
+        // device. Only the automatic per-scheduler probe (supplied_config ==
+        // nullptr, from ggml_backend_sched_new(), which runs unconditionally
+        // on every SYCL scheduler whether or not the cache was requested)
+        // must treat a zero budget as "stay dormant, do nothing" here - an
+        // explicit request (supplied_config != nullptr, e.g. --moe-cache
+        // on/auto/soft with no positive MiB) still creates a dormant session
+        // (begin() rejects every node on the same zero-budget check below),
+        // matching query_config()'s contract of reporting capability
+        // defaults independent of whether a budget is currently available.
         if (!supplied_config && config.budget_mb == 0) {
             return nullptr;
         }
@@ -429,6 +468,36 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
         if (!sctx) {
             MOE_CACHE_LOG("[moe-cache] SYCL backend has no usable context\n");
             return nullptr;
+        }
+
+        // --moe-cache on/auto/soft (no explicit MiB) reach here with
+        // budget_mb == 0: arg.cpp encodes "resolve free-minus-reserve" as
+        // zero, and common/fit.cpp separately computes its own projected
+        // free-VRAM figure to decide whether to spill routed experts to host
+        // RAM at all - but that computed figure is never wired back into
+        // cparams.moe_cache_budget_mib (confirmed by reading common.cpp and
+        // llama-context.cpp: both just forward the original, still-zero
+        // params.moe_cache.budget_mib to ggml_backend_sched_set_moe_cache).
+        // Fixing that disconnect is a shared fit/scheduler change spanning
+        // several non-provider files, out of scope here. Deriving the same
+        // free-minus-reserve figure independently at session-create time at
+        // least lets the session engage instead of staying permanently
+        // dormant while fit believes a cache is available; sycl_moe_grow_pool
+        // (below) is what makes a resulting session usable rather than
+        // thrashing, since a session with a real budget but pools still
+        // capped at one tensor's expert count would be worse than dormant.
+        if (supplied_config && config.budget_mb == 0) {
+            size_t free_bytes = 0, total_bytes = 0;
+            ggml_backend_sycl_get_device_memory(sctx->device, &free_bytes, &total_bytes);
+            const size_t reserve_bytes = config.reserve_mb << 20;
+            const size_t usable_bytes = free_bytes > reserve_bytes ? free_bytes - reserve_bytes : 0;
+            config.budget_mb = usable_bytes >> 20;
+            if (config.budget_mb == 0) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: free memory (%zu MiB) does not exceed the "
+                              "reserve (%zu MiB); nothing to cache\n",
+                              sctx->device, free_bytes >> 20, config.reserve_mb);
+                return nullptr;
+            }
         }
 
         std::unique_ptr<moe_cache_session> session(new (std::nothrow) moe_cache_session());

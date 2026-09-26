@@ -47,13 +47,26 @@ Look for the provider's cache activation and pool messages, not just acceptance
 of `--moe-cache`. Use `-lv 4` for diagnostic detail. Missing providers, unsupported
 shapes, inadequate capacity, or fully resident weights can leave caching dormant.
 
-`on`/`auto`/`soft` without `--fit` currently reach the provider with a zero
-budget (`arg.cpp` sets `budget_mib=0` for all three unless a positive integer
-follows `--moe-cache`, and neither provider resolves that to a real free-VRAM
-figure on its own) - both providers reject a zero budget outright rather than
-guessing, so the cache silently stays dormant. Use `--fit on` (which computes
-a real figure before calling into the provider) or a positive integer MiB
-value until that resolution path is filled in.
+`on`/`auto`/`soft` (no explicit MiB) reach the provider with `budget_mib=0`
+(`arg.cpp`'s encoding for "resolve free-minus-reserve yourself"). `--fit`'s
+own placement planner separately computes its own projected free-VRAM figure
+to decide whether spilling routed experts to host RAM is worth it at all -
+but that computed figure is never wired back into the value
+`ggml_backend_sched_set_moe_cache` actually receives (confirmed by reading
+`common/fit.cpp`, `common/common.cpp`, and `src/llama-context.cpp`: the
+scheduler call always gets the original, still-zero `--moe-cache` value, not
+fit's derived one). Fixing that disconnect is a shared fit/scheduler change
+outside this backend's files.
+
+The SYCL provider works around it locally: `session_create()` derives its own
+free-minus-reserve figure independently when it receives a zero budget from
+an explicit `on`/`auto`/`soft` request, so the session isn't permanently
+dormant while fit believes a cache exists. This is an independent
+approximation of the same free-VRAM state fit already queried moments
+earlier, not a wired-through value - the two are not guaranteed identical,
+though in practice VRAM state rarely shifts meaningfully between fit running
+and scheduler creation. The Vulkan provider does not have this workaround and
+stays dormant in the same scenario, exactly as it does today.
 
 ## Vulkan and SYCL implementation limits
 
