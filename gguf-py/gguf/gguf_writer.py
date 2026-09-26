@@ -905,6 +905,27 @@ class GGUFWriter:
     def add_hidden_act(self, value: str) -> None:
         self.add_string(Keys.LLM.HIDDEN_ACT.format(arch=self.arch), value)
 
+    def add_head_layers(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.HEAD_LAYERS.format(arch=self.arch), value)
+
+    def add_n_qtype(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.N_QTYPE.format(arch=self.arch), value)
+
+    def add_marker_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MARKER_TOKEN_ID.format(arch=self.arch), value)
+
+    def add_max_len(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.MAX_LEN.format(arch=self.arch), value)
+
+    def add_head_max_len(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.HEAD_MAX_LEN.format(arch=self.arch), value)
+
+    def add_temperature(self, value: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.TEMPERATURE.format(arch=self.arch), value)
+
+    def add_act_classes(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ACT_CLASSES.format(arch=self.arch), value)
+
     def add_expert_group_scale(self, value: float) -> None:
         self.add_float32(Keys.LLM.EXPERT_GROUP_SCALE.format(arch=self.arch), value)
 

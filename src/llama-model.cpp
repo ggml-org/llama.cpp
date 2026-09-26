@@ -344,6 +344,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_step35(params);
         case LLM_ARCH_SPARK2_5:
             return new llama_model_spark2_5(params);
+        case LLM_ARCH_LAYA:
+            // the laya encoder is a ModernBERT (mmBERT) encoder; reuse the
+            // modern-bert model class so that llama-quantize can instantiate
+            // the arch for M2 quantization (full inference graph lands in M3)
+            return new llama_model_modern_bert(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }

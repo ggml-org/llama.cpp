@@ -2,6 +2,8 @@
 !*.*
 !snapshots/
 !fusion/
+!laya/
+!laya/golden/
 *.o
 ggml-common.h
 **/*.swp

@@ -161,6 +161,13 @@ class Keys:
         SWIGLU_CLAMP_EXP                  = "{arch}.swiglu_clamp_exp"
         SWIGLU_CLAMP_SHEXP                = "{arch}.swiglu_clamp_shexp"
         HIDDEN_ACT                        = "{arch}.hidden_activation"
+        HEAD_LAYERS                       = "{arch}.head_layers"                  # laya: decision head transformer layers
+        N_QTYPE                           = "{arch}.n_qtype"                      # laya: question type count (choice/score/noul)
+        MARKER_TOKEN_ID                   = "{arch}.marker_token_id"              # laya: token id marking option positions
+        MAX_LEN                           = "{arch}.max_len"                      # laya: max sequence length
+        HEAD_MAX_LEN                      = "{arch}.head_max_len"                 # laya: max head (option region) length
+        TEMPERATURE                       = "{arch}.temperature"                  # laya: per-qtype temperature (3 floats)
+        ACT_CLASSES                       = "{arch}.act_classes"                  # laya: action head class count
         DENSE_FEAT_IN_SIZE                = "{arch}.{dense}_feat_in"
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
         TARGET_LAYERS                     = "{arch}.target_layers"
@@ -642,6 +649,7 @@ class MODEL_ARCH(IntEnum):
     NANBEIGE         = auto()
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
+    LAYA             = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -873,6 +881,18 @@ class MODEL_TENSOR(IntEnum):
     CLS                  = auto() # classifier
     CLS_OUT              = auto() # classifier output projection
     CLS_NORM             = auto()
+    TYPE_EMB             = auto() # laya: question type embedding
+    HEAD_ATTN_QKV        = auto() # laya: decision head attention qkv
+    HEAD_ATTN_OUT        = auto() # laya: decision head attention output
+    HEAD_ATTN_NORM       = auto() # laya: decision head attention pre-norm
+    HEAD_FFN_NORM        = auto() # laya: decision head ffn pre-norm
+    HEAD_FFN_UP          = auto() # laya: decision head ffn up
+    HEAD_FFN_DOWN        = auto() # laya: decision head ffn down
+    SCORER_0             = auto() # laya: scorer LayerNorm
+    SCORER_1             = auto() # laya: scorer Linear(768,768)
+    SCORER_3             = auto() # laya: scorer Linear(768,1)
+    ACT_HEAD_0           = auto() # laya: act head Linear(d+4,256)
+    ACT_HEAD_2           = auto() # laya: act head Linear(256,2)
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
     CONVNEXT_NORM        = auto()
@@ -1401,6 +1421,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.NANBEIGE:         "nanbeige",
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
     MODEL_ARCH.POCKETTTS:        "pockettts",
+    MODEL_ARCH.LAYA:             "laya",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1630,6 +1651,18 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.CLS:                       "cls",
     MODEL_TENSOR.CLS_OUT:                   "cls.output",
     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
+    MODEL_TENSOR.TYPE_EMB:                  "type_emb",
+    MODEL_TENSOR.HEAD_ATTN_QKV:             "head.{bid}.attn_qkv",
+    MODEL_TENSOR.HEAD_ATTN_OUT:             "head.{bid}.attn_output",
+    MODEL_TENSOR.HEAD_ATTN_NORM:            "head.{bid}.attn_norm",
+    MODEL_TENSOR.HEAD_FFN_NORM:             "head.{bid}.ffn_norm",
+    MODEL_TENSOR.HEAD_FFN_UP:               "head.{bid}.ffn_up",
+    MODEL_TENSOR.HEAD_FFN_DOWN:             "head.{bid}.ffn_down",
+    MODEL_TENSOR.SCORER_0:                  "scorer.0",
+    MODEL_TENSOR.SCORER_1:                  "scorer.1",
+    MODEL_TENSOR.SCORER_3:                  "scorer.3",
+    MODEL_TENSOR.ACT_HEAD_0:                "act_head.0",
+    MODEL_TENSOR.ACT_HEAD_2:                "act_head.2",
     MODEL_TENSOR.CONV1D:                    "conv1d",
     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
     MODEL_TENSOR.CONVNEXT_NORM:             "convnext.{bid}.norm",
@@ -2481,6 +2514,31 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.CLS,
         MODEL_TENSOR.CLS_OUT,
         MODEL_TENSOR.CLS_NORM,
+    ],
+    MODEL_ARCH.LAYA: [
+        # encoder: mmBERT (modern-bert naming)
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_NORM,
+        # decision head
+        MODEL_TENSOR.TYPE_EMB,
+        MODEL_TENSOR.HEAD_ATTN_QKV,
+        MODEL_TENSOR.HEAD_ATTN_OUT,
+        MODEL_TENSOR.HEAD_ATTN_NORM,
+        MODEL_TENSOR.HEAD_FFN_NORM,
+        MODEL_TENSOR.HEAD_FFN_UP,
+        MODEL_TENSOR.HEAD_FFN_DOWN,
+        MODEL_TENSOR.SCORER_0,
+        MODEL_TENSOR.SCORER_1,
+        MODEL_TENSOR.SCORER_3,
+        MODEL_TENSOR.ACT_HEAD_0,
+        MODEL_TENSOR.ACT_HEAD_2,
     ],
     MODEL_ARCH.NOMIC_BERT: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -5941,6 +5999,15 @@ KEY_BLOCK_COUNT           = Keys.LLM.BLOCK_COUNT
 KEY_FEED_FORWARD_LENGTH   = Keys.LLM.FEED_FORWARD_LENGTH
 KEY_USE_PARALLEL_RESIDUAL = Keys.LLM.USE_PARALLEL_RESIDUAL
 KEY_TENSOR_DATA_LAYOUT    = Keys.LLM.TENSOR_DATA_LAYOUT
+
+# laya
+KEY_HEAD_LAYERS          = Keys.LLM.HEAD_LAYERS
+KEY_N_QTYPE              = Keys.LLM.N_QTYPE
+KEY_MARKER_TOKEN_ID      = Keys.LLM.MARKER_TOKEN_ID
+KEY_MAX_LEN              = Keys.LLM.MAX_LEN
+KEY_HEAD_MAX_LEN         = Keys.LLM.HEAD_MAX_LEN
+KEY_TEMPERATURE          = Keys.LLM.TEMPERATURE
+KEY_ACT_CLASSES          = Keys.LLM.ACT_CLASSES
 
 # attention
 KEY_ATTENTION_HEAD_COUNT        = Keys.Attention.HEAD_COUNT
