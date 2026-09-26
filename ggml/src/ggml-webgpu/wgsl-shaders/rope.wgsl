@@ -122,7 +122,12 @@ fn rope_yarn(theta_extrap: f32, i: u32) -> vec2<f32> {
         theta = theta * (1 - ramp_mix) + theta_extrap * ramp_mix;
         mscale *= 1.0f + 0.1f * log(1.0f / params.freq_scale);
     }
+#ifdef BACKWARD
+    // the backward pass rotates the other way
+    return vec2<f32>(cos(theta) * mscale, -sin(theta) * mscale);
+#else
     return vec2<f32>(cos(theta) * mscale, sin(theta) * mscale);
+#endif
 }
 
 fn pair_base(i0: u32, div_2: bool) -> u32 {
