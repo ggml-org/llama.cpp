@@ -50,12 +50,78 @@ static  __global__ void pool2d_nchw_kernel(
     o_ptr[cur_oh * ow + cur_ow] = res;
 }
 
+template <typename Ti, typename To>
+static __global__ void pool2d_nchw_kernel_warp(
+        const int ih, const int iw, const int oh, const int ow,
+        const int kh, const int kw, const int sh, const int sw,
+        const int ph, const int pw, const int parallel_elements,
+        const Ti* src, To* dst, const enum ggml_op_pool op) {
+    const int warp_id = (threadIdx.x + blockIdx.x * blockDim.x) / WARP_SIZE;
+    const int lane     = threadIdx.x % WARP_SIZE;
+    if (warp_id >= parallel_elements) {
+        return;
+    }
+
+    const int I_HW = ih * iw;
+    const int O_HW = oh * ow;
+    const int nc     = warp_id / O_HW;
+    const int cur_oh = warp_id % O_HW / ow;
+    const int cur_ow = warp_id % O_HW % ow;
+    const Ti* i_ptr = src + nc * I_HW;
+
+    const int start_h = cur_oh * sh - ph;
+    const int bh = max(0, start_h);
+    const int eh = min(ih, start_h + kh);
+    const int start_w = cur_ow * sw - pw;
+    const int bw = max(0, start_w);
+    const int ew = min(iw, start_w + kw);
+
+    const int win_w     = ew - bw;
+    const int win_elems = (eh - bh) * win_w;
+    const To scale = 1. / (kh * kw);
+
+    To res;
+    switch (op) {
+        case GGML_OP_POOL_AVG: res = 0; break;
+        case GGML_OP_POOL_MAX: res = -FLT_MAX; break;
+        default: res = 0; assert(false);
+    }
+
+    for (int t = lane; t < win_elems; t += WARP_SIZE) {
+        const int i = bh + t / win_w;
+        const int j = bw + t % win_w;
+        const Ti cur = __ldg(i_ptr + i * iw + j);
+        switch (op) {
+            case GGML_OP_POOL_AVG: res += cur * scale; break;
+            case GGML_OP_POOL_MAX: res = max(res, (To)cur); break;
+            default: break;
+        }
+    }
+
+#pragma unroll
+    for (int offset = WARP_SIZE/2; offset > 0; offset >>= 1) {
+        const To other = __shfl_down_sync(0xFFFFFFFF, res, offset);
+        res = (op == GGML_OP_POOL_MAX) ? max(res, other) : res + other;
+    }
+
+    if (lane == 0) {
+        dst[nc * O_HW + cur_oh * ow + cur_ow] = res;
+    }
+}
+
 static void pool2d_nchw_kernel_f32_f32_cuda(
         const int ih, const int iw, const int oh, const int ow,
         const int kh, const int kw, const int sh, const int sw,
         const int ph, const int pw, const int parallel_elements,
         const float * src, float * dst, const enum ggml_op_pool op,
         cudaStream_t stream) {
+
+    if (kh * kw >= POOL2D_WARP_KERNEL_MIN_WINDOW) {
+        const int warps_per_block = CUDA_POOL2D_BLOCK_SIZE / WARP_SIZE;
+        const int num_blocks = (parallel_elements + warps_per_block - 1) / warps_per_block;
+        pool2d_nchw_kernel_warp<<<num_blocks, CUDA_POOL2D_BLOCK_SIZE, 0, stream>>>(ih, iw, oh, ow, kh, kw, sh, sw, ph, pw, parallel_elements, src, dst, op);
+        return;
+    }
 
     const int num_blocks = (parallel_elements + CUDA_POOL2D_BLOCK_SIZE - 1) / CUDA_POOL2D_BLOCK_SIZE;
     dim3 block_nums(num_blocks);
