@@ -6731,11 +6731,9 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 // path (ne12 == 1, FP32 src1) runs entirely on GPU - allow that case.
                 // opt_for_reorder_id() uses sycl_reorder_temp_buffer (USM malloc/free), which
                 // requires async USM allocation to be graph-capturable. When the reorder
-                // optimization is disabled (GGML_SYCL_DISABLE_OPT=1 / g_ggml_sycl_disable_optimize),
+                // optimization is disabled (GGML_SYCL_ENABLE_OPT=0 / !g_ggml_sycl_enable_optimize),
                 // no reorder runs and async USM is not needed for this path.
-                // Note: GGML_SYCL_DISABLE_OPT is being renamed to GGML_SYCL_ENABLE_OPT in a
-                // pending PR; update this check when that rename lands.
-                if ((!g_ggml_sycl_use_async_mem_op && !g_ggml_sycl_disable_optimize) ||
+                if ((!g_ggml_sycl_use_async_mem_op && g_ggml_sycl_enable_optimize) ||
                         cgraph->nodes[i]->src[1]->ne[2] != 1 ||
                         cgraph->nodes[i]->src[1]->type != GGML_TYPE_F32) {
                     GGML_LOG_INFO("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
