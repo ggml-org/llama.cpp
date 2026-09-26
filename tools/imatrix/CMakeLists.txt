@@ -3,6 +3,11 @@ add_executable(${TARGET} imatrix.cpp)
 target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
+if(GGML_OPENMP_ENABLED)
+    find_package(OpenMP REQUIRED)
+    target_link_libraries(${TARGET} PRIVATE OpenMP::OpenMP_CXX)
+endif()
+
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
