@@ -1,22 +1,34 @@
 # MoE expert cache
 
-This fork includes TheTom's Vulkan expert-cache provider and the shared CPU,
-backend-scheduler, and fitting integration. CPU, BLAS, SYCL, and OpenVINO do not
-register cache providers. Their ordinary MoE execution remains available.
+This fork includes TheTom's Vulkan expert-cache provider, a SYCL twin of it,
+and the shared CPU, backend-scheduler, and fitting integration. CPU, BLAS, and
+OpenVINO do not register cache providers. Their ordinary MoE execution remains
+available.
 
-The Vulkan provider caches CPU-resident expert weights and dispatches supported
-expert matvecs to Vulkan. Unsupported operations and failed cache work fall back
-to the CPU `MUL_MAT_ID` implementation. Cache sessions belong to a scheduler;
-weights are not persisted across process restarts.
+The Vulkan and SYCL providers cache CPU-resident expert weights and dispatch
+supported expert matvecs to the GPU. Unsupported operations and failed cache
+work fall back to the CPU `MUL_MAT_ID` implementation. Cache sessions belong to
+a scheduler; weights are not persisted across process restarts.
+
+The SYCL provider reuses the existing `ggml_sycl_mul_mat_vec_q_id()` kernel
+dispatcher (`mmvq.cpp`) for the actual matvec: the cache slab is addressed
+exactly like the stacked expert-weight buffer that function already expects,
+with pool slot indices standing in for expert ids. It needs no shader/pipeline
+compilation step and no manual staging buffer - `sycl::queue::memcpy` moves
+data between host and USM device allocations directly regardless of device
+topology, which is simpler than the Vulkan provider's UMA-vs-discrete split.
 
 ## Usage
 
-Build with `GGML_VULKAN=ON`, then select a Vulkan device reported by
-`llama-server --list-devices`:
+Build with `GGML_VULKAN=ON` or `GGML_SYCL=ON`, then select the device reported
+by `llama-server --list-devices`:
 
 ```sh
 ~/build-vulkan/bin/llama-server -m /path/to/model.gguf \
     --device Vulkan0 --fit on --moe-cache auto -ngl 99 -c 8192
+
+~/build-sycl/bin/llama-server -m /path/to/model.gguf \
+    --device SYCL0 --cpu-moe --moe-cache on -ngl 99 -c 8192
 ```
 
 The cache needs canonical CPU-resident expert weights. A fully GPU-resident
@@ -35,11 +47,15 @@ Look for the provider's cache activation and pool messages, not just acceptance
 of `--moe-cache`. Use `-lv 4` for diagnostic detail. Missing providers, unsupported
 shapes, inadequate capacity, or fully resident weights can leave caching dormant.
 
-## Vulkan implementation limits
+## Vulkan and SYCL implementation limits
 
-- One selected Vulkan device per session.
-- Fills are synchronous and bounded per dispatch; this provider has no background
-  fill workers or predictive prefetch.
+Both providers share the same v1 shape:
+
+- One selected device per session (Vulkan or SYCL, not mixed).
+- Fills are synchronous and bounded per dispatch; neither provider has a
+  background fill worker or predictive prefetch yet (`moe-cache-common.h`'s
+  `moe_cache_device` already carries the queue/worker/inflight fields for one,
+  unused by either provider - a natural v2).
 - Fused SwiGLU cache dispatch is unavailable. The ordinary CPU path handles it.
 - Pools are allocated lazily by expert shape and weight type. Automatic mode
   requires the shared 1 GiB slab floor; forced modes allow smaller experiments.
@@ -49,15 +65,20 @@ shapes, inadequate capacity, or fully resident weights can leave caching dormant
 - A profitable hit rate is not guaranteed. Transfers, synchronous fills, spare
   VRAM, model shapes, and CPU bandwidth all affect performance.
 
+SYCL-specific: the provider quantizes activation rows to Q8_1 on the CPU thread
+that owns them (a plain scalar loop, matching the Vulkan provider's approach)
+before uploading; this is not a hot path since rows per dispatch are bounded
+by `max_batch`.
+
 ## Provider controls
 
 The shared configuration retains its historical `GGML_CUDA_MOE_CACHE_*` names.
-Vulkan reads these names too; they do not require a CUDA backend.
+Vulkan and SYCL read these names too; they do not require a CUDA backend.
 
 | Variable | Default | Purpose |
 | --- | ---: | --- |
 | `GGML_CUDA_MOE_CACHE_RESERVE_MB` | 3072 | VRAM kept outside the cache |
-| `GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB` | 512 on Vulkan | Minimum expert size |
+| `GGML_CUDA_MOE_CACHE_MIN_EXPERT_KB` | 512 (auto) / 1024 (forced) | Minimum expert size; lower it if `-lv 4`/debug shows experts rejected below the floor |
 | `GGML_CUDA_MOE_CACHE_MAX_BATCH` | 8 | Maximum eligible token batch |
 | `GGML_CUDA_MOE_CACHE_INSERTS` | 8 | Bound on fills per plan |
 | `GGML_CUDA_MOE_CACHE_QUEUE_MB` | 512 | Bound on fill bytes |
@@ -71,6 +92,7 @@ this document does not promise asynchronous, fused, or multi-device behavior.
 
 ```sh
 timeout 120 ~/build-vulkan/bin/test-moe-cache
+timeout 120 ~/build-sycl/bin/test-moe-cache
 ```
 
 The synthetic test checks cache hits, invalidation, dispatch/collection/fill

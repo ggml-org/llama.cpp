@@ -8088,6 +8088,8 @@ static const ggml_backend_reg_i ggml_backend_sycl_reg_interface = {
 
 // backend registry
 
+extern "C" void ggml_sycl_moe_cache_register(void * reg);
+
 ggml_backend_reg_t ggml_backend_sycl_reg() {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_reg\n");
     static ggml_backend_reg reg;
@@ -8128,6 +8130,7 @@ ggml_backend_reg_t ggml_backend_sycl_reg() {
                 /* .iface       = */ ggml_backend_sycl_reg_interface,
                 /* .context     = */ ctx
             };
+            ggml_sycl_moe_cache_register(&reg);
         }
 
         initialized = true;
