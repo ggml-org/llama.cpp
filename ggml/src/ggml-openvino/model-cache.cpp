@@ -237,8 +237,7 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
     if (!f.is_open()) {
         return false;
     }
-    std::string tag;
-    std::string val;
+    std::string tag, val;
     // header: fingerprint
     if (!(f >> tag >> val) || tag != "fingerprint" || val != hex64(fingerprint)) {
         return false;

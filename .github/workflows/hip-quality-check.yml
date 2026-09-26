@@ -49,22 +49,14 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip jq
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: hip-quality-check-ubuntu-22.04
-          save: false
-
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: hip-quality-check-ubuntu-22.04
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with Werror
         id: cmake_build
@@ -93,14 +85,12 @@ jobs:
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
           python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
 
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+          GH_TOKEN: ${{ github.token }}
         with:
           key: hip-quality-check-ubuntu-22.04
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

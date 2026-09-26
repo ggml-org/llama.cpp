@@ -9,7 +9,7 @@
 
 struct utf8_parse_result {
     uint32_t codepoint;      // Decoded codepoint (only valid if status == SUCCESS)
-    size_t bytes_consumed;   // How many bytes this codepoint uses (1-4), or the length of the valid prefix if status != SUCCESS
+    size_t bytes_consumed;   // How many bytes this codepoint uses (1-4)
     enum status { SUCCESS, INCOMPLETE, INVALID } status;
 
     utf8_parse_result(enum status s, uint32_t cp = 0, size_t bytes = 0)

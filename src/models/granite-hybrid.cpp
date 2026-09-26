@@ -30,7 +30,7 @@ void llama_model_granite_hybrid::load_arch_hparams(llama_model_loader & ml) {
         case 768: type = LLM_TYPE_350M; break;
         case 1536: type = (hparams.n_ff() == 512 ? LLM_TYPE_7B_A1B : LLM_TYPE_1B); break;
         case 2048: case 2560: type = LLM_TYPE_3B; break;
-        case 4096: type = LLM_TYPE_32B_A9B; break;
+        case 4096: type = LLM_TYPE_32B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 

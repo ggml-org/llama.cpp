@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import sys
 import tempfile
 
 from appium.options.common import AppiumOptions
@@ -94,25 +93,17 @@ def run_adb_command(cmd: str, *, check: bool = True) -> subprocess.CompletedProc
     return result
 
 
-def run_snapdragon(
-    cmd_args: list[str],
-    *,
-    device: str | None = None,
-    extra_run_args: list[str] | None = None,
+def run_script(
+    script: str,
     extra_env: dict[str, str] | None = None,
+    extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a tool via scripts/snapdragon/run.py targeting android."""
+    """Run an upstream shell script from /qdc/appium/ on the QDC runner host."""
     env = os.environ.copy()
     env["GGML_HEXAGON_EXPERIMENTAL"] = "1"
     if extra_env:
         env.update(extra_env)
-    cmd = [sys.executable, f"{SCRIPTS_DIR}/run.py", "--target", "android"]
-    if device is not None:
-        cmd.extend(["-d", device])
-    if extra_run_args:
-        cmd.extend(extra_run_args)
-    cmd.append("--")
-    cmd.extend(cmd_args)
+    cmd = [f"{SCRIPTS_DIR}/{script}"] + (extra_args or [])
     result = subprocess.run(
         cmd, env=env,
         text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

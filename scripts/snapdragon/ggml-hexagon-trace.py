@@ -10,7 +10,6 @@ import bisect
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
-logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("ggml-hexagon-trace")
 
 op_pattern = re.compile(
@@ -733,7 +732,7 @@ def main():
     group.add_argument("--tail", type=int, help="Limit to last N ops")
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
 
     op_filter_re = None
     if args.filter:

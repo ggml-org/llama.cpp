@@ -20,7 +20,7 @@ namespace op {
 static ov::Output<ov::Node> reshape_add_id_input_to_2d(const ov::Output<ov::Node> & input,
                                                        const ov::PartialShape & input_shape,
                                                        const std::vector<int> & dims) {
-    const auto & actual_shape = input.get_partial_shape();
+    const auto actual_shape = input.get_partial_shape();
     if (actual_shape.rank().is_static() && actual_shape.rank().get_length() == 2) {
         return input;
     }

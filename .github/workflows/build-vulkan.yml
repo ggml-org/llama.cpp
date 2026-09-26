@@ -53,20 +53,12 @@ jobs:
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: vulkan-ubuntu-24.04-arm
           variant: ccache
-          save: false
-
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: vulkan-ubuntu-24.04-arm
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Configure
         id: cmake_configure
@@ -81,17 +73,15 @@ jobs:
         run: |
           time cmake --build build -j $(nproc)
 
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
         env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+          GH_TOKEN: ${{ github.token }}
         with:
           key: vulkan-ubuntu-24.04-arm
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   ubuntu-llvmpipe:
     runs-on: ubuntu-24.04
@@ -122,19 +112,11 @@ jobs:
           strip: 1
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: vulkan-ubuntu-24.04-llvmpipe
-          save: false
-
-      - name: ccache-buckets-restore
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
-        with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          folder: llama.cpp
-          hf_bucket: ggml-org/cache
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -145,18 +127,6 @@ jobs:
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-buckets-save
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        uses: ./.github/actions/ccache-buckets
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
-        with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          folder: llama.cpp
-          evict-old-files: 1d
-          hf_bucket: ggml-org/cache
-          save: true
-
       - name: Test
         id: cmake_test
         run: |
@@ -164,7 +134,19 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
-          ctest -L main --verbose --timeout 900
+          # This is using llvmpipe and runs slower than other backends
+          # test-backend-ops is too slow on llvmpipe, skip it
+          ctest -L main -E test-backend-ops --verbose --timeout 900
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: vulkan-ubuntu-24.04-llvmpipe
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows:
     runs-on: windows-2025
@@ -178,7 +160,7 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.24
+        uses: ggml-org/ccache-action@v1.2.21
         with:
           key: cpu-windows-2025-x64-vulkan
           variant: ccache

@@ -7,7 +7,7 @@ dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
 requires-python = '>=3.10'
-dependencies = ['numpy (>=2.2.6)', 'tqdm (>=4.27)', 'pyyaml (>=5.1)', 'requests (>=2.25)']
+dependencies = ['numpy (>=1.17)', 'tqdm (>=4.27)', 'pyyaml (>=5.1)', 'requests (>=2.25)']
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",

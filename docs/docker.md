@@ -123,7 +123,7 @@ You may want to pass in some different `ARGS`, depending on the MUSA environment
 
 The defaults are:
 
-- the base image is the MUSA 5.2.0 image from the Moore Threads registry
+- `MUSA_VERSION` set to `rc4.3.0`
 
 The resulting images, are essentially the same as the non-MUSA images:
 

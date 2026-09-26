@@ -14,6 +14,8 @@ namespace ggml {
 
 std::string getCurrentTime();
 
+void dump_ov_model(std::shared_ptr<ov::Model> model);
+
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs);
 
 int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb);

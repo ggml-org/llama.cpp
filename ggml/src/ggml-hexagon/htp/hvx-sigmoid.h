@@ -68,50 +68,50 @@ static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
     return Q6_Vsf_equals_Vqf32(res);
 }
 
-#define hvx_sigmoid_loop_body(dst_type, src_type, vec_store)                                  \
-    do {                                                                                      \
-        dst_type * restrict vdst = (dst_type *) dst;                                          \
-        src_type * restrict vsrc = (src_type *) src;                                          \
-                                                                                              \
-        const HVX_Vector one     = hvx_vec_splat_f32(1.f);                                    \
-        const HVX_Vector max_exp = hvx_vec_splat_f32(87.f);                                   \
-        const HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);                                  \
-                                                                                              \
-        const uint32_t epv  = 128 / sizeof(float);                                            \
-        const uint32_t nvec = n / epv;                                                        \
-        const uint32_t nloe = n % epv;                                                        \
-                                                                                              \
-        uint32_t i = 0;                                                                       \
-                                                                                              \
-        _Pragma("unroll(4)")                                                                  \
-        for (; i < nvec; i++) {                                                               \
-             vdst[i] = hvx_vec_fast_sigmoid_f32_guard(vsrc[i], one, max_exp, min_exp);        \
-        }                                                                                     \
-        if (nloe) {                                                                           \
+#define hvx_sigmoid_loop_body(dst_type, src_type, vec_store)    \
+    do {                                                        \
+        dst_type * restrict vdst = (dst_type *) dst;            \
+        src_type * restrict vsrc = (src_type *) src;            \
+                                                                \
+        const HVX_Vector one     = hvx_vec_splat_f32(1.f);      \
+        const HVX_Vector max_exp = hvx_vec_splat_f32(87.f);     \
+        const HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);    \
+                                                                \
+        const uint32_t epv  = 128 / sizeof(float);              \
+        const uint32_t nvec = n / epv;                          \
+        const uint32_t nloe = n % epv;                          \
+                                                                \
+        uint32_t i = 0;                                         \
+                                                                \
+        _Pragma("unroll(4)")                                    \
+        for (; i < nvec; i++) {                                 \
+             vdst[i] = hvx_vec_fast_sigmoid_f32_guard(vsrc[i], one, max_exp, min_exp); \
+        }                                                       \
+        if (nloe) {                                             \
              HVX_Vector tmp = hvx_vec_fast_sigmoid_f32_guard(vsrc[i], one, max_exp, min_exp); \
-             vec_store((void *) &vdst[i], nloe * sizeof(float), tmp);                         \
-        }                                                                                     \
+             vec_store((void *) &vdst[i], nloe * sizeof(float), tmp); \
+        }                                                       \
     } while(0)
 
-#define hvx_tanh_loop_body(dst_type, src_type, vec_store)             \
-    do {                                                              \
-        dst_type * restrict vdst = (dst_type *) dst;                  \
-        src_type * restrict vsrc = (src_type *) src;                  \
-                                                                      \
-        const uint32_t epv  = 128 / sizeof(float);                    \
-        const uint32_t nvec = n / epv;                                \
-        const uint32_t nloe = n % epv;                                \
-                                                                      \
-        uint32_t i = 0;                                               \
-                                                                      \
-        _Pragma("unroll(4)")                                          \
-        for (; i < nvec; i++) {                                       \
-             vdst[i] = hvx_vec_tanh_f32(vsrc[i]);                     \
-        }                                                             \
-        if (nloe) {                                                   \
-             HVX_Vector tmp = hvx_vec_tanh_f32(vsrc[i]);              \
+#define hvx_tanh_loop_body(dst_type, src_type, vec_store)       \
+    do {                                                        \
+        dst_type * restrict vdst = (dst_type *) dst;            \
+        src_type * restrict vsrc = (src_type *) src;            \
+                                                                \
+        const uint32_t epv  = 128 / sizeof(float);              \
+        const uint32_t nvec = n / epv;                          \
+        const uint32_t nloe = n % epv;                          \
+                                                                \
+        uint32_t i = 0;                                         \
+                                                                \
+        _Pragma("unroll(4)")                                    \
+        for (; i < nvec; i++) {                                 \
+             vdst[i] = hvx_vec_tanh_f32(vsrc[i]);               \
+        }                                                       \
+        if (nloe) {                                             \
+             HVX_Vector tmp = hvx_vec_tanh_f32(vsrc[i]);        \
              vec_store((void *) &vdst[i], nloe * sizeof(float), tmp); \
-        }                                                             \
+        }                                                       \
     } while(0)
 
 static inline void hvx_sigmoid_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {

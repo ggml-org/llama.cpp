@@ -27,7 +27,7 @@
 #include <vector>
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 2
+#define MTMD_SERIALIZATION_VERSION 1
 
 struct mtmd_serialization {
     // note: using 64-bit here for future-proofing
@@ -105,14 +105,12 @@ void clip_image_f32::serialize(mtmd_serialization & ser) const {
     // note: buf is intentionally NOT serialized; the loaded clip_image_f32 will always be a placeholder
     ser.write(add_viewsep);
     ser.write(add_newline);
-    ser.write(lead_pad);
     ser.write((int32_t)nx_);
     ser.write((int32_t)ny_);
 }
 void clip_image_f32::deserialize(mtmd_serialization & ser) {
     add_viewsep = ser.read<bool>();
     add_newline = ser.read<bool>();
-    lead_pad = ser.read<int32_t>();
     nx_ = ser.read<int32_t>();
     ny_ = ser.read<int32_t>();
     buf.clear(); // always a placeholder after loading
@@ -694,7 +692,6 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
-            case PROJECTOR_TYPE_LING3VL:
             case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
@@ -826,11 +823,6 @@ struct mtmd_context {
                     img_beg = "<|im_start|>";
                     img_end = "<|im_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
-                } break;
-            case PROJECTOR_TYPE_DEEPSEEK4V:
-                {
-                    // no vocab tokens are added; the start/end/newline markers are learned embeddings emitted by the encoder
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_deepseek4v>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
             case PROJECTOR_TYPE_DOTS3NOTE_V:
@@ -1098,7 +1090,7 @@ void mtmd_free(mtmd_context * ctx) {
     delete ctx;
 }
 
-std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_internal_part> & parts, int n_merge) {
+std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_input_part> & parts, int n_merge) {
     std::vector<std::vector<const mtmd_bitmap *>> output;
     for (size_t i = 0; i < parts.size(); i++) {
         if (parts[i].bitmap == nullptr) {
@@ -1118,14 +1110,14 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
 }
 
 struct mtmd_tokenizer {
-    const mtmd_context * ctx;
+    mtmd_context * ctx;
 
     std::string input_text; // note: can contain null bytes; do not use c_str()
     bool add_special;
     bool parse_special;
     const llama_vocab * vocab;
 
-    using part = mtmd_internal_part;
+    using part = mtmd_input_part;
     std::vector<part> parts;
     // these will be freed when mtmd_tokenizer finishes
     std::vector<mtmd::bitmap> bm_from_lazy; // TODO @ngxson : refactor, free bm_from_lazy progressively
@@ -1141,9 +1133,9 @@ struct mtmd_tokenizer {
         }
     }
 
-    mtmd_tokenizer(const mtmd_context * ctx,
+    mtmd_tokenizer(mtmd_context * ctx,
             const mtmd_input_text * text,
-            const mtmd_bitmap * const * bmps,
+            const mtmd_bitmap ** bmps,
             size_t n_bitmaps) : ctx(ctx) {
         add_special   = text->add_special;
         parse_special = text->parse_special;
@@ -1161,7 +1153,7 @@ struct mtmd_tokenizer {
                 }
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
-                parts.push_back({std::move(part), nullptr, parse_special});
+                parts.push_back({std::move(part), nullptr});
             }
         }
 
@@ -1173,26 +1165,6 @@ struct mtmd_tokenizer {
         }
         if (n_markers != bitmaps.size()) {
             throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
-        }
-
-        expand_lazy_bitmaps();
-    }
-
-    mtmd_tokenizer(const mtmd_context * ctx,
-            const mtmd_input_part * const * input_parts,
-            size_t n_parts,
-            bool add_special) : ctx(ctx) {
-        this->add_special = add_special;
-        parse_special = true; // only used for text returned by lazy bitmaps
-        vocab         = ctx->vocab;
-
-        for (size_t i = 0; i < n_parts; i++) {
-            const mtmd_input_part * p = input_parts[i];
-            if (p->text != nullptr) {
-                parts.push_back({std::string(p->text->text, p->text->text_len), nullptr, p->text->parse_special});
-            } else {
-                parts.push_back({"", p->bitmap});
-            }
         }
 
         expand_lazy_bitmaps();
@@ -1222,7 +1194,7 @@ struct mtmd_tokenizer {
                             LOG_DBG("%s: lazy callback returned bitmap with dimensions %d x %d\n", __func__, out_bm->nx, out_bm->ny);
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
-                            expanded.push_back({ptr, nullptr, parse_special});
+                            expanded.push_back({ptr, nullptr});
                             LOG_DBG("%s: lazy callback returned text: %s\n", __func__, out_str);
                         }
                     } else if (res == -1) {
@@ -1266,7 +1238,7 @@ struct mtmd_tokenizer {
                     return res;
                 }
             } else {
-                add_text(p.text, p.parse_special);
+                add_text(p.text, parse_special);
             }
         }
 
@@ -1477,18 +1449,6 @@ struct mtmd_tokenizer {
                 if (preproc_out.entries.size() == 0) {
                     LOG_ERR("%s: no image tokens produced by preprocessor (ref: https://github.com/ggml-org/llama.cpp/pull/24769)\n", __func__);
                     return 2;
-                }
-
-                if (ctx->proj_type_v() == PROJECTOR_TYPE_DEEPSEEK4V) {
-                    // the text model perceives input in blocks of N tokens (N = COMPRESS_PAD_TO = 4, same as the CSA compress ratio)
-                    // image need to be aligned to block size, while adding IMAGE_PAD embeddings to the beginning
-                    // TODO @ngxson : maybe refactor this in the future
-                    constexpr int32_t align = 4;
-                    size_t n_past = 0;
-                    for (const auto & e : cur.entries) {
-                        n_past += mtmd_input_chunk_get_n_tokens(&e);
-                    }
-                    preproc_out.entries[0].lead_pad = align - 1 - (int32_t)(n_past % align);
                 }
 
                 size_t n_tokens = 0;
@@ -1734,37 +1694,13 @@ struct mtmd_tokenizer {
     }
 };
 
-int32_t mtmd_tokenize(const mtmd_context * ctx,
+int32_t mtmd_tokenize(mtmd_context * ctx,
             mtmd_input_chunks * output,
             const mtmd_input_text * text,
-            const mtmd_bitmap * const * bitmaps,
+            const mtmd_bitmap ** bitmaps,
             size_t n_bitmaps) {
     try {
         mtmd_tokenizer tokenizer(ctx, text, bitmaps, n_bitmaps);
-        return tokenizer.tokenize(output);
-    } catch (const std::exception & e) {
-        LOG_ERR("%s: error: %s\n", __func__, e.what());
-        return 2;
-    }
-}
-
-int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
-            mtmd_input_chunks * output,
-            const mtmd_input_part * const * parts,
-            size_t n_parts,
-            bool add_special) {
-    for (size_t i = 0; i < n_parts; i++) {
-        if ((parts[i]->text == nullptr) == (parts[i]->bitmap == nullptr)) {
-            LOG_ERR("%s: part %zu must have either text or bitmap set, not both\n", __func__, i);
-            return 1;
-        }
-        if (parts[i]->text != nullptr && parts[i]->text->text == nullptr) {
-            LOG_ERR("%s: part %zu has null text pointer\n", __func__, i);
-            return 1;
-        }
-    }
-    try {
-        mtmd_tokenizer tokenizer(ctx, parts, n_parts, add_special);
         return tokenizer.tokenize(output);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
@@ -2174,12 +2110,9 @@ bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk
         proj_type = ctx->proj_type_a();
     }
     switch (proj_type) {
-        case PROJECTOR_TYPE_GEMMA4V:
-            // E2B (n_embd = 1536) and E4B (n_embd = 2560) always use causal
-            return ctx->n_embd_text != 1536 && ctx->n_embd_text != 2560;
-        case PROJECTOR_TYPE_GEMMA4UV:
         case PROJECTOR_TYPE_GEMMA3:
-        case PROJECTOR_TYPE_DEEPSEEK4V:
+        case PROJECTOR_TYPE_GEMMA4V:
+        case PROJECTOR_TYPE_GEMMA4UV:
             return true;
         default:
             return false;
@@ -2274,7 +2207,7 @@ void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
     bitmap->mergeable = mergeable;
 }
 
-mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,
+mtmd_bitmap * mtmd_bitmap_init_lazy(mtmd_context * ctx,
                                     const char * id,
                                     void * user_data,
                                     mtmd_bitmap_lazy_callback callback) {

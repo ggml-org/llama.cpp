@@ -194,11 +194,7 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
     if (*pos == '[') {
         pos++;
         const char * int_end = parse_int(pos);
-        unsigned long id = std::stoul(std::string(pos, int_end - pos));
-        if (id > std::numeric_limits<uint32_t>::max()) {
-            throw std::runtime_error(std::string("parsed token id is too big at ") + pos);
-        }
-        uint32_t token_id = static_cast<uint32_t>(id);
+        uint32_t token_id = std::stoul(std::string(pos, int_end - pos));
         pos = int_end;
         if (*pos != ']') {
             throw std::runtime_error(std::string("expecting ']' at ") + pos);
@@ -466,6 +462,9 @@ const char * llama_grammar_parser::parse_sequence(
     // (though it's technically the same as -1 now)
     auto handle_repetitions = [&](uint64_t min_times, uint64_t max_times) {
         bool no_max = max_times == UINT64_MAX;
+        if (!no_max && min_times > max_times) {
+            throw std::runtime_error("min_times cannot be greater than max_times");
+        }
         if (last_sym_start == rule.size()) {
             throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
         }
@@ -496,7 +495,7 @@ const char * llama_grammar_parser::parse_sequence(
             total_rules = min_times;
         }
 
-        if (n_prev_rules * total_rules > MAX_REPETITION_THRESHOLD) {
+        if (n_prev_rules * total_rules >= MAX_REPETITION_THRESHOLD) {
             throw std::runtime_error("number of rules that are going to be repeated multiplied by the new repetition exceeds sane defaults, please reduce the number of repetitions or rule complexity");
         }
 
@@ -875,18 +874,17 @@ static void llama_grammar_advance_stack(
     std::set<llama_grammar_stack, decltype(stack_cmp)> seen(stack_cmp);
 
     while (!todo.empty()) {
-        llama_grammar_stack curr_stack_candidate = std::move(todo.back());
+        llama_grammar_stack curr_stack = std::move(todo.back());
         todo.pop_back();
 
-        auto [curr_stack_it, inserted] = seen.insert(std::move(curr_stack_candidate));
-        if (!inserted) {
+        if (seen.find( curr_stack) != seen.end()) {
             continue;
         }
-        const llama_grammar_stack & curr_stack = *curr_stack_it;
+        seen.insert(curr_stack);
 
         if (curr_stack.empty()) {
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
-                new_stacks.emplace_back(curr_stack);
+                new_stacks.emplace_back(std::move(curr_stack));
             }
             continue;
         }
@@ -929,7 +927,7 @@ static void llama_grammar_advance_stack(
         case LLAMA_GRETYPE_TOKEN_NOT:
             if (std::find(new_stacks.begin(), new_stacks.end(), curr_stack) == new_stacks.end()) {
                 // only add the stack if it's not a duplicate of one we already have
-                new_stacks.emplace_back(curr_stack);
+                new_stacks.emplace_back(std::move(curr_stack));
             }
             break;
         default:

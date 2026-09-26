@@ -85,7 +85,6 @@ set(GGML_OPENCL_KERNELS
     mul_mv_f16_f32_1row
     mul_mv_f16_f32_l4
     mul_mv_f16_f32
-    mul_mv_f16_f32_mrow
     mul_mv_f32_f32
     mul_mv_q1_0_f32
     mul_mv_q1_0_f32_flat
@@ -170,7 +169,6 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q4_0_f32
     gemv_noshuffle_q4_0_f32_spec
     gemm_noshuffle_q4_0_f32
-    gemv_noshuffle_q4_0_f32_32b_trans
     gemv_noshuffle_q4_1_f32
     gemm_noshuffle_q4_1_f32
     gemv_noshuffle_q5_0_f32
@@ -182,19 +180,11 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_q8_0_f32
     gemm_noshuffle_q8_0_f32
     gemv_noshuffle_q4_k_f32
-    gemv_noshuffle_q4_k_f32_o4
-    gemv_noshuffle_q4_k_f32_tiled
     gemm_noshuffle_q4_k_f32
-    gemv_noshuffle_q4_k_f32_32b_trans
     gemv_noshuffle_q6_k_f32
-    gemv_noshuffle_q6_k_f32_o4
-    gemv_noshuffle_q6_k_f32_tiled
     gemm_noshuffle_q6_k_f32
-    gemm_noshuffle_q6_k_f32_tiled
-    gemv_noshuffle_q6_k_f32_32b_trans
     gemv_noshuffle_q5_k_f32
     gemm_noshuffle_q5_k_f32
-    gemv_noshuffle_q5_k_f32_32b_trans
     mul
     neg
     norm
@@ -226,7 +216,6 @@ set(GGML_OPENCL_KERNELS
     exp
     expm1
     abs
-    unary_ext
     softplus
     pad
     repeat
@@ -234,7 +223,6 @@ set(GGML_OPENCL_KERNELS
     mul_mm_f16_f32_kq_kqv
     conv2d
     conv2d_f16_f32
-    flash_attn_repack
     flash_attn_pre_f16
     flash_attn_f32_f16
     flash_attn_f32_q8_0
@@ -244,7 +232,7 @@ set(GGML_OPENCL_KERNELS
 )
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
-    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8)
+    list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8)
 endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})

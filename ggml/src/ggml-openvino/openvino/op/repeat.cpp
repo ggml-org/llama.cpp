@@ -1,6 +1,7 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml.h"
 
 #include <memory>
 #include <openvino/op/broadcast.hpp>

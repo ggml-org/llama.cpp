@@ -2,8 +2,6 @@
 #define ALLREDUCE_OPS_H
 
 #include <stdint.h>
-#include <stddef.h>
-#include <stdbool.h>
 
 #define HTP_ALLREDUCE_MAX_RANKS 4
 
@@ -16,15 +14,6 @@ enum htp_allreduce_kernel_type {
     HTP_ALLREDUCE_KERNEL_DMA_1D,
     HTP_ALLREDUCE_KERNEL_DMA_2D,
 };
-
-static inline size_t htp_allreduce_vtcm_buffer_count(
-    uint32_t n_ranks,
-    uint32_t n_threads,
-    bool has_add,
-    bool is_row_bcast
-) {
-    return (size_t) (n_ranks + 1) * n_threads + (has_add ? (is_row_bcast ? 1 : n_threads) : 0);
-}
 
 struct htp_allreduce_kernel_params {
     int32_t rank;

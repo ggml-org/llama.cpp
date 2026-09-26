@@ -79,7 +79,9 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     float state[head_size];
     __shared__ float _r[head_size], _w[head_size], _k[head_size], _a[head_size], _b[head_size];
 
+#ifndef GGML_USE_MUSA
     #pragma unroll
+#endif
     for (int i = 0; i < head_size; i++) {
         state[i] = s[batch_i * state_size + head_i * head_size * head_size + tid * head_size + i];
     }

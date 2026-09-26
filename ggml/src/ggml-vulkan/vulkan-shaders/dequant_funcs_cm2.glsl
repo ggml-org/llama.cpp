@@ -247,33 +247,6 @@ f16vec4 dequantFuncQ8_0_v(const in decodeBufQ8_0 bl, const in uint blockCoords[2
     return f16vec4(vec4(qi) * vec4(float(d)));
 }
 
-layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
-   block_tq1_0 block;
-};
-
-float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
-{
-    const uint e = coordInBlock[1];
-    const uint bidx = tq1_0_byte_of(e);
-    const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
-    const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(e));
-    return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
-}
-
-f16vec4 dequantFuncTQ1_0_v(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
-{
-    const uint e = coordInBlock[1];
-    f16vec4 v;
-    [[unroll]] for (uint k = 0u; k < 4u; ++k) {
-        const uint ee = e + k;
-        const uint bidx = tq1_0_byte_of(ee);
-        const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
-        const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(ee));
-        v[k] = bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
-    }
-    return v;
-}
-
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
    block_tq2_0 block;
 };
@@ -1068,7 +1041,7 @@ float16_t dequantFuncIQ2_S(const in decodeBufIQ2_S bl, const in uint blockCoords
     const uint scale = (bl.block.scales[ib32] >> ((idx & 0x10) >> 2)) & 0xf;
     const uint qs = bl.block.qs[ib8];
     const uint qh = bl.block.qh[ib32];
-    const uint sign = bl.block.qs[QUANT_K_IQ2_S / 8 + ib8] >> (idx & 0x6);
+    const uint sign = bl.block.qs[QUANT_K / 8 + ib8] >> (idx & 0x6);
 
     const float d = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
@@ -1090,7 +1063,7 @@ f16vec4 dequantFuncIQ2_S_v(const in decodeBufIQ2_S bl, const in uint blockCoords
     const uint scale = (bl.block.scales[ib32] >> ((idx & 0x10) >> 2)) & 0xf;
     const uint qs    = bl.block.qs[ib8];
     const uint qh    = bl.block.qh[ib32];
-    const uint sb    = uint(bl.block.qs[QUANT_K_IQ2_S / 8 + ib8]) >> (idx & 0x6u);
+    const uint sb    = uint(bl.block.qs[QUANT_K / 8 + ib8]) >> (idx & 0x6u);
 
     const float d  = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
@@ -1121,7 +1094,7 @@ float16_t dequantFuncIQ3_XXS(const in decodeBufIQ3_XXS bl, const in uint blockCo
     uint idx = coordInBlock[1];
 
     const uint iqs = (idx & 0xFC) >> 2;             // 0..63
-    const uint is = QUANT_K_IQ3_XXS / 4 + ((idx & 0xE0) >> 3);// 8 values
+    const uint is = QUANT_K / 4 + ((idx & 0xE0) >> 3);// 8 values
 
     const float d = float(bl.block.d);
     const uint qs = bl.block.qs[iqs];
@@ -1144,7 +1117,7 @@ f16vec4 dequantFuncIQ3_XXS_v(const in decodeBufIQ3_XXS bl, const in uint blockCo
     const uint idx = coordInBlock[1];
 
     const uint iqs = idx >> 2;
-    const uint is  = QUANT_K_IQ3_XXS / 4 + ((idx & 0xE0) >> 3);
+    const uint is  = QUANT_K / 4 + ((idx & 0xE0) >> 3);
 
     const float d     = float(bl.block.d);
     const uint  qs    = bl.block.qs[iqs];
@@ -1433,8 +1406,6 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_Q8_0)
 #define dequantFuncA dequantFuncQ8_0
 #define dequantFuncA_v dequantFuncQ8_0_v
-#elif defined(DATA_A_TQ1_0)
-#define dequantFuncA dequantFuncTQ1_0
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
 #define dequantFuncA_v dequantFuncTQ2_0_v

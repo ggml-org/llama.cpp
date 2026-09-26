@@ -1,7 +1,6 @@
 #include "llama.h"
 
 #include "llama-impl.h"
-#include "llama-version.h"
 
 #include "llama-chat.h"
 #include "llama-context.h"

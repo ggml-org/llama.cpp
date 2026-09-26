@@ -234,11 +234,7 @@ class SpecialVocab:
                 tokenizer_config['eos_token'] = special_eos = special_sep
             if post_processor := tokenizer.get('post_processor'):
                 for processor in post_processor.get('processors', [post_processor]):
-                    processor_type = processor.get('type')
-                    if processor_type == 'ByteLevel':
-                        self.add_special_token.setdefault('bos', False)
-                        self.add_special_token.setdefault('eos', False)
-                    elif processor_type == 'RobertaProcessing':
+                    if processor.get('type') == 'RobertaProcessing':
                         self.add_special_token['bos'] = True
                         self.add_special_token['eos'] = True
                         self.add_special_token['sep'] = True
@@ -251,7 +247,7 @@ class SpecialVocab:
                         continue
                     # Crude parsing of TemplateProcessing to determine if BOS/SEP/EOS should be added
                     # Only works with simple templates, **will** get it wrong on unusual sequences
-                    elif processor_type == 'TemplateProcessing':
+                    if processor.get('type') == 'TemplateProcessing':
                         tmpl_single = processor.get('single', [])
                         tmpl_pair = processor.get('pair', [])
                         special_first = None
@@ -340,10 +336,7 @@ class SpecialVocab:
         for typ in self.special_token_types:
             add_entry = tokenizer_config.get(f'add_{typ}_token')
             if isinstance(add_entry, bool):
-                if typ not in self.add_special_token:
-                    self.add_special_token[typ] = add_entry
-                elif self.add_special_token[typ] != add_entry:
-                    logger.warning(f'Mismatch between tokenizer_config add_{typ}_token({add_entry}) and tokenizer post_processor<{typ}>({self.add_special_token[typ]}) - opting for the latter')
+                self.add_special_token[typ] = add_entry
             entry = tokenizer_config.get(f'{typ}_token')
             if isinstance(entry, str):
                 tc_content = entry

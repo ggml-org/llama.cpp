@@ -46,24 +46,31 @@
 		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
 
+	let permissionDismissed = $state(false);
+
 	const pendingPermission = $derived(
 		isStreaming && isLastAssistantMessage
 			? agenticStore.getPendingPermissionRequest(message.convId)
 			: null
 	);
 
-	// dismissal applies to the request object, so the next request ( new
-	// identity ) shows the card again without any reset bookkeeping
-	let dismissedPermission: typeof pendingPermission = $state(null);
+	let prevPendingRef: typeof pendingPermission = null;
+	$effect(() => {
+		if (pendingPermission !== prevPendingRef) {
+			prevPendingRef = pendingPermission;
 
-	const visiblePermission = $derived(
-		pendingPermission && dismissedPermission !== pendingPermission ? pendingPermission : null
-	);
+			if (pendingPermission) {
+				permissionDismissed = false;
+			}
+		}
+	});
 
 	function handlePermission(decision: ToolPermissionDecision) {
-		dismissedPermission = pendingPermission;
+		permissionDismissed = true;
 		agenticStore.resolvePermission(message.convId, decision);
 	}
+
+	let continueDismissed = $state(false);
 
 	const pendingContinue = $derived(
 		isStreaming && isLastAssistantMessage
@@ -71,18 +78,16 @@
 			: false
 	);
 
-	let continueDismissed = $state(false);
-
-	// the continue request is a plain boolean, so there is no identity to
-	// compare against; clear the dismissal whenever no request is pending so
-	// the next one starts from a clean state
+	let prevContinueRef = false;
 	$effect(() => {
-		if (!pendingContinue) {
-			continueDismissed = false;
+		if (pendingContinue !== prevContinueRef) {
+			prevContinueRef = pendingContinue;
+
+			if (pendingContinue) {
+				continueDismissed = false;
+			}
 		}
 	});
-
-	const showContinue = $derived(Boolean(pendingContinue) && !continueDismissed);
 
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
@@ -189,7 +194,7 @@
 		/>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 		<ChatMessageToolCallBlock
-			attachments={section.toolResultExtras}
+			attachments={message?.extra}
 			isExecuting={section.toolCallId !== undefined &&
 				section.toolCallId === currentlyExecutingToolCallId}
 			{isStreaming}
@@ -233,15 +238,15 @@
 		{/each}
 	{/if}
 
-	{#if visiblePermission}
+	{#if pendingPermission && !permissionDismissed}
 		<ChatMessageActionCardPermissionRequest
 			onDecision={handlePermission}
-			serverLabel={visiblePermission.serverLabel}
-			toolName={visiblePermission.toolName}
+			serverLabel={pendingPermission.serverLabel}
+			toolName={pendingPermission.toolName}
 		/>
 	{/if}
 
-	{#if showContinue}
+	{#if pendingContinue && !continueDismissed}
 		<ChatMessageActionCardContinueRequest onDecision={handleContinue} />
 	{/if}
 </div>

@@ -32,7 +32,4 @@ std::string finalize_file(const hf_file & file);
 // Remove the entire cached directory for a repo, returns true if removed
 bool remove_cached_repo(const std::string & repo_id);
 
-// Returns the HuggingFace hub cache path
-std::string get_cache_path();
-
 } // namespace hf_cache
