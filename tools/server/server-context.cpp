@@ -1051,6 +1051,7 @@ private:
             mparams.n_threads        = params_base.cpuparams.n_threads;
             mparams.flash_attn_type  = params_base.flash_attn_type;
             mparams.warmup           = params_base.warmup;
+            mparams.use_extra_bufts  = !params_base.no_extra_bufts;
             mparams.image_min_tokens = params_base.image_min_tokens;
             mparams.image_max_tokens = params_base.image_max_tokens;
             mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
