@@ -129,6 +129,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "HYV3ForCausalLM": "hunyuan",
     "HYV4ForCausalLM": "hy_v4",
     "IQuestCoderForCausalLM": "llama",
+    "InstellaMoEForCausalLM": "deepseek",
     "InternLM2ForCausalLM": "internlm",
     "InternLM3ForCausalLM": "internlm",
     "JAISLMHeadModel": "jais",
