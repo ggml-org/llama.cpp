@@ -75,6 +75,13 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     // non-thinking generation prompt ends with a bare </think> instead of an empty
     // <think></think> pair.
     const bool is_v4 = tmpl.source().find("function_calls") == std::string::npos;
+    // V4.1 keeps the V4 format but its DSML tag names carry a leading space:
+    // "<｜DSML｜ calls>", "<｜DSML｜ invoke>", "<｜DSML｜ parameter>" (the release's
+    // encoding/encoding.py: tool_calls_block_name = " calls"). The template builds the
+    // opener as "<' + dsml_token + ' calls>" (single or double quotes), so that literal
+    // identifies a V4.1 template.
+    const bool is_v41 = is_v4 && (tmpl.source().find("' calls>") != std::string::npos ||
+                                  tmpl.source().find("\" calls>") != std::string::npos);
 
     std::optional<json> adjusted_messages;
     if (is_v4) {
@@ -94,13 +101,15 @@ common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_templ
     const std::string DSML         = "｜DSML｜";
     const std::string THINK_START  = "<think>";
     const std::string THINK_END    = "</think>";
-    const std::string TC_BLOCK     = is_v4 ? "tool_calls" : "function_calls";
+    const std::string TC_BLOCK     = is_v41 ? " calls" : is_v4 ? "tool_calls" : "function_calls";
+    const std::string INVOKE_TAG   = is_v41 ? " invoke" : "invoke";
+    const std::string PARAM_TAG    = is_v41 ? " parameter" : "parameter";
     const std::string FC_START     = "<" + DSML + TC_BLOCK + ">";
     const std::string FC_END       = "</" + DSML + TC_BLOCK + ">";
-    const std::string INVOKE_START = "<" + DSML + "invoke";
-    const std::string INVOKE_END   = "</" + DSML + "invoke>";
-    const std::string PARAM_START  = "<" + DSML + "parameter";
-    const std::string PARAM_END    = "</" + DSML + "parameter>";
+    const std::string INVOKE_START = "<" + DSML + INVOKE_TAG;
+    const std::string INVOKE_END   = "</" + DSML + INVOKE_TAG + ">";
+    const std::string PARAM_START  = "<" + DSML + PARAM_TAG;
+    const std::string PARAM_END    = "</" + DSML + PARAM_TAG + ">";
     const std::string GEN_PROMPT   = "<｜Assistant｜>";
     const std::string TC_SEPARATOR = "\n\n";
 
