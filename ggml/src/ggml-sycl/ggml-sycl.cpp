@@ -6731,21 +6731,35 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 }
                 break;
             }
-            case GGML_OP_MUL_MAT_ID:
-                // The non-fused path (ne12 > 1) blocks on host; the fused single-token decode
-                // path (ne12 == 1, FP32 src1) runs entirely on GPU - allow that case.
-                // opt_for_reorder_id() uses sycl_reorder_temp_buffer (USM malloc/free), which
-                // requires async USM allocation to be graph-capturable. When the reorder
-                // optimization is disabled (GGML_SYCL_ENABLE_OPT=0 / !g_ggml_sycl_enable_optimize),
-                // no reorder runs and async USM is not needed for this path.
-                if ((!g_ggml_sycl_use_async_mem_op && g_ggml_sycl_enable_optimize) ||
-                        cgraph->nodes[i]->src[1]->ne[2] != 1 ||
-                        cgraph->nodes[i]->src[1]->type != GGML_TYPE_F32) {
+            case GGML_OP_MUL_MAT_ID: {
+                // The non-fused path (ne12 > 1, or a ne12==1 node that fails any fused-path
+                // precondition) blocks on host in ggml_sycl_mul_mat_id(); the fused single-token
+                // decode path in ggml_sycl_mul_mat_id_mmvq_fused() runs entirely on GPU. Mirror
+                // every bail-out check in that function here, since a node that dispatch would
+                // fall through to the blocking path on is not graph-capturable even if it
+                // superficially looks like a decode-shaped MUL_MAT_ID.
+                // opt_for_reorder_id() (used inside the fused path) uses sycl_reorder_temp_buffer
+                // (USM malloc/free), which requires async USM allocation to be graph-capturable.
+                // When the reorder optimization is disabled (GGML_SYCL_ENABLE_OPT=0 /
+                // !g_ggml_sycl_enable_optimize), no reorder runs and async USM is not needed.
+                const ggml_tensor * mmid_dst  = cgraph->nodes[i];
+                const ggml_tensor * mmid_src0 = mmid_dst->src[0];
+                const ggml_tensor * mmid_src1 = mmid_dst->src[1];
+                const ggml_tensor * mmid_ids  = mmid_dst->src[2];
+                const bool fused_dispatchable =
+                    mmid_src1->ne[2] == 1 &&
+                    mmid_src1->type == GGML_TYPE_F32 && mmid_dst->type == GGML_TYPE_F32 &&
+                    mmid_src1->ne[0] == mmid_src0->ne[0] && mmid_src1->ne[0] % QK8_1 == 0 &&
+                    ggml_is_contiguous(mmid_src1) &&
+                    mmid_ids->ne[1] == 1 &&
+                    (mmid_src1->ne[1] == 1 || mmid_src1->ne[1] == mmid_ids->ne[0]);
+                if (!fused_dispatchable || (!g_ggml_sycl_use_async_mem_op && g_ggml_sycl_enable_optimize)) {
                     GGML_LOG_INFO("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
                                   ggml_op_name(node_op));
                     return false;
                 }
                 break;
+            }
             case GGML_OP_MUL_MAT:
                 // We cannot use graphs with ggml_sycl_mul_mat() when SYCL async memory allocation extensions are not available,
                 // as SYCL malloc / free and host wait calls are not supported when recording to a graph which are all present
