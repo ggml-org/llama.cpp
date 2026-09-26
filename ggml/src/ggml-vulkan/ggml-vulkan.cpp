@@ -15372,6 +15372,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     // So don't support this combination for now.
                     return false;
                 }
+                if (op->src[1]->type == GGML_TYPE_BF16 && op->src[0]->type != GGML_TYPE_BF16) {
+                    // BF16 in src1 is only served by the BF16 x BF16 pipelines
+                    return false;
+                }
 
                 return true;
             }
