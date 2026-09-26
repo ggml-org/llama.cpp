@@ -1,3 +1,4 @@
+#include "ggml-vulkan-adreno-compat.hpp"
 #include "ggml-vulkan-common.h"
 
 namespace {
@@ -583,6 +584,23 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     GGML_ASSERT(parameter_count > 0);
     GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
+
+#if defined(__ANDROID__) && defined(GGML_VULKAN_ADRENO_750_SHMEM)
+    // Keep the workaround limited to the observed F32 prefill selection.
+    // The existing shared-memory shader has the same bindings and push layout.
+    if (specialization_constants.size() == 3 &&
+        ggml_vk_adreno_750_matvec_shmem(
+            device->properties.vendorID, static_cast<uint32_t>(device->driver_id),
+            device->properties.driverVersion, device->properties.deviceName.data(),
+            spv_data == mul_mat_vec_f32_f32_f32_subgroup_no_shmem_data,
+            specialization_constants[0], specialization_constants[1], specialization_constants[2],
+            required_subgroup_size, require_full_subgroups,
+            device->properties.limits.maxComputeSharedMemorySize)) {
+        spv_data = mul_mat_vec_f32_f32_f32_data;
+        spv_size = mul_mat_vec_f32_f32_f32_len;
+    }
+
+#endif
 
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
 
