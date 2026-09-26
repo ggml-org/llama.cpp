@@ -854,6 +854,14 @@ public:
 
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
+
+        const auto fail_slot = common_get_env("LLAMA_SERVER_DEBUG_FAIL_PROMPT_SLOT");
+        if (!fail_slot.empty()) {
+            debug_fail_prompt_slot = std::stoi(fail_slot);
+            if (debug_fail_prompt_slot < 0 || std::to_string(debug_fail_prompt_slot) != fail_slot) {
+                throw std::runtime_error("LLAMA_SERVER_DEBUG_FAIL_PROMPT_SLOT must be a non-negative slot id");
+            }
+        }
     }
 
     ~server_context_impl() {
@@ -909,6 +917,7 @@ private:
     int trace = 0;        // env: LLAMA_TRACE
     int slots_debug = 0;  // env: LLAMA_SERVER_SLOTS_DEBUG
     int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
+    int debug_fail_prompt_slot = -1; // env: LLAMA_SERVER_DEBUG_FAIL_PROMPT_SLOT, one-shot
 
     int n_empty_consecutive = 0;
 
@@ -3111,7 +3120,7 @@ private:
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
 
-            iterate(slots, [&](server_slot & slot) {
+            const auto process_prompt = [&](server_slot & slot, bool & alora_disabled) {
                 if (!add_ok || batch.size() >= n_batch) {
                     return; // batch is full, skip remaining slots
                 }
@@ -3455,6 +3464,7 @@ private:
                         alora_scale = slot.lora[enabled_loras[0]].scale;
                         slot.lora[enabled_loras[0]].scale = 0.0f;
                         alora_disabled_id = enabled_loras[0];
+                        alora_disabled = true;
                     }
 
                     bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
@@ -3545,6 +3555,12 @@ private:
                             /* output    = */ slot.need_embd(),
                             /* is_prompt = */ true);
                         slot.prompt.tokens.push_back(cur_tok);
+
+                        if (slot.id == debug_fail_prompt_slot && batch.size() - n_tokens_prev == 2) {
+                            debug_fail_prompt_slot = -1;
+                            SLT_WRN(slot, "debug prompt allocation failure: batch_before=%d\n", n_tokens_prev);
+                            throw std::bad_alloc();
+                        }
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
                         if (do_checkpoint && spans.is_user_start(slot.prompt.n_tokens())) {
@@ -3637,6 +3653,31 @@ private:
 
                 if (!slot_batched) {
                     slot_batched = &slot;
+                }
+            };
+
+            iterate(slots, [&](server_slot & slot) {
+                const auto n_tokens_prev = batch.size();
+                const auto add_ok_prev = add_ok;
+                const auto alora_scale_prev = alora_scale;
+                const auto alora_disabled_id_prev = alora_disabled_id;
+                bool alora_disabled = false;
+
+                try {
+                    process_prompt(slot, alora_disabled);
+                } catch (const std::exception &) {
+                    // Discard only this slot's unprocessed tokens; earlier batch indices stay valid.
+                    batch.tokens.resize(n_tokens_prev);
+                    add_ok = add_ok_prev;
+                    if (alora_disabled) {
+                        slot.lora[alora_disabled_id].scale = alora_scale;
+                    }
+                    alora_scale = alora_scale_prev;
+                    alora_disabled_id = alora_disabled_id_prev;
+
+                    // The prompt and checkpoint state may include work that was never decoded.
+                    slot.prompt_clear();
+                    throw;
                 }
             });
         }
