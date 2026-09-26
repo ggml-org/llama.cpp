@@ -101,6 +101,7 @@ int g_ggml_sycl_enable_mkl_fa = 1;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
+int g_ggml_sycl_comm_direct_alloc = 0;
 int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
@@ -358,6 +359,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
+        g_ggml_sycl_comm_direct_alloc = ggml_sycl_get_env("GGML_SYCL_COMM_DIRECT_ALLOC", 0);
         g_ggml_sycl_enable_fusion = ggml_sycl_get_env("GGML_SYCL_ENABLE_FUSION", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_prioritize_dmmv = ggml_sycl_get_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
@@ -475,6 +477,7 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_VMM: virtual memory extension is not available\n");
 #endif
+        GGML_LOG_INFO("  GGML_SYCL_COMM_DIRECT_ALLOC: %d\n", g_ggml_sycl_comm_direct_alloc);
 
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FUSION: %d\n", g_ggml_sycl_enable_fusion);
 
@@ -6995,6 +6998,12 @@ struct ggml_backend_sycl_comm_context {
     std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf0;
     std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf1;
     int64_t buf_nelem = 0;
+
+    // GGML_SYCL_COMM_DIRECT_ALLOC=1: use one plain device allocation per buffer instead of the pool.
+    // Peer copy across VMM pool chunks crashes current Level Zero drivers (intel/compute-runtime#995).
+    bool      direct = false;
+    uint8_t * direct0 = nullptr;
+    uint8_t * direct1 = nullptr;
 };
 
 void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
@@ -7014,8 +7023,12 @@ void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends)
     ctx->backends.assign(backends, backends + n_backends);
     auto * sctx0 = (ggml_backend_sycl_context *) backends[0]->context;
     auto * sctx1 = (ggml_backend_sycl_context *) backends[1]->context;
-    ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
-    ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
+    if (g_ggml_sycl_comm_direct_alloc) {
+        ctx->direct = true;  // allocated on first use, see allreduce_tensor
+    } else {
+        ctx->buf0 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx0->pool());
+        ctx->buf1 = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(sctx1->pool());
+    }
     return ctx;
 }
 catch (const sycl::exception &) { return nullptr; }
@@ -7035,6 +7048,10 @@ void ggml_backend_sycl_comm_free(void * comm_ctx_v) {
         try {
             sctx0->stream()->wait();
             sctx1->stream()->wait();
+            if (comm_ctx->direct) {
+                ggml_sycl_free_device(comm_ctx->direct0, *sctx0->stream());
+                ggml_sycl_free_device(comm_ctx->direct1, *sctx1->stream());
+            }
         } catch (...) { /* best effort during shutdown */ }
     }
 
@@ -7082,12 +7099,30 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
 
     // Grow per-device byte buffers if needed (4 * nelem bytes each).
     if (comm_ctx->buf_nelem < nelem) {
-        comm_ctx->buf0->realloc(nelem * 4);
-        comm_ctx->buf1->realloc(nelem * 4);
+        if (comm_ctx->direct) {
+            // Free is immediate, so wait until earlier allreduces are done.
+            q0->wait();
+            q1->wait();
+            ggml_sycl_free_device(comm_ctx->direct0, *q0);
+            ggml_sycl_free_device(comm_ctx->direct1, *q1);
+            comm_ctx->direct0 = nullptr;
+            comm_ctx->direct1 = nullptr;
+            comm_ctx->buf_nelem = 0;
+            SYCL_CHECK(CHECK_TRY_ERROR(comm_ctx->direct0 = (uint8_t *) ggml_sycl_malloc_device(
+                                           nelem * 4, *q0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(comm_ctx->direct1 = (uint8_t *) ggml_sycl_malloc_device(
+                                           nelem * 4, *q1)));
+            if (comm_ctx->direct0 == nullptr || comm_ctx->direct1 == nullptr) {
+                return false;  // meta-backend falls back to its generic all-reduce
+            }
+        } else {
+            comm_ctx->buf0->realloc(nelem * 4);
+            comm_ctx->buf1->realloc(nelem * 4);
+        }
         comm_ctx->buf_nelem = nelem;
     }
-    uint8_t * buf0 = comm_ctx->buf0->get();
-    uint8_t * buf1 = comm_ctx->buf1->get();
+    uint8_t * buf0 = comm_ctx->direct ? comm_ctx->direct0 : comm_ctx->buf0->get();
+    uint8_t * buf1 = comm_ctx->direct ? comm_ctx->direct1 : comm_ctx->buf1->get();
 
     // F16 native path: direct 2-byte cross-device copy + add, skipping the
     // F32 round-trip the meta-backend fallback would force. Cross-device copies
