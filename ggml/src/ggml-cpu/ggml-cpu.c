@@ -15,6 +15,9 @@
 #include "ops.h"
 #include "ggml.h"
 #include "common.h"
+#ifdef GGML_USE_CPU_KLEIDIAI
+#    include "kleidiai/kleidiai.h"
+#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -3000,7 +3003,20 @@ struct ggml_cplan ggml_graph_plan(
 
                         // Tiled flash attention scratch (tile sizes defined in common.h)
                         // Per-thread: Q_q + KQ + mask + VKQ32 + V32 + K_f32 + padding
-                        size_t prefill  = sizeof(float)*(GGML_FA_TILE_Q*DK + 2*GGML_FA_TILE_Q*GGML_FA_TILE_KV + GGML_FA_TILE_Q*DV + GGML_FA_TILE_KV*DV + GGML_FA_TILE_KV*DK)*n_tasks;
+                        size_t prefill_per_thread =
+                            sizeof(float) * (GGML_FA_TILE_Q * DK + 2 * GGML_FA_TILE_Q * GGML_FA_TILE_KV +
+                                             GGML_FA_TILE_Q * DV + GGML_FA_TILE_KV * DV + GGML_FA_TILE_KV * DK);
+#ifdef GGML_USE_CPU_KLEIDIAI
+                        struct ggml_kleidiai_sme2_flash_attn_workspace workspace;
+                        if (ggml_kleidiai_sme2_flash_attn_get_workspace(node, &workspace)) {
+                            prefill_per_thread += workspace.thread_size;
+                        } else {
+                            prefill_per_thread += sizeof(float) * CACHE_LINE_SIZE_F32;
+                        }
+#else
+                        prefill_per_thread += sizeof(float) * CACHE_LINE_SIZE_F32;
+#endif
+                        size_t prefill = prefill_per_thread * n_tasks;
 
                         // Decode path: n_kv_chunks = n_tasks (one chunk per thread)
                         // Per-thread: VKQ accmulator (DV), partial M, partial S + intra-thread scratch for V, Q and VKQ
