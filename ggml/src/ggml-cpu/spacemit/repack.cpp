@@ -370,6 +370,74 @@ static block_q8_0x32 make_block_q8_0x32(block_q8_0 * in, unsigned int blck_size_
     return out;
 }
 
+// IME1: interleave 16 q8_0 rows so a plain vle8 sequence in the i8i8 kernel lands weights in the
+// vmadot group/parity layout. Mirrors make_block_q4_0x16 but stores full int8 (no nibble packing).
+// qs (512B) = [INNER step 0: reg0..reg7][INNER step 1: reg0..reg7], each reg 32B holding 4 columns
+// x (even=K-first-half / odd=K-second-half). Column col -> acc=col/4, cgrp=col%4.
+static block_q8_0x16 make_block_q8_0x16(block_q8_0 * in, unsigned int blck_size_interleave) {
+    block_q8_0x16 out;
+    GGML_ASSERT(QK8_0 / blck_size_interleave == 2);
+    GGML_UNUSED(blck_size_interleave);
+
+    for (int i = 0; i < 16; i++) {
+        out.d[i] = in[i].d;
+    }
+
+    memset(out.qs, 0, sizeof(out.qs));
+    for (int col = 0; col < 16; col++) {
+        const int      acc  = col / 4;
+        const int      cgrp = col % 4;
+        const int8_t * q    = in[col].qs;
+        for (int s = 0; s < 2; s++) {
+            const int base   = s * 16;
+            uint8_t * reg_lo = out.qs + (s * 8 + acc)     * 32;
+            uint8_t * reg_hi = out.qs + (s * 8 + acc + 4) * 32;
+            for (int i = 0; i < 4; i++) {
+                reg_lo[(2 * cgrp)     * 4 + i] = (uint8_t) q[base + 0  + i];
+                reg_lo[(2 * cgrp + 1) * 4 + i] = (uint8_t) q[base + 4  + i];
+                reg_hi[(2 * cgrp)     * 4 + i] = (uint8_t) q[base + 8  + i];
+                reg_hi[(2 * cgrp + 1) * 4 + i] = (uint8_t) q[base + 12 + i];
+            }
+        }
+    }
+    return out;
+}
+
+static int repack_q8_0_to_q8_0_16_bl_ref(ggml_tensor *              t,
+                                         int                        interleave_block,
+                                         const void * GGML_RESTRICT data,
+                                         size_t                     data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(interleave_block == 16);
+
+    constexpr int nrows_interleaved = 16;
+
+    block_q8_0x16 *    dst = (block_q8_0x16 *) t->data;
+    const block_q8_0 * src = (const block_q8_0 *) data;
+    block_q8_0         dst_tmp[16];
+    int                nrow    = ggml_nrows(t);
+    int                nblocks = t->ne[0] / QK8_0;
+
+    GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q8_0));
+
+    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % QK8_0 != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += nrows_interleaved) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            for (int i = 0; i < nrows_interleaved; i++) {
+                dst_tmp[i] = src[x + i * nblocks];
+            }
+            *dst++ = make_block_q8_0x16(dst_tmp, interleave_block);
+        }
+        src += nrows_interleaved * nblocks;
+    }
+    return 0;
+
+    GGML_UNUSED(data_size);
+}
+
 static int repack_q2_k_to_q2_k_32_bl(ggml_tensor *              t,
                                      int                        interleave_block,
                                      const void * GGML_RESTRICT data,
@@ -1766,6 +1834,10 @@ template <> int repack<block_q6_K, 32, 32>(ggml_tensor * t, const void * data, s
 #else
     return repack_q6_k_to_q8_0_32_bl(t, 32, data, data_size);
 #endif
+}
+
+template <> int repack<block_q8_0, 32, 16>(ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_q8_0_to_q8_0_16_bl_ref(t, 16, data, data_size);
 }
 
 template <> int repack<block_q8_0, 32, 32>(ggml_tensor * t, const void * data, size_t data_size) {
