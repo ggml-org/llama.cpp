@@ -46,14 +46,13 @@ constexpr constant static float kvalues_mxfp4_f[16] = {
 };
 
 static inline int best_index_int8(int n, constant float * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
+    const float x2 = x + x;
+    int idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx = (x2 >= val[j-1] + val[j]) ? j : idx;
     }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+    return idx;
 }
 
 static inline float e8m0_to_fp32(uint8_t x) {
