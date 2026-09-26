@@ -12,6 +12,13 @@
  * We encourage human contributors to ensure the quality and reliability of the codebase.
  */
 
+struct clip_graph_soprano : clip_graph {
+    clip_graph_soprano(clip_ctx * ctx, const clip_image_f32 & img, int n_frames) : clip_graph(ctx, img), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+    static void decode_spectrum(const std::vector<float> & spectrum, std::vector<float> & pcm);
+    int n_frames;
+};
+
 struct clip_graph_siglip : clip_graph {
     clip_graph_siglip(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;

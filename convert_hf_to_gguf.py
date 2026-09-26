@@ -16,6 +16,7 @@ if 'NO_LOCAL_GGUF' not in os.environ:
 import gguf
 
 from conversion import (
+    MMPROJ_MODEL_MAP,
     ModelBase,
     ModelType,
     get_model_architecture,
@@ -118,6 +119,10 @@ def parse_args() -> argparse.Namespace:
         help="Export multimodal projector (mmproj) for vision models. This will only work on some vision models. An 'mmproj-' prefix will be added to the output file name.",
     )
     parser.add_argument(
+        "--mmproj-architecture", choices=sorted(MMPROJ_MODEL_MAP),
+        help="Select the mmproj architecture explicitly when config.json only describes the text backbone. Requires --mmproj.",
+    )
+    parser.add_argument(
         "--mtp", action="store_true",
         help="Export only the multi-token prediction (MTP) head as a separate GGUF, suitable for use as a speculative draft. An 'mtp-' prefix will be added to the output file name.",
     )
@@ -171,6 +176,8 @@ def parse_args() -> argparse.Namespace:
     )
 
     args = parser.parse_args()
+    if args.mmproj_architecture and (not args.mmproj or args.mistral_format):
+        parser.error("--mmproj-architecture requires --mmproj and does not support --mistral-format")
     if not args.print_supported_models and args.model is None:
         parser.error("the following arguments are required: model")
     return args
@@ -244,7 +251,7 @@ def main() -> None:
         model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
         hparams = ModelBase.load_hparams(dir_model, is_mistral_format)
         if not is_mistral_format:
-            model_architecture = get_model_architecture(hparams, model_type)
+            model_architecture = args.mmproj_architecture or get_model_architecture(hparams, model_type)
             logger.info(f"Model architecture: {model_architecture}")
             try:
                 model_class = get_model_class(model_architecture, mmproj=(model_type == ModelType.MMPROJ))
