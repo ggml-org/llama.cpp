@@ -70,7 +70,9 @@
 // LDS footprint as V=64) while the full state stays in registers. gram/pmat/inversion are
 // computed once per chunk and shared across the passes (unlike V=64's 2 blocks/head).
 #ifdef SEQ_HALF
+#ifndef VH
 #define VH 64
+#endif
 #else
 #define VH V
 #endif
@@ -239,10 +241,14 @@ void main() {
 #ifdef SEQ_HALF
     // whole-head via NH sequential value passes: gram/pmat/inversion once, then per pass
     // mirror [D x VH] state to shared, project, solve, out, update the pass's register tiles.
-    const uint sg_half = ((sg % VT) >= VTH) ? 1u : 0u;  // which value pass owns this sg's state tiles
+    const uint sg_pass = (sg % VT) / VTH;  // which value pass (0..NH-1) owns this sg's state tiles
     for (uint t0 = 0; t0 < p.n_tokens; t0 += C) {
         const uint valid = min(C, p.n_tokens - t0);
 
+        // ensure the previous chunk's last-pass reads of q/k (state update) and of
+        // carry/ep/prefix are done before this chunk overwrites them (the per-pass loop
+        // drops its end-of-pass barrier and relies on the next pass's post-mirror barrier).
+        barrier();
         if (sg == 0) {
             const uint t = gl_SubgroupInvocationID;
             const uint gb = seq_id * p.sb3 + (t0 + t) * p.sb2 + head_id * p.sb1;
@@ -322,7 +328,7 @@ void main() {
             const uint voff = hv * VH;   // value-column offset of this pass within the head
 
             // mirror this pass's register state tiles to shared [D x VH]
-            if (sg_half == hv) {
+            if (sg_pass == hv) {
                 [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
                     const uint ti = sg + j * NSUB;
                     const uint off = (TILE_C(ti) - voff) * LDP + TILE_R(ti);
@@ -421,7 +427,7 @@ void main() {
             barrier();
 
             // state = cdecay*state + K^T @ delta2 for this pass's register tiles
-            if (sg_half == hv) {
+            if (sg_pass == hv) {
                 [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
                     const uint ti = sg + j * NSUB;
                     coopmat<OPD, SG, TM, C, MUA> kth, ktl;
@@ -434,7 +440,9 @@ void main() {
                     PRODUCT(state[j], kth, ktl, dh, dl);
                 }
             }
-            barrier();
+            // no end-of-pass barrier: the next pass's post-mirror barrier separates this
+            // pass's state-update reads from the next pass's delta writes; the chunk boundary
+            // is covered by the barrier at the top of the t0 loop.
         }
     }
 #else
