@@ -79,29 +79,41 @@
 	// and an entry lands in the first group that claims it
 	let entries = $derived(byRecency(groupModelQuants(visible)));
 	let groups = $derived.by(() => {
-		// only llama-compat servers report a load state
-		const isLlamaCompat = (entry: ModelQuantGroup) =>
-			getBackendCapabilities(getBackend(entry.base.backendId)).loadUnload;
-		const loaded = entries.filter(
-			(entry) =>
-				isLlamaCompat(entry) && entry.quants.some((q) => modelsStore.isModelLoaded(q.model))
-		);
-		const claimed = new SvelteSet(loaded.map((entry) => entry.key));
-		const favorites = entries.filter(
-			(entry) =>
-				!claimed.has(entry.key) &&
-				entry.quants.some((q) => modelsStore.favoriteModelIds.has(q.model))
+		// A loaded quant is a model of its own: it moves to the loaded section, and
+		// the quants of its repo that are not loaded stay behind as that repo. Only
+		// llama-compat servers report a load state.
+		const isLoaded = (option: ModelOption) =>
+			getBackendCapabilities(getBackend(option.backendId)).loadUnload &&
+			modelsStore.isModelLoaded(option.model);
+		const loaded: ModelQuantGroup[] = [];
+		const rest: ModelQuantGroup[] = [];
+
+		for (const entry of entries) {
+			const remaining = entry.quants.filter((quant) => !isLoaded(quant));
+
+			for (const quant of entry.quants) {
+				if (!isLoaded(quant)) continue;
+
+				loaded.push({ ...entry, base: quant, key: quant.id, quants: [quant] });
+			}
+
+			if (remaining.length > 0) rest.push({ ...entry, base: remaining[0], quants: remaining });
+		}
+
+		const claimed = new SvelteSet<string>();
+		const favorites = rest.filter((entry) =>
+			entry.quants.some((q) => modelsStore.favoriteModelIds.has(q.model))
 		);
 
 		for (const entry of favorites) claimed.add(entry.key);
 
-		const hidden = entries.filter(
+		const hidden = rest.filter(
 			(entry) => !claimed.has(entry.key) && entry.quants.some((q) => modelsStore.isHidden(q.id))
 		);
 		const hiddenKeys = new SvelteSet(hidden.map((entry) => entry.key));
 		const byBackend = new SvelteMap<string, ModelQuantGroup[]>();
 
-		for (const entry of entries) {
+		for (const entry of rest) {
 			if (claimed.has(entry.key) || hiddenKeys.has(entry.key)) continue;
 
 			const backendId = entry.base.backendId ?? LOCAL_BACKEND_ID;

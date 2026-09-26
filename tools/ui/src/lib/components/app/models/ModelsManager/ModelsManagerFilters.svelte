@@ -3,11 +3,10 @@
 	import { ChevronDown, Image, Mic, Server, Video } from '@lucide/svelte';
 	import { Logo } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
-	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
-	import { LOCAL_BACKEND_ID } from '$lib/constants';
+	import { FILTER_TRIGGER_CLASS, LOCAL_BACKEND_ID } from '$lib/constants';
 	import type { Backend } from '$lib/types/backend';
 
 	interface Props {
@@ -74,13 +73,17 @@
 	<DropdownMenu.Root>
 		<DropdownMenu.Trigger>
 			{#snippet child({ props })}
-				<Button {...props} class="gap-1.5" size="sm" variant="outline">
+				<button
+					{...props}
+					class="inline-flex items-center whitespace-nowrap {FILTER_TRIGGER_CLASS}"
+					type="button"
+				>
 					<Server class="h-3.5 w-3.5" />
 
 					{providerLabel}
 
 					<ChevronDown class="h-3.5 w-3.5 opacity-60" />
-				</Button>
+				</button>
 			{/snippet}
 		</DropdownMenu.Trigger>
 
@@ -113,7 +116,7 @@
 		type="single"
 		value={String(contextLimit)}
 	>
-		<Select.Trigger class="gap-1.5 shadow-sm" size="sm">
+		<Select.Trigger class={FILTER_TRIGGER_CLASS} size="sm">
 			<span class="text-muted-foreground">Context:</span>
 
 			{contextLabel}
@@ -126,9 +129,19 @@
 		</Select.Content>
 	</Select.Root>
 
-	<ToggleGroup.Root bind:value={modalities} type="multiple" variant="outline">
+	<ToggleGroup.Root
+		bind:value={modalities}
+		class="bg-muted/60 dark:bg-muted/75"
+		type="multiple"
+		variant="outline"
+	>
 		{#each MODALITIES as modality (modality.key)}
-			<ToggleGroup.Item aria-label={modality.label} title={modality.label} value={modality.key}>
+			<ToggleGroup.Item
+				aria-label={modality.label}
+				class="bg-transparent! border-border/30! dark:border-border/20!"
+				title={modality.label}
+				value={modality.key}
+			>
 				<modality.icon class="h-3.5 w-3.5" />
 			</ToggleGroup.Item>
 		{/each}

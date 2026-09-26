@@ -127,20 +127,7 @@
 		groups.map((group) => {
 			// a flat section lists its models straight, families or not
 			const flat = FLAT_SECTIONS.has(group.kind) || !settingsStore.config.groupModelsByFamily;
-			// a loaded section lists the quants themselves: the repo a quant came from
-			// is not what is loaded, so folding them under it says nothing
-			const entries =
-				group.kind === 'loaded'
-					? group.items.flatMap((entry) =>
-							entry.quants.map((quant) => ({
-								...entry,
-								base: quant,
-								key: quant.id,
-								quants: [quant]
-							}))
-						)
-					: group.items;
-			const items = sortEntries(entries);
+			const items = sortEntries(group.items);
 
 			return {
 				...group,

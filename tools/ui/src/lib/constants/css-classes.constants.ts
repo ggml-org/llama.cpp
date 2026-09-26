@@ -29,6 +29,19 @@ export const CHAT_INPUT_FOCUS_SELECTOR =
  */
 export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-content"] input';
 
+/** Filter controls above the model table: one box, one height, one fill. */
+export const FILTER_TRIGGER_CLASS = `
+    h-8
+    gap-1.5
+    rounded-md
+    px-3
+    text-sm
+    font-medium
+    transition-colors
+    hover:bg-muted/80 dark:hover:bg-muted
+    ${INPUT_CLASSES}
+`;
+
 /** Neutral model badge: params, quantization, tags. */
 export const MODEL_BADGE_CLASS =
 	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
