@@ -3250,53 +3250,30 @@ bool ggml_sycl_mul_mat_vec_q_glu_plain(enum ggml_type gate_type, enum ggml_type 
     return false;
 }
 
-template <ggml_type type>
-static bool mul_mat_vec_q_glu_reorder_switch_ncols(enum ggml_glu_op glu_op, const void * vx, const void * vgate,
-                                                   const void * vy, float * dst, int ncols, int nrows, int ncols_dst,
-                                                   int stride_col_y_bytes, int stride_col_dst, dpct::queue_ptr stream) {
+template <ggml_type type, int... Ns>
+static bool mul_mat_vec_q_glu_reorder_ncols(enum ggml_glu_op glu_op, const void * vx, const void * vgate,
+                                            const void * vy, float * dst, int ncols, int nrows, int ncols_dst,
+                                            int stride_col_y_bytes, int stride_col_dst, dpct::queue_ptr stream) {
     using vec_dot = reorder_vec_dot_q_sycl<type>;
 
-    switch (ncols_dst) {
-        case 1:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 1>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 2:
-            if constexpr (type == GGML_TYPE_Q4_K) {
-                if (nrows >= Q4_K_MMVQ_ROW_PAIR_MIN_NROWS) {
-                    launch_mul_mat_vec_q_reorder_glu_impl<vec_dot, 2, 2>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
-                    return true;
-                }
-            }
-            launch_mul_mat_vec_q_reorder_glu_impl<vec_dot, 2, 1>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
-            return true;
-        case 3:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 3>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 4:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 4>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 5:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 5>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 6:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 6>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 7:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 7>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        case 8:
-            launch_mul_mat_vec_q_reorder_glu<vec_dot, 8>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
-                                                         stride_col_dst, glu_op, stream);
-            return true;
-        default:
+    auto launch = [&](auto I) -> bool {
+        constexpr int n = decltype(I)::value;
+        if (ncols_dst != n) {
             return false;
-    }
+        }
+        if constexpr (type == GGML_TYPE_Q4_K && n == 2) {
+            if (nrows >= Q4_K_MMVQ_ROW_PAIR_MIN_NROWS) {
+                launch_mul_mat_vec_q_reorder_glu_impl<vec_dot, 2, 2>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
+                return true;
+            }
+        }
+        launch_mul_mat_vec_q_reorder_glu<vec_dot, n>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes,
+                                                     stride_col_dst, glu_op, stream);
+        return true;
+    };
+
+    // unary fold over launch
+    return (launch(std::integral_constant<int, Ns>{}) || ...);
 }
 
 bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu_op glu_op, const void * vx,
@@ -3309,13 +3286,12 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu
 
     switch (src0_type) {
         case GGML_TYPE_Q4_K:
-            return mul_mat_vec_q_glu_reorder_switch_ncols<GGML_TYPE_Q4_K>(glu_op, vx, vgate, vy, dst, ncols, nrows,
-                                                                          ncols_dst, stride_col_y_bytes,
-                                                                          stride_col_dst, stream);
+            return mul_mat_vec_q_glu_reorder_ncols<GGML_TYPE_Q4_K, 1, 2, 3, 4, 5, 6, 7, 8>(
+                glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes, stride_col_dst, stream);
         case GGML_TYPE_Q5_K:
-            return mul_mat_vec_q_glu_reorder_switch_ncols<GGML_TYPE_Q5_K>(glu_op, vx, vgate, vy, dst, ncols, nrows,
-                                                                          ncols_dst, stride_col_y_bytes,
-                                                                          stride_col_dst, stream);
+            // fusion declines q5_K past 5 columns
+            return mul_mat_vec_q_glu_reorder_ncols<GGML_TYPE_Q5_K, 1, 2, 3, 4, 5>(
+                glu_op, vx, vgate, vy, dst, ncols, nrows, ncols_dst, stride_col_y_bytes, stride_col_dst, stream);
         default:
             return false;
     }
