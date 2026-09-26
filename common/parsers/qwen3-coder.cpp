@@ -59,7 +59,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         data.prompt.append(data.generation_prompt);
     }
 
-    data.parser = build_chat_peg_parser(inputs.token_table, [&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         // The template strips the newline before </think>, so leave it out of the reasoning
