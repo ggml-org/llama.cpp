@@ -133,6 +133,10 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
         }
         case REASONING_BUDGET_FORCING:
         {
+            // prompt tokens (e.g. '\n' after "<think>") are not the forced "</think>": ignore them
+            if (!ctx->forced_tokens.empty() && token != ctx->forced_tokens[ctx->force_pos]) {
+                break;
+            }
             // track the end sequence within forced_tokens so it is also reported on DONE
             const int32_t match = ctx->end_matcher.advance(token);
             ctx->force_pos++;
