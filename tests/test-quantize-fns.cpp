@@ -155,6 +155,73 @@ static int test_vec_dot_f32(bool verbose) {
     return num_failed;
 }
 
+// regression test for exact -128 handling in the x86 int8 dot-product helpers
+// (adapted from the unit test in #29356, thanks @AnkitNakhawa)
+static int test_vec_dot_q8_0_i8_min(bool verbose) {
+    struct test_block_q8_0 {
+        ggml_fp16_t d;
+        int8_t qs[32];
+    };
+
+    // the pair lives in block blk at byte offset off; the other block stays
+    // zero, so with per-block x scales dx0/dx1 a dropped byte range, a missing
+    // block or a wrong block/scale association changes the result
+    const struct {
+        int8_t blk;   // 0 or 1 (n = 64 -> two blocks)
+        int8_t off;   // byte offset of the pair within the block
+        int8_t x0;
+        int8_t x1;
+        int8_t y0;
+        int8_t y1;
+        float  dx0;   // x scale of block 0
+        float  dx1;   // x scale of block 1
+        float  expected;
+    } cases[] = {
+        { 0,  0,    -1,    0, -128,    0, 1.0f, 1.0f,   128.0f },
+        { 0,  0,     1,    0, -128,    0, 1.0f, 1.0f,  -128.0f },
+        { 0,  0,  -128,    0, -128,    0, 1.0f, 1.0f, 16384.0f },
+        { 0,  0,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // two (-128)*(-128) products sum to 2^15
+        { 0,  0,  -128, -128,  127,  127, 1.0f, 1.0f, -32512.0f }, // x = -128 without y = -128
+        { 0,  0,   127,  127, -128, -128, 1.0f, 1.0f, -32512.0f },
+        { 0,  8,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second 8-byte half of the first 16
+        { 0, 16,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second 16-byte half
+        { 0, 30,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // last pair of the block
+        { 1,  0,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f }, // second block needs the -128 check, too
+        { 1, 30,  -128, -128, -128, -128, 1.0f, 1.0f, 32768.0f },
+        { 1,  0,  -128, -128, -128, -128, 0.5f, 1.0f, 32768.0f }, // dot of block 1 must use block 1's scale
+    };
+
+    const auto * q8_0 = ggml_get_type_traits_cpu(GGML_TYPE_Q8_0);
+    int num_failed = 0;
+
+    assert(sizeof(test_block_q8_0) == ggml_row_size(GGML_TYPE_Q8_0, 32));
+
+    for (const auto & test : cases) {
+        test_block_q8_0 x[2] = {};
+        test_block_q8_0 y[2] = {};
+        x[0].d = ggml_fp32_to_fp16(test.dx0);
+        x[1].d = ggml_fp32_to_fp16(test.dx1);
+        y[0].d = y[1].d = ggml_fp32_to_fp16(1.0f);
+        x[test.blk].qs[test.off + 0] = test.x0;
+        x[test.blk].qs[test.off + 1] = test.x1;
+        y[test.blk].qs[test.off + 0] = test.y0;
+        y[test.blk].qs[test.off + 1] = test.y1;
+
+        float result = 0.0f;
+        q8_0->vec_dot(64, &result, 0, x, 0, y, 0, 1);
+
+        const bool failed = result != test.expected;
+        num_failed += failed;
+        if (failed || verbose) {
+            printf(" q8_0 vec_dot blk=%d off=%2d x={%4d,%4d} y={%4d,%4d}: %s (ref=%f got=%f)\n",
+                   test.blk, test.off, test.x0, test.x1, test.y0, test.y1,
+                   RESULT_STR[failed], test.expected, result);
+        }
+    }
+
+    return num_failed;
+}
+
 static int test_vec_dot_q(bool verbose) {
     int num_failed = 0;
 
@@ -263,6 +330,7 @@ int main(int argc, char * argv[]) {
     int num_failed = 0;
 
     num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_vec_dot_q8_0_i8_min(verbose);
     num_failed += test_vec_dot_q(verbose);
 
     if (num_failed || verbose) {
