@@ -152,8 +152,6 @@ jobs:
             os: ubuntu-22.04
           - build: 'arm64'
             os: ubuntu-24.04-arm
-          - build: 's390x'
-            os: ubuntu-24.04-s390x
 
     runs-on: ${{ matrix.os }}
 
@@ -1229,6 +1227,66 @@ jobs:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
+  # builds the Hexagon NPU backend for Windows Arm64 - llama-server is injected
+  # from the windows-cpu zip during the release "Merge artifacts" step
+  windows-snapdragon:
+    needs: [check-release]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+
+    runs-on: windows-2025-vs2026
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Install Hexagon SDK
+        shell: powershell
+        run: |
+          python scripts/snapdragon/setup-sdk.py --hexagon
+          foreach ($name in @("HEXAGON_SDK_ROOT", "HEXAGON_TOOLS_ROOT")) {
+            $value = [Environment]::GetEnvironmentVariable($name, "User")
+            if (-not $value) { throw "$name was not set by setup-sdk.py" }
+            "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" amd64_arm64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake ^
+            -D HEXAGON_SDK_ROOT="%HEXAGON_SDK_ROOT%" ^
+            -D HEXAGON_TOOLS_ROOT="%HEXAGON_TOOLS_ROOT%" ^
+            -D PREBUILT_LIB_DIR=windows_aarch64 ^
+            -D GGML_NATIVE=OFF ^
+            -D GGML_LLAMAFILE=OFF ^
+            -D GGML_OPENMP=OFF ^
+            -D GGML_HEXAGON=ON ^
+            -D GGML_BACKEND_DL=ON ^
+            -D LLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release --target ggml-hexagon htp-v73 htp-v75 htp-v79 htp-v81
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          7z a -snl llama-bin-win-hexagon-arm64.zip `
+            .\build\bin\Release\* `
+            .\build\ggml\src\ggml-hexagon\libggml-htp-*.so `
+            .\ggml\src\ggml-hexagon\libggml-htp.inf
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-bin-win-hexagon-arm64.zip
+          name: llama-bin-win-hexagon-arm64.zip
+
   # note: builds only the ggml-cuda backend - llama-server is injected from the
   #       windows-cpu zip during the release "Merge artifacts" step
   windows-cuda:
@@ -1827,6 +1885,7 @@ jobs:
 
     needs:
       - windows
+      - windows-snapdragon
       - windows-cpu
       - windows-cuda
       - windows-sycl
@@ -1985,6 +2044,7 @@ jobs:
             **Windows:**
             - [Windows x64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-x64.zip)
             - [Windows arm64 (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cpu-arm64.zip)
+            - [Windows arm64 (Hexagon, requires local catalog signing)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-hexagon-arm64.zip) - [Signing and installation instructions](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend/snapdragon/windows.md#sign-and-install-a-release-package)
             - [Windows arm64 (OpenCL Adreno)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-opencl-adreno-arm64.zip)
             - [Windows x64 (CUDA 12)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-12.4-x64.zip) - [CUDA 12.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-12.4-x64.zip)
             - [Windows x64 (CUDA 13)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-win-cuda-13.4-x64.zip) - [CUDA 13.4 DLLs](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/cudart-llama-bin-win-cuda-13.4-x64.zip)
