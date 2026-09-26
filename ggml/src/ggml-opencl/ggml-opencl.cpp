@@ -704,6 +704,9 @@ struct ggml_backend_opencl_context {
     size_t  image_max_buffer_size;
     size_t  image2d_max_width;
     size_t  image2d_max_height;
+    size_t  image3d_max_width;
+    size_t  image3d_max_height;
+    size_t  image3d_max_depth;
 
     cl_device_svm_capabilities svm_caps;
 
@@ -9112,6 +9115,9 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE_MAX_BUFFER_SIZE, sizeof(size_t), &backend_ctx->image_max_buffer_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), &backend_ctx->image2d_max_width, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->image2d_max_height, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE3D_MAX_WIDTH, sizeof(size_t), &backend_ctx->image3d_max_width, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE3D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->image3d_max_height, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE3D_MAX_DEPTH, sizeof(size_t), &backend_ctx->image3d_max_depth, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MAX_WORK_GROUP_SIZE, sizeof(size_t), &backend_ctx->max_workgroup_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_LOCAL_MEM_SIZE, sizeof(cl_ulong), &backend_ctx->local_mem_size, NULL));
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_SVM_CAPABILITIES, sizeof(cl_device_svm_capabilities), &backend_ctx->svm_caps, 0));
@@ -11498,6 +11504,20 @@ static bool use_fa_bin_kernels_prefill(const ggml_backend_opencl_context * backe
     const int dv = v->ne[0];
 
     constexpr bool prefill_only = true;
+
+    // The repacked Q/K/V are 3D images: Q {n_q, n_batch*n_head, dk/4}, K {dk, n_kv/4, n_batch*n_head_kv},
+    // V {n_kv, dv/4, n_batch*n_head_kv}. Past the device's 3D image limits clCreateImage fails and the
+    // call asserts (X2-90: V is n_kv wide, so any prefill past ~16k tokens of context), so decline those shapes.
+    const size_t n_kv   = (size_t) k->ne[1];
+    const size_t n_bh   = (size_t) q->ne[3] * (size_t) q->ne[2];
+    const size_t n_bhkv = (size_t) q->ne[3] * (size_t) k->ne[2];
+    if ((size_t) n_q > backend_ctx->image3d_max_width || n_bh > backend_ctx->image3d_max_height ||
+        (size_t) dk / 4 > backend_ctx->image3d_max_depth ||
+        (size_t) dk > backend_ctx->image3d_max_width || (n_kv + 3) / 4 > backend_ctx->image3d_max_height ||
+        n_kv > backend_ctx->image3d_max_width || (size_t) dv / 4 > backend_ctx->image3d_max_height ||
+        n_bhkv > backend_ctx->image3d_max_depth) {
+        return false;
+    }
 
     // q8_0 K/V at DK=512 gives wrong results here when V differs from K (f16 K/V is correct).
     // Decline it, as this backend does without the kernel library.
