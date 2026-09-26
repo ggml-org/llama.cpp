@@ -1577,6 +1577,16 @@ class TextModel(ModelBase):
 
         return seems_special
 
+    def does_token_look_byte(self, token: str | bytes) -> bool:
+        if isinstance(token, (bytes, bytearray)):
+            token_text = token.decode(encoding="utf-8")
+        elif isinstance(token, memoryview):
+            token_text = token.tobytes().decode(encoding="utf-8")
+        else:
+            token_text = token
+
+        return bool(re.fullmatch(r"<0x[0-9A-Fa-f]{2}>", token_text))
+
     # used for GPT-2 BPE and WordPiece vocabs
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
@@ -1609,7 +1619,9 @@ class TextModel(ModelBase):
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                    if self.does_token_look_byte(token):
+                        toktypes.append(gguf.TokenType.BYTE)
+                    elif added_tokens_decoder[i].special or self.does_token_look_special(token):
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         # NOTE: this was added for Gemma.
@@ -1936,6 +1948,9 @@ class TextModel(ModelBase):
         if chkhsh == "653660222fb704f61cbf2b618a8ae6502b7f8b20c980f9a5de07ed78e13319cd":
             # ref: https://huggingface.co/ufakai/ufakzeka-1
             res = "ufakzeka"
+        if chkhsh == "079be25958f51a600a944c6c529381549910befee3970e703cbd2fbb9ea5468f":
+            # ref: https://huggingface.co/fraunhofer-iis/elmod-2.7b-base
+            res = "elmod"
 
         if res is None:
             logger.warning("\n")

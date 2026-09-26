@@ -68,6 +68,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_HY_V4             = 57,
     LLAMA_VOCAB_PRE_TYPE_SPARK2_5          = 58,
     LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
+    LLAMA_VOCAB_PRE_TYPE_ELMOD             = 60,
 };
 
 struct LLM_KV;
@@ -150,6 +151,7 @@ struct llama_vocab {
     bool get_clean_spaces              () const;
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
+    bool get_escape_after_split        () const;
     bool get_treat_whitespace_as_suffix() const;
     const normalizer_options & get_normalizer_opts() const;
 

@@ -69,6 +69,188 @@ struct naive_trie {
     llama_token value;
 };
 
+static void llama_escape_whitespace(std::string & text) {
+    replace_all(text, " ", "\xe2\x96\x81");
+}
+
+static void llama_unescape_whitespace(std::string & word) {
+    replace_all(word, "\xe2\x96\x81", " ");
+}
+
+//
+// normalizer
+//
+
+struct llm_normalizer {
+    llm_normalizer(const std::vector<char> & precompiled_charsmap) {
+        if (precompiled_charsmap.size() > 0) {
+            size_t charsmap_offset = 0;
+
+            // First four bytes of precompiled_charsmap contains length of binary
+            // blob containing XOR-compressed compact double array (XCDA) entries
+            uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
+            charsmap_offset += sizeof(xcda_blob_size);
+
+            // Next xcda_blob_size bytes contain entries of XOR-compressed compact
+            // double array (XCDA). Each entry is bit-packed into a 32-bit integer.
+            xcda_array = (const uint32_t *) &precompiled_charsmap[charsmap_offset];
+            xcda_array_size = xcda_blob_size / sizeof(uint32_t);
+            charsmap_offset += xcda_blob_size;
+
+            // Remaining bytes of precompiled charsmap contain null-terminated
+            // replacement strings for prefixes matched by the XCDA.
+            prefix_replacements = &precompiled_charsmap[charsmap_offset];
+            prefix_replacements_size = precompiled_charsmap.size() - charsmap_offset;
+        }
+    }
+
+    const char * prefix_replacements = NULL;
+    size_t prefix_replacements_size = 0;
+
+    const uint32_t * xcda_array = NULL;
+    size_t xcda_array_size = 0;
+};
+
+struct llm_normalizer_session {
+    llm_normalizer_session(const llm_normalizer & normalizer) : normalizer(normalizer) {}
+
+    /*
+     * This structure is a view wrapper for XOR-compressed double array (XCDA)
+     * See Shunsuke Kanda (2018). Space- and Time-Efficient String Dictionaries.
+     * Each bit-packed entry contains:
+     * - BASE array value in bits 10-30
+     * - LCHECK array value in bits 0-7
+     * - LEAF array value in bit 9
+     * Entries containing indexes of replacement sequences have set bit 31
+     */
+    struct xcda_array_view {
+    public:
+        xcda_array_view(const uint32_t * xcda_array, size_t xcda_array_size) : xcda_array(xcda_array), xcda_array_size(xcda_array_size) {
+        }
+        uint32_t get_base(size_t index) {
+            uint32_t packed_node = get_node(index);
+            return (packed_node >> 10) << ((packed_node & (1U << 9)) >> 6);
+        }
+        uint32_t get_lcheck(size_t index) {
+            uint32_t packed_node = get_node(index);
+            return packed_node & ((1U << 31) | 0xff);
+        }
+        bool get_leaf(size_t index) {
+            uint32_t packed_node = get_node(index);
+            return (packed_node >> 8) & 1;
+        }
+        uint32_t get_value(size_t index) {
+            uint32_t packed_node = get_node(index);
+            return packed_node & ((1U << 31) - 1);
+        }
+    private:
+        uint32_t get_node(size_t index) {
+            if (index >= xcda_array_size) {
+                throw std::runtime_error("Index out of array bounds in XCDA array!");
+            }
+            return xcda_array[index];
+        }
+        const uint32_t * xcda_array;
+        size_t xcda_array_size;
+    };
+
+    // helper structure for returning normalization results
+    struct normalization_result {
+        const char * normalized;
+        size_t normalized_len;
+        size_t consumed_input;
+    };
+
+    struct normalization_result normalize_prefix(const std::string & input, size_t input_offset) {
+        if (input_offset == input.size()) {
+            return { &input[input_offset], 0, 0 };
+        }
+
+        size_t longest_prefix_length = 0;
+        size_t longest_prefix_offset = 0;
+
+        if (normalizer.xcda_array_size > 0) {
+            struct xcda_array_view xcda_view(normalizer.xcda_array, normalizer.xcda_array_size);
+
+            // Find the longest normalized sequence matching the input prefix by walking
+            // the XOR-compressed compact double array (XCDA) starting from the root node
+            // We find the index of the next node by calculating BASE[s] ^ c where s is
+            // the index of the previous node and c is a numerical character value
+            uint32_t node_index = 0;
+            // get BASE of the root node
+            node_index = xcda_view.get_base(node_index);
+            for (size_t prefix_offset = input_offset; prefix_offset < input.size(); prefix_offset++) {
+                unsigned char c = input[prefix_offset];
+                if (c == 0) {
+                    break;
+                }
+                node_index ^= c;
+                // if value of LCHECK is not c it means that this is not a child of
+                // the previous node, so we stop matching
+                if (xcda_view.get_lcheck(node_index) != c) {
+                    break;
+                }
+                bool is_leaf = xcda_view.get_leaf(node_index);
+                // get BASE of the current node
+                node_index ^= xcda_view.get_base(node_index);
+                // if LEAF of the current node is true, it means that its BASE points to the node
+                // containing index of replacement sequence for currently matched input prefix
+                if (is_leaf)
+                {
+                    longest_prefix_length = prefix_offset - input_offset + 1;
+                    // get index of replacement sequence for currently matched input prefix
+                    longest_prefix_offset = xcda_view.get_value(node_index);
+                }
+            }
+        }
+
+        if (longest_prefix_length > 0) {
+            // we have a match, so return the replacement sequence
+            if (longest_prefix_offset >= normalizer.prefix_replacements_size) {
+                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+            }
+            const char * prefix_replacement = &(normalizer.prefix_replacements)[longest_prefix_offset];
+            size_t max_len = normalizer.prefix_replacements_size - longest_prefix_offset;
+            size_t repl_len = 0;
+            while (repl_len < max_len && prefix_replacement[repl_len] != '\0') {
+                repl_len++;
+            }
+            if (repl_len == max_len) {
+                throw std::runtime_error("Unterminated string in precompiled charsmap!");
+            }
+            return { prefix_replacement, repl_len, longest_prefix_length };
+        }
+
+        // check if the input prefix contains a valid sequence of UTF-8 code units
+        try {
+            // if yes, return this sequence unmodified
+            size_t prefix_offset = input_offset;
+            unicode_cpt_from_utf8(input, prefix_offset);
+            return { &input[input_offset], prefix_offset - input_offset, prefix_offset - input_offset };
+        } catch (std::invalid_argument & /*ex*/) {
+            // if no, consume 1 byte and return U+FFFD - REPLACEMENT CHARACTER
+            return { "\xEF\xBF\xBD", 3, 1 };
+        }
+    }
+
+    std::string normalize(const std::string & input) {
+        std::string normalized;
+        normalized.reserve(input.size() * 3);
+
+        size_t input_len = input.size();
+
+        for (size_t input_offset = 0; input_offset < input_len; ) {
+            auto norm_res = normalize_prefix(input, input_offset);
+            normalized.append(norm_res.normalized, norm_res.normalized_len);
+            input_offset += norm_res.consumed_input;
+        }
+
+        return normalized;
+    }
+private:
+    const llm_normalizer & normalizer;
+};
+
 //
 // tokenizers
 //
@@ -278,7 +460,7 @@ struct llm_bigram_bpe {
 };
 
 struct llm_tokenizer_bpe : llm_tokenizer {
-    llm_tokenizer_bpe(const llama_vocab & vocab) {
+    llm_tokenizer_bpe(const llama_vocab & vocab, const std::vector<char> & precompiled_charsmap) : normalizer(precompiled_charsmap) {
         GGML_ASSERT(vocab.get_type() == LLAMA_VOCAB_TYPE_BPE);
         switch (vocab.get_pre_type()) {
             case LLAMA_VOCAB_PRE_TYPE_LLAMA3:
@@ -551,6 +733,15 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}+| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_ELMOD:
+                regex_exprs = {
+                    // note the missing backslashes near the end, the model was trained with this regex so we keep the original form
+                    // see https://huggingface.co/fraunhofer-iis/elmod-2.7b-it/discussions/2 for details
+                    // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|s+(?!\\S)|\\s+"
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|s+(?!\\S)|\\s+",
+                };
+                byte_encode = false;
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -572,6 +763,8 @@ struct llm_tokenizer_bpe : llm_tokenizer {
 
     std::vector<std::string> regex_exprs;
     bool byte_encode = true; // GPT-2 byte encoding; false for SPM-style BPE (raw UTF-8)
+
+    llm_normalizer normalizer;
 };
 
 struct llm_tokenizer_bpe_session {
@@ -618,7 +811,13 @@ struct llm_tokenizer_bpe_session {
 
     virtual void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+        auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs, tokenizer.byte_encode);
+
+        if (vocab.get_escape_whitespaces() && vocab.get_escape_after_split()) {
+            for (auto & word : word_collection) {
+                llama_escape_whitespace(word);
+            }
+        }
 
         symbols_final.clear();
         auto tok_pre = vocab.get_pre_type();
@@ -774,6 +973,19 @@ private:
 };
 
 //
+// normalizing BPE tokenizer
+//
+
+struct llm_tokenizer_bpe_norm_session : llm_normalizer_session, llm_tokenizer_bpe_session {
+    llm_tokenizer_bpe_norm_session(const llama_vocab & vocab, const llm_tokenizer_bpe & tokenizer) : llm_normalizer_session(tokenizer.normalizer), llm_tokenizer_bpe_session(vocab, tokenizer) {}
+
+    void tokenize(const std::string & text, std::vector<llama_token> & output) override {
+        std::string normalized(normalize(text));
+        llm_tokenizer_bpe_session::tokenize(normalized, output);
+    }
+};
+
+//
 // WPM tokenizer
 //
 
@@ -901,27 +1113,7 @@ private:
 //
 
 struct llm_tokenizer_ugm : llm_tokenizer {
-    llm_tokenizer_ugm(const llama_vocab & vocab, const std::vector<char> & precompiled_charsmap) {
-        if (precompiled_charsmap.size() > 0) {
-            size_t charsmap_offset = 0;
-
-            // First four bytes of precompiled_charsmap contains length of binary
-            // blob containing XOR-compressed compact double array (XCDA) entries
-            uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
-            charsmap_offset += sizeof(xcda_blob_size);
-
-            // Next xcda_blob_size bytes contain entries of XOR-compressed compact
-            // double array (XCDA). Each entry is bit-packed into a 32-bit integer.
-            xcda_array = (const uint32_t *) &precompiled_charsmap[charsmap_offset];
-            xcda_array_size = xcda_blob_size / sizeof(uint32_t);
-            charsmap_offset += xcda_blob_size;
-
-            // Remaining bytes of precompiled charsmap contain null-terminated
-            // replacement strings for prefixes matched by the XCDA.
-            prefix_replacements = &precompiled_charsmap[charsmap_offset];
-            prefix_replacements_size = precompiled_charsmap.size() - charsmap_offset;
-        }
-
+    llm_tokenizer_ugm(const llama_vocab & vocab, const std::vector<char> & precompiled_charsmap) : normalizer(precompiled_charsmap) {
         for (uint32_t id = 0; id < vocab.n_tokens(); ++id) {
             const auto & token_data = vocab.get_token_data(id);
 
@@ -947,12 +1139,6 @@ struct llm_tokenizer_ugm : llm_tokenizer {
     // escaped space symbol - U+2581 (Lower One Eighth Block)
     const std::string escaped_space = "\xE2\x96\x81";
 
-    const char * prefix_replacements = NULL;
-    size_t prefix_replacements_size = 0;
-
-    const uint32_t * xcda_array = NULL;
-    size_t xcda_array_size = 0;
-
     struct naive_trie user_defined_token_matcher;
 
     float min_score = FLT_MAX;
@@ -962,10 +1148,12 @@ struct llm_tokenizer_ugm : llm_tokenizer {
     float unknown_token_score;
 
     struct naive_trie token_matcher;
+
+    llm_normalizer normalizer;
 };
 
-struct llm_tokenizer_ugm_session {
-    llm_tokenizer_ugm_session(const llama_vocab & vocab, const llm_tokenizer_ugm & tokenizer) : vocab(vocab), tokenizer(tokenizer) {}
+struct llm_tokenizer_ugm_session : llm_normalizer_session {
+    llm_tokenizer_ugm_session(const llama_vocab & vocab, const llm_tokenizer_ugm & tokenizer) : llm_normalizer_session(tokenizer.normalizer), vocab(vocab), tokenizer(tokenizer) {}
 
     /* This implementation is based on SentencePiece optimized Viterbi algorithm for
      * unigram language models. The general idea is to:
@@ -1067,14 +1255,6 @@ struct llm_tokenizer_ugm_session {
     }
 
 private:
-
-    // helper structure for returning normalization results
-    struct normalization_result {
-        const char * normalized;
-        size_t normalized_len;
-        size_t consumed_input;
-    };
-
     void normalize(const std::string& input, std::string * normalized) {
         normalized->clear();
         normalized->reserve(input.size() * 3);
@@ -1121,46 +1301,6 @@ private:
         }
     }
 
-    /*
-     * This structure is a view wrapper for XOR-compressed double array (XCDA)
-     * See Shunsuke Kanda (2018). Space- and Time-Efficient String Dictionaries.
-     * Each bit-packed entry contains:
-     * - BASE array value in bits 10-30
-     * - LCHECK array value in bits 0-7
-     * - LEAF array value in bit 9
-     * Entries containing indexes of replacement sequences have set bit 31
-     */
-    struct xcda_array_view {
-    public:
-        xcda_array_view(const uint32_t * xcda_array, size_t xcda_array_size) : xcda_array(xcda_array), xcda_array_size(xcda_array_size) {
-        }
-        uint32_t get_base(size_t index) {
-            uint32_t packed_node = get_node(index);
-            return (packed_node >> 10) << ((packed_node & (1U << 9)) >> 6);
-        }
-        uint32_t get_lcheck(size_t index) {
-            uint32_t packed_node = get_node(index);
-            return packed_node & ((1U << 31) | 0xff);
-        }
-        bool get_leaf(size_t index) {
-            uint32_t packed_node = get_node(index);
-            return (packed_node >> 8) & 1;
-        }
-        uint32_t get_value(size_t index) {
-            uint32_t packed_node = get_node(index);
-            return packed_node & ((1U << 31) - 1);
-        }
-    private:
-        uint32_t get_node(size_t index) {
-            if (index >= xcda_array_size) {
-                throw std::runtime_error("Index out of array bounds in XCDA array!");
-            }
-            return xcda_array[index];
-        }
-        const uint32_t * xcda_array;
-        size_t xcda_array_size;
-    };
-
     // this structure stores the best tokenization so far at input_offset
     struct best_tokenization {
         llama_token token_id;
@@ -1180,71 +1320,7 @@ private:
             return { &input[input_offset], user_defined_token_match.second, user_defined_token_match.second };
         }
 
-        size_t longest_prefix_length = 0;
-        size_t longest_prefix_offset = 0;
-
-        if (tokenizer.xcda_array_size > 0) {
-            struct xcda_array_view xcda_view(tokenizer.xcda_array, tokenizer.xcda_array_size);
-
-            // Find the longest normalized sequence matching the input prefix by walking
-            // the XOR-compressed compact double array (XCDA) starting from the root node
-            // We find the index of the next node by calculating BASE[s] ^ c where s is
-            // the index of the previous node and c is a numerical character value
-            uint32_t node_index = 0;
-            // get BASE of the root node
-            node_index = xcda_view.get_base(node_index);
-            for (size_t prefix_offset = input_offset; prefix_offset < input.size(); prefix_offset++) {
-                unsigned char c = input[prefix_offset];
-                if (c == 0) {
-                    break;
-                }
-                node_index ^= c;
-                // if value of LCHECK is not c it means that this is not a child of
-                // the previous node, so we stop matching
-                if (xcda_view.get_lcheck(node_index) != c) {
-                    break;
-                }
-                bool is_leaf = xcda_view.get_leaf(node_index);
-                // get BASE of the current node
-                node_index ^= xcda_view.get_base(node_index);
-                // if LEAF of the current node is true, it means that its BASE points to the node
-                // containing index of replacement sequence for currently matched input prefix
-                if (is_leaf)
-                {
-                    longest_prefix_length = prefix_offset - input_offset + 1;
-                    // get index of replacement sequence for currently matched input prefix
-                    longest_prefix_offset = xcda_view.get_value(node_index);
-                }
-            }
-        }
-
-        if (longest_prefix_length > 0) {
-            // we have a match, so return the replacement sequence
-            if (longest_prefix_offset >= tokenizer.prefix_replacements_size) {
-                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
-            }
-            const char * prefix_replacement = &(tokenizer.prefix_replacements)[longest_prefix_offset];
-            size_t max_len = tokenizer.prefix_replacements_size - longest_prefix_offset;
-            size_t repl_len = 0;
-            while (repl_len < max_len && prefix_replacement[repl_len] != '\0') {
-                repl_len++;
-            }
-            if (repl_len == max_len) {
-                throw std::runtime_error("Unterminated string in precompiled charsmap!");
-            }
-            return { prefix_replacement, repl_len, longest_prefix_length };
-        }
-
-        // check if the input prefix contains a valid sequence of UTF-8 code units
-        try {
-            // if yes, return this sequence unmodified
-            size_t prefix_offset = input_offset;
-            unicode_cpt_from_utf8(input, prefix_offset);
-            return { &input[input_offset], prefix_offset - input_offset, prefix_offset - input_offset };
-        } catch (std::invalid_argument & /*ex*/) {
-            // if no, consume 1 byte and return U+FFFD - REPLACEMENT CHARACTER
-            return { "\xEF\xBF\xBD", 3, 1 };
-        }
+        return llm_normalizer_session::normalize_prefix(input, input_offset);
     }
 
     const llama_vocab & vocab;
@@ -1835,6 +1911,7 @@ struct llama_vocab::impl {
     bool clean_spaces               = false;  // clean_up_tokenization_spaces
     bool remove_extra_whitespaces   = false;
     bool escape_whitespaces         = true;
+    bool escape_after_split         = false;
     bool treat_whitespace_as_suffix = false;
 
     // BertNormalizer options
@@ -2045,39 +2122,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = LLAMA_TOKEN_NULL;
             special_pad_id  = 0;
             special_mask_id = LLAMA_TOKEN_NULL;
-
-            const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
-            if (precompiled_charsmap_keyidx != -1) {
-                if (gguf_get_kv_type(ctx, precompiled_charsmap_keyidx) != GGUF_TYPE_ARRAY) {
-                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
-                }
-                const gguf_type pc_type = gguf_get_arr_type(ctx, precompiled_charsmap_keyidx);
-                if (pc_type != GGUF_TYPE_INT8 && pc_type != GGUF_TYPE_UINT8) {
-                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
-                }
-
-                const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
-                const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
-                precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
-                if (precompiled_charsmap.size() < sizeof(uint32_t)) {
-                    throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
-                }
-                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
-#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-#endif
-                if (*xcda_blob_size + sizeof(uint32_t) >= precompiled_charsmap.size()) {
-                    throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
-                }
-#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-                // correct endianness of data in precompiled_charsmap binary blob
-                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
-                uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
-                for (size_t i = 0; i < xcda_array_size; ++i) {
-                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
-                }
-#endif
-            }
         } else if (tokenizer_model == "rwkv") {
             type = LLAMA_VOCAB_TYPE_RWKV;
 
@@ -2419,6 +2463,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "mellum2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MELLUM2;
+            } else if (
+                tokenizer_pre == "elmod") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_ELMOD;
+                escape_whitespaces = true;
+                escape_after_split = true;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2447,6 +2497,41 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             add_eos = false;
         } else {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
+        }
+
+        if (tokenizer_model == "t5" || pre_type == LLAMA_VOCAB_PRE_TYPE_ELMOD) {
+            const int precompiled_charsmap_keyidx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str());
+            if (precompiled_charsmap_keyidx != -1) {
+                if (gguf_get_kv_type(ctx, precompiled_charsmap_keyidx) != GGUF_TYPE_ARRAY) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+                }
+                const gguf_type pc_type = gguf_get_arr_type(ctx, precompiled_charsmap_keyidx);
+                if (pc_type != GGUF_TYPE_INT8 && pc_type != GGUF_TYPE_UINT8) {
+                    throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP).c_str()));
+                }
+
+                const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
+                const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
+                precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+                if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                    throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
+                }
+                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+#endif
+                if (*xcda_blob_size + sizeof(uint32_t) >= precompiled_charsmap.size()) {
+                    throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+                }
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                // correct endianness of data in precompiled_charsmap binary blob
+                size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
+                uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
+                for (size_t i = 0; i < xcda_array_size; ++i) {
+                    xcda_array[i] = __builtin_bswap32(xcda_array[i]);
+                }
+#endif
+            }
         }
 
         ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
@@ -3219,7 +3304,7 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
             tokenizer = std::make_unique<llm_tokenizer_spm>(vocab);
             break;
         case LLAMA_VOCAB_TYPE_BPE:
-            tokenizer = std::make_unique<llm_tokenizer_bpe>(vocab);
+            tokenizer = std::make_unique<llm_tokenizer_bpe>(vocab, precompiled_charsmap);
             break;
         case LLAMA_VOCAB_TYPE_WPM:
             tokenizer = std::make_unique<llm_tokenizer_wpm>(vocab);
@@ -3382,14 +3467,6 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
     return piece;
 }
 
-static void llama_escape_whitespace(std::string & text) {
-    replace_all(text, " ", "\xe2\x96\x81");
-}
-
-static void llama_unescape_whitespace(std::string & word) {
-    replace_all(word, "\xe2\x96\x81", " ");
-}
-
 static std::string llama_decode_text(const std::string & text) {
     std::string decoded_text;
 
@@ -3487,6 +3564,8 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     session = std::make_unique<llm_tokenizer_hybriddna_session>(vocab, *tok_bpe);
                 } else if (vocab.get_tokenizer_model() == "whitespace") {
                     session = std::make_unique<llm_tokenizer_whitespace_session>(vocab, *tok_bpe);
+                } else if (vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_ELMOD) {
+                    session = std::make_unique<llm_tokenizer_bpe_norm_session>(vocab, *tok_bpe);
                 } else {
                     session = std::make_unique<llm_tokenizer_bpe_session>(vocab, *tok_bpe);
                 }
@@ -3498,7 +3577,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
                         std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
 
-                        if (escape_whitespaces) {
+                        if (escape_whitespaces && !escape_after_split) {
                             llama_escape_whitespace(text);
                         }
 
@@ -4156,6 +4235,10 @@ bool llama_vocab::get_remove_extra_whitespaces() const {
 
 bool llama_vocab::get_escape_whitespaces() const {
     return pimpl->escape_whitespaces;
+}
+
+bool llama_vocab::get_escape_after_split() const {
+    return pimpl->escape_after_split;
 }
 
 bool llama_vocab::get_treat_whitespace_as_suffix() const {
