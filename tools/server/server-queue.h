@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -19,6 +20,10 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+
+    // slot lingering state: deadline per slot that released while tasks were deferred
+    // one entry per slot, so releases from different slots do not displace each other
+    std::map<int, int64_t> linger_slots;
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -64,6 +69,14 @@ public:
     // Call when the state of one slot is changed, it will move one task from deferred to main queue
     // prioritize tasks that use the specified slot (otherwise, pop the first deferred task)
     void pop_deferred_task(int id_slot);
+
+    // Start lingering on a slot release: wait linger_ms before popping from deferred queue
+    // Only lingers if deferred queue is non-empty and should_linger is true
+    void pop_deferred_with_linger(int id_slot, int32_t linger_ms, bool should_linger);
+
+    // Check if a slot is currently lingering, and if so, cancel the linger (hit occurred)
+    // Thread-safe. Returns true if linger was cancelled.
+    bool cancel_linger_if_active(int id_slot);
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
@@ -138,6 +151,14 @@ public:
 
 private:
     void cleanup_pending_task(int id_target);
+
+    // earliest deadline among the lingering slots, or -1 if none is lingering
+    // mutex_tasks must be held
+    int64_t linger_deadline_min() const;
+
+    // remove every slot whose linger deadline passed and return their ids
+    // mutex_tasks must be held
+    std::vector<int> linger_take_expired(int64_t now);
 
     // process all pending tasks in the queue
     // returns true if the queue is terminated, false if there is no more task to process
