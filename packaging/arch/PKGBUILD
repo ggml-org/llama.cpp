@@ -13,7 +13,8 @@ license=('MIT')
 depends=('intel-oneapi-compiler-shared-runtime' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'curl' 'openssl')
 makedepends=('git' 'cmake' 'ninja' 'python' 'npm' 'intel-dpcpp-cpp-compiler' 'intel-oneapi-mkl')
 provides=('llama-cpp')
-conflicts=('llama-cpp')
+conflicts=('llama-cpp' 'llama-cpp-git' 'llama.cpp-sycl' 'llama.cpp-sycl-f16' 'llama.cpp-sycl-f16-git')
+install="${pkgname}.install"
 source=("${pkgname%-git}::git+${url}.git#branch=master")
 sha256sums=('SKIP')
 
@@ -66,25 +67,10 @@ build() {
 package() {
     DESTDIR="$pkgdir" cmake --install build
 
-    install -Dm644 "${pkgname%-git}/packaging/arch/llama-sycl.env" \
-        "$pkgdir/usr/lib/systemd/system/llama-server.service.d/sycl-graph.conf.example"
-}
-
-post_install() {
-    cat <<'EOF'
-==> This package compiles the SYCL graph-capture path in (GGML_SYCL_GRAPH=ON at build
-    time), but it stays disabled at runtime unless you opt in:
-
-        export GGML_SYCL_ENABLE_GRAPH=1
-
-    For a systemd unit, drop this in an override
-    (systemctl edit llama-server.service) or copy the shipped example at
-    /usr/lib/systemd/system/llama-server.service.d/sycl-graph.conf.example:
-
-        [Service]
-        Environment=GGML_SYCL_ENABLE_GRAPH=1
-
-    Benefit is batch-1 decode only, and has not been benchmarked end-to-end on this
-    fork yet - see PR #58's review discussion before assuming a speedup.
-EOF
+    install -Dm644 "${pkgname%-git}/LICENSE" \
+        "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "${pkgname%-git}/packaging/arch/llama-server.conf" \
+        "$pkgdir/etc/conf.d/llama-server"
+    install -Dm644 "${pkgname%-git}/packaging/arch/llama-server.service" \
+        -t "$pkgdir/usr/lib/systemd/system"
 }

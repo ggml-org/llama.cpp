@@ -1,0 +1,14 @@
+[Unit]
+Description=llama.cpp server (TurboQuant+ SYCL fork)
+After=syslog.target network.target local-fs.target remote-fs.target nss-lookup.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/conf.d/llama-server
+ExecStart=/usr/bin/llama-server $LLAMA_ARGS
+ExecReload=/bin/kill -s HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

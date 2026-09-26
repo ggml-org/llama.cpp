@@ -1,0 +1,15 @@
+post_install() {
+    cat <<'EOF'
+==> This package compiles SYCL command-graph capture in (GGML_SYCL_GRAPH=ON at
+    build time), but it stays disabled at runtime by default. Edit
+    /etc/conf.d/llama-server and uncomment GGML_SYCL_ENABLE_GRAPH=1 to opt in,
+    then restart llama-server.service.
+
+    Benefit is batch-1 decode only, and has not been benchmarked end-to-end on
+    this fork - see PR #58's review discussion before assuming a speedup.
+EOF
+}
+
+post_upgrade() {
+    post_install
+}
