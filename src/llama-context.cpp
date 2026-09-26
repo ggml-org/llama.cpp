@@ -424,6 +424,25 @@ llama_context::llama_context(
 
         LLAMA_LOG_DEBUG("%s: backend_ptrs.size() = %zu\n", __func__, backend_ptrs.size());
 
+        // graph inputs live in the CPU backend's buffer. if a GPU can use that buffer directly, the scheduler
+        // does not copy the inputs to the device, so nothing orders the next set_inputs after the previous compute
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            if (ggml_backend_dev_type(ggml_backend_get_device(backend_ptrs[i])) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                continue;
+            }
+            for (auto * backend : backend_ptrs) {
+                auto * dev = ggml_backend_get_device(backend);
+                auto dev_type = ggml_backend_dev_type(dev);
+                if ((dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) &&
+                    ggml_backend_dev_supports_buft(dev, backend_buft[i])) {
+                    sync_host_inputs = true;
+                }
+            }
+        }
+        if (sync_host_inputs) {
+            LLAMA_LOG_INFO("%s: GPU reads host input buffer in place, synchronizing before set_inputs\n", __func__);
+        }
+
         // TODO: move these checks to ggml_backend_sched
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
         bool pipeline_parallel =
@@ -1444,6 +1463,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // set the input data for the input tensors
     {
         //const auto t_start_us = ggml_time_us();
+
+        // the previous graph_compute_async may still be reading the inputs that are about to be overwritten
+        if (sync_host_inputs) {
+            ggml_backend_sched_synchronize(sched.get());
+        }
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
