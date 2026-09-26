@@ -852,7 +852,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
 
     bool res = true;
 
-    // save the head of the restored cells - the seq_rm() below can move it
+    // save the head of the restored cells - could be needed to clear the state
     // the head is valid only when state_read_meta() succeeded
     const bool meta_read = state_read_meta(io, cell_count, seq_id);
     const uint32_t cell_head = head;
