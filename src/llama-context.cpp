@@ -4369,6 +4369,10 @@ llama_context * llama_init_from_model(llama_model * model, llama_context_params 
         (params.type_k == GGML_TYPE_TURBO2_0 || params.type_k == GGML_TYPE_TURBO3_0 ||
          params.type_k == GGML_TYPE_TURBO4_0 || params.type_v == GGML_TYPE_TURBO2_0 ||
          params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
+        if (model->arch == LLM_ARCH_GROK) {
+            LLAMA_LOG_ERROR("%s: turbo cache types require flash_attn, which is not compatible with Grok\n", __func__);
+            return nullptr;
+        }
         LLAMA_LOG_WARN("%s: turbo cache types require flash_attn — enabling automatically\n", __func__);
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     }
@@ -4384,36 +4388,46 @@ llama_context * llama_init_from_model(llama_model * model, llama_context_params 
         }
     }
 
+    // Resolve the per-layer effective cache types before validating block-size
+    // divisibility: auto-asymmetric-K and layer-adaptive can rewrite a turbo
+    // layer to q8_0 (see llama-kv-cache.cpp's constructor), and q8_0's block
+    // size of 32 - not turbo's 128-padding - applies to that layer's actual
+    // (unpadded) head dimension.
+    const ggml_type resolved_type_k = llama_kv_cache_resolve_stream_type_k(*model, model->hparams, params.type_k, params.type_v);
+    const int adaptive_mode = llama_kv_cache_turbo_layer_adaptive_mode(params.type_v, model->hparams.n_layer());
+
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_k);
-        const bool k_is_turbo = ggml_type_is_turbo(params.type_k);
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
+            const ggml_type layer_type_k = llama_kv_cache_turbo_layer_adaptive_type_k(
+                adaptive_mode, resolved_type_k, params.type_v, il, model->hparams.n_layer());
+            const uint32_t blck_size = ggml_blck_size(layer_type_k);
             uint32_t head_k = model->hparams.n_embd_head_k(il);
             // Turbo types zero-pad heads to next multiple of 128 in llama-kv-cache.cpp
-            if (k_is_turbo && head_k % 128 != 0) {
+            if (ggml_type_is_turbo(layer_type_k) && head_k % 128 != 0) {
                 head_k = ((head_k + 127) / 128) * 128;
             }
             if (head_k % blck_size != 0) {
                 LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
-                    __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k(il));
+                    __func__, ggml_type_name(layer_type_k), blck_size, model->hparams.n_embd_head_k(il));
                 return nullptr;
             }
         }
     }
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_v);
-        const bool v_is_turbo = ggml_type_is_turbo(params.type_v);
         const bool is_mla = model->hparams.is_mla();
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
+            const ggml_type layer_type_v = llama_kv_cache_turbo_layer_adaptive_type_v(
+                adaptive_mode, resolved_type_k, params.type_v, il, model->hparams.n_layer());
+            const uint32_t blck_size = ggml_blck_size(layer_type_v);
             uint32_t head_v = model->hparams.n_embd_head_v(il);
             // Turbo types zero-pad; MLA has no separate V cache (V = view of K)
-            if (v_is_turbo && !is_mla && head_v % 128 != 0) {
+            if (ggml_type_is_turbo(layer_type_v) && !is_mla && head_v % 128 != 0) {
                 head_v = ((head_v + 127) / 128) * 128;
             }
             if (head_v % blck_size != 0) {
                 LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_v=%u\n",
-                    __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v(il));
+                    __func__, ggml_type_name(layer_type_v), blck_size, model->hparams.n_embd_head_v(il));
                 return nullptr;
             }
         }
