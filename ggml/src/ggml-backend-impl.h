@@ -8,24 +8,28 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 2
+    #define GGML_BACKEND_API_VERSION 3
 
     //
     // Backend buffer type
     //
 
     struct ggml_backend_buffer_type_i {
-        const char *          (*get_name)      (ggml_backend_buffer_type_t buft);
+        const char *          (*get_name)        (ggml_backend_buffer_type_t buft);
         // allocate a buffer of this type
-        ggml_backend_buffer_t (*alloc_buffer)  (ggml_backend_buffer_type_t buft, size_t size);
+        ggml_backend_buffer_t (*alloc_buffer)    (ggml_backend_buffer_type_t buft, size_t size);
+        // (optional) allocate tensors from a list into a buffer of this type (defaults to alloc_buffer + linear allocator)
+        ggml_backend_buffer_t (*alloc_buffer_n)  (ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors);
         // tensor alignment
-        size_t                (*get_alignment) (ggml_backend_buffer_type_t buft);
+        size_t                (*get_alignment)   (ggml_backend_buffer_type_t buft);
         // (optional) max buffer size that can be allocated (defaults to SIZE_MAX)
-        size_t                (*get_max_size)  (ggml_backend_buffer_type_t buft);
+        size_t                (*get_max_size)    (ggml_backend_buffer_type_t buft);
         // (optional) data size needed to allocate the tensor, including padding (defaults to ggml_nbytes)
-        size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
+        size_t                (*get_alloc_size)  (ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
+        // (optional) total data size needed to allocate the given tensors, including padding and splitting (defaults to per-tensor get_alloc_size)
+        size_t                (*get_alloc_size_n)(ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors);
         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
-        bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
+        bool                  (*is_host)         (ggml_backend_buffer_type_t buft);
     };
 
     struct ggml_backend_buffer_type {
@@ -100,9 +104,6 @@ extern "C" {
 
     GGML_API size_t         ggml_backend_meta_n_backends    (ggml_backend_t meta_backend);
     GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
-
-    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
-    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
     //
     // Backend (stream)
