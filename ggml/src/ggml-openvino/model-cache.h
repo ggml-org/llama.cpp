@@ -15,7 +15,6 @@
 
 #include <cstdint>
 #include <string>
-#include <vector>
 
 // Returns the compiled-model cache directory from GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR,
 // or empty if unset/disabled. When empty, callers must not use the cache.
@@ -42,30 +41,16 @@ std::string ggml_openvino_model_cache_blob_path(const std::string & dir, uint64_
 // fingerprints, used to re-verify a hit before trusting the blob.
 std::string ggml_openvino_model_cache_manifest_path(const std::string & dir, uint64_t fingerprint);
 
-// Write/read the manifest: a header (fingerprint, OV version), the OV
-// Parameter and Result names of the exported model in port order, then one
-// "name ne0 ne1 ne2 ne3 type sample_hash" line per weight. Returns false on
-// I/O error.
-//
-// The port names are persisted rather than re-derived from the imported
-// CompiledModel: the frontend keys tensors by Parameter/Result friendly name,
-// but OpenVINO's serializer renames colliding friendly names on export (a
-// stateless KV cache is both a Parameter and a Result called cache_k_lN and
-// comes back as cache_k_lN_1), so names read off the imported ports no longer
-// match the decoder's keys and the output silently stays unbound. Port *order*
-// is what export/import preserves, and binding is positional.
+// Write/read the manifest. The manifest is a newline-separated list of
+// "name ne0 ne1 ne2 ne3 type sample_hash" lines plus a header line with the
+// fingerprint and OV version. Returns false on I/O error.
 bool ggml_openvino_model_cache_write_manifest(const std::string & path,
                                               const ggml_cgraph * cgraph,
-                                              uint64_t fingerprint,
-                                              const std::vector<std::string> & input_names,
-                                              const std::vector<std::string> & output_names);
+                                              uint64_t fingerprint);
 
 // Verify that the cgraph's weights still match the stored manifest (guards the
 // sampled-hash collision risk: a blob is only trusted if every weight's
-// name/shape/type/sample-hash matches what was cached) and read back the port
-// names. Returns true on match; the name vectors are only meaningful then.
+// name/shape/type/sample-hash matches what was cached). Returns true on match.
 bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
                                                const ggml_cgraph * cgraph,
-                                               uint64_t fingerprint,
-                                               std::vector<std::string> & input_names,
-                                               std::vector<std::string> & output_names);
+                                               uint64_t fingerprint);

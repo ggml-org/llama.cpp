@@ -76,6 +76,10 @@ hf_files get_cached_files(const std::string & /*repo_id*/) {
     return {};
 }
 
+std::string get_cache_path() {
+    return {};
+}
+
 std::string finalize_file(const hf_file & /*file*/) {
     throw std::runtime_error(DOWNLOAD_DISABLED_MSG);
 }

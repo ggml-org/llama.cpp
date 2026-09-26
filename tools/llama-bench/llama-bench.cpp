@@ -520,6 +520,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help\n");
+    printf("  --version                                   show version and build info\n");
     printf("  --numa <distribute|isolate|numactl>         numa mode (default: disabled)\n");
     printf("  -r, --repetitions <n>                       number of times to repeat each test (default: %d)\n", cmd_params_defaults.reps);
     printf("  --prio <-1|0|1|2|3>                         process/thread priority (default: %d)\n", cmd_params_defaults.prio);
@@ -678,6 +679,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         try {
             if (arg == "-h" || arg == "--help") {
                 print_usage(argc, argv);
+                exit(0);
+            } else if (arg == "--version") {
+                llama_print_build_info(llama_version());
                 exit(0);
             } else if (arg == "-m" || arg == "--model") {
                 if (++i >= argc) {
@@ -1376,6 +1380,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
+    if (params.repack.empty()) {
+        params.repack = cmd_params_defaults.repack;
+    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -1454,8 +1461,8 @@ struct cmd_params_instance {
         mparams.lazy_mode     = lazy_mode;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
-        mparams.use_extra_bufts = repack;
         mparams.no_host       = no_host;
+        mparams.use_extra_bufts = repack;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -2197,6 +2204,9 @@ struct markdown_printer : public printer {
         }
         if (field == "no_host") {
             return "noh";
+        }
+        if (field == "repack") {
+            return "rpk";
         }
         if (field == "devices") {
             return "dev";

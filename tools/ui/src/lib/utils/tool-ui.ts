@@ -8,6 +8,7 @@ import type { ToolUiEntry } from '$lib/types';
  */
 export function getToolUi(toolName: string | undefined): ToolUiEntry | null {
 	if (!toolName) return null;
+
 	if (!Object.hasOwn(TOOL_UI, toolName)) return null;
 
 	return (TOOL_UI as Record<string, ToolUiEntry>)[toolName];

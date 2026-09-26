@@ -74,11 +74,11 @@ def test_tools_builtin_read_file():
     assert "def test_tools_builtin_read_file" in text
 
 
-def test_tools_builtin_write_then_edit_file():
+def test_tools_builtin_write_then_edit_file(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    log_path = str(tmp_path / "test.log")
     try:
         write_res = call_tool("write_file", {"path": log_path, "content": "line1\nline2\nline3\n"})
         assert write_res["result"] == "file written successfully"
@@ -103,11 +103,11 @@ def test_tools_builtin_write_then_edit_file():
             os.remove(log_path)
 
 
-def test_tools_builtin_edit_file_rejects_non_unique_old_text():
+def test_tools_builtin_edit_file_rejects_non_unique_old_text(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    log_path = str(tmp_path / "test.log")
     try:
         call_tool("write_file", {"path": log_path, "content": "dup\ndup\n"})
         err = call_tool_expect_error("edit_file", {
@@ -257,7 +257,7 @@ def test_tools_builtin_requires_api_key_at_startup(tmp_path):
     with pytest.raises(RuntimeError, match="Server process died"):
         server.start(timeout_seconds=5)
     server.stop()
-    assert "built-in server tools require an API key" in log_path.read_text()
+    assert "built-in server tools or MCP servers require an API key" in log_path.read_text()
 
 
 @pytest.mark.parametrize(
@@ -472,11 +472,11 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
     assert leftover.returncode != 0, f"container {container_id} was not cleaned up after server exit"
 
 
-def test_tools_builtin_edit_file_rejects_overlapping_edits():
+def test_tools_builtin_edit_file_rejects_overlapping_edits(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    log_path = str(tmp_path / "test.log")
     try:
         call_tool("write_file", {"path": log_path, "content": "line1\nline2\n"})
         err = call_tool_expect_error("edit_file", {

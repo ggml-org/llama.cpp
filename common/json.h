@@ -82,6 +82,9 @@ struct common_json_value {
     // note: a nested pair {"a", "b"} does not build, use common_json::array({"a", "b"}) for an array
     common_json_value(std::initializer_list<common_json_item> items);
 
+    template <typename T, typename std::enable_if<std::is_enum<T>::value, int>::type = 0>
+    common_json_value(T val) : common_json_value((typename std::underlying_type<T>::type) val) {}
+
     template <typename T, typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, int>::type = 0>
     common_json_value(T val) : type(std::is_signed<T>::value ? VAL_INT : VAL_UINT) {
         if (std::is_signed<T>::value) {
@@ -111,6 +114,7 @@ struct common_json_item {
 // the types common_json_value holds on its own
 // anything else reaches its common_json ctor and recurses forever
 template <typename T> struct common_json_is_value : std::integral_constant<bool,
+    std::is_enum<T>::value ||
     std::is_arithmetic<T>::value ||
     std::is_same<T, std::nullptr_t>::value ||
     std::is_same<T, std::string>::value ||

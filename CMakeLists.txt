@@ -4,16 +4,19 @@ include(CheckIncludeFileCXX)
 
 ### llama.cpp version
 set(LLAMA_VERSION_MAJOR 0)
-set(LLAMA_VERSION_MINOR 3)
+set(LLAMA_VERSION_MINOR 5)
 set(LLAMA_VERSION_PATCH 0)
 set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
 
-# Whether this is a development/nightly build.
+# whether this is a development/nightly build
+# set this to OFF when making a release from a release tag (vX.Y.Z)
+# ref: https://github.com/ggml-org/ggml/discussions/1579
 option(LLAMA_BUILD_IS_DEV "llama: dev build" ON)
 
 if (LLAMA_BUILD_IS_DEV)
     set(LLAMA_VERSION "${LLAMA_VERSION_BASE}-dev")
 else()
+    # TODO: check that the current commit is tagged correctly according to the version specified above
     set(LLAMA_VERSION "${LLAMA_VERSION_BASE}")
 endif()
 
@@ -41,9 +44,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(LLAMA_STANDALONE ON)
 
     include(git-vars)
-
-    # configure project version
-    # TODO
 else()
     set(LLAMA_STANDALONE OFF)
 endif()
@@ -101,6 +101,14 @@ else()
     set(LLAMA_TOOLS_INSTALL_DEFAULT ${LLAMA_STANDALONE})
 endif()
 
+# subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
+if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
+        OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
+    set(LLAMA_SUBPROCESS_DEFAULT OFF)
+else()
+    set(LLAMA_SUBPROCESS_DEFAULT ON)
+endif()
+
 #
 # option list
 #
@@ -127,7 +135,7 @@ option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                            
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
-option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
+option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available" ON)
 
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
@@ -135,6 +143,7 @@ option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 # 3rd party libs
 option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
+option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
 
@@ -179,6 +188,16 @@ llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")
 license_add_file("llama.cpp" "LICENSE")
+
+#
+# compile options
+#
+
+# clang stores the modification time of the precompiled header sources inside the
+# header and rejects it when they differ, so the timestamp is left out of it
+add_compile_options(
+    "$<$<COMPILE_LANG_AND_ID:C,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>"
+    "$<$<COMPILE_LANG_AND_ID:CXX,Clang,IntelLLVM>:SHELL:-Xclang -fno-pch-timestamp>")
 
 #
 # 3rd-party

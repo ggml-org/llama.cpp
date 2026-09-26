@@ -330,6 +330,7 @@ static void test_reasoning_budget_end_match() {
         llama_sampler_free(sampler);
     }
 
+
     // forced_tokens not ending with a known end sequence records nothing
     {
         auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);

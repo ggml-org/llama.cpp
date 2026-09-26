@@ -29,7 +29,7 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < block_count");
 
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp, false);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
@@ -210,7 +210,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         // the trunk, so it takes the full-attention + MoE path below with no special casing
         const int flags = il < n_layer ? trunk_flags : mtp_flags;
 
-        const int64_t n_ff_exp   = hparams.n_ff_exp   ? hparams.n_ff_exp   : n_ff / n_expert_used;
+        const int64_t n_ff_exp   = hparams.n_ff_exp()   ? hparams.n_ff_exp()   : n_ff / n_expert_used;
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         const int64_t head_k_dim = hparams.ssm_d_state;
@@ -324,7 +324,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
     // the converter folded each gamma to (1 + w)
     ggml_tensor * xn = ggml_rms_norm(ctx0, x, hparams.f_norm_rms_eps);
     xn = ggml_reshape_2d(ctx0, xn, hc_dim, nt);
-    // the CUDA broadcast-mul kernel has no path for an F32 activation times an F16 operand
+    // the broadcast-mul kernel has no path for an F32 activation times an F16 operand
     if (w_norm->type != xn->type && xn->type == GGML_TYPE_F32) {
         w_norm = ggml_cast(ctx0, w_norm, GGML_TYPE_F32);
     }
@@ -333,23 +333,32 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_mix(
 
     ggml_tensor * lo = build_lora_mm(w_down, xn);
     lo = ggml_silu(ctx0, ggml_scale(ctx0, lo, 1.0f / (float) hc));
-    ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(w_up, lo));
+    ggml_tensor * gate = build_lora_mm(w_up, lo);
     cb(gate, "hc_gate", il);
 
-    ggml_tensor * gated = ggml_mul(ctx0, xn, gate);
-    gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
+    ggml_tensor * mixed = nullptr;
+    if (cparams.fused_dsv4_hc_pre && il >= 0) {
+        // sigmoid gate and mean over the streams in one op
+        mixed = ggml_dsv4_hc_pre_gated(ctx0,
+                ggml_reshape_3d(ctx0, xn,   n_embd, hc, nt),
+                ggml_reshape_3d(ctx0, gate, n_embd, hc, nt), 1.0f / (float) hc);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_PRE, mixed, il});
+    } else {
+        ggml_tensor * gated = ggml_mul(ctx0, xn, ggml_sigmoid(ctx0, gate));
+        gated = ggml_reshape_3d(ctx0, gated, n_embd, hc, nt);
 
-    // collapse the streams by their mean
-    ggml_tensor * mixed = ggml_view_2d(ctx0, gated, n_embd, nt,
-            ggml_row_size(gated->type, n_embd) * hc, 0);
-    mixed = ggml_cont(ctx0, mixed);
-    for (int64_t c = 1; c < hc; ++c) {
-        ggml_tensor * s = ggml_view_2d(ctx0, gated, n_embd, nt,
-                ggml_row_size(gated->type, n_embd) * hc,
-                ggml_row_size(gated->type, n_embd) * c);
-        mixed = ggml_add(ctx0, mixed, s);
+        // collapse the streams by their mean
+        mixed = ggml_view_2d(ctx0, gated, n_embd, nt,
+                ggml_row_size(gated->type, n_embd) * hc, 0);
+        mixed = ggml_cont(ctx0, mixed);
+        for (int64_t c = 1; c < hc; ++c) {
+            ggml_tensor * s = ggml_view_2d(ctx0, gated, n_embd, nt,
+                    ggml_row_size(gated->type, n_embd) * hc,
+                    ggml_row_size(gated->type, n_embd) * c);
+            mixed = ggml_add(ctx0, mixed, s);
+        }
+        mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     }
-    mixed = ggml_scale(ctx0, mixed, 1.0f / (float) hc);
     cb(mixed, "hc_mixed", il);
 
     if (inject) {
@@ -371,12 +380,20 @@ ggml_tensor * llama_model_qwen4exp::graph::build_hc_combine(
     // 2*sigmoid centres the scatter weights on 1, so a zero injection is a plain residual add
     ggml_tensor * w = ggml_sigmoid(ctx0, ggml_scale(ctx0, inject, 1.0f / (float) hc));
     w = ggml_scale(ctx0, w, 2.0f);
-    w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
-    ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
-    b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
+    ggml_tensor * cur = nullptr;
+    if (cparams.fused_dsv4_hc_post && il >= 0) {
+        // identity comb: every stream adds the same block output, scaled by its own weight
+        cur = ggml_dsv4_hc_post(ctx0, block_out, residual, w, nullptr);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_POST, cur, il});
+    } else {
+        w = ggml_reshape_3d(ctx0, w, 1, hc, nt);
 
-    ggml_tensor * cur = ggml_add(ctx0, residual, ggml_mul(ctx0, b, w));
+        ggml_tensor * b = ggml_reshape_3d(ctx0, block_out, n_embd, 1, nt);
+        b = ggml_repeat_4d(ctx0, b, n_embd, hc, nt, 1);
+
+        cur = ggml_add(ctx0, residual, ggml_mul(ctx0, b, w));
+    }
     cb(cur, "hc_combine", il);
 
     return cur;
@@ -1018,7 +1035,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, kq_mask_top_k, nullptr, nullptr, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, nullptr, kq_mask_top_k, nullptr, nullptr, top_k->ne[0], kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // the rotation is its own inverse, so undo it on the value side of the output
@@ -1181,8 +1198,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
 
     ggml_tensor * conv_qkv_mix = conv_output_silu;
 
-    int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
-    int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
+    int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, conv_channels);
 
     // Extract the convolved Q, K, V from conv_output
     ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
@@ -1207,10 +1223,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     cb(k_conv, "k_conv", il);
     cb(v_conv, "v_conv", il);
 
+
     const float eps_norm = hparams.f_norm_rms_eps;
 
-    q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
-    k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+    q_conv = build_gdn_l2_norm(ctx0, q_conv, eps_norm);
+    k_conv = build_gdn_l2_norm(ctx0, k_conv, eps_norm);
 
     // repeat to match shapes when head keys != value keys; unneeded with the fused GDN
     if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {

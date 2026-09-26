@@ -53,6 +53,8 @@ endif()
 
 set(TARGET llama-common)
 
+include(parsers/sources.cmake)
+
 # LLAMA_DOWNLOAD=OFF swaps the network-backed downloader for a stub so that
 # llama-common carries no cpp-httplib/OpenSSL dependency (SDK builds).
 if (LLAMA_DOWNLOAD)
@@ -68,6 +70,7 @@ else()
 endif()
 
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -92,6 +95,8 @@ add_library(${TARGET}
     imatrix-loader.cpp
     imatrix-loader.h
     json-schema-to-grammar.cpp
+    json-schema.cpp
+    json-schema.h
     json.cpp
     json.h
     llguidance.cpp

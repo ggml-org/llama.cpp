@@ -81,12 +81,33 @@ echo "Tag ${VERSION} does not exist on remote - OK"
 # deleted when backends were pruned (afe22f08c), so no commit since then can
 # ever have a run recorded against that workflow path - the check was an
 # unconditional, permanent block, not a real gate. See CLAUDE.md.
+#
+# The upstream ghcr.io container-image check is also dropped: its variants
+# include cuda/rocm/musa images this fork never builds, and it depends on a
+# docker workflow that was deleted along with the rest of .github/.
 
 MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 GGML_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Local ggml version: ${GGML_VERSION}"
+
+echo "Checking API/ABI compatibility..."
+set +e
+bash "$SCRIPT_DIR/check-release-apiabi.sh"
+APIABI_RESULT=$?
+set -e
+if [[ $APIABI_RESULT -ne 0 ]]; then
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Warning: API/ABI check found backwards-incompatible changes (dry run, continuing)."
+        CHECKS_PASSED=false
+    else
+        echo "Error: API/ABI check found backwards-incompatible changes."
+        exit 1
+    fi
+else
+    echo "API/ABI compatibility check passed - OK"
+fi
 
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
     echo "checks_passed=${CHECKS_PASSED}" >> "$GITHUB_OUTPUT"

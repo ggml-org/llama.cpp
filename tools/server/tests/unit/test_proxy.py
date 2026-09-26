@@ -145,6 +145,7 @@ def test_mcp_proxy_allow_does_not_disable_default_policy(target: str):
 
 
 def test_mcp_proxy_no_content():
+    # note: see issue #26598
     class NoContentHandler(BaseHTTPRequestHandler):
         def do_POST(self):
             self.send_response(204)

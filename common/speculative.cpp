@@ -235,9 +235,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             common_params_sampling params;
             params.no_perf = false;
             params.top_k = 10;
-            params.samplers = {
-                COMMON_SAMPLER_TYPE_TOP_K,
-            };
+            params.samplers.assign(1, COMMON_SAMPLER_TYPE_TOP_K);
 
             smpl.reset(common_sampler_init(llama_get_model(ctx_dft), params));
         }
@@ -303,7 +301,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
-            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+            common_batch_add(batch, dp.id_last, dp.pos0, { seq_id }, true);
         }
 
         int ret = llama_decode(ctx_dft, batch);
@@ -362,7 +360,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
                     continue;
                 }
 
-                common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
+                common_batch_add(batch, id, dp.pos0 + i + 1, { seq_id }, true);
             }
 
             if (batch.n_tokens == 0) {
@@ -1219,13 +1217,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             common_sampler_reset(smpls[seq_id].get());
 
-            // dp.n_past is the slot's token count. For an M-RoPE target that is no longer the
+            // dp.pos0 is the slot's token count. For an M-RoPE target that is no longer the
             // next position once an image has been in the prompt (image tokens advance the
             // position by the grid size, not by their count), and a noise block placed at the
             // token count sits hundreds of positions past the draft's own cache. Take the next
             // position from the target's memory instead; without images the two are equal.
             const llama_pos pos_max_tgt = llama_memory_seq_pos_max(llama_get_memory(params.ctx_tgt), seq_id);
-            const int32_t n = pos_max_tgt >= 0 ? (int32_t) pos_max_tgt + 1 : (int32_t) dp.n_past;
+            const int32_t n = pos_max_tgt >= 0 ? (int32_t) pos_max_tgt + 1 : (int32_t) dp.pos0;
 
             const int32_t n_draft = params.n_max;
 
@@ -1376,7 +1374,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     //   neither (qwen35 / qwen35moe): a single trained MTP head.
     int32_t n_mtp_layers  = 1;
     bool    is_mem_shared = false;   // gemma4
-    bool    same_position_draft = false; // gemma4-assistant only: every draft row in a round shares n_past
+    bool    same_position_draft = false; // gemma4-assistant only: every draft row in a round shares pos0
     bool    chain_heads   = false;   // derived in the ctor: n_mtp_layers > 1 && !is_mem_shared
 
     // Per-sequence cross-batch carryover: pair (h_p, x_{p+1}) at MTP pos p+1.
@@ -1690,7 +1688,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const int32_t n_tokens = batch_in.n_tokens;
 
-        // remember the frist and last batch index for each sequence
+        // remember the first and last batch index for each sequence
         std::fill(i_batch_beg.begin(), i_batch_beg.end(), -1);
         std::fill(i_batch_end.begin(), i_batch_end.end(), -1);
 
@@ -1911,9 +1909,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 }
                 const int n_chain = n_cap[seq_one];
 
-                // deferred rows at or past n_past hold candidates the verify
-                // rejected; the committed prefix ends at n_past - 1. Drop them.
-                drop_deferred_from(seq_one, dp.n_past);
+                // deferred rows at or past pos0 hold candidates the verify
+                // rejected; the committed prefix ends at pos0 - 1. Drop them.
+                drop_deferred_from(seq_one, dp.pos0);
 
                 // rows of other sequences cannot join a single-sequence chain
                 // batch; decode all remaining rows standalone in that case
@@ -1939,7 +1937,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 defer.embd.clear();
 
                 for (int j = 0; j < n_chain; ++j) {
-                    common_batch_add(batch, j == 0 ? dp.id_last : 0, dp.n_past + j, { seq_one }, true);
+                    common_batch_add(batch, j == 0 ? dp.id_last : 0, dp.pos0 + j, { seq_one }, true);
                     if (j == 0) {
                         std::memcpy(batch.embd + (size_t) n_catchup * n_embd, pending_h[seq_one].data(), row_bytes);
                     } else {
@@ -2025,9 +2023,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // advances in batch order. If nothing drafts this round they stay deferred
         // and process() flushes them later.
         //
-        // For every seq drafting this round, deferred rows at or past its n_past are
+        // For every seq drafting this round, deferred rows at or past its pos0 are
         // candidates the verify just rejected (the committed prefix ends at
-        // n_past - 1, same as the chain path). Merging them would decode a rejected
+        // pos0 - 1, same as the chain path). Merging them would decode a rejected
         // token and this round's first draft row at the same position in the same
         // batch: duplicate-position draft KV cells, no X < Y error, silent quality
         // loss. Only reachable at n_parallel > 1 (a single drafting seq takes the
@@ -2035,7 +2033,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         if (any_drafting && !defer.tok.empty()) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 if (dparams[seq_id].drafting) {
-                    drop_deferred_from(seq_id, dparams[seq_id].n_past);
+                    drop_deferred_from(seq_id, dparams[seq_id].pos0);
                 }
             }
         }
@@ -2068,7 +2066,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 n_cap[seq_id] = dp.n_max;
             }
 
-            common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
+            common_batch_add(batch, dp.id_last, dp.pos0, { seq_id }, true);
             std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
             i_last[seq_id] = batch.n_tokens - 1;
@@ -2082,16 +2080,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         while (n_drafting > 0) {
             // each step decodes under a different head, i.e. a different decoder layer, and
-            // KV is per layer. process() filled this layer's KV only for positions < n_past
+            // KV is per layer. process() filled this layer's KV only for positions < pos0
             // (prompt + accepted prefix) — nothing in the draft region yet. so reset the
-            // draft region (the seq_rm lower bound is n_past, leaving the prompt KV intact)
+            // draft region (the seq_rm lower bound is pos0, leaving the prompt KV intact)
             // and select head i so it rebuilds its own layer's KV there; decoding just the
             // latest token would leave its attention reading cells only another head wrote.
             if (chain_heads) {
                 auto * mem_dft = llama_get_memory(ctx_dft);
                 for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                     if (drafting[seq_id]) {
-                        llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].n_past, -1);
+                        llama_memory_seq_rm(mem_dft, seq_id, dparams[seq_id].pos0, -1);
                     }
                 }
                 llama_set_nextn_layer_offset(ctx_dft, i);
@@ -2157,19 +2155,19 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     const int n_rows = (int) result.size() + 1; // id_last + tokens drafted so far
                     for (int t = 0; t < n_rows; ++t) {
                         const llama_token tok = (t == 0) ? dp.id_last : result[t - 1];
-                        common_batch_add(batch, tok, dp.n_past + t, { seq_id }, t == n_rows - 1);
+                        common_batch_add(batch, tok, dp.pos0 + t, { seq_id }, t == n_rows - 1);
                         std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd,
                                     chain_h[seq_id].data() + (size_t) t * n_embd, row_bytes);
                     }
                 } else if (same_position_draft) {
                     // note: with shared memory (e.g. Gemma4 assistants) we use the same position for all draft tokens
                     // ref: https://github.com/huggingface/transformers/blob/effde20942e3f82a1b97449f60b3a48c5ff96145/docs/source/en/model_doc/gemma4_assistant.md?plain=1#L36-L37
-                    common_batch_add(batch, id, dp.n_past, { seq_id }, true);
+                    common_batch_add(batch, id, dp.pos0, { seq_id }, true);
                     std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, h_row, row_bytes);
                 } else {
                     // is_mem_shared models with a real trained NextN head (qwen35, qwen4exp, ...)
                     // still draft at incrementing positions, same as the non-shared-memory path
-                    common_batch_add(batch, id, dp.n_past + i + 1, { seq_id }, true);
+                    common_batch_add(batch, id, dp.pos0 + i + 1, { seq_id }, true);
                     std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, h_row, row_bytes);
                 }
 
@@ -2971,10 +2969,21 @@ common_params common_base_params_to_speculative(const common_params & params) {
     result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
 
     if (has_draft) {
-        result.devices               = params_spec.devices;
+        // default to global devices value
+        if (!params_spec.devices.empty()) {
+            result.devices           = params_spec.devices;
+        }
         result.model                 = params_spec.mparams;
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
+
+        // a draft pinned to a single device doesn't need the meta wrapper an inherited -sm tensor would give it
+        // (the device list is null-terminated, so a single device means size 2)
+        const size_t n_devs = std::count_if(params_spec.devices.begin(), params_spec.devices.end(),
+                [](ggml_backend_dev_t d) { return d != nullptr; });
+        if (n_devs == 1) {
+            result.split_mode = LLAMA_SPLIT_MODE_LAYER;
+        }
 
         if (params_spec.cpuparams.n_threads > 0) {
             result.cpuparams.n_threads       = params_spec.cpuparams.n_threads;
@@ -3119,68 +3128,37 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     {
         uint32_t enabled_configs = common_get_enabled_speculative_configs(params.types);
 
-        bool has_draft_simple = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE));
-        bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
-        bool has_draft_mtp_adaptive = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_dspark = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)) && params.draft.ctx_dft != nullptr;
-
         // If --dflash or --eagle3 flags are set, enable the corresponding type
-        if (!has_draft_dflash && params.draft.dflash && params.draft.ctx_dft != nullptr) {
-            has_draft_dflash = true;
+        if (params.draft.dflash) {
+            enabled_configs |= (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
         }
-        if (!has_draft_eagle3 && params.draft.eagle3 && params.draft.ctx_dft != nullptr) {
-            has_draft_eagle3 = true;
+        if (params.draft.eagle3) {
+            enabled_configs |= (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3);
         }
 
-
-        bool has_ngram_cache   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_CACHE));
-        bool has_ngram_simple  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE));
-        bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));
-        bool has_ngram_map_k4v = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V));
-        bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
+        auto add_config_if_enabled = [&](common_speculative_type type, bool available = true) {
+            if (available && (enabled_configs & (1u << type))) {
+                configs.emplace_back(type, params);
+            }
+        };
 
         // when adding a new type - update here the logic above
         static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
-        if (has_ngram_simple) {
-            // This implementation can guess a lot of tokens without any draft model.
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, params));
-        }
-        if (has_ngram_map_k) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K, params));
-        }
-        if (has_ngram_map_k4v) {
-            // This implementation can guess tokens with high acceptance rate but is more expensive.
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, params));
-        }
-        if (has_ngram_mod) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, params));
-        }
-        if (has_ngram_cache) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, params));
-        }
-        if (has_draft_simple) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, params));
-        }
-        if (has_draft_eagle3) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params));
-        }
-        if (has_draft_mtp) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, params));
-        }
-        if (has_draft_mtp_adaptive) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, params));
-        }
-        if (has_draft_dflash) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
-        }
-        if (has_draft_dspark) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));
-        }
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
+
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};

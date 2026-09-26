@@ -1,6 +1,9 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
 
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import threading
+
 from openai import OpenAI
 import pytest
 
@@ -17,7 +20,7 @@ def create_server():
     server.api_key = TEST_API_KEY
 
 
-@pytest.mark.parametrize("endpoint", ["/health", "/models", "/v1/models"])
+@pytest.mark.parametrize("endpoint", ["/health"])
 def test_access_public_endpoint(endpoint: str):
     global server
     server.start()

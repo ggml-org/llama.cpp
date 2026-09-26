@@ -78,7 +78,6 @@ See:
 
 - #22105
 
-
 ### Chained MTP (`--spec-chain N`)
 
 Chained MTP drafts N tokens in one decode. It currently supports dense Qwen3.5-family models and requires flash attention. For recurrent models, batch and ubatch sizes below N + 2 are raised to N + 2.
@@ -105,7 +104,6 @@ llama-server -m Qwen3-4B.gguf --spec-type draft-mtp-adaptive \
 ```
 
 `--spec-draft-n-min-adaptive` must be in `[1, --spec-draft-n-max]`.
-
 
 ### DSpark (`draft-dspark`)
 

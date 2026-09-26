@@ -34,6 +34,11 @@ extern "C" {
         void * context;
     };
 
+    // [TAG_ALLOC_SIZE_EXPAND]
+    // returns true for ops that may require additional memory for fleeting data on some backends,
+    // i.e. the backend buffer type's get_alloc_size may return more than ggml_nbytes for the output tensor
+    GGML_API bool ggml_op_alloc_size_may_expand(enum ggml_op op);
+
     //
     // Backend buffer
     //

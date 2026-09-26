@@ -35,8 +35,8 @@ def _mcp_config_json(servers: dict) -> str:
 def _start_server_with_mcp(mcp_json: str, **kwargs) -> ServerProcess:
     """Helper to start a router server with MCP config."""
     srv = ServerPreset.router()
+    srv.server_tools = "all"
     srv.no_ui = True
-    srv.server_port = 8085  # avoid conflict with load_all() which uses 8080
     srv.mcp_servers_json = mcp_json
     for k, v in kwargs.items():
         setattr(srv, k, v)
@@ -168,11 +168,11 @@ def test_mcp_bad_command_does_not_crash():
         res = server.make_request("GET", "/health")
         assert res.status_code == 200, res.body
 
-        # The tools endpoint should remain healthy and omit the failed MCP server.
+        # Builtin tools should still work
         res = server.make_request("GET", "/tools")
         assert res.status_code == 200, res.body
         tools = res.body
-        # No tools from the bad server should be exposed.
+        # Should have builtin tools but no MCP tools from the bad server
         mcp_tools = [t for t in tools if t.get("name", "").startswith("nonexistent_")]
         assert len(mcp_tools) == 0, f"Expected no nonexistent_ tools, got {mcp_tools}"
     finally:
@@ -219,7 +219,6 @@ def test_mcp_tools_not_listed_when_not_configured():
     server.server_tools = "all"
     server.api_key = "mcp-mixed-mode-test-key"
     server.no_ui = True
-    server.server_port = 8085
     server.start()
 
     try:
@@ -288,8 +287,8 @@ def test_mcp_tools_via_json_config_file():
 
     try:
         server = ServerPreset.router()
+        server.server_tools = "all"
         server.no_ui = True
-        server.server_port = 8085
         server.mcp_servers_config = config_path
         server.start()
 
@@ -505,8 +504,8 @@ def test_mcp_config_file_errors():
     """Invalid JSON config and missing file should cause server to fail to start."""
     # Invalid JSON - server should fail to start
     server = ServerPreset.router()
+    server.server_tools = "all"
     server.no_ui = True
-    server.server_port = 8085
     server.mcp_servers_json = "not valid json"
     try:
         server.start()
@@ -516,8 +515,8 @@ def test_mcp_config_file_errors():
 
     # Missing file - server should fail to start
     server = ServerPreset.router()
+    server.server_tools = "all"
     server.no_ui = True
-    server.server_port = 8085
     server.mcp_servers_config = "/nonexistent/path.json"
     try:
         server.start()

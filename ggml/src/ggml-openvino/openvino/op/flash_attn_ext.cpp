@@ -68,35 +68,18 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     const int op_case = context.get_op_case();
 
     if (op_case == 1 || op_case == 2) {
-        int64_t k_n_state_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[3];
-        int64_t k_n_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[1];
-        size_t k_nb1 = context.get_view_input_stride(1, 0)[2];
-        size_t k_offset = context.get_view_input_offset(1, 0);
-
-        // V has its own view into the flat KV buffer, whose head count, head size,
-        // row stride and offset can differ from K's (e.g. asymmetric K/V types, or
-        // architectures with distinct K/V head sizes), so prefer V's own view
-        // metadata over K's. op_case is decided purely from K (see get_op_case()),
-        // so V is not guaranteed to be a tracked VIEW here; fall back to K's values
-        // (the previous behavior) when it isn't.
-        int64_t v_n_state_head = k_n_state_head;
-        int64_t v_n_head = k_n_head;
-        size_t v_nb1 = k_nb1;
-        size_t v_offset = k_offset;
-        if (context.get_view_input_size(2) > 0) {
-            v_n_state_head = (int64_t) context.get_view_input_ggml_shape(2, 0)[3];
-            v_n_head = (int64_t) context.get_view_input_ggml_shape(2, 0)[1];
-            v_nb1 = context.get_view_input_stride(2, 0)[2];
-            v_offset = context.get_view_input_offset(2, 0);
-        }
+        int64_t n_state_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[3];
+        int64_t n_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[1];
+        size_t nb1 = context.get_view_input_stride(1, 0)[2];
+        size_t offset = context.get_view_input_offset(1, 0);
         ov::Output<ov::Node> attention_size;
         if (op_case == 1) {
             attention_size = context.get_input("attention_size");
         } else {
             attention_size = context.get_input("attention_size_static");
         }
-        k = reshape_flat_kv(k, k_offset, k_nb1, k_n_head, k_n_state_head, attention_size);
-        v = reshape_flat_kv(v, v_offset, v_nb1, v_n_head, v_n_state_head, attention_size);
+        k = reshape_flat_kv(k, offset, nb1, n_head, n_state_head, attention_size);
+        v = reshape_flat_kv(v, offset, nb1, n_head, n_state_head, attention_size);
     }
 
     float * params = reinterpret_cast<float *>(context.get_output_op_params());
@@ -212,7 +195,9 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     auto tile_kv = [&](int64_t n_heads, int64_t n_heads_kv, int64_t hs, ov::Output<Node> kv) {
         int64_t f = n_heads / n_heads_kv;
         if (f > 1 && n_heads_kv > 1) {
-            ov::Output<ov::Node> kv_broadcast_shape, kv_unsqueezed, new_kv_shape;
+            ov::Output<ov::Node> kv_broadcast_shape;
+            ov::Output<ov::Node> kv_unsqueezed;
+            ov::Output<ov::Node> new_kv_shape;
             auto unsqueeze_axes = ov::op::v0::Constant::create(ov::element::i64, Shape{}, {2});
             kv_unsqueezed = std::make_shared<ov::op::v0::Unsqueeze>(kv, unsqueeze_axes);
 

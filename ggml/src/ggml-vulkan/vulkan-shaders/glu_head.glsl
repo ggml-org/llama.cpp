@@ -40,3 +40,4 @@ layout (push_constant) uniform parameter
 uint get_aoffset() { return p.misalign_offsets >> 16; }
 uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
 uint get_doffset() { return p.misalign_offsets & 0xFF; }
+

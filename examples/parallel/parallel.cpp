@@ -11,6 +11,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <random>
 #include <string>
 #include <vector>
 #include <ctime>
@@ -156,7 +157,7 @@ static std::vector<std::string> split_string(const std::string& input, char deli
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
-    srand(1234);
+    std::mt19937 rng(1234);
 
     common_params params;
 
@@ -321,7 +322,7 @@ int main(int argc, char ** argv) {
                     client.t_start_prompt = ggml_time_us();
                     client.t_start_gen    = 0;
 
-                    client.input    = k_prompts[rand() % k_prompts.size()];
+                    client.input    = k_prompts[rng() % k_prompts.size()];
                     client.response = "";
 
                     // construct the prompt:
@@ -334,10 +335,10 @@ int main(int argc, char ** argv) {
                         client.prompt += k_system;
                     }
 
-                    const int n_junk_cur = rand() % n_junk;
+                    const int n_junk_cur = rng() % n_junk;
 
                     for (int i = 0; i < n_junk_cur; ++i) {
-                        const int r = rand() % k_questions.size();
+                        const int r = rng() % k_questions.size();
                         client.prompt += "User:\n" + k_questions[r] + "\nAssistant:\n " + k_answers[r] + "\n";
                     }
                     client.prompt += "User:\n" + client.input + "\nAssistant:\n";

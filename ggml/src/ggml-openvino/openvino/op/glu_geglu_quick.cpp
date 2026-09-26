@@ -6,8 +6,8 @@
 #include <openvino/core/node_output.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/multiply.hpp>
-#include <openvino/op/sigmoid.hpp>
 #include <openvino/op/slice.hpp>
+#include <openvino/op/swish.hpp>
 
 namespace ov {
 namespace frontend {
@@ -50,9 +50,7 @@ OutputVector translate_glu_geglu_quick(const NodeContext & context) {
     // Create the constant in the same type as src0 to avoid f16/f32 mismatch.
     auto input_type = src0.get_element_type();
     auto coef = ov::op::v0::Constant::create(input_type, ov::Shape{}, {1.702f});
-    auto scaled  = std::make_shared<ov::op::v1::Multiply>(src0, coef);
-    auto sigmoid = std::make_shared<ov::op::v0::Sigmoid>(scaled);
-    auto gated   = std::make_shared<ov::op::v1::Multiply>(src0, sigmoid);
+    auto gated   = std::make_shared<ov::op::v4::Swish>(src0, coef);
     auto res     = std::make_shared<ov::op::v1::Multiply>(gated, src1);
 
     return rename_outputs_with_suffix({res}, context.get_name());

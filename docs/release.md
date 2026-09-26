@@ -35,13 +35,8 @@ the workflow validates that the commit belongs to the branch and is not older
 than 3 days from the branch HEAD, then releases that commit instead of the
 branch HEAD.
 
-The workflow creates an annotated git tag (e.g. `v0.1.0`), pushes it to the
-remote, and then creates a GitHub Release for that tag. The release body holds
-the change log since the previous release tag and a link to the nightly build
-(the `b*` tag built from the released commit); that nightly tag is also
-attached to the release as `nightly-tag.txt`. The release carries no binaries
-of its own. With `dry_run` set (the default) the workflow only runs the checks
-and creates neither the tag nor the release.
+The workflow creates an annotated git tag (e.g. `v0.1.0`) and pushes it to the
+remote. No GitHub Release object is created, the tag is the release artifact.
 
 ## Building a release
 
@@ -51,8 +46,8 @@ release tag must pass `-DLLAMA_BUILD_IS_DEV=OFF` to produce a clean version stri
 (e.g. `0.1.0` instead of `0.1.0-dev`).
 
 ## How releases reach users
-The GitHub Release made for a tag is a pointer, not a build: the binaries live
-on the nightly build it links to. Users get a release through the following
+Currently releases are not published to github releases, only nightly/development
+builds are available there. The way users can access releases are using the following
 channels:
 
 - **llama-install.sh**  — downloads pre-built binaries built from the release tag.

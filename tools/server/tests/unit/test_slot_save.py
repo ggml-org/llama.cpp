@@ -10,10 +10,10 @@ STATE_FILE_HEADER_SIZE = 12
 server = ServerPreset.tinyllama2()
 
 @pytest.fixture(autouse=True)
-def create_server():
+def create_server(tmp_path):
     global server
     server = ServerPreset.tinyllama2()
-    server.slot_save_path = "./tmp"
+    server.slot_save_path = str(tmp_path)
     server.temperature = 0.0
 
 
@@ -94,7 +94,7 @@ def test_slot_restore_legacy_token_list():
     assert res.body["n_saved"] == 84
 
     # rewrite the token payload into a plain token list, as written by servers that predate the packed server_tokens format
-    path = os.path.join("tmp", "slot_legacy.bin")
+    path = os.path.join(server.slot_save_path, "slot_legacy.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
 
@@ -462,7 +462,7 @@ def test_slot_save_restore_image_payload_larger_than_context(mmproj_server):
     })
     assert res.status_code == 200
 
-    path = os.path.join("tmp", "mm_slot_large_payload.bin")
+    path = os.path.join(server.slot_save_path, "mm_slot_large_payload.bin")
     with open(path, "rb") as f:
         data = bytearray(f.read())
     payload_size = struct.unpack_from("=I", data, STATE_FILE_HEADER_SIZE - 4)[0]
@@ -561,7 +561,8 @@ def test_slot_restore_ignores_invalid_checkpoint_sidecar(damage):
 
     # Make a version-2 sidecar bound to this primary file, then damage it.
     state_hash = 14695981039346656037
-    with open("tmp/checkpoint.bin", "rb") as state:
+    checkpoint_path = os.path.join(server.slot_save_path, "checkpoint.bin")
+    with open(checkpoint_path, "rb") as state:
         for value in state.read():
             state_hash = ((state_hash ^ value) * 1099511628211) & ((1 << 64) - 1)
     if damage == "stale":
@@ -569,7 +570,7 @@ def test_slot_restore_ignores_invalid_checkpoint_sidecar(damage):
     sidecar = struct.pack("=IIQI", 0x4C434B50, 2, state_hash, 1)
     if damage == "oversized":
         sidecar += struct.pack("=qiiQ", 1, 0, 0, 1 << 63)
-    with open("tmp/checkpoint.bin.ckpt", "wb") as output:
+    with open(checkpoint_path + ".ckpt", "wb") as output:
         output.write(sidecar)
 
     result = server.make_request("POST", "/slots/0?action=restore", data={"filename": "checkpoint.bin"})

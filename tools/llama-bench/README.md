@@ -82,6 +82,7 @@ test parameters:
                                             (default: disabled)
   -nopo, --no-op-offload <0|1>              (default: 0)
   --no-host <0|1>                           (default: 0)
+  --repack <0|1>                            (default: 1)
 
 Multiple values can be given for each parameter by separating them with ','
 or by specifying the parameter multiple times. Ranges can be given as
@@ -237,7 +238,7 @@ CSV prints one header row followed by one row per benchmark result. Repetition s
 Historical upstream output illustrating this format (older schema and hardware; the current additional fields are listed above):
 
 ```csv
-build_commit,build_number,cpu_info,gpu_info,backends,model_filename,model_type,model_size,model_n_params,n_batch,n_ubatch,n_threads,cpu_mask,cpu_strict,poll,type_k,type_v,n_gpu_layers,n_cpu_moe,split_mode,main_gpu,no_kv_offload,flash_attn,devices,tensor_split,tensor_buft_overrides,use_mmap,use_direct_io,embeddings,no_op_offload,no_host,fit_target,fit_min_ctx,n_prompt,n_gen,n_depth,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts
+build_commit,build_number,cpu_info,gpu_info,backends,model_filename,model_type,model_size,model_n_params,n_batch,n_ubatch,n_threads,cpu_mask,cpu_strict,poll,type_k,type_v,n_gpu_layers,n_cpu_moe,split_mode,main_gpu,no_kv_offload,flash_attn,devices,tensor_split,tensor_buft_overrides,use_mmap,use_direct_io,embeddings,no_op_offload,no_host,repack,fit_target,fit_min_ctx,n_prompt,n_gen,n_depth,test_time,avg_ns,stddev_ns,avg_ts,stddev_ts
 "8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","-1","0","layer","0","0","-1","auto","0.00","none","1","0","0","0","0","0","0","512","0","0","2025-04-24T11:57:09Z","70285660","982040","7285.676949","100.064434"
 "8cf427ff","5163","AMD Ryzen 7 7800X3D 8-Core Processor","NVIDIA GeForce RTX 4080","CUDA","models/Qwen2.5-7B-Instruct-Q4_K_M.gguf","qwen2 7B Q4_K - Medium","4677120000","7615616512","2048","512","8","0x0","0","50","f16","f16","-1","0","layer","0","0","-1","auto","0.00","none","1","0","0","0","0","0","0","0","128","0","2025-04-24T11:57:10Z","1067431600","3834831","119.915244","0.430617"
 ```
@@ -286,6 +287,7 @@ Historical upstream output illustrating this format (older schema and hardware; 
     "embeddings": false,
     "no_op_offload": 0,
     "no_host": false,
+    "repack": true,
     "fit_target": 0,
     "fit_min_ctx": 0,
     "n_prompt": 512,
@@ -331,6 +333,7 @@ Historical upstream output illustrating this format (older schema and hardware; 
     "embeddings": false,
     "no_op_offload": 0,
     "no_host": false,
+    "repack": true,
     "fit_target": 0,
     "fit_min_ctx": 0,
     "n_prompt": 0,

@@ -135,6 +135,7 @@ public:
     // per layer
     std::vector<ggml_tensor *> r_l;
     std::vector<ggml_tensor *> s_l;
+    // a second conv history that must stay replicated across devices, so it cannot share the r row
     std::vector<ggml_tensor *> p_l;
 
     // per layer, only allocated when gdn_replay is true: [n_embd_s_ingredient(), mem_size * n_rs_seq]
@@ -169,6 +170,8 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+
+    void state_clear(llama_seq_id seq_id, uint32_t cell_head, uint32_t cell_count);
 };
 
 class llama_memory_recurrent_context : public llama_memory_context_i {

@@ -1046,7 +1046,7 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (split->inputs_capacity > 0) {
         new_cap = 2*split->inputs_capacity;
-        GGML_LOG_WARN("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
+        GGML_LOG_DEBUG("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
     }
     auto * pnew = (struct ggml_tensor **) realloc((void *) split->inputs, new_cap * sizeof(struct ggml_tensor *));
     if (pnew == NULL) {
@@ -1061,7 +1061,7 @@ static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
     int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
     if (sched->graph_inputs_capacity > 0) {
         new_cap = 2*sched->graph_inputs_capacity;
-        GGML_LOG_WARN("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
+        GGML_LOG_DEBUG("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
     }
     auto * pnew = (struct ggml_tensor **) realloc((void *) sched->graph_inputs, new_cap * sizeof(struct ggml_tensor *));
     if (pnew == NULL) {
@@ -1881,7 +1881,10 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
             ggml_backend_synchronize(sched->backends[i]);
         }
 
-        ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
+        if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
+            GGML_LOG_ERROR("%s: failed to reserve graph buffers\n", __func__);
+            return false;
+        }
         if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
             GGML_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             return false;
@@ -1983,6 +1986,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     // get the ids
                     ggml_tensor * ids_tensor = node->src[2];
                     ggml_backend_t ids_backend = split_backend;
+
+                    if (ggml_nelements(ids_tensor) == 0) {
+                        continue;
+                    }
 
                     // if the ids tensor is also an input of the split, it may not have been copied yet to the split backend
                     // in that case, we use the original ids tensor

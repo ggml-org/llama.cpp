@@ -52,12 +52,14 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         std::fill(hparams_idx.n_head_kv_arr.begin(), hparams_idx.n_head_kv_arr.end(), 1);
         hparams_idx.n_embd_head_k_full = model.hparams.indexer_head_size;
         hparams_idx.n_embd_head_v_full = model.hparams.indexer_head_size;
-        hparams_idx.n_embd_head_k_mla_impl = model.hparams.indexer_head_size;
-        hparams_idx.n_embd_head_v_mla_impl = model.hparams.indexer_head_size;
 
         // the cached indexer keys are raw, rotation happens after pooling at read time, so a
         // K-shift must not rotate them while the stream copies in the same update still apply
         hparams_idx.rope_type = LLAMA_ROPE_TYPE_NONE;
+
+        // fool llama_kv_cache into thinking this is a MLA cache, so it won't cache V tensors
+        hparams_idx.n_embd_head_k_mla_impl = model.hparams.indexer_head_size;
+        hparams_idx.n_embd_head_v_mla_impl = model.hparams.indexer_head_size;
 
         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 

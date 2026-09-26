@@ -23,6 +23,10 @@ import type {
 	ApiModelsSseData,
 	ApiModelsSseEvent,
 	ApiModelListResponse,
+	ApiModelLoadStage,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
+	ApiModelsSseProgress,
 	ApiProcessingState,
 	ApiRouterModelMeta,
 	ApiRouterModelsListResponse,
@@ -52,6 +56,7 @@ import type {
 	DatabaseMessageExtraVideoFile,
 	ExportedConversation,
 	ExportedConversations,
+	ModelLoadProgress,
 	// Model types
 	ModelLoadProgress,
 	ModelModalities,
@@ -137,7 +142,6 @@ declare global {
 
 declare global {
 	interface Window {
-		idxThemeStyle?: number;
 		idxCodeBlock?: number;
 
 		// File System Access API - not in the DOM lib and unavailable in some browsers

@@ -1259,16 +1259,27 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
                 }
             }
         }
+        // TODO: revisit once the graph allocator has been refactored, see https://github.com/ggml-org/llama.cpp/pull/25051#issuecomment-4842873396
+        ggml_backend_buffer_t init_buf = simple_buf;
         if (t_ij->view_src != nullptr) {
             t_ij->data = (char *) t_ij->view_src->data + t_ij->view_offs;
+            // views inherit the source slice's concrete sub-buffer (issue 22197)
+            if (tensor->view_src != nullptr && ggml_backend_buffer_is_meta(tensor->view_src->buffer)
+                    && t_ij->view_src->buffer != nullptr) {
+                t_ij->buffer = t_ij->view_src->buffer;
+                init_buf     = t_ij->view_src->buffer;
+            }
         } else if (simple_buf != nullptr) {
+            if (ggml_backend_buffer_is_multi_buffer(simple_buf)) {
+                GGML_ABORT("multi buffers are not supported by the meta backend");
+            }
             t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
         }
 
-        if (simple_buf) {
+        if (init_buf) {
             // the backend that owns the buffer will set .extra
-            ggml_backend_buffer_init_tensor(simple_buf, t_ij);
+            ggml_backend_buffer_init_tensor(init_buf, t_ij);
         } else {
             t_ij->extra = tensor->extra;
         }

@@ -206,6 +206,7 @@ int main()
         root ::= "a"{5,3}
     )""");
 
+
     verify_parsing(R"""(
         root  ::= "a"
     )""", {

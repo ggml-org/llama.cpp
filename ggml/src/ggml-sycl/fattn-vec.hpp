@@ -74,6 +74,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
                         const int32_t nb31,
                         const int32_t nb32,
                         const int64_t nb33) {
+
 #ifdef SYCL_FLASH_ATTN
     // Skip unused kernel variants for faster compilation:
 
@@ -478,7 +479,6 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
             KQ_max_shared[j*warp_size+item_ct1.get_local_id(1)] = KQ_max[j];
         }
     }
-
 
     item_ct1.barrier(sycl::access::fence_space::local_space);
 

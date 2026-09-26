@@ -17,6 +17,7 @@
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
+struct llama_model;
 
 // available models
 enum llm_type {
@@ -116,6 +117,8 @@ enum llm_type {
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
     LLM_TYPE_A13B,
+    LLM_TYPE_1B_A400M, // Granite3 MoE
+    LLM_TYPE_3B_A800M, // Granite3 MoE
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
     LLM_TYPE_7_9B_A1_3B, // Ling-3.0-tiny
@@ -125,15 +128,17 @@ enum llm_type {
     LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_26B_A4B, // Gemma4
     LLM_TYPE_30B_A3B,
-    LLM_TYPE_118B_A8B,
     LLM_TYPE_31B_A3_5B,
+    LLM_TYPE_32B_A9B, // Granite4 Hybrid
     LLM_TYPE_35B_A3B, // Qwen3.5
     LLM_TYPE_48B_A3B, // Kimi Linear
+    LLM_TYPE_75B_A9B, // Nemotron 3 Puzzle
     LLM_TYPE_80B_A3B, // Qwen3 Next
     LLM_TYPE_A3B,     // Qwen3.8 Flash Next
     LLM_TYPE_100B_A6B,
     LLM_TYPE_102B_A12B, // Solar-Open
     LLM_TYPE_106B_A12B, // GLM-4.5-Air
+    LLM_TYPE_118B_A8B,  // Laguna-S-2
     LLM_TYPE_120B_A12B, // Nemotron 3 Super
     LLM_TYPE_122B_A10B, // Qwen3.5
     LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
@@ -368,6 +373,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_b   = nullptr; // b3
     struct ggml_tensor * ffn_act    = nullptr;
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
+    struct ggml_tensor * ffn_exp_probs_b_vl = nullptr; // deepseek4 vision (bias for image tokens)
     struct ggml_tensor * ffn_gate_tid2eid = nullptr;
 
     struct ggml_tensor * dflash_attn_conv_base = nullptr;
@@ -610,6 +616,19 @@ struct llama_meta_device_get_split_state_userdata {
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
+struct llama_prec_policy {
+    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op (unused for now)
+    // TODO: migrate ad-hoc ggml_prec_set_acc() calls to this container + update apply() to use it
+    std::unordered_map<const ggml_tensor *, ggml_prec> prec_acc;
+
+    // the key is the weight tensor `res->src[0]`, stores the recommended activation precision type
+    std::unordered_map<const ggml_tensor *, ggml_prec> prec_src1;
+
+    bool apply(ggml_tensor * res) const;
+
+    void load(llama_model_loader & ml, const llama_model & model);
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -618,6 +637,9 @@ struct llama_model {
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
+
+    // per-tensor activation precision policy
+    llama_prec_policy prec_policy;
 
     // for classifier models
     std::vector<std::string> classifier_labels;
@@ -644,11 +666,13 @@ struct llama_model {
     struct ggml_tensor * nextn_proj_pre  = nullptr;
     struct ggml_tensor * nextn_proj_post = nullptr;
 
+    // hrm-text initial low-cycle state
+    struct ggml_tensor * hrm_z_l_init = nullptr;
+
     // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;
-
 
     // classifier
     struct ggml_tensor * cls       = nullptr;
@@ -813,6 +837,9 @@ struct llama_model_base : public llama_model {
                 int64_t n_embd_, int64_t n_embd_q_, int64_t n_embd_k_, int64_t n_embd_v_,
                 int flags);
 
+    // helper: read the SWA pattern as one flag per layer, or as a period expanded by set_swa_pattern
+    void load_swa_pattern(llama_model_loader & ml, uint32_t n_pattern, bool dense_first = false);
+
     void load_stats  (llama_model_loader & ml) override;
     void load_hparams(llama_model_loader & ml) override;
     void load_vocab  (llama_model_loader & ml) override;
@@ -845,7 +872,7 @@ const char * llm_type_name(llm_type type);
     const int64_t n_token_types  = vocab.n_token_types();    GGML_UNUSED(n_token_types); \
     const int64_t n_rot          = hparams.n_rot();          GGML_UNUSED(n_rot); \
     const int64_t n_expert       = hparams.n_expert;         GGML_UNUSED(n_expert); \
-    const int64_t n_expert_used  = hparams.n_expert_used;    GGML_UNUSED(n_expert_used); \
+    const int64_t n_expert_used  = hparams.n_expert_used();  GGML_UNUSED(n_expert_used); \
     const int64_t n_ctx_train    = hparams.n_ctx_train;      GGML_UNUSED(n_ctx_train);
 
 // For internal test use

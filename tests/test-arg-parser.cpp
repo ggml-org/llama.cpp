@@ -179,7 +179,6 @@ static void test(void) {
         std::remove(path);
     }
 
-
     {
         common_params base;
         base.n_parallel = 4;

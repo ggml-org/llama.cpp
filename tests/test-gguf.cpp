@@ -1167,15 +1167,17 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
 
 enum roundtrip_read_mode {
     ROUNDTRIP_READ_MODE_FILE,
+    ROUNDTRIP_READ_MODE_FILE_OFFSET, // GGUF embedded after some bytes of a bigger file
     ROUNDTRIP_READ_MODE_BUFFER,
     ROUNDTRIP_READ_MODE_CALLBACK,
 };
 
 static const char * roundtrip_read_mode_name(const roundtrip_read_mode mode) {
     switch (mode) {
-        case ROUNDTRIP_READ_MODE_FILE:     return "file";
-        case ROUNDTRIP_READ_MODE_BUFFER:   return "buffer";
-        case ROUNDTRIP_READ_MODE_CALLBACK: return "callback";
+        case ROUNDTRIP_READ_MODE_FILE:        return "file";
+        case ROUNDTRIP_READ_MODE_FILE_OFFSET: return "file_offset";
+        case ROUNDTRIP_READ_MODE_BUFFER:      return "buffer";
+        case ROUNDTRIP_READ_MODE_CALLBACK:    return "callback";
     }
 
     GGML_ABORT("fatal error");
@@ -1214,6 +1216,12 @@ static std::pair<int, int> test_roundtrip(
     GGML_ASSERT(file);
 #endif // _WIN32
 
+    // not a multiple of any alignment, so the data section padding must be relative to the GGUF start
+    const long prefix = read_mode == ROUNDTRIP_READ_MODE_FILE_OFFSET ? 7 : 0;
+    for (long i = 0; i < prefix; ++i) {
+        fputc(0xAB, file);
+    }
+
     gguf_write_to_file_ptr(gguf_ctx_0, file, only_meta);
     rewind(file);
 
@@ -1236,6 +1244,7 @@ static std::pair<int, int> test_roundtrip(
         };
         gguf_ctx_1 = gguf_init_from_callback(read_buffer_callback, &reader, 4096, 4ull << 30 /* 4GB */, gguf_params);
     } else {
+        GGML_ASSERT(fseek(file, prefix, SEEK_SET) == 0);
         gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
     }
 
@@ -1448,6 +1457,11 @@ int main(int argc, char ** argv) {
 
         for (bool only_meta : {true, false}) {
             std::pair<int, int> result = test_roundtrip(dev, seed, only_meta, ROUNDTRIP_READ_MODE_FILE);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_FILE_OFFSET);
             npass += result.first;
             ntest += result.second;
         }

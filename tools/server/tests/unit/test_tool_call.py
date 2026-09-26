@@ -21,7 +21,6 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
     server.model_alias = "tinyllama-2-tool-call"
-    server.server_port = 8081
     server.n_slots = 1
     server.n_ctx = 8192
     server.n_batch = 2048

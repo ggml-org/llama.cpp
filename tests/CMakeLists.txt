@@ -10,7 +10,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${TEST_SOURCES})
-    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common)
+    target_link_libraries(${TEST_TARGET} PRIVATE llama llama-common) # TODO: [TAG_TESTS_LLAMA_LINK]
     if (LLAMA_TESTS_INSTALL)
         install(TARGETS ${TEST_TARGET} RUNTIME)
     endif()
@@ -223,7 +223,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     # llama_build_and_test(test-double-float.cpp) # SLOW
 
-    llama_build_and_test(test-llama-archs.cpp)
+    llama_build(test-llama-archs.cpp)
 
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
@@ -276,6 +276,15 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-kimi-k3
+        LABEL main
+        ARGS -m "${MODEL_DIR}/kimi-k3-moe.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-kimi-k3 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 
     # Test state save/load functionality across all architectures, using the generated dummy models
     llama_test(
@@ -284,6 +293,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ARGS --models "${MODEL_DIR}" -t 4 -tb 4
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+
+    llama_build(test-fusion.cpp)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -291,6 +302,7 @@ llama_build_and_test(test-jinja.cpp)
 if (LLAMA_SUBPROCESS)
     llama_test(test-jinja NAME test-jinja-py ARGS -py LABEL python)
 endif()
+llama_build_and_test(test-json-schema.cpp)
 llama_build_and_test(test-chat-auto-parser.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp)
 # debug tool for chat template differential analysis (not registered as a test, run it manually)
@@ -321,7 +333,7 @@ add_test(NAME test-download-model COMMAND ${CMAKE_COMMAND}
     -DDEST=${MODEL_DEST}
     -DNAME=${MODEL_NAME}
     -DHASH=${MODEL_HASH}
-    -P ${CMAKE_SOURCE_DIR}/cmake/download-models.cmake
+    -P ${PROJECT_SOURCE_DIR}/cmake/download-models.cmake
 )
 set_tests_properties(test-download-model PROPERTIES FIXTURES_SETUP test-download-model)
 
@@ -342,7 +354,6 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
 endif()
-llama_build_and_test(test-backend-ops.cpp)
 if (NOT LLAMA_USE_SYSTEM_GGML)
     llama_build(test-moe-cache.cpp)
     llama_test(test-moe-cache LABEL "main;backend")
@@ -354,6 +365,10 @@ endif()
 
 llama_build_and_test(test-moe-cache-fit.cpp)
 
+# TODO: make this test (and others) not link `libllama` as it is not needed [TAG_TESTS_LLAMA_LINK]
+llama_build(test-backend-ops.cpp)
+
+llama_build_and_test(test-tiled-mulmat.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
@@ -367,7 +382,7 @@ if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()
 
-if (NOT GGML_BACKEND_DL)
+if (NOT GGML_BACKEND_DL AND GGML_CPU)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)
     llama_build_and_test(test-quantize-fns.cpp)
@@ -411,7 +426,6 @@ llama_build_and_test(test-turbo-quant.c LABEL "turbo")
 if (NOT LLAMA_USE_SYSTEM_GGML)
     # Needs non-public ggml-impl.h
     llama_build_and_test(test-gguf.cpp)
-
     # Needs non-public ggml{,-backend}-impl.h
     llama_build_and_test(test-alloc.cpp)
 endif()

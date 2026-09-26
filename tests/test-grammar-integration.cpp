@@ -976,7 +976,7 @@ static void test_json_schema() {
     // Otherwise, this test structure is the same.
 
     test_schema(
-        "empty schema (object)",
+        "empty schema (any value)",
         // Schema
         R"""(
             {}
@@ -985,14 +985,16 @@ static void test_json_schema() {
         {
             R"""({})""",
             R"""({"foo": "bar"})""",
-        },
-        // Failing strings
-        {
-            "",
             "[]",
             "null",
             R"""("")""",
             "true",
+        },
+        // Failing strings
+        {
+            "",
+            R"""({"foo"})""",
+            "foo",
         }
     );
 
