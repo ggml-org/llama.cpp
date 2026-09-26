@@ -17,12 +17,10 @@
 
 // Chunked gated-delta-net prefill (non-KDA, S_v == D == 128, K == 1).
 // Faithful port of the CUDA MMA kernel (PR 29353): one workgroup owns one
-// value block [v0, v0+V) of one (seq, head); its 8 subgroups split the D x V
-// state into round-robin [TM x TN] register tiles, mirror them to shared each
-// chunk, and read the full state back for the projections. The deep (K=D)
-// phase splits its 6 output tiles one per subgroup (sg0 gram, sg1 pmat,
-// sg2-3 qs=Q@S, sg4-5 ks=K@S) so no subgroup does two matmuls back to back.
-// bf16 hi/lo 3x product for ~fp32 accuracy.
+// value block [v0, v0+V) of one (seq, head); its subgroups split the D x V
+// state into round-robin [TM x TN] register tiles, mirror them (shared, or gmem
+// scratch when GMEM_MIRROR) each chunk, and read the full state back for the
+// projections. bf16 hi/lo 3x product for ~fp32 accuracy.
 //
 // One source, two coopmat backends selected by preproc:
 //   COOPMAT2  -> GL_NV_cooperative_matrix2 (flexible dims, coopMatPerElementNV)
@@ -36,7 +34,9 @@
 #define D  128         // head dim / value dim
 #define TM 16          // tile rows
 #define TN 16          // tile cols (bf16 cm has only m16n16k16; n8 would pad)
-#define V  64          // value columns per workgroup block
+#ifndef V
+#define V  64          // value columns per workgroup block (V=128 = whole head)
+#endif
 #define NSUB 16        // subgroups per workgroup
 #ifndef SUBGROUP_SIZE
 #define SUBGROUP_SIZE 32   // lanes per subgroup (32 = NVIDIA/wave32; 64 = RDNA wave64)
@@ -49,6 +49,16 @@
 #endif
 #define PAD 8          // shared padding to break COL-load bank conflicts (keep LDP*2 a multiple of 16B)
 #define LDP (D + PAD)  // padded leading dim for q/k [CxD] and state mirror [DxV]
+
+// GMEM_MIRROR (set by the shader generator for the whole-head V=128 variant) mirrors
+// the [D x V] state to a global scratch buffer instead of shared, so V can exceed the
+// LDS budget. The default (V=64) keeps the mirror in shared.
+// MERGE_QSKS runs qs=Q@S and ks=K@S on one subgroup (halves state reads) - a win on
+// the memory/issue-bound coopmat1 (RDNA) path. The coopmat2 (NVIDIA) path is mma-
+// product-bound, so it splits them across subgroups to keep the mma chain short.
+#if !defined(COOPMAT2)
+#define MERGE_QSKS
+#endif
 
 #define STATE_TILES ((D / TM) * (V / TN))
 #define PER_WARP    (STATE_TILES / NSUB)
@@ -80,10 +90,15 @@ layout(binding = 3) readonly  buffer GBuf     { float data_g[];     };
 layout(binding = 4) readonly  buffer BetaBuf  { float data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { float data_state[]; };
 layout(binding = 6)           buffer DstBuf   { float data_dst[];   };
+#ifdef GMEM_MIRROR
+layout(binding = 7) coherent  buffer MirrorBuf { OPD data_mirror[]; };
+#endif
 
 shared OPD sh_qh[C * LDP], sh_ql[C * LDP];   // q*scale hi/lo (D padded)
 shared OPD sh_kh[C * LDP], sh_kl[C * LDP];   // k hi/lo (D padded)
+#ifndef GMEM_MIRROR
 shared OPD sh_sh[LDP * V], sh_sl[LDP * V];   // state mirror [D x V] column-major (D padded)
+#endif
 shared OPD sh_dh[C * V], sh_dl[C * V];   // delta (pre-inv) / delta2 [C x V] row-major
 shared OPD sh_soh[C * V], sh_sol[C * V]; // solved [C x V] row-major
 shared OPD sh_ph[C * C], sh_pl[C * C];   // decayed P
@@ -193,6 +208,13 @@ void main() {
 
     const uint state_base = (seq_id * p.H + head_id) * (D * D);
 
+#ifdef GMEM_MIRROR
+    const uint mir_stride = uint(LDP) * V;
+    const uint mir_block  = (head_id * p.n_seqs + seq_id) * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+    const uint mir_h      = mir_block * mir_stride * 2u;
+    const uint mir_l      = mir_h + mir_stride;
+#endif
+
     coopmat<float, SG, TM, TN, MACC> state[PER_WARP];
     [[unroll]] for (uint j = 0; j < PER_WARP; j++) {
         const uint ti = sg + j * NSUB;
@@ -229,10 +251,23 @@ void main() {
             const coopmat<OPD, SG, TM, TN, ACCB> hi = coopmat<OPD, SG, TM, TN, ACCB>(state[j]);
             const coopmat<float, SG, TM, TN, MACC> hf = coopmat<float, SG, TM, TN, MACC>(hi);
             const coopmat<OPD, SG, TM, TN, ACCB> lo = coopmat<OPD, SG, TM, TN, ACCB>(state[j] - hf);
+#ifdef GMEM_MIRROR
+            coopMatStore(hi, data_mirror, mir_h + off, LDP, COL);
+            coopMatStore(lo, data_mirror, mir_l + off, LDP, COL);
+#else
             coopMatStore(hi, sh_sh, off, LDP, COL);
             coopMatStore(lo, sh_sl, off, LDP, COL);
+#endif
         }
+#ifdef GMEM_MIRROR
+        // mirror lives in gmem but is produced+consumed within this workgroup, so a
+        // workgroup-scope buffer barrier is sufficient (avoids a device-scope L2 flush).
+        controlBarrier(gl_ScopeWorkgroup, gl_ScopeWorkgroup,
+                       gl_StorageSemanticsBuffer | gl_StorageSemanticsShared,
+                       gl_SemanticsAcquireRelease);
+#else
         barrier();
+#endif
 
         // prefetch next chunk's q/k into registers, overlapping the deep phase
         const uint nvalid = t0 + C < p.n_tokens ? min(C, p.n_tokens - (t0 + C)) : 0u;
@@ -244,9 +279,9 @@ void main() {
             sh_carry[tid] = exp(plast - sh_prefix[tid]);
         }
 
-        // Deep (K=D) phase, subgroups sg0-5 busy (each one output tile, balanced):
-        //   sg0: gram (K@K^T)->L   sg1: pmat (Q@K^T)->P
-        //   sg2,3: qs=Q@S -> base  sg4,5: ks=K@S -> delta
+        // Deep (K=D) phase: sg0 gram (K@K^T)->L, sg1 pmat (Q@K^T)->P, then one value
+        // tile per subgroup (sg2..2+VT-1) computes qs=Q@S (->base) and ks=K@S (->delta)
+        // together, sharing the state B-tiles.
         coopmat<float, SG, C, TN, MACC> base_r = coopmat<float, SG, C, TN, MACC>(0);
         if (sg < 2 * CT) {
             const bool gram = sg < CT;
@@ -271,7 +306,47 @@ void main() {
             } else {
                 coopMatPerElement(x, x, StorePmat, c_o);
             }
+#ifdef MERGE_QSKS
         } else if (sg - 2 * CT < VT) {
+            // qs=Q@S (->base) and ks=K@S (->delta) share the state B-tiles: load S once
+            // per k-step and feed both matmuls, halving state-mirror reads. One value
+            // tile per subgroup. Best when memory/issue-bound (RDNA); doubles the deep
+            // mma critical path so the split below is used when mma-product-bound (NV).
+            const uint ti  = sg - 2 * CT;
+            const uint c_o = ti * TN;
+            coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
+            coopmat<float, SG, C, TN, MACC> ks = coopmat<float, SG, C, TN, MACC>(0);
+            [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
+                coopmat<OPD, SG, C, KT, MUA> qh, ql, kh, kl;
+                coopMatLoad(qh, sh_qh, kk, LDP, ROW);
+                coopMatLoad(ql, sh_ql, kk, LDP, ROW);
+                coopMatLoad(kh, sh_kh, kk, LDP, ROW);
+                coopMatLoad(kl, sh_kl, kk, LDP, ROW);
+                coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
+#ifdef GMEM_MIRROR
+                coopMatLoad(sbh, data_mirror, mir_h + c_o * LDP + kk, LDP, COL);
+                coopMatLoad(sbl, data_mirror, mir_l + c_o * LDP + kk, LDP, COL);
+#else
+                coopMatLoad(sbh, sh_sh, c_o * LDP + kk, LDP, COL);
+                coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
+#endif
+                PRODUCT(qs, qh, ql, sbh, sbl);
+                PRODUCT(ks, kh, kl, sbh, sbl);
+            }
+            coopMatPerElement(base_r, qs, ApplyExpPrefix);
+            const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
+            coopmat<float, SG, C, TN, MACC> delta;
+            coopMatPerElement(delta, ks, ComputeDelta, v_base, p.sv2, valid);
+            const coopmat<OPD, SG, C, TN, ACCB> dh = coopmat<OPD, SG, C, TN, ACCB>(delta);
+            const coopmat<float, SG, C, TN, MACC> df = coopmat<float, SG, C, TN, MACC>(dh);
+            const coopmat<OPD, SG, C, TN, ACCB> dl = coopmat<OPD, SG, C, TN, ACCB>(delta - df);
+            coopMatStore(dh, sh_dh, c_o, V, ROW);
+            coopMatStore(dl, sh_dl, c_o, V, ROW);
+        }
+#else
+        } else if (sg - 2 * CT < VT) {
+            // qs=Q@S -> base on its own subgroup; ks below on separate subgroups so the
+            // deep-phase mma critical path stays short (mma-product-bound devices).
             const uint ti  = sg - 2 * CT;
             const uint c_o = ti * TN;
             coopmat<float, SG, C, TN, MACC> qs = coopmat<float, SG, C, TN, MACC>(0);
@@ -280,16 +355,17 @@ void main() {
                 coopMatLoad(qh, sh_qh, kk, LDP, ROW);
                 coopMatLoad(ql, sh_ql, kk, LDP, ROW);
                 coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
+#ifdef GMEM_MIRROR
+                coopMatLoad(sbh, data_mirror, mir_h + c_o * LDP + kk, LDP, COL);
+                coopMatLoad(sbl, data_mirror, mir_l + c_o * LDP + kk, LDP, COL);
+#else
                 coopMatLoad(sbh, sh_sh, c_o * LDP + kk, LDP, COL);
                 coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
+#endif
                 PRODUCT(qs, qh, ql, sbh, sbl);
             }
             coopMatPerElement(base_r, qs, ApplyExpPrefix);
         } else {
-            // ks=K@S tiles loop over the leftover subgroups so V is not tied to
-            // NSUB: V=32 keeps one tile per subgroup (sg6,7 idle), V=64 gives each
-            // of sg6,7 two ks tiles. qs stays on its own subgroups so base_r and
-            // the later out phase remain register-coupled.
             const uint ks_nsg = NSUB - (2 * CT + VT);
             for (uint ti = sg - (2 * CT + VT); ti < VT; ti += ks_nsg) {
                 const uint c_o = ti * TN;
@@ -299,8 +375,13 @@ void main() {
                     coopMatLoad(kh, sh_kh, kk, LDP, ROW);
                     coopMatLoad(kl, sh_kl, kk, LDP, ROW);
                     coopmat<OPD, SG, KT, TN, MUB> sbh, sbl;
+#ifdef GMEM_MIRROR
+                    coopMatLoad(sbh, data_mirror, mir_h + c_o * LDP + kk, LDP, COL);
+                    coopMatLoad(sbl, data_mirror, mir_l + c_o * LDP + kk, LDP, COL);
+#else
                     coopMatLoad(sbh, sh_sh, c_o * LDP + kk, LDP, COL);
                     coopMatLoad(sbl, sh_sl, c_o * LDP + kk, LDP, COL);
+#endif
                     PRODUCT(ks, kh, kl, sbh, sbl);
                 }
                 const uint v_base = seq_id * p.sv3 + head_id * p.sv1 + v0 + c_o + t0 * p.sv2;
@@ -313,6 +394,7 @@ void main() {
                 coopMatStore(dl, sh_dl, c_o, V, ROW);
             }
         }
+#endif
         barrier();
 
         // invert (I + L) by forward substitution: one subgroup per row, lane = column
