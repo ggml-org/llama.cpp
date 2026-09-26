@@ -286,11 +286,17 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                                      ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(indexer_k, "indexer_k", il);
 
-                // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
-                cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
-                cb(indexer_k, "indexer_k", il);
+                // perform Hadamard transform on indexer q and k when the LID cache
+                // has rotation enabled (the kv-cache attn_rot override guarantees the
+                // rot tensor for DeepSeek DSA archs; GLM-DSA stores indexer K
+                // unrotated, so skip the transform to stay consistent with the
+                // write side)
+                if (inp_attn_dsa->self_k_rot_lid) {
+                    indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                    cb(indexer_q, "indexer_q", il);
+                    indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                    cb(indexer_k, "indexer_k", il);
+                }
 
                 // store indexer keys to KV cache
                 const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();
@@ -303,6 +309,11 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
 
                 // get cached indexer keys
                 indexer_k = mctx_lid->get_k(ctx0, il);
+
+                // TurboQuant: turbo K is padded to a 128-element block and
+                // WHT-rotated at quantize time; match indexer_q so the dot
+                // product with ggml_lightning_indexer stays width-aligned.
+                indexer_q = build_attn_pad_turbo_query(indexer_q, indexer_k, mctx_lid->get_turbo_innerq_scale_inv());
 
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];

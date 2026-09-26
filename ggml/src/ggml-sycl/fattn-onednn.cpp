@@ -305,12 +305,12 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
             const bool k_gemma = k_non_dense &&
                 ((int64_t)K->nb[2] < (int64_t)K->ne[1] * (int64_t)K->nb[1]);
             if (ggml_is_contiguously_allocated(K) && !k_non_dense) {
-                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, K);
                 to_fp16(K_data, K_ptr, ggml_nelements(K), stream);
             } else {
                 const size_t bs = ggml_blck_size(K->type);
                 const size_t ts = ggml_type_size(K->type);
-                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type, K);
                 int64_t s01, s02, s03;
                 if (k_gemma) {
                     const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
@@ -339,12 +339,12 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
             const bool v_gemma = v_non_dense &&
                 ((int64_t)V->nb[2] < (int64_t)V->ne[1] * (int64_t)V->nb[1]);
             if (ggml_is_contiguously_allocated(V) && !v_non_dense) {
-                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, V);
                 to_fp16(V_data, V_ptr, ggml_nelements(V), stream);
             } else {
                 const size_t bs = ggml_blck_size(V->type);
                 const size_t ts = ggml_type_size(V->type);
-                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type, V);
                 int64_t s01, s02, s03;
                 if (v_gemma) {
                     const int64_t blk_per_row = (int64_t)V->ne[0] / bs;

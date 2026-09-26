@@ -90,6 +90,7 @@ class ServerProcess:
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
+    api_key_file: str | None = None
     models_dir: str | None = None
     models_max: int | None = None
     models_preset: str | None = None
@@ -116,13 +117,16 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
+    ui_mcp_proxy_allow: List[str] | None = None
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
     server_tools_runtime: str | None = None
+    server_tools_cwd_root: str | None = None
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    cors_credentials: bool | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -183,6 +187,8 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.cors_credentials is not None:
+            server_args.append("--cors-credentials" if self.cors_credentials else "--no-cors-credentials")
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -242,6 +248,8 @@ class ServerProcess:
             server_args.extend(["--spec-type", self.spec_type])
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
+        if self.api_key_file:
+            server_args.extend(["--api-key-file", self.api_key_file])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
@@ -281,10 +289,14 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.ui_mcp_proxy_allow:
+            server_args.extend(["--ui-mcp-proxy-allow", ",".join(self.ui_mcp_proxy_allow)])
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
         if self.server_tools_runtime:
             server_args.extend(["--tools-runtime", self.server_tools_runtime])
+        if self.server_tools_cwd_root:
+            server_args.extend(["--tools-cwd-root", self.server_tools_cwd_root])
         if self.mcp_servers_config:
             server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
         if self.mcp_servers_json:

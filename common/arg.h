@@ -110,6 +110,9 @@ namespace common_arg_utils {
     bool is_truthy(const std::string & value);
     bool is_falsey(const std::string & value);
     bool is_autoy(const std::string & value);
+    std::vector<std::string> find_unknown_env_vars(
+        const std::vector<common_arg> & options,
+        const std::vector<std::string> & environment);
 }
 
 struct common_params_context {

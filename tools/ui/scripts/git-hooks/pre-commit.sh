@@ -14,7 +14,7 @@ cd "$REPO_ROOT/tools/ui"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
-    echo "❌ node_modules not found. Run 'npm ci' first."
+    echo "ERROR: node_modules not found. Run 'npm ci' first."
     exit 1
 fi
 
@@ -45,13 +45,13 @@ if git stash list | grep -q "$stash_name"; then
 fi
 
 if [ $format_ok -ne 0 ]; then
-    echo "❌ Format failed"
+    echo "ERROR: Format failed"
     exit 1
 fi
 if [ $check_ok -ne 0 ]; then
-    echo "❌ Type check failed"
+    echo "ERROR: Type check failed"
     exit 1
 fi
 
-echo "✅ Pre-commit checks passed"
+echo "Pre-commit checks passed"
 exit 0

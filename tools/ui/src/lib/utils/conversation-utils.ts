@@ -86,6 +86,11 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 	const visited = new Set<string>();
 
 	function walk(conv: DatabaseConversation, depth: number) {
+		// Guard against a cyclic forkedFromConversationId chain (corrupt or
+		// hand-edited data): without this, revisiting an already-walked node
+		// recurses forever instead of stopping at a bounded tree.
+		if (visited.has(conv.id)) return;
+
 		visited.add(conv.id);
 		result.push({ conversation: conv, depth });
 

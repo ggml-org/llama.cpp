@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstring>
+#include <cwchar>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -44,9 +45,22 @@
 #include <string.h>
 #include <fcntl.h>
 #include <io.h>
+#ifndef fileno
+#define fileno _fileno
+#endif
+#ifndef isatty
+#define isatty _isatty
+#endif
 #else
 #include <sys/ioctl.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#endif
+#endif
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+extern char ** environ;
 #endif
 
 #if defined(__linux__)
@@ -68,6 +82,55 @@ common_time_meas::~common_time_meas() {
     if (t_start_us >= 0) {
         t_acc += ggml_time_us() - t_start_us;
     }
+}
+
+#ifdef _WIN32
+static std::string wide_to_utf8(const wchar_t * ws) {
+    if (!ws || !*ws) {
+        return {};
+    }
+
+    const int len = static_cast<int>(std::wcslen(ws));
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
+    if (bytes == 0) {
+        return {};
+    }
+
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
+
+    return utf8;
+}
+#endif
+
+std::vector<std::string> common_get_process_environment() {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    LPWCH env_block = GetEnvironmentStringsW();
+    if (!env_block) {
+        return env;
+    }
+    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
+        env.emplace_back(wide_to_utf8(e));
+    }
+    FreeEnvironmentStringsW(env_block);
+#else
+#if defined(__APPLE__)
+    char *** process_environment_ptr = _NSGetEnviron();
+    char ** process_environment = process_environment_ptr == nullptr ? nullptr : *process_environment_ptr;
+#else
+    char ** process_environment = environ;
+#endif
+    if (process_environment == nullptr) {
+        return env;
+    }
+    for (char ** e = process_environment; *e != nullptr; e++) {
+        env.emplace_back(*e);
+    }
+#endif
+
+    return env;
 }
 
 //
@@ -1248,6 +1311,16 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     if (params.fit_params) {
         COM_TRC("%s", "fitting params to device memory ...\n");
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+        // Snapshot the pre-fit state so a failed fit can be rolled back to a
+        // documented fallback instead of continuing with an unproven placement.
+        const llama_model_params mparams_before = mparams;
+        const llama_context_params cparams_before = cparams;
+        const std::vector<float> tensor_split_before(
+                params.tensor_split, params.tensor_split + llama_max_devices());
+        const std::vector<llama_model_tensor_buft_override> tbo_before =
+            params.tensor_buft_overrides;
+        const common_moe_cache_params moe_cache_before = params.moe_cache;
+
 
         // the draft context is created from the same base params and follows the main context, fit both together
         const bool has_draft = params.speculative.has_dft();
@@ -1269,14 +1342,44 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             /*.cparams      =*/ &cparams_dft,
             /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
         };
-
-        common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+        const common_params_fit_status fit_status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
+            &params.moe_cache,
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
             has_draft || spec_mtp ? &extra : nullptr,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+        if (fit_status == COMMON_PARAMS_FIT_STATUS_ERROR) {
+            throw std::runtime_error(
+                "failed to fit parameters to device memory (hard error); retry with -fit off");
+        }
+        if (fit_status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+            COM_ERR("%s", "fit could not prove a viable placement; restoring the pre-fit parameters\n");
+            mparams = mparams_before;
+            cparams = cparams_before;
+            std::copy(tensor_split_before.begin(), tensor_split_before.end(), params.tensor_split);
+            params.tensor_buft_overrides = tbo_before;
+            params.moe_cache = moe_cache_before;
+            // Re-point at the restored arrays (the override vector may have moved).
+            mparams.tensor_split = params.tensor_split;
+            mparams.tensor_buft_overrides = params.tensor_buft_overrides.empty()
+                ? nullptr : params.tensor_buft_overrides.data();
+        }
+    }
+
+    if (params.moe_cache.mode_explicit || params.moe_cache.fit_selected) {
+        const char * mode = params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF ? "off" :
+            params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO ? "auto" :
+            params.moe_cache.mode == COMMON_MOE_CACHE_MODE_SOFT ? "soft" : "on";
+        const char * placement = params.moe_cache.fit_selected ? " placement=cache-aware-fit" : "";
+        if (params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF) {
+            COM_INF("%s", "MoE cache: mode=off\n");
+        } else if (params.moe_cache.budget_mib > 0) {
+            COM_INF("MoE cache: mode=%s budget=%zu MiB/device%s; use -lv 4 for resolved backend state, actual pools, and statistics\n", mode, params.moe_cache.budget_mib, placement);
+        } else {
+            COM_INF("MoE cache: mode=%s budget=free-minus-reserve%s; use -lv 4 for resolved backend state, actual pools, and statistics\n", mode, placement);
+        }
     }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -1663,7 +1766,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
-    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end() ||
+                                          std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params.speculative.types.end();
 
     return mparams;
 }
@@ -1673,11 +1777,20 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
+    cparams.n_outputs_max     = params.n_outputs_max;
     cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    cparams.gdn_replay        = params.gdn_replay;
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
+
+    if (cparams.n_rs_seq > 0) {
+        const uint32_t n_batch_min = cparams.n_rs_seq + 2;
+        cparams.n_batch  = std::max(cparams.n_batch,  n_batch_min);
+        cparams.n_ubatch = std::max(cparams.n_ubatch, n_batch_min);
+    }
+
     cparams.n_threads         = params.cpuparams.n_threads;
     cparams.n_threads_batch   = params.cpuparams_batch.n_threads == -1 ?
                                 params.cpuparams.n_threads : params.cpuparams_batch.n_threads;
@@ -1703,6 +1816,22 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    if (params.moe_cache.mode_explicit) {
+        switch (params.moe_cache.mode) {
+            case COMMON_MOE_CACHE_MODE_OFF:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_OFF;
+                break;
+            case COMMON_MOE_CACHE_MODE_AUTO:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_AUTO;
+                break;
+            case COMMON_MOE_CACHE_MODE_ON:
+            case COMMON_MOE_CACHE_MODE_SOFT:
+                cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_ON;
+                break;
+        }
+    }
+    cparams.moe_cache_budget_mib = params.moe_cache.budget_mib;
 
     return cparams;
 }
@@ -1749,6 +1878,11 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
     auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
     free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+    if (!ggml_threadpool_new_fn || !free_fn) {
+        COM_WRN("%s", "threadpool functions not found in CPU backend\n");
+        free_fn = nullptr;
+        return;
+    }
 
     struct ggml_threadpool_params tpp_batch =
             ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);

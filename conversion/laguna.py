@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import ModelBase, TextModel, gguf, logger
+from .qwen import DFlashModel
 
 
 @ModelBase.register("LagunaForCausalLM")
@@ -206,3 +207,61 @@ class LagunaModel(TextModel):
                     f"declared {gate_type} gate (expected {expected}); weights and config disagree.")
 
         yield from TextModel.modify_tensors(self, data_torch, name, bid)
+
+
+@ModelBase.register("DFlashLagunaForCausalLM")
+class DFlashLagunaModel(DFlashModel):
+    """Laguna DFlash drafter (e.g. poolside/Laguna-XS-2.1-DFlash).
+
+    Dense Laguna-style draft layers on top of the generic DFlash contract:
+    fused qkv_proj (split here), per-head/per-element g_proj attention gate,
+    per-aux-layer RMSNorms (aux_hidden_norms) applied before concat + fc, and a
+    causal noise block. The GGUF is marked with decoder_arch = "laguna" so the
+    runtime picks the Laguna draft-layer contract. No embeddings or lm_head:
+    the drafter shares them with the target at runtime.
+    """
+
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_gguf_parameters(self) -> None:
+        # transformers' LagunaConfig injects MoE defaults (num_experts_per_tok)
+        # into the dense drafter config (num_experts == 0). Drop the expert keys
+        # so the GGUF does not carry an expert_count=0 / expert_used_count>0
+        # pair, which the runtime rejects.
+        if not self.hparams.get("num_experts") and not self.hparams.get("num_local_experts"):
+            for k in ("num_experts", "num_local_experts", "num_experts_per_tok", "num_experts_per_token"):
+                self.hparams.pop(k, None)
+        super().set_gguf_parameters()
+        self.gguf_writer.add_decoder_arch("laguna")
+
+    _aux_norms: dict[int, Tensor] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # per-aux feature norms: stack model.aux_hidden_norms.{k}.weight into a
+        # single [n_aux, n_embd] tensor once all of them have been seen
+        m = re.fullmatch(r"model\.aux_hidden_norms\.(\d+)\.weight", name)
+        if m:
+            if self._aux_norms is None:
+                self._aux_norms = {}
+            self._aux_norms[int(m.group(1))] = data_torch
+            dcfg = self.hparams.get("dflash_config", {})
+            n_aux = len(dcfg.get("target_layer_ids", [])
+                        or self.hparams.get("eagle_aux_hidden_state_layer_ids", []))
+            if n_aux and len(self._aux_norms) == n_aux:
+                stacked = torch.stack([self._aux_norms[i] for i in range(n_aux)], dim=0)
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_AUX_NORM), stacked)
+            return
+
+        # fused attention projection: split into q/k/v and take the normal path
+        if name.endswith("self_attn.qkv_proj.weight"):
+            head_dim = self.hparams["head_dim"]
+            q_size = self.hparams["num_attention_heads"] * head_dim
+            kv_size = self.hparams["num_key_value_heads"] * head_dim
+            q, k, v = data_torch.split([q_size, kv_size, kv_size], dim=0)
+            base = name.removesuffix("qkv_proj.weight")
+            yield from super().modify_tensors(q, base + "q_proj.weight", bid)
+            yield from super().modify_tensors(k, base + "k_proj.weight", bid)
+            yield from super().modify_tensors(v, base + "v_proj.weight", bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)

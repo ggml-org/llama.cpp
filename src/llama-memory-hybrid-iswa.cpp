@@ -25,6 +25,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                     bool   gdn_replay_req,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -58,6 +59,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         rs_size,
         n_seq_max,
         n_rs_seq,
+        gdn_replay_req,
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
@@ -138,6 +140,11 @@ llama_memory_context_ptr llama_memory_hybrid_iswa::init_update(llama_context * l
 bool llama_memory_hybrid_iswa::get_can_shift() const {
     // Shifting is trivially supported for recurrent
     return mem_attn->get_can_shift();
+}
+
+void llama_memory_hybrid_iswa::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
 }
 
 void llama_memory_hybrid_iswa::clear(bool data) {

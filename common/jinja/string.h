@@ -47,7 +47,12 @@ struct string {
     // mark this string as input if other has ALL parts as input
     void mark_input_based_on(const string & other);
 
-    string & append(const string & other);
+    // ref-qualified: an lvalue appends in place and returns itself for
+    // chaining; a temporary (e.g. left->as_string().append(...)) hands its
+    // parts back by value so the caller moves instead of copying out of a
+    // reference into an expiring object
+    string & append(const string & other) &;
+    string   append(const string & other) &&;
 
     // in-place transformations
 

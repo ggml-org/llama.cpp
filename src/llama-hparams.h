@@ -336,9 +336,7 @@ struct llama_hparams {
     // TODO: can be expressed via the `new n_embd_inp_impl` and remove this param
     uint32_t n_deepstack_layers = 0;
 
-    // deepstack layer array (Granite4 Vision)
-    // -1  => no deepstack
-    // >=0 => input embedding index for deepstack injection
+    // deepstack layer array (Granite4 Vision): -1 => none, >=0 => input embedding index
     std::array<int32_t, LLAMA_MAX_LAYERS> deepstack_mapping_arr;
 
     // gemma4 per-layer embedding
@@ -450,6 +448,10 @@ struct llama_hparams {
     // dimension of the recurrent state embeddings
     uint32_t n_embd_s() const;
 
+    // dimension of one ggml_gated_delta_net emit_mode==1 ingredient slot (4 rows of head_dim,
+    // one each for k/v/g/beta) -- only meaningful for GDN/KDA-style layers.
+    uint32_t n_embd_s_ingredient() const;
+
     uint32_t n_pos_per_embd() const;
 
     // note: currently only support if either all or none of the layers are MLA
@@ -464,6 +466,9 @@ struct llama_hparams {
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;
+
+    // number of layers that carry a KV cache (respects n_layer_kv_from_start)
+    uint32_t n_layer_kv() const;
 
     // note that this function uses different SWA parameters from those in the hparams
     // note: inlined on purpose for performance reasons

@@ -849,6 +849,12 @@ class DSparkModel(DFlashModel):
         if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith("lm_head.weight"):
             return
 
+        # note: the interleaved-rope (rope_is_neox_style = false) permute for
+        # self_attn.q/k_proj.weight and q/k_norm.weight is applied once, by
+        # DFlashModel.modify_tensors below via super() - do not repeat it here,
+        # since _ROPE_PERMUTE_SUFFIXES is a shared class attribute and applying
+        # the same reshape/transpose twice does not invert it, it corrupts the
+        # tensor into a third, wrong layout.
         yield from super().modify_tensors(data_torch, name, bid)
 
     def prepare_tensors(self):

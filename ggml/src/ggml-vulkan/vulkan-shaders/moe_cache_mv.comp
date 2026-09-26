@@ -1,0 +1,903 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_16bit_storage : require
+// types.glsl uses [[unroll]] in the IQ table init functions pulled in by the
+// DATA_A_* defines.
+#extension GL_EXT_control_flow_attributes : require
+
+// types.glsl needs FLOAT_TYPE for the shared-memory tables it declares under
+// the DATA_A_* defines; this shader only uses the const tables.
+#define FLOAT_TYPE float
+
+#include "types.glsl"
+
+// Layout: one thread per (hit, output row) pair.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Buffer bindings
+layout (binding = 1) readonly buffer B {int32_t data_ids[];};
+layout (binding = 2) readonly buffer C {block_q8_1 data_act[];};
+layout (binding = 3) writeonly buffer D {float data_dst[];};
+
+layout (binding = 4) uniform Params {
+    int64_t n_in;
+    int64_t n_out;
+    int64_t expert_stride;
+    int64_t row_stride;
+    int64_t n_hits;
+    int64_t padded_n_in;
+} p;
+
+// Select weight block type via preprocessor define (1=Q8_0, 2=Q4_0, 3=Q4_K, 4=Q6_K, 5=Q5_K).
+// Compiled separately per type by vulkan-shaders-gen (see process_shaders()).
+#if !defined(MOE_CACHE_WTYPE)
+#define MOE_CACHE_WTYPE 1
+#endif
+
+#if MOE_CACHE_WTYPE == 1
+layout (binding = 0) readonly buffer A {block_q8_0 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 34
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 2
+layout (binding = 0) readonly buffer A {block_q4_0 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 18
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 3
+layout (binding = 0) readonly buffer A {block_q4_K data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 144
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 4
+layout (binding = 0) readonly buffer A {block_q6_K data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 210
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 5
+layout (binding = 0) readonly buffer A {block_q5_K data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 176
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 6
+layout (binding = 0) readonly buffer A {block_q1_0 data_slab[];};
+#define WBLOCK_QK 128
+#define WBLOCK_BYTES 18
+#define ACT_BLOCKS_PER_WBLOCK 4
+#endif
+
+#if MOE_CACHE_WTYPE == 7
+layout (binding = 0) readonly buffer A {block_q2_0 data_slab[];};
+#define WBLOCK_QK 64
+#define WBLOCK_BYTES 18
+#define ACT_BLOCKS_PER_WBLOCK 2
+#endif
+
+#if MOE_CACHE_WTYPE == 8
+layout (binding = 0) readonly buffer A {block_q4_1 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 20
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 9
+layout (binding = 0) readonly buffer A {block_q5_0 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 22
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 10
+layout (binding = 0) readonly buffer A {block_q5_1 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 24
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 11
+layout (binding = 0) readonly buffer A {block_q2_K data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 84
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 12
+layout (binding = 0) readonly buffer A {block_q3_K data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 110
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 13
+layout (binding = 0) readonly buffer A {block_iq2_xxs data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 66
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 14
+layout (binding = 0) readonly buffer A {block_iq2_xs data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 74
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 15
+layout (binding = 0) readonly buffer A {block_iq2_s data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 82
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 16
+layout (binding = 0) readonly buffer A {block_iq3_xxs data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 98
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 17
+layout (binding = 0) readonly buffer A {block_iq3_s data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 110
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 18
+layout (binding = 0) readonly buffer A {block_iq1_s data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 50
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 19
+layout (binding = 0) readonly buffer A {block_iq1_m data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 56
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 20
+layout (binding = 0) readonly buffer A {block_iq4_nl data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 18
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 21
+layout (binding = 0) readonly buffer A {block_iq4_xs data_slab[];};
+#define WBLOCK_QK 256
+#define WBLOCK_BYTES 136
+#define ACT_BLOCKS_PER_WBLOCK 8
+#endif
+
+#if MOE_CACHE_WTYPE == 22
+layout (binding = 0) readonly buffer A {block_mxfp4 data_slab[];};
+#define WBLOCK_QK 32
+#define WBLOCK_BYTES 17
+#define ACT_BLOCKS_PER_WBLOCK 1
+#endif
+
+#if MOE_CACHE_WTYPE == 23
+layout (binding = 0) readonly buffer A {block_nvfp4 data_slab[];};
+#define WBLOCK_QK 64
+#define WBLOCK_BYTES 36
+#define ACT_BLOCKS_PER_WBLOCK 2
+#endif
+
+// ---------------------------------------------------------------------------
+// Per-type block dot product functions
+// ---------------------------------------------------------------------------
+
+float dot_block_q8_0(const block_q8_0 w, const block_q8_1 a) {
+    const float d_w = float(w.d);
+    const float d_a = float(a.ds.x);
+    int sum_q = 0;
+    for (int i = 0; i < 32; i++) {
+        sum_q += int(w.qs[i]) * int(a.qs[i]);
+    }
+    return d_w * d_a * float(sum_q);
+}
+
+// Q4_0: 4-bit nibbles, offset by -8, one 32-wide act block.
+// qs packing (CPU reference): byte j = element j (low nibble) | element
+// j+16 (high nibble), so element j pairs with act element j.
+float dot_block_q4_0(const block_q4_0 w, const block_q8_1 a) {
+    const float d_w = float(w.d);
+    const float d_a = float(a.ds.x);
+    int sum_q = 0;
+    for (int i = 0; i < 16; i++) {
+        const uint nibbles = w.qs[i];
+        sum_q += (int(nibbles & 0xFu) - 8) * int(a.qs[i]);
+        sum_q += (int(nibbles >> 4) - 8) * int(a.qs[i + 16]);
+    }
+    return d_w * d_a * float(sum_q);
+}
+
+// Q4_K: 8 sub-blocks of 32. Each sub-block has a 6-bit scale and a 6-bit min
+// packed across scales[12] (matches ggml get_scale_min_k4 / the Metal and
+// CPU reference dequantizers). Sub-block sb pairs with act block (ab + sb);
+// formula matches the CUDA reference:
+//   d_all * d8[sb] * sc6 * dot1 - d_min * d8[sb] * mn6 * dot2
+// where dot1 = sum(q4*qs) and dot2 = sum(qs) over the 32 elements.
+// qs packing (CPU reference): sub-block pair 2k/2k+1 shares qs[32k..32k+31],
+// even sub-block in the low nibbles, odd in the high nibbles.
+float dot_block_q4_K(const block_q4_K w, const uint ab) {
+    const float d_all = float(w.dm[0]);
+    const float d_min = float(w.dm[1]);
+
+    float sum = 0.0f;
+    for (int sb = 0; sb < 8; sb++) {
+        int sc, mn;
+        if (sb < 4) {
+            sc = int(w.scales[sb]) & 0x3F;
+            mn = int(w.scales[sb + 4]) & 0x3F;
+        } else {
+            sc = (int(w.scales[sb + 4]) & 0xF) | ((int(w.scales[sb - 4]) & 0xC0) >> 2);
+            mn = (int(w.scales[sb + 4]) >> 4) | ((int(w.scales[sb]) & 0xC0) >> 2);
+        }
+        const float dl = d_all * float(sc);
+        const float ml = d_min * float(mn);
+        const block_q8_1 a = data_act[ab + uint(sb)];
+        const float d_a = float(a.ds.x);
+
+        int dot1 = 0;
+        int dot2 = 0;
+        for (int j = 0; j < 32; j++) {
+            const uint nibbles = w.qs[(sb >> 1) * 32 + j];
+            const int n0 = ((sb & 1) != 0) ? int(nibbles >> 4) : int(nibbles & 0xFu);
+            const int qs = int(a.qs[j]);
+            dot1 += n0 * qs;
+            dot2 += qs;
+        }
+        sum += d_a * (dl * float(dot1) - ml * float(dot2));
+    }
+    return sum;
+}
+
+// Q5_K: 8 sub-blocks of 32. Same scale/min packing as Q4_K (get_scale_min_k4)
+// plus a per-element high bit in qh. q5 = nibble | (high << 4) with no offset
+// (the min term shifts it; see vec_dot_q5_K_q8_1_impl_vmmq, which also uses
+// the unshifted vl|vh). The high bit of element (sb*32 + j) sits at qh[j]
+// bit (2*(sb >> 1) + (sb & 1)).
+float dot_block_q5_K(const block_q5_K w, const uint ab) {
+    const float d_all = float(w.dm[0]);
+    const float d_min = float(w.dm[1]);
+
+    float sum = 0.0f;
+    for (int sb = 0; sb < 8; sb++) {
+        int sc, mn;
+        if (sb < 4) {
+            sc = int(w.scales[sb]) & 0x3F;
+            mn = int(w.scales[sb + 4]) & 0x3F;
+        } else {
+            sc = (int(w.scales[sb + 4]) & 0xF) | ((int(w.scales[sb - 4]) & 0xC0) >> 2);
+            mn = (int(w.scales[sb + 4]) >> 4) | ((int(w.scales[sb]) & 0xC0) >> 2);
+        }
+        const float dl = d_all * float(sc);
+        const float ml = d_min * float(mn);
+        const block_q8_1 a = data_act[ab + uint(sb)];
+        const float d_a = float(a.ds.x);
+
+        int dot1 = 0;
+        int dot2 = 0;
+        for (int j = 0; j < 32; j++) {
+            const uint nibbles = w.qs[(sb >> 1) * 32 + j];
+            const int q5 = ((sb & 1) != 0) ? int(nibbles >> 4) : int(nibbles & 0xFu);
+            const int high = int((w.qh[j] >> (2 * (sb >> 1) + (sb & 1))) & 1u);
+            const int qs = int(a.qs[j]);
+            dot1 += (q5 | (high << 4)) * qs;
+            dot2 += qs;
+        }
+        sum += d_a * (dl * float(dot1) - ml * float(dot2));
+    }
+    return sum;
+}
+
+// Q6_K: 16 sub-blocks of 16 elements, int8 scale per sub-block, 8 act blocks
+// of 32. Element e uses weight scale scales[e/16] and act block (ab + e/32),
+// so two weight sub-blocks share one act block. q6 value packing (CPU
+// reference): ql byte (e%64) + 64*(e/128), high nibble iff (e/64) is odd;
+// qh byte (e%32) + 32*(e/128), bits 2*((e/32) % 4).
+float dot_block_q6_K(const block_q6_K w, const uint ab) {
+    const float d_all = float(w.d);
+
+    float sum = 0.0f;
+    for (int e = 0; e < 256; e++) {
+        const int sb = e / 16;
+        const int ab_e = int(ab) + e / 32;
+        const float dl = d_all * float(w.scales[sb]);
+        const block_q8_1 a = data_act[uint(ab_e)];
+        const float d_a = float(a.ds.x);
+
+        const uint low = w.ql[(e % 64) + 64 * (e / 128)];
+        const uint high = w.qh[(e % 32) + 32 * (e / 128)];
+        const int q4 = (((e / 64) & 1) != 0) ? int(low >> 4) : int(low & 0xFu);
+        const int q2 = int(high >> (2 * ((e / 32) % 4))) & 0x3;
+        const int q6 = q4 | (q2 << 4);
+        const float w_val = dl * float(q6 - 32);
+
+        sum += w_val * d_a * float(a.qs[e % 32]);
+    }
+    return sum;
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+// 7-bit sign pattern -> 8 sign bits (bit i is the sign of value i). The 8th
+// sign is the popcount parity (CUDA unpack_ksigns / the ksigns_iq2xs table).
+uint moe_cache_ksigns7(uint v) {
+    const uint p = uint(bitCount(v) & 1u);
+    return (v & 127u) ^ (p << 7u);
+}
+
+// E8M0 exponent byte -> float (matches ggml_cuda_e8m0_to_fp32 / the Metal
+// e8m0_to_fp32 helper; the 0x00400000 case is the E8M0 zero convention).
+float moe_cache_e8m0_to_fp32(uint x) {
+    uint bits;
+    if (x == 0u) {
+        bits = 0x00400000u;
+    } else {
+        bits = x << 23u;
+    }
+    return uintBitsToFloat(bits);
+}
+
+// ---------------------------------------------------------------------------
+// Legacy 32/64/128-wide types
+// ---------------------------------------------------------------------------
+
+// Q1_0: 128 elements per block, one scale, 1 bit per element (+1/-1). The
+// weight block spans four 32-wide act chunks, each with its own q8_1 scale.
+float dot_block_q1_0(const block_q1_0 w, const uint ab) {
+    float sum = 0.0f;
+    for (int c = 0; c < 4; c++) {
+        const block_q8_1 a = data_act[ab + uint(c)];
+        int sumi = 0;
+        for (int j = 0; j < 32; j++) {
+            const int e = c*32 + j;
+            const int bit = int(w.qs[e >> 3] >> (e & 7)) & 1;
+            sumi += (bit != 0 ? 1 : -1) * int(a.qs[j]);
+        }
+        sum += float(a.ds.x) * float(sumi);
+    }
+    return float(w.d) * sum;
+}
+
+// Q2_0: 64 elements per block, one scale, 2 bits per element mapped
+// {0,1,2,3} -> {-1,0,1,2} (CPU vec_dot_q2_0 reference). Two act chunks.
+float dot_block_q2_0(const block_q2_0 w, const uint ab) {
+    float sum = 0.0f;
+    for (int c = 0; c < 2; c++) {
+        const block_q8_1 a = data_act[ab + uint(c)];
+        int sumi = 0;
+        for (int j = 0; j < 32; j++) {
+            const int e = c*32 + j;
+            const int q2 = int(w.qs[e >> 2] >> (2 * (e & 3))) & 3;
+            sumi += (q2 - 1) * int(a.qs[j]);
+        }
+        sum += float(a.ds.x) * float(sumi);
+    }
+    return float(w.d) * sum;
+}
+
+// Q4_1: nibbles 0..15, min term via the q8_1 activation sum (CPU reference:
+// (d*d8)*sumi + m*s). qs packing like Q4_0.
+float dot_block_q4_1(const block_q4_1 w, const block_q8_1 a) {
+    const float d = float(w.d);
+    const float m = float(w.m);
+    const float d_a = float(a.ds.x);
+    int sumi = 0;
+    for (int i = 0; i < 16; i++) {
+        const uint nibbles = w.qs[i];
+        sumi += int(nibbles & 0xFu) * int(a.qs[i]);
+        sumi += int(nibbles >> 4) * int(a.qs[i + 16]);
+    }
+    return (d * d_a) * float(sumi) + m * float(a.ds.y);
+}
+
+// Q5_0: nibble | (high bit << 4) - 16, single scale, no min term. High bit of
+// element e is bit e of the 32-bit qh field.
+float dot_block_q5_0(const block_q5_0 w, const block_q8_1 a) {
+    const float d = float(w.d);
+    const float d_a = float(a.ds.x);
+    int sumi = 0;
+    for (int i = 0; i < 16; i++) {
+        const int hi0 = int(w.qh[i >> 4] >> (i & 15)) & 1;
+        const int hi1 = int(w.qh[(i + 16) >> 4] >> ((i + 16) & 15)) & 1;
+        const int v0 = (int(w.qs[i] & 0xFu) | (hi0 << 4)) - 16;
+        const int v1 = (int(w.qs[i] >> 4) | (hi1 << 4)) - 16;
+        sumi += v0 * int(a.qs[i]) + v1 * int(a.qs[i + 16]);
+    }
+    return (d * d_a) * float(sumi);
+}
+
+// Q5_1: nibble | (high bit << 4) in 0..31, min term via the act sum (CPU
+// reference: (d*d8)*sumi + m*s).
+float dot_block_q5_1(const block_q5_1 w, const block_q8_1 a) {
+    const float d = float(w.d);
+    const float m = float(w.m);
+    const float d_a = float(a.ds.x);
+    int sumi = 0;
+    for (int i = 0; i < 16; i++) {
+        const int hi0 = int(w.qh >> i) & 1;
+        const int hi1 = int(w.qh >> (i + 16)) & 1;
+        const int v0 = int(w.qs[i] & 0xFu) | (hi0 << 4);
+        const int v1 = int(w.qs[i] >> 4) | (hi1 << 4);
+        sumi += v0 * int(a.qs[i]) + v1 * int(a.qs[i + 16]);
+    }
+    return (d * d_a) * float(sumi) + m * float(a.ds.y);
+}
+
+// Q2_K: 16 sub-blocks of 16 elements. scales[sb] packs a 4-bit scale (low) and
+// a 4-bit min (high). q2 codes are raw 0..3; the min term recenters them.
+// Sub-block sb pairs with act block (ab + sb/2). value packing (CPU
+// vec_dot_q2_K_q8_K reference): element e uses byte qs[32*(e/128) + e%32],
+// 2-bit field 2*((e/32)%4).
+float dot_block_q2_K(const block_q2_K w, const uint ab) {
+    const float d_all = float(w.dm[0]);
+    const float d_min = float(w.dm[1]);
+    float sum = 0.0f;
+    for (int sb = 0; sb < 16; sb++) {
+        const float dl = d_all * float(int(w.scales[sb]) & 0xF);
+        const float ml = d_min * float(int(w.scales[sb]) >> 4);
+        const block_q8_1 a = data_act[ab + uint(sb / 2)];
+        const float d_a = float(a.ds.x);
+        int dot1 = 0;
+        int dot2 = 0;
+        for (int j = 0; j < 16; j++) {
+            const int e = sb*16 + j;
+            const int q2 = int(w.qs[32*(e/128) + e%32] >> (2*((e/32)%4))) & 3;
+            const int qs = int(a.qs[j + 16*(sb & 1)]);
+            dot1 += q2 * qs;
+            dot2 += qs;
+        }
+        sum += d_a * (dl * float(dot1) - ml * float(dot2));
+    }
+    return sum;
+}
+
+// Q3_K: 16 sub-blocks of 16 elements, 6-bit scale per sub-block packed across
+// scales[12] (CPU vec_dot_q3_K_q8_K reference unpacking). value = (2-bit
+// code) - 4 + 4*hmask bit; scale = sc6 - 32; no min term.
+float dot_block_q3_K(const block_q3_K w, const uint ab) {
+    const float d_all = float(w.d);
+    float sum = 0.0f;
+    for (int sb = 0; sb < 16; sb++) {
+        // 6-bit scales packed across scales[12] (CUDA vec_dot_q3_K_q8_1
+        // unpacking): 16 low nibbles in scales[0..7], 16x2 high bits in
+        // scales[8..11].
+        const int sc_low  = int(w.scales[sb % 8] >> (4 * (sb / 8))) & 0xF;
+        const int sc_high = (int(w.scales[8 + sb % 4] >> (2 * (sb / 4))) & 3) << 4;
+        const float dl = d_all * float((sc_low | sc_high) - 32);
+        const block_q8_1 a = data_act[ab + uint(sb / 2)];
+        const float d_a = float(a.ds.x);
+        int dot1 = 0;
+        for (int j = 0; j < 16; j++) {
+            const int e = sb*16 + j;
+            const int low2 = int(w.qs[32*(e/128) + e%32] >> (2*((e/32)%4))) & 3;
+            const int hbit = int(w.hmask[e%32] >> (4*(e/128) + (e/32)%4)) & 1;
+            dot1 += (low2 - 4 + 4*hbit) * int(a.qs[j + 16*(sb & 1)]);
+        }
+        sum += d_a * dl * float(dot1);
+    }
+    return sum;
+}
+
+// ---------------------------------------------------------------------------
+// Grid (IQ) types. Each 32-wide act window decodes to the same values the
+// scalar dequantizers produce (see dequantize_iq* in the Metal kernel and the
+// CPU vec_dot_iq*_q8_K generics); only the accumulation differs.
+// ---------------------------------------------------------------------------
+
+// IQ2_XXS: 8 act windows of 32. Each window uses 8 bytes of qs: 4 grid indices
+// (aux8) and 4 bytes of scale+signs (aux32_s); the 4-bit scale sits in the top
+// nibble, signs are 7-bit groups. scale factor (2*scale+1)/8 (CPU reference).
+// The grid table exists in types.glsl only under the matching DATA_A_* define.
+#if MOE_CACHE_WTYPE == 13
+float dot_block_iq2_xxs(const block_iq2_xxs w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib32 = 0; ib32 < 8; ib32++) {
+        const uint aux32_g = uint(w.qs[8*ib32 + 0]) | (uint(w.qs[8*ib32 + 1]) << 8u) |
+                             (uint(w.qs[8*ib32 + 2]) << 16u) | (uint(w.qs[8*ib32 + 3]) << 24u);
+        const uint aux32_s = uint(w.qs[8*ib32 + 4]) | (uint(w.qs[8*ib32 + 5]) << 8u) |
+                             (uint(w.qs[8*ib32 + 6]) << 16u) | (uint(w.qs[8*ib32 + 7]) << 24u);
+        const uint ls = 2u * ((aux32_s >> 28u) & 0xFu) + 1u;
+        const block_q8_1 a = data_act[ab + uint(ib32)];
+        int sumi = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint idx = (aux32_g >> (8u * uint(l))) & 0xFFu;
+            const uint signs = moe_cache_ksigns7((aux32_s >> (7u * uint(l))) & 127u);
+            const uvec2 e = iq2xxs_grid_const[idx];
+            for (int i = 0; i < 8; i++) {
+                const uint byte = (i < 4) ? ((e.x >> (8u * uint(i))) & 0xFFu)
+                                          : ((e.y >> (8u * uint(i - 4))) & 0xFFu);
+                const int g = int(byte);
+                const int sgn = int((signs >> uint(i)) & 1u);
+                sumi += (sgn != 0 ? -g : g) * int(a.qs[8*l + i]);
+            }
+        }
+        sum += float(a.ds.x) * float(sumi * int(ls));
+    }
+    return float(w.d) * (1.0f/8.0f) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 13
+
+// IQ2_XS: per 32-window, 4 uint16 words hold a 9-bit grid index and 7 sign
+// bits each; scales[ib32] holds two 4-bit scales (per 16-element half).
+// scale factor (2*scale+1)/8 (CPU reference).
+#if MOE_CACHE_WTYPE == 14
+float dot_block_iq2_xs(const block_iq2_xs w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib32 = 0; ib32 < 8; ib32++) {
+        const uint ls1 = 2u * uint(w.scales[ib32] & 0xFu) + 1u;
+        const uint ls2 = 2u * uint(w.scales[ib32] >> 4u) + 1u;
+        const block_q8_1 a = data_act[ab + uint(ib32)];
+        int sumi1 = 0;
+        int sumi2 = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint q2w = uint(w.qs[4*ib32 + l]);
+            const uint idx = q2w & 511u;
+            const uint signs = moe_cache_ksigns7((q2w >> 9u) & 127u);
+            const uvec2 e = iq2xs_grid_const[idx];
+            int sumi = 0;
+            for (int i = 0; i < 8; i++) {
+                const uint byte = (i < 4) ? ((e.x >> (8u * uint(i))) & 0xFFu)
+                                          : ((e.y >> (8u * uint(i - 4))) & 0xFFu);
+                const int g = int(byte);
+                const int sgn = int((signs >> uint(i)) & 1u);
+                sumi += (sgn != 0 ? -g : g) * int(a.qs[8*l + i]);
+            }
+            if (l < 2) { sumi1 += sumi; } else { sumi2 += sumi; }
+        }
+        sum += float(a.ds.x) * float(int(ls1)*sumi1 + int(ls2)*sumi2);
+    }
+    return float(w.d) * (1.0f/8.0f) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 14
+
+// IQ2_S: per 32-window, 4 grid bytes + 4 sign bytes (at qs + 32), a 2-bit high
+// index from qh[ib32], and two 4-bit scales. scale factor (2*scale+1)/8.
+#if MOE_CACHE_WTYPE == 15
+float dot_block_iq2_s(const block_iq2_s w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib32 = 0; ib32 < 8; ib32++) {
+        const uint ls1 = 2u * uint(w.scales[ib32] & 0xFu) + 1u;
+        const uint ls2 = 2u * uint(w.scales[ib32] >> 4u) + 1u;
+        const uint qh = uint(w.qh[ib32]);
+        const block_q8_1 a = data_act[ab + uint(ib32)];
+        int sumi1 = 0;
+        int sumi2 = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint idx = uint(w.qs[4*ib32 + l]) | ((qh << (8u - 2u*uint(l))) & 0x300u);
+            const uint sg = uint(w.qs[32 + 4*ib32 + l]);
+            const uvec2 e = iq2s_grid_const[idx];
+            int sumi = 0;
+            for (int i = 0; i < 8; i++) {
+                const uint byte = (i < 4) ? ((e.x >> (8u * uint(i))) & 0xFFu)
+                                          : ((e.y >> (8u * uint(i - 4))) & 0xFFu);
+                const int g = int(byte);
+                const int sgn = int((sg >> uint(i)) & 1u);
+                sumi += (sgn != 0 ? -g : g) * int(a.qs[8*l + i]);
+            }
+            if (l < 2) { sumi1 += sumi; } else { sumi2 += sumi; }
+        }
+        sum += float(a.ds.x) * float(int(ls1)*sumi1 + int(ls2)*sumi2);
+    }
+    return float(w.d) * (1.0f/8.0f) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 15
+
+// IQ3_XXS: per 32-window, 8 grid bytes in qs[0..63] and 4 scale+sign bytes in
+// qs[64..95]. Two 4-byte grid entries and 7-bit sign groups per l; scale
+// factor (2*scale+1)/4 (CPU reference).
+#if MOE_CACHE_WTYPE == 16
+float dot_block_iq3_xxs(const block_iq3_xxs w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib32 = 0; ib32 < 8; ib32++) {
+        const uint aux32 = uint(w.qs[64 + 4*ib32 + 0]) | (uint(w.qs[64 + 4*ib32 + 1]) << 8u) |
+                           (uint(w.qs[64 + 4*ib32 + 2]) << 16u) | (uint(w.qs[64 + 4*ib32 + 3]) << 24u);
+        const uint ls = 2u * ((aux32 >> 28u) & 0xFu) + 1u;
+        const block_q8_1 a = data_act[ab + uint(ib32)];
+        int sumi = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint e1 = iq3xxs_grid_const[uint(w.qs[8*ib32 + 2*l + 0])];
+            const uint e2 = iq3xxs_grid_const[uint(w.qs[8*ib32 + 2*l + 1])];
+            const uint signs = moe_cache_ksigns7((aux32 >> (7u * uint(l))) & 127u);
+            for (int i = 0; i < 4; i++) {
+                const int g1 = int((e1 >> (8u * uint(i))) & 0xFFu);
+                const int g2 = int((e2 >> (8u * uint(i))) & 0xFFu);
+                const int s1 = int((signs >> uint(i)) & 1u);
+                const int s2 = int((signs >> uint(i + 4)) & 1u);
+                sumi += (s1 != 0 ? -g1 : g1) * int(a.qs[8*l + i]);
+                sumi += (s2 != 0 ? -g2 : g2) * int(a.qs[8*l + i + 4]);
+            }
+        }
+        sum += float(a.ds.x) * float(sumi * int(ls));
+    }
+    return float(w.d) * (1.0f/4.0f) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 16
+
+// IQ3_S: per 32-window, 8 grid bytes, 4 sign bytes, qh[ib32] for the 9th
+// index bit, and a 4-bit scale. scale factor 1 + 2*scale (no /8; CPU
+// reference).
+#if MOE_CACHE_WTYPE == 17
+float dot_block_iq3_s(const block_iq3_s w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib32 = 0; ib32 < 8; ib32++) {
+        const uint ls = 2u * uint(w.scales[ib32 >> 1] >> (4u * uint(ib32 & 1))) + 1u;
+        const uint qh = uint(w.qh[ib32]);
+        const block_q8_1 a = data_act[ab + uint(ib32)];
+        int sumi = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint e1 = iq3s_grid_const[uint(w.qs[8*ib32 + 2*l + 0]) | ((qh << (8u - 2u*uint(l))) & 256u)];
+            const uint e2 = iq3s_grid_const[uint(w.qs[8*ib32 + 2*l + 1]) | ((qh << (7u - 2u*uint(l))) & 256u)];
+            const uint sg = uint(w.signs[4*ib32 + l]);
+            for (int i = 0; i < 4; i++) {
+                const int g1 = int((e1 >> (8u * uint(i))) & 0xFFu);
+                const int g2 = int((e2 >> (8u * uint(i))) & 0xFFu);
+                const int s1 = int((sg >> uint(i)) & 1u);
+                const int s2 = int((sg >> uint(i + 4)) & 1u);
+                sumi += (s1 != 0 ? -g1 : g1) * int(a.qs[8*l + i]);
+                sumi += (s2 != 0 ? -g2 : g2) * int(a.qs[8*l + i + 4]);
+            }
+        }
+        sum += float(a.ds.x) * float(sumi * int(ls));
+    }
+    return float(w.d) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 17
+
+// IQ1_S: per 32-window, 4 grid bytes in qs, qh[ib] supplies a 3-bit high index
+// and the scale/delta. grid values are 4-bit per byte (iq1s_grid_gpu). The
+// min term uses the q8_1 activation sum ds.y (CUDA reference).
+#if MOE_CACHE_WTYPE == 18
+float dot_block_iq1_s(const block_iq1_s w, const uint ab) {
+    // iq1s_grid_gpu_const lives under NEEDS_IQ1S_GRID_GPU in types.glsl.
+    #if !defined(NEEDS_IQ1S_GRID_GPU)
+    #error "moe_cache_mv.comp: IQ1_S requires NEEDS_IQ1S_GRID_GPU"
+    #endif
+    float sum = 0.0f;
+    for (int ib = 0; ib < 8; ib++) {
+        const uint qh = uint(w.qh[ib]);
+        const int ls = 2 * (int(qh >> 12) & 7) + 1;
+        const float delta = (qh & 0x8000u) != 0u ? -1.0f - IQ1S_DELTA : -1.0f + IQ1S_DELTA;
+        const block_q8_1 a = data_act[ab + uint(ib)];
+        int sumi = 0;
+        for (int l = 0; l < 4; l++) {
+            const uint idx = uint(w.qs[4*ib + l]) | (((qh >> (3u*uint(l))) & 7u) << 8u);
+            const uint e = iq1s_grid_gpu_const[idx];
+            for (int i = 0; i < 4; i++) {
+                const int g0 = int((e >> (8u*uint(i))) & 0xFu);
+                const int g1 = int((e >> (8u*uint(i) + 4u)) & 0xFu);
+                sumi += g0 * int(a.qs[8*l + i]);
+                sumi += g1 * int(a.qs[8*l + i + 4]);
+            }
+        }
+        sum += float(ls) * (float(a.ds.x) * float(sumi) + float(a.ds.y) * delta);
+    }
+    return float(w.d) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 18
+
+// IQ1_M: no block d; the scale is reconstructed from the four uint16 scales
+// words. Per 32-window: 4 grid bytes, 2 qh bytes (deltas), two 6-bit scales.
+// delta terms use the raw q8 sum (CUDA reference), act scale from ds.x.
+#if MOE_CACHE_WTYPE == 19
+float dot_block_iq1_m(const block_iq1_m w, const uint ab) {
+    #if !defined(NEEDS_IQ1S_GRID_GPU)
+    #error "moe_cache_mv.comp: IQ1_M requires NEEDS_IQ1S_GRID_GPU"
+    #endif
+    float sum = 0.0f;
+    for (int ib = 0; ib < 8; ib++) {
+        const uint qh0 = uint(w.qh[2*ib]);
+        const uint qh1 = uint(w.qh[2*ib + 1]);
+        const float delta0 = (qh0 & 0x08u) != 0u ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
+        const float delta1 = (qh0 & 0x80u) != 0u ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
+        const float delta2 = (qh1 & 0x08u) != 0u ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
+        const float delta3 = (qh1 & 0x80u) != 0u ? -1.0f - IQ1M_DELTA : -1.0f + IQ1M_DELTA;
+        const uint sc16 = uint(w.scales[ib >> 1]);
+        const int ls1 = 2 * (int(sc16 >> (6u*uint(ib & 1) + 0u)) & 7) + 1;
+        const int ls2 = 2 * (int(sc16 >> (6u*uint(ib & 1) + 3u)) & 7) + 1;
+        const block_q8_1 a = data_act[ab + uint(ib)];
+        int sumi0 = 0;
+        int sumi1 = 0;
+        float sumf0 = 0.0f;
+        float sumf1 = 0.0f;
+        for (int l = 0; l < 4; l++) {
+            const uint qhl = (l < 2) ? qh0 : qh1;
+            const uint idx = uint(w.qs[4*ib + l]) | ((qhl << (8u - 4u*uint(l % 2))) & 0x700u);
+            const float delta = (l == 0) ? delta0 : (l == 1) ? delta1 : (l == 2) ? delta2 : delta3;
+            const uint e = iq1s_grid_gpu_const[idx];
+            int sumi = 0;
+            int sumy = 0;
+            for (int i = 0; i < 4; i++) {
+                const int g0 = int((e >> (8u*uint(i))) & 0xFu);
+                const int g1 = int((e >> (8u*uint(i) + 4u)) & 0xFu);
+                sumi += g0 * int(a.qs[8*l + i]) + g1 * int(a.qs[8*l + i + 4]);
+                sumy += int(a.qs[8*l + i]) + int(a.qs[8*l + i + 4]);
+            }
+            if (l < 2) { sumi0 += sumi; sumf0 += delta * float(sumy); }
+            else       { sumi1 += sumi; sumf1 += delta * float(sumy); }
+        }
+        sum += float(a.ds.x) * ((float(sumi0) + sumf0) * float(ls1) +
+                                (float(sumi1) + sumf1) * float(ls2));
+    }
+    const uint sc16 = (uint(w.scales[0]) >> 12) | ((uint(w.scales[1]) >> 8) & 0x00F0u) |
+                      ((uint(w.scales[2]) >> 4) & 0x0F00u) | (uint(w.scales[3]) & 0xF000u);
+    return unpackHalf2x16(sc16).x * sum;
+}
+#endif // MOE_CACHE_WTYPE == 19
+
+// IQ4_NL: 32 elements per block, one scale, 4-bit non-linear codes
+// (kvalues_iq4nl), 2 per byte (CPU vec_dot_iq4_nl_q8_1 reference).
+#if MOE_CACHE_WTYPE == 20
+float dot_block_iq4_nl(const block_iq4_nl w, const uint ab) {
+    const block_q8_1 a = data_act[ab];
+    int sumi = 0;
+    for (int j = 0; j < 16; j++) {
+        const uint byte = w.qs[j];
+        sumi += int(kvalues_iq4nl_const[byte & 0xFu]) * int(a.qs[j]);
+        sumi += int(kvalues_iq4nl_const[byte >> 4u]) * int(a.qs[j + 16]);
+    }
+    return float(w.d) * float(a.ds.x) * float(sumi);
+}
+#endif // MOE_CACHE_WTYPE == 20
+
+// IQ4_XS: per 32-window, 16 qs bytes and a 6-bit scale (4 bits from scales_l,
+// 2 from scales_h), offset by -32 (CPU reference).
+#if MOE_CACHE_WTYPE == 21
+float dot_block_iq4_xs(const block_iq4_xs w, const uint ab) {
+    float sum = 0.0f;
+    for (int ib = 0; ib < 8; ib++) {
+        const uint s_l = uint(w.scales_l[ib >> 1] >> (4u * uint(ib & 1))) & 0xFu;
+        const uint s_h = (uint(w.scales_h >> (2u * uint(ib))) & 3u) << 4u;
+        const float dl = float(int(s_l | s_h) - 32);
+        const block_q8_1 a = data_act[ab + uint(ib)];
+        int sumi = 0;
+        for (int j = 0; j < 16; j++) {
+            const uint byte = w.qs[16*ib + j];
+            sumi += int(kvalues_iq4nl_const[byte & 0xFu]) * int(a.qs[j]);
+            sumi += int(kvalues_iq4nl_const[byte >> 4u]) * int(a.qs[j + 16]);
+        }
+        sum += float(a.ds.x) * dl * float(sumi);
+    }
+    return float(w.d) * sum;
+}
+#endif // MOE_CACHE_WTYPE == 21
+
+// ---------------------------------------------------------------------------
+// FP4 types
+// ---------------------------------------------------------------------------
+
+// MXFP4: 32 elements, one E8M0 exponent, 2 E2M1 values per byte. The 0.5f
+// folds the half-step kvalues table convention (CUDA vec_dot_mxfp4_q8_1).
+#if MOE_CACHE_WTYPE == 22
+float dot_block_mxfp4(const block_mxfp4 w, const block_q8_1 a) {
+    const float d = moe_cache_e8m0_to_fp32(uint(w.e)) * 0.5f * float(a.ds.x);
+    int sumi = 0;
+    for (int j = 0; j < 16; j++) {
+        const uint byte = w.qs[j];
+        sumi += int(kvalues_mxfp4_const[byte & 0xFu]) * int(a.qs[j]);
+        sumi += int(kvalues_mxfp4_const[byte >> 4u]) * int(a.qs[j + 16]);
+    }
+    return d * float(sumi);
+}
+#endif // MOE_CACHE_WTYPE == 22
+
+// NVFP4: 64 elements = 4 sub-blocks of 16, each with a UE4M3 scale; 2 E2M1
+// values per byte (CPU vec_dot_nvfp4 reference packing).
+#if MOE_CACHE_WTYPE == 23
+float dot_block_nvfp4(const block_nvfp4 w, const uint ab) {
+    float sum = 0.0f;
+    for (int s = 0; s < 4; s++) {
+        // ue4m3_to_fp32_build returns the raw E4M3 value; the CPU reference
+        // (ggml_ue4m3_to_fp32) folds * 0.5 to pair with the x2 kvalues_mxfp4
+        // table, so match it here.
+        const float d = ue4m3_to_fp32_build(uint(w.d[s])) * 0.5f;
+        const block_q8_1 a = data_act[ab + uint(s >> 1)];
+        int sumi = 0;
+        for (int j = 0; j < 8; j++) {
+            const uint byte = w.qs[8*s + j];
+            const int off = (s & 1) * 16;
+            sumi += int(kvalues_mxfp4_const[byte & 0xFu]) * int(a.qs[off + j]);
+            sumi += int(kvalues_mxfp4_const[byte >> 4u]) * int(a.qs[off + j + 8]);
+        }
+        sum += float(a.ds.x) * d * float(sumi);
+    }
+    return sum;
+}
+#endif // MOE_CACHE_WTYPE == 23
+
+void main() {
+    // One thread per (hit, output row) pair, like the Metal kernel.
+    const uint id = gl_GlobalInvocationID.x;
+    const uint total = uint(p.n_hits) * uint(p.n_out);
+    if (id >= total) return;
+
+    const uint hit = id / uint(p.n_out);
+    const uint row = id - hit * uint(p.n_out);
+
+    const int slot = data_ids[hit];
+    if (slot < 0) {
+        data_dst[id] = 0.0f;
+        return;
+    }
+
+    // All byte offsets are exact multiples of the weight block size, so the
+    // block index is an exact integer division.
+    const int64_t byte_off = int64_t(slot) * p.expert_stride + int64_t(row) * p.row_stride;
+    const uint block_base = uint(byte_off / int64_t(WBLOCK_BYTES));
+    const uint act_base = hit * uint(p.padded_n_in / int64_t(32));
+
+    const int nb = int(p.n_in / int64_t(WBLOCK_QK));
+    float sum = 0.0f;
+    for (int ib = 0; ib < nb; ib++) {
+        const uint ab = act_base + uint(ib) * ACT_BLOCKS_PER_WBLOCK;
+#if MOE_CACHE_WTYPE == 1
+        sum += dot_block_q8_0(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 2
+        sum += dot_block_q4_0(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 3
+        sum += dot_block_q4_K(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 4
+        sum += dot_block_q6_K(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 5
+        sum += dot_block_q5_K(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 6
+        sum += dot_block_q1_0(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 7
+        sum += dot_block_q2_0(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 8
+        sum += dot_block_q4_1(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 9
+        sum += dot_block_q5_0(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 10
+        sum += dot_block_q5_1(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 11
+        sum += dot_block_q2_K(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 12
+        sum += dot_block_q3_K(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 13
+        sum += dot_block_iq2_xxs(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 14
+        sum += dot_block_iq2_xs(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 15
+        sum += dot_block_iq2_s(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 16
+        sum += dot_block_iq3_xxs(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 17
+        sum += dot_block_iq3_s(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 18
+        sum += dot_block_iq1_s(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 19
+        sum += dot_block_iq1_m(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 20
+        sum += dot_block_iq4_nl(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 21
+        sum += dot_block_iq4_xs(data_slab[block_base + uint(ib)], ab);
+#elif MOE_CACHE_WTYPE == 22
+        sum += dot_block_mxfp4(data_slab[block_base + uint(ib)], data_act[ab]);
+#elif MOE_CACHE_WTYPE == 23
+        sum += dot_block_nvfp4(data_slab[block_base + uint(ib)], ab);
+#endif
+    }
+    data_dst[id] = sum;
+}

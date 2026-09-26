@@ -174,6 +174,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
+    COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, // MTP with adaptive draft depth
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
@@ -326,10 +327,12 @@ struct common_params_model {
 struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
+    int32_t n_min_adaptive = 3; // minimum adaptive MTP draft depth (also the starting depth)
 
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
+    bool chain = false; // chained drafting: all n_max tokens in one GPU decode (MTP only)
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     common_params_model mparams;
@@ -348,6 +351,13 @@ struct common_params_speculative_draft {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    std::list<std::string> tensor_buft_override_patterns; // owns the strings tensor_buft_overrides[].pattern points into
+
+    bool    eagle3                = false; // use EAGLE3 speculative decoding
+    bool    dflash                = false; // use DFlash speculative decoding
+    bool    dflash_defer_injection = true;  // defer encoder KV injection to draft time (set false for higher acceptance on some models)
+    int32_t n_ctx                 = 0;     // draft context size
+
 };
 
 struct common_params_speculative_ngram_mod {
@@ -355,6 +365,7 @@ struct common_params_speculative_ngram_mod {
 
     int32_t n_max = 64;
     int32_t n_min = 48;
+    int32_t n_dead_off = 3;  // consecutive zero-accept ngram-mod drafts before disabling it for a sequence (0 = never)
 };
 
 struct common_params_speculative_ngram_map {
@@ -394,7 +405,9 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -446,6 +459,20 @@ struct lr_opt {
 
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
+enum common_moe_cache_mode {
+    COMMON_MOE_CACHE_MODE_OFF,
+    COMMON_MOE_CACHE_MODE_AUTO,
+    COMMON_MOE_CACHE_MODE_ON,
+    COMMON_MOE_CACHE_MODE_SOFT,
+};
+
+struct common_moe_cache_params {
+    common_moe_cache_mode mode = COMMON_MOE_CACHE_MODE_AUTO;
+    size_t budget_mib          = 0;
+    bool mode_explicit         = false;
+    bool fit_selected          = false;
+};
+
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
@@ -457,6 +484,7 @@ struct common_params {
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
     int32_t n_outputs_max_per_seq =     1; // max outputs per sequence
+    bool    gdn_replay            = false; // DRC: ingredient-replay rollback for GDN models instead of full K-snapshots [EXPERIMENTAL]
     int32_t grp_attn_n            =     1; // group-attention factor
     int32_t grp_attn_w            =   512; // group-attention width
     int32_t n_print               =    -1; // print token count every n tokens (-1 = disabled)
@@ -526,6 +554,7 @@ struct common_params {
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    std::list<std::string> tensor_buft_override_patterns; // owns the strings tensor_buft_overrides[].pattern points into
 
     bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
     std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
@@ -533,6 +562,7 @@ struct common_params {
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
+    bool    warn_unknown_env            = false;
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
     bool    offline                    = false;
@@ -581,6 +611,7 @@ struct common_params {
     bool check_tensors     = false; // validate tensor data
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
+    common_moe_cache_params moe_cache;
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
 
     bool single_turn       = false; // single turn chat conversation
@@ -630,7 +661,7 @@ struct common_params {
     int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
     int32_t kv_unified_per_slot = 0;     // max context per parallel slot; 0 = unset
     int32_t checkpoint_min_step = 8192;  // minimum spacing between context checkpoints
-    int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
+    int32_t cache_ram_mib       = 8192;  // -1 = half free host RAM at startup, 0 = disable, positive = MiB
 
     std::string public_path   = "";                                                                         // NOLINT
     std::string api_prefix    = "";                                                                         // NOLINT
@@ -642,7 +673,7 @@ struct common_params {
     std::string cors_origins = "*";
     std::string cors_methods = "GET, POST, DELETE, OPTIONS";
     std::string cors_headers = "*";
-    bool cors_credentials = true;
+    bool cors_credentials = false;
     bool cors_origins_explicit = false; // for --agent option
 
     bool enable_chat_template = true;
@@ -666,6 +697,7 @@ struct common_params {
     // UI configs
     bool ui = true;
     bool ui_mcp_proxy = false;
+    std::vector<std::string> ui_mcp_proxy_allow;
     std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
@@ -676,6 +708,7 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
     std::string server_tools_runtime;
+    std::string server_tools_cwd_root;
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
@@ -693,7 +726,9 @@ struct common_params {
     std::string slot_save_path;
     std::string media_path; // path to directory for loading media files
 
-    float slot_prompt_similarity = 0.1f;
+    float   slot_prompt_similarity        = 0.1f;
+    float   slot_cache_key_similarity     = 0.5f;
+    int32_t slot_cache_key_min_prefix     = 32;
 
     // batched-bench params
     bool is_pp_shared   = false;
@@ -901,6 +936,8 @@ std::string fs_path_to_utf8(const std::filesystem::path & path);
 // and setting an empty value unsets the variable
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
+
+std::vector<std::string> common_get_process_environment();
 
 //
 // Filesystem utils
@@ -1157,12 +1194,14 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
     return { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() };
 }
 
-inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides) {
-    // keep strings alive and avoid leaking memory by storing them in a static list
-    static std::list<std::string> buft_override_strings;
+// `patterns` must outlive `overrides` (each override's pattern points into it); pass the
+// tensor_buft_override_patterns list on the same params object that owns `overrides`, not a
+// function-local static -- a static here would leak across every params object for the
+// lifetime of the process and would not be thread-safe for concurrent parses.
+inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vector<llama_model_tensor_buft_override> & overrides, std::list<std::string> & patterns) {
     for (int i = 0; i < n; ++i) {
-        buft_override_strings.push_back(llm_ffn_block_regex(i, ffn_regex));
-        overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
+        patterns.push_back(llm_ffn_block_regex(i, ffn_regex));
+        overrides.push_back({patterns.back().c_str(), ggml_backend_cpu_buffer_type()});
     }
 }
 

@@ -130,6 +130,8 @@ A common pattern is to allow repetitions of a pattern `x` up to N times.
 
 While semantically correct, the syntax `x? x? x?.... x?` (with N repetitions) may result in extremely slow sampling. Instead, you can write `x{0,N}` (or `(x (x (x ... (x)?...)?)?)?` w/ N-deep nesting in earlier llama.cpp versions).
 
+Bounds are exact: `x{0,5000}` accepts at most 5000 copies. Above 32 required or optional copies the parser encodes the bound logarithmically (a few rules per power of two) instead of chaining one rule per copy, so large bounds stay cheap to parse and to sample against.
+
 ## Using GBNF grammars
 
 You can use GBNF grammars:

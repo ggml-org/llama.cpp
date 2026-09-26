@@ -191,8 +191,8 @@
 {%- if thinking_effort is undefined -%}
     {%- set thinking_effort = 'max' -%}
 {%- endif -%}
-{%- if thinking and thinking_effort is not none and thinking_effort not in ['low', 'high', 'max'] -%}
-    {{- raise_exception('Unsupported thinking_effort=' + thinking_effort|string + '; supported values are low, high, and max.') -}}
+{%- if thinking and thinking_effort is not none and thinking_effort not in ['low', 'medium', 'high', 'max'] -%}
+    {{- raise_exception('Unsupported thinking_effort=' + thinking_effort|string + '; supported values are low, medium, high, and max.') -}}
 {%- endif -%}
 
 {%- set state = namespace(image_index=0, tool_calls=none, tool_index=0, response_schema=none) -%}
@@ -201,7 +201,7 @@
     {{- render_tool_declare(tools) -}}
 {%- endif -%}
 
-{%- if thinking and thinking_effort in ['low', 'high', 'max'] -%}
+{%- if thinking and thinking_effort in ['low', 'medium', 'high', 'max'] -%}
     {{- internal_system_message(
         'thinking-effort',
         '`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=' + thinking_effort|string + '`.'
@@ -321,4 +321,3 @@
 {%- if image_prompts is defined and image_prompts is not none and state.image_index != image_prompts|length -%}
     {{- raise_exception('image prompt count ' + image_prompts|length|string + ' != consumed placeholder count ' + state.image_index|string) -}}
 {%- endif -%}
-

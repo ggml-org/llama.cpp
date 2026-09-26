@@ -5,7 +5,7 @@
 #   --dry-run: warn on failures instead of aborting
 #
 # Env (when running in GitHub Actions):
-#   GH_TOKEN, GITHUB_REPOSITORY, GITHUB_OUTPUT
+#   GITHUB_OUTPUT
 #   RELEASE_BRANCH: when set, HEAD must belong to origin/RELEASE_BRANCH and must
 #     not be older than 3 days from the branch HEAD (skipped when unset)
 set -euo pipefail
@@ -22,9 +22,9 @@ for arg in "$@"; do
     esac
 done
 
-MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MAJOR \([0-9]*\).*/\1/')
-MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*MINOR \([0-9]*\).*/\1/')
-PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | sed 's/.*PATCH \([0-9]*\).*/\1/')
+MAJOR=$(grep "set(LLAMA_VERSION_MAJOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+MINOR=$(grep "set(LLAMA_VERSION_MINOR" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
+PATCH=$(grep "set(LLAMA_VERSION_PATCH" "$REPO_ROOT/CMakeLists.txt" | grep -oP '\d+')
 VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Determined version: ${VERSION}"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
@@ -71,99 +71,26 @@ if git ls-remote --tags origin "${VERSION}" | grep -q "${VERSION}"; then
 fi
 echo "Tag ${VERSION} does not exist on remote - OK"
 
-echo "Checking release.yml status for commit ${SHA}..."
-if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
-    echo "Warning: GITHUB_REPOSITORY not set - skipping CI check (local run)"
-else
-    RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?per_page=100" \
-        --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"success\")] | length")
-    if [[ "$RUNS" -eq 0 ]]; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            echo "Warning: no successful release.yml run found for HEAD (${SHA}) (dry run, continuing)."
-            CHECKS_PASSED=false
-        else
-            echo "Error: no successful release.yml run found for HEAD (${SHA})"
-            echo "The nightly build must complete successfully before making a release."
-            exit 1
-        fi
-    else
-        echo "Found successful release.yml run for HEAD."
-    fi
-fi
+# NOTE: two upstream release gates were removed here rather than reworked:
+# (1) a byte-for-byte diff of ggml/src, ggml/include and ggml/CMakeLists.txt
+#     against the matching ggml-org/ggml tag, and (2) a lookup of
+#     .github/workflows/release.yml CI runs for the release commit.
+# Both assume upstream's topology, which this fork intentionally does not
+# have: ggml/ carries the TurboQuant+ codec and SYCL changes plus 9+ deleted
+# backends (so it never matches upstream byte-for-byte), and release.yml was
+# deleted when backends were pruned (afe22f08c), so no commit since then can
+# ever have a run recorded against that workflow path - the check was an
+# unconditional, permanent block, not a real gate. See CLAUDE.md.
+#
+# The upstream ghcr.io container-image check is also dropped: its variants
+# include cuda/rocm/musa images this fork never builds, and it depends on a
+# docker workflow that was deleted along with the rest of .github/.
 
-MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*MAJOR \([0-9]*\).*/\1/')
-MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*MINOR \([0-9]*\).*/\1/')
-PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | sed 's/.*PATCH \([0-9]*\).*/\1/')
+MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
+MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
+PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 GGML_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
 echo "Local ggml version: ${GGML_VERSION}"
-
-if ! git clone --depth 1 --branch "${GGML_VERSION}" https://github.com/ggml-org/ggml.git upstream-ggml 2>/dev/null; then
-    echo "Warning: tag ${GGML_VERSION} not found in upstream ggml - skipping comparison"
-else
-    echo "Comparing local ggml/ src and include with upstream ${GGML_VERSION}..."
-    DIFF=$(diff -rq "$REPO_ROOT/ggml/src"          upstream-ggml/src          2>&1 || true)
-    DIFF+=$(diff -rq "$REPO_ROOT/ggml/include"     upstream-ggml/include      2>&1 || true)
-    DIFF+=$(diff     "$REPO_ROOT/ggml/CMakeLists.txt" upstream-ggml/CMakeLists.txt 2>&1 || true)
-    rm -rf upstream-ggml
-    if [[ -n "$DIFF" ]]; then
-        echo "local ggml/ differs from upstream ${GGML_VERSION}:"
-        echo "$DIFF"
-        if [[ "$DRY_RUN" == "true" ]]; then
-            echo "Warning: would abort release due to ggml mismatch (dry run, continuing)."
-            CHECKS_PASSED=false
-        else
-            echo "Error: ggml must match upstream before making a release."
-            exit 1
-        fi
-    else
-        echo "local ggml/ matches upstream ${GGML_VERSION}"
-    fi
-fi
-
-echo "Checking container images for commit ${SHA}..."
-NIGHTLY_TAG="$(git tag --points-at "${SHA}" | grep -E '(^|-)b[0-9]+(-[0-9a-f]{7})?$' | head -n 1 || true)"
-if [[ -z "${NIGHTLY_TAG}" ]]; then
-    echo "Warning: no nightly tag points at ${SHA} - skipping container image check"
-elif [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
-    echo "Warning: GITHUB_REPOSITORY not set - skipping container image check (local run)"
-else
-    CONTAINER_REPO="${GITHUB_REPOSITORY,,}"  # lower-case owner/repo for ghcr.io
-    GHCR_TOKEN="$(curl -fsSL \
-        "https://ghcr.io/token?scope=repository:${CONTAINER_REPO}:pull&service=ghcr.io" \
-        | grep -oP '"token"\s*:\s*"\K[^"]+')"
-
-    VARIANTS=("" "-cuda" "-cuda13" "-vulkan" "-rocm" "-intel" "-musa" "-openvino")
-    TYPES=("full" "light" "server")
-    CONTAINER_ERR=""
-    for type in "${TYPES[@]}"; do
-        for variant in "${VARIANTS[@]}"; do
-            tag="${type}${variant}-${NIGHTLY_TAG}"
-            STATUS="$(curl -s -o /dev/null -w "%{http_code}" \
-                -H "Authorization: Bearer ${GHCR_TOKEN}" \
-                -H "Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json" \
-                "https://ghcr.io/v2/${CONTAINER_REPO}/manifests/${tag}")"
-            if [[ "${STATUS}" == "200" ]]; then
-                echo "  ${tag} - OK"
-            else
-                echo "  ${tag} - MISSING"
-                CONTAINER_ERR+=" ${tag}"
-            fi
-        done
-    done
-
-    if [[ -n "${CONTAINER_ERR}" ]]; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            echo "Warning: missing container images for ${NIGHTLY_TAG}:${CONTAINER_ERR} (dry run, continuing)."
-            CHECKS_PASSED=false
-        else
-            echo "Error: missing container images for ${NIGHTLY_TAG}:${CONTAINER_ERR}"
-            echo "The Docker workflow must complete successfully before making a release."
-            exit 1
-        fi
-    else
-        echo "All container images found for ${NIGHTLY_TAG} - OK"
-    fi
-fi
 
 echo "Checking API/ABI compatibility..."
 set +e

@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "source_sha": "ef1c35835dd99f236b5f2470193dd565d964b9d4",
+  "status": "GO",
+  "reason": "all binding P4.5a gates passed",
+  "gates": {
+    "provenance": true,
+    "harness": true,
+    "short_ppl": true,
+    "full_ppl": true,
+    "capacity": true,
+    "decode": true
+  },
+  "models": {
+    "mistral": {
+      "status": "PASS",
+      "ppl": {
+        "f16": 7.6669,
+        "q8_0": 7.6674,
+        "q4_0": 7.7229,
+        "turbo4": 7.6879,
+        "deltas": {
+          "vs_f16": {
+            "absolute": 0.020999999999999908,
+            "percentage": 0.2739047072480405
+          },
+          "vs_q8_0": {
+            "absolute": 0.020500000000000185,
+            "percentage": 0.2673657302344923
+          },
+          "vs_q4_0": {
+            "absolute": -0.03500000000000014,
+            "percentage": -0.45319763301350235
+          }
+        }
+      },
+      "capacity": {
+        "q8_0": {
+          "k_type": "q8_0",
+          "v_type": "q8_0",
+          "k_mib": 544.00,
+          "v_mib": 544.00,
+          "total_mib": 1088
+        },
+        "turbo4": {
+          "k_type": "turbo4",
+          "v_type": "turbo4",
+          "k_mib": 272.00,
+          "v_mib": 272.00,
+          "total_mib": 544
+        },
+        "q8_over_turbo4": 2
+      },
+      "decode": {
+        "pairs": [
+          {
+            "pair": 1,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 18.152465,
+            "turbo4_tps": 19.738341,
+            "delta_pct": 8.73642229856937
+          },
+          {
+            "pair": 2,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 18.173993,
+            "turbo4_tps": 19.655853,
+            "delta_pct": 8.153739247065861
+          },
+          {
+            "pair": 3,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 18.207425,
+            "turbo4_tps": 19.750635,
+            "delta_pct": 8.475718010646748
+          },
+          {
+            "pair": 4,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 18.163131,
+            "turbo4_tps": 19.767373,
+            "delta_pct": 8.832408905711242
+          },
+          {
+            "pair": 5,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 18.205077,
+            "turbo4_tps": 19.662568,
+            "delta_pct": 8.005958997042416
+          },
+          {
+            "pair": 6,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 18.180578,
+            "turbo4_tps": 19.777725,
+            "delta_pct": 8.784907718555491
+          },
+          {
+            "pair": 7,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 18.188262,
+            "turbo4_tps": 19.706460,
+            "delta_pct": 8.347130693410932
+          }
+        ],
+        "mean_pct": 8.47661226728601,
+        "sample_stdev_pct": 0.32446529120713424,
+        "critical_value": 2.447,
+        "lower95_pct": 8.176521111982233
+      }
+    },
+    "llama31": {
+      "status": "PASS",
+      "ppl": {
+        "f16": 7.4852,
+        "q8_0": 7.4850,
+        "q4_0": 7.7231,
+        "turbo4": 7.6051,
+        "deltas": {
+          "vs_f16": {
+            "absolute": 0.11990000000000034,
+            "percentage": 1.60182760647678
+          },
+          "vs_q8_0": {
+            "absolute": 0.12009999999999987,
+            "percentage": 1.6045424181696744
+          },
+          "vs_q4_0": {
+            "absolute": -0.11799999999999944,
+            "percentage": -1.5278838808250539
+          }
+        }
+      },
+      "capacity": {
+        "q8_0": {
+          "k_type": "q8_0",
+          "v_type": "q8_0",
+          "k_mib": 544.00,
+          "v_mib": 544.00,
+          "total_mib": 1088
+        },
+        "turbo4": {
+          "k_type": "turbo4",
+          "v_type": "turbo4",
+          "k_mib": 272.00,
+          "v_mib": 272.00,
+          "total_mib": 544
+        },
+        "q8_over_turbo4": 2
+      },
+      "decode": {
+        "pairs": [
+          {
+            "pair": 1,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 17.716859,
+            "turbo4_tps": 19.084642,
+            "delta_pct": 7.720234156630124
+          },
+          {
+            "pair": 2,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 17.721767,
+            "turbo4_tps": 19.179859,
+            "delta_pct": 8.227689710625352
+          },
+          {
+            "pair": 3,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 17.629332,
+            "turbo4_tps": 19.054327,
+            "delta_pct": 8.08309129353284
+          },
+          {
+            "pair": 4,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 16.818652,
+            "turbo4_tps": 19.098089,
+            "delta_pct": 13.553030290418056
+          },
+          {
+            "pair": 5,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 17.668027,
+            "turbo4_tps": 19.045117,
+            "delta_pct": 7.794248899438538
+          },
+          {
+            "pair": 6,
+            "order": [
+              "turbo4",
+              "q4_0"
+            ],
+            "q4_0_tps": 17.718668,
+            "turbo4_tps": 19.105913,
+            "delta_pct": 7.829284910129819
+          },
+          {
+            "pair": 7,
+            "order": [
+              "q4_0",
+              "turbo4"
+            ],
+            "q4_0_tps": 17.742772,
+            "turbo4_tps": 19.080238,
+            "delta_pct": 7.538089313214424
+          }
+        ],
+        "mean_pct": 8.677952653427022,
+        "sample_stdev_pct": 2.16181486790766,
+        "critical_value": 2.447,
+        "lower95_pct": 6.678535338712933
+      }
+    }
+  },
+  "preliminary_nonbinding": {
+    "source": "build-p45a on mergerfs with /usr/bin/cc as C compiler",
+    "binding": false,
+    "llama31": {
+      "f16": 7.5431,
+      "q8_0": 7.5454,
+      "q4_0": 7.7704,
+      "turbo4": 7.6602
+    },
+    "excluded": "Qwen3 auto-asymmetric run changed effective turbo4 K to q8_0"
+  }
+}

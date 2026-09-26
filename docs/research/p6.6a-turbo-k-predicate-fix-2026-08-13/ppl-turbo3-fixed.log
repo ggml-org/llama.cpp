@@ -1,0 +1,11 @@
+0.00.229.686 W load: control-looking token: 128247 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+0.00.978.654 W llama_kv_cache: auto-asymmetric: Qwen-family architecture (GQA ratio 2:1, n_head=16, n_head_kv=8) - upgrading K from turbo3 to q8_0 to prevent quality degradation. Disable with TURBO_AUTO_ASYMMETRIC=0
+0.01.152.666 I 
+0.01.152.715 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.01.152.769 I perplexity: tokenizing the input ..
+0.01.566.400 I perplexity: tokenization took 413.625 ms
+0.01.566.489 I perplexity: calculating perplexity over 8 chunks, n_ctx=512, batch_size=2048, n_seq=4
+0.02.770.899 I perplexity: 1.20 seconds per pass - ETA 0.03 minutes
+[1]11.1816,[2]14.6601,[3]14.6488,[4]15.5437,[5]15.6072,[6]15.7231,[7]16.1854,[8]16.9173,
+0.03.844.902 I Final estimate: PPL = 16.9173 +/- 1.35452
+

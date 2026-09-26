@@ -5,9 +5,14 @@ set(MTMD_VIDEO_HELP "enable video support in mtmd (requires ffmpeg binary in PAT
 set(MTMD_VIDEO ON CACHE BOOL "${MTMD_VIDEO_HELP}")
 # TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
 
-if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
+# do not FORCE the MTMD_VIDEO cache entry here: that would permanently
+# overwrite the user's persisted preference, so it stays OFF even after a
+# later reconfigure turns LLAMA_SUBPROCESS back on. Gate the effective
+# (non-cache) flag instead.
+set(MTMD_VIDEO_ENABLED ${MTMD_VIDEO})
+if (MTMD_VIDEO_ENABLED AND NOT LLAMA_SUBPROCESS)
     message(STATUS "Disabling MTMD_VIDEO because LLAMA_SUBPROCESS is OFF")
-    set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
+    set(MTMD_VIDEO_ENABLED OFF)
 endif()
 
 find_package(Threads REQUIRED)
@@ -86,7 +91,7 @@ target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::mi
 target_include_directories(mtmd PUBLIC  .)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
-if (MTMD_VIDEO)
+if (MTMD_VIDEO_ENABLED)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
 endif()
 
@@ -97,6 +102,10 @@ if (BUILD_SHARED_LIBS)
 
     # export all symbols so that internal components can be tested by test-mtmd-impl
     set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif()
+
+if (COMMAND llama_build_mtmd_tests)
+    llama_build_mtmd_tests()
 endif()
 
 set(MTMD_PUBLIC_HEADERS

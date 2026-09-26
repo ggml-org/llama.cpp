@@ -24,6 +24,19 @@ public:
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
+                         bool   gdn_replay_req,
+        const layer_filter_cb & filter);
+
+    // Upstream-compatible constructor: no GDN ingredient replay. Kept so ggml-org
+    // call sites compile unchanged on every sync.
+    llama_memory_recurrent(
+            const llama_model & model,
+                    ggml_type   type_r,
+                    ggml_type   type_s,
+                         bool   offload,
+                     uint32_t   mem_size,
+                     uint32_t   n_seq_max,
+                     uint32_t   n_rs_seq,
         const layer_filter_cb & filter);
 
     ~llama_memory_recurrent() = default;
@@ -78,6 +91,17 @@ public:
 
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
+    // DRC phase 2 (opt-in, env-gated by LLAMA_GDN_REPLAY): when true, `s_l` holds only the
+    // authoritative state (no (1+n_rs_seq) widening) and `ingr_l` holds a per-seq ring of
+    // n_rs_seq ggml_gated_delta_net emit_mode==1 ingredient slots instead. Rollback marks
+    // `replay_len[seq]` (steps to replay from the ingredient ring) rather than calling
+    // set_rs_idx. Only meaningful for GDN/KDA-style recurrent layers.
+    bool gdn_replay = false;
+
+    // per-seq pending replay length (0 = no replay pending); parallel to rs_idx, cleared on
+    // full seq_rm/clear so a released slot can't leave a dangling replay for its next occupant.
+    std::vector<uint32_t> replay_len;
+
     // computed before each graph build
     uint32_t n = 0;
 
@@ -113,6 +137,18 @@ public:
     std::vector<ggml_tensor *> s_l;
     // a second conv history that must stay replicated across devices, so it cannot share the r row
     std::vector<ggml_tensor *> p_l;
+
+    // per layer, only allocated when gdn_replay is true: [n_embd_s_ingredient(), mem_size * n_rs_seq]
+    std::vector<ggml_tensor *> ingr_l;
+
+    // per layer, only allocated when gdn_replay is true: [n_embd_s(), mem_size] -- the state as of
+    // n_rs_seq tokens before the end of the last decode (the oldest edge of the retained window).
+    // Replay must start from THIS, not from s_l: by the time a rollback is discovered, s_l already
+    // holds the (now known-wrong) optimistic "everything got accepted" final state, and delta-net's
+    // rank-1 update has no inverse -- there is no way to "undo" trailing tokens from it. Replaying
+    // ingredients only ever moves state forward, so the checkpoint to replay from must predate the
+    // whole uncertain trailing window, not follow it.
+    std::vector<ggml_tensor *> s_ckpt_l;
 
 private:
     //const llama_model & model;
@@ -175,9 +211,22 @@ public:
 
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
+    ggml_tensor * get_ingr_l(int32_t il) const;    // nullptr unless mem->gdn_replay
+    ggml_tensor * get_s_ckpt_l(int32_t il) const;  // nullptr unless mem->gdn_replay
     ggml_tensor * get_p_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    // DRC phase 2: pending replay length for the (single, in the n_seq_max==1 case) sequence
+    // in the current ubatch, or 0 if none. Used by can_reuse() and the graph builder.
+    uint32_t get_replay_len() const;
+
+    // DRC phase 2: mark the pending replay as consumed. Called exactly once per decode, after the
+    // graph has been built (every GDN layer reads get_replay_len() during build). Mirrors
+    // s_copy_idx()'s consume-and-clear of rs_idx: without it the first partial rejection latches a
+    // rollback that is re-applied on every later decode, so the recurrent state permanently trails
+    // the token stream.
+    void consume_replay_len() const;
 
 private:
     const llama_memory_status status;

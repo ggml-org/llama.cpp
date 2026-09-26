@@ -174,6 +174,7 @@ class Keys:
         HAS_CONFIDENCE_HEAD               = "{arch}.has_confidence_head"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
+        DECODER_ARCH                      = "{arch}.decoder_arch"
 
     class Adapters:
         COUNT                = "{arch}.adapters.count"
@@ -206,6 +207,8 @@ class Keys:
         OUTPUT_GROUP_COUNT           = "{arch}.attention.output_group_count"
         OUTPUT_LORA_RANK             = "{arch}.attention.output_lora_rank"
         OUTPUT_SCALE                 = "{arch}.attention.output_scale"
+        COMPRESS_RATIOS              = "{arch}.attention.compress_ratios"
+        COMPRESS_ROPE_FREQ_BASE      = "{arch}.attention.compress_rope_freq_base"
         VALUE_SCALE                  = "{arch}.attention.value_scale"
         COMPRESS_RATIOS              = "{arch}.attention.compress_ratios"
         COMPRESS_ROPE_FREQ_BASE      = "{arch}.attention.compress_rope_freq_base"
@@ -819,13 +822,13 @@ class MODEL_TENSOR(IntEnum):
     HC_ATTN_FN           = auto()
     HC_ATTN_BASE         = auto()
     HC_ATTN_SCALE        = auto()
-    HC_FFN_FN            = auto()
-    HC_FFN_BASE          = auto()
-    HC_FFN_SCALE         = auto()
     HC_ATTN_NORM         = auto() # qwen4exp
     HC_ATTN_DOWN         = auto() # qwen4exp
     HC_ATTN_UP           = auto() # qwen4exp
     HC_ATTN_INJECT       = auto() # qwen4exp
+    HC_FFN_FN            = auto()
+    HC_FFN_BASE          = auto()
+    HC_FFN_SCALE         = auto()
     HC_FFN_NORM          = auto() # qwen4exp
     HC_FFN_DOWN          = auto() # qwen4exp
     HC_FFN_UP            = auto() # qwen4exp
@@ -870,6 +873,7 @@ class MODEL_TENSOR(IntEnum):
     ENC_FFN_DOWN         = auto()
     ENC_FFN_UP           = auto()
     ENC_OUTPUT_NORM      = auto()
+    ENC_AUX_NORM         = auto()
     CLS                  = auto() # classifier
     CLS_OUT              = auto() # classifier output projection
     CLS_NORM             = auto()
@@ -1198,6 +1202,11 @@ class MODEL_TENSOR(IntEnum):
     NEXTN_HNORM            = auto()
     NEXTN_SHARED_HEAD_HEAD = auto()
     NEXTN_SHARED_HEAD_NORM = auto()
+    # qwen4exp: the MTP head's own hyper-connection mixer, which stands in for the
+    # output norm the trunk does not have
+    NEXTN_HC_HEAD_NORM     = auto()
+    NEXTN_HC_HEAD_DOWN     = auto()
+    NEXTN_HC_HEAD_UP       = auto()
     # eagle3
     FC                     = auto()  # feature fusion layer
     D2T                    = auto()  # draft to target vocabulary mapping
@@ -1423,6 +1432,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.MASKED_EMBD_CENTROIDS:     "masked_embd_centroids",
     MODEL_TENSOR.MASKED_EMBD_ORDERING:      "masked_embd_ordering",
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
+    MODEL_TENSOR.HC_HEAD_FN:                "output_hc_fn",
+    MODEL_TENSOR.HC_HEAD_BASE:              "output_hc_base",
+    MODEL_TENSOR.HC_HEAD_SCALE:             "output_hc_scale",
+    MODEL_TENSOR.HC_HEAD_NORM:              "output_hc_norm",                 # qwen4exp
+    MODEL_TENSOR.HC_HEAD_DOWN:              "output_hc_down",                 # qwen4exp
+    MODEL_TENSOR.HC_HEAD_UP:                "output_hc_up",                   # qwen4exp
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
     MODEL_TENSOR.HRM_Z_L_INIT:              "hrm.z_l_init",
@@ -1474,6 +1489,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_DOWN_EXP:              "blk.{bid}.ffn_down_exps",
     MODEL_TENSOR.FFN_UP_EXP:                "blk.{bid}.ffn_up_exps",
     MODEL_TENSOR.FFN_GATE_UP_EXP:           "blk.{bid}.ffn_gate_up_exps",
+    MODEL_TENSOR.FFN_GATE_TID2EID:          "blk.{bid}.ffn_gate_tid2eid",
     MODEL_TENSOR.FFN_EXP_PROBS_B:           "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.FFN_EXP_PROBS_B_VL:        "blk.{bid}.exp_probs_b_vl",
     MODEL_TENSOR.FFN_GATE_TID2EID:          "blk.{bid}.ffn_gate_tid2eid",
@@ -1576,13 +1592,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_ATTN_FN:                "blk.{bid}.hc_attn_fn",
     MODEL_TENSOR.HC_ATTN_BASE:              "blk.{bid}.hc_attn_base",
     MODEL_TENSOR.HC_ATTN_SCALE:             "blk.{bid}.hc_attn_scale",
-    MODEL_TENSOR.HC_FFN_FN:                 "blk.{bid}.hc_ffn_fn",
-    MODEL_TENSOR.HC_FFN_BASE:               "blk.{bid}.hc_ffn_base",
-    MODEL_TENSOR.HC_FFN_SCALE:              "blk.{bid}.hc_ffn_scale",
     MODEL_TENSOR.HC_ATTN_NORM:              "blk.{bid}.hc_attn_norm",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_DOWN:              "blk.{bid}.hc_attn_down",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_UP:                "blk.{bid}.hc_attn_up",           # qwen4exp
     MODEL_TENSOR.HC_ATTN_INJECT:            "blk.{bid}.hc_attn_inject",       # qwen4exp
+    MODEL_TENSOR.HC_FFN_FN:                 "blk.{bid}.hc_ffn_fn",
+    MODEL_TENSOR.HC_FFN_BASE:               "blk.{bid}.hc_ffn_base",
+    MODEL_TENSOR.HC_FFN_SCALE:              "blk.{bid}.hc_ffn_scale",
     MODEL_TENSOR.HC_FFN_NORM:               "blk.{bid}.hc_ffn_norm",          # qwen4exp
     MODEL_TENSOR.HC_FFN_DOWN:               "blk.{bid}.hc_ffn_down",          # qwen4exp
     MODEL_TENSOR.HC_FFN_UP:                 "blk.{bid}.hc_ffn_up",            # qwen4exp
@@ -1627,6 +1643,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ENC_FFN_DOWN:              "enc.blk.{bid}.ffn_down",
     MODEL_TENSOR.ENC_FFN_UP:                "enc.blk.{bid}.ffn_up",
     MODEL_TENSOR.ENC_OUTPUT_NORM:           "enc.output_norm",
+    MODEL_TENSOR.ENC_AUX_NORM:              "enc.aux_norm",
     MODEL_TENSOR.CLS:                       "cls",
     MODEL_TENSOR.CLS_OUT:                   "cls.output",
     MODEL_TENSOR.CLS_NORM:                  "cls.norm",
@@ -1985,6 +2002,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    MODEL_TENSOR.NEXTN_HC_HEAD_NORM:        "blk.{bid}.nextn.hc_head_norm",
+    MODEL_TENSOR.NEXTN_HC_HEAD_DOWN:        "blk.{bid}.nextn.hc_head_down",
+    MODEL_TENSOR.NEXTN_HC_HEAD_UP:          "blk.{bid}.nextn.hc_head_up",
     MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.DSPARK_MARKOV_W1:          "markov_w1",
     MODEL_TENSOR.DSPARK_MARKOV_W2:          "markov_w2",
@@ -2291,6 +2311,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_CTC_OUT,
         MODEL_TENSOR.A_CTC_OUT_MID,
         MODEL_TENSOR.A_ENC_ATTN_REL_POS_EMB,
+        MODEL_TENSOR.A_ENC_SE_CONV1,
+        MODEL_TENSOR.A_ENC_SE_CONV2,
+        MODEL_TENSOR.A_ENC_ASP_ATTN,
+        MODEL_TENSOR.A_ENC_ASP_TDNN,
         # qformer projector
         MODEL_TENSOR.A_QF_PROJ_QUERY,
         MODEL_TENSOR.A_QF_PROJ_NORM,
@@ -2982,6 +3006,15 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.PLE_NORM_QUERY,
         MODEL_TENSOR.PLE_NORM_CONV,
         MODEL_TENSOR.PLE_CONV1D,
+        # NextN/MTP draft head
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
+        MODEL_TENSOR.NEXTN_HC_HEAD_NORM,
+        MODEL_TENSOR.NEXTN_HC_HEAD_DOWN,
+        MODEL_TENSOR.NEXTN_HC_HEAD_UP,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -5227,6 +5260,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_GATE,
         MODEL_TENSOR.ATTN_SINKS,
         MODEL_TENSOR.ATTN_Q_A,
         MODEL_TENSOR.ATTN_Q_B,
@@ -5270,6 +5304,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DFLASH_SELECTOR_PREV,
         MODEL_TENSOR.DFLASH_SELECTOR_NEXT,
         MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN,
+        MODEL_TENSOR.ENC_AUX_NORM,
     ],
     MODEL_ARCH.MISTRAL4: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -5722,12 +5757,23 @@ class GGMLQuantizationType(IntEnum):
     NVFP4   = 40
     Q1_0    = 41
     Q2_0    = 42
+    # Stable fork type IDs; see ggml.h
+    # TURBO2_0/3_0/4_0 are runtime KV cache types, they never appear in a GGUF file
+    TURBO2_0 = 43
+    TURBO3_0 = 44
+    TURBO4_0 = 45
+    TQ3_1S  = 46
+    TQ4_1S  = 47
+    Q8_CR   = 48
+    Q5_CR   = 49
+    Q6_CR   = 50
 
 
 class ExpertGatingFuncType(IntEnum):
-    SOFTMAX       = 1
-    SIGMOID       = 2
-    SQRTSOFTPLUS  = 4
+    SOFTMAX        = 1
+    SIGMOID        = 2
+    SOFTMAX_WEIGHT = 3
+    SQRTSOFTPLUS   = 4
 
 
 # TODO: add GGMLFileType from ggml_ftype in ggml.h
@@ -5778,6 +5824,11 @@ class LlamaFileType(IntEnum):
     MOSTLY_NVFP4         = 39  # except 1d tensors
     MOSTLY_Q1_0          = 40  # except 1d tensors
     MOSTLY_Q2_0          = 41  # except 1d tensors
+    MOSTLY_Q8_CR         = 512  # except 1d tensors, ConvRot-rotated Q8_0
+    MOSTLY_TQ3_1S        = 43  # except 1d tensors
+    MOSTLY_TQ4_1S        = 44  # except 1d tensors
+    MOSTLY_Q5_CR         = 513  # except 1d tensors, ConvRot-rotated Q5_0
+    MOSTLY_Q6_CR         = 514  # except 1d tensors, ConvRot-rotated Q6_K
 
     GUESSED              = 1024  # not specified in the model file
 
@@ -5916,6 +5967,17 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.Q2_0:    (64, 2 + 16),
+    GGMLQuantizationType.TURBO2_0: (128, 2 + 32),
+    GGMLQuantizationType.TURBO3_0: (128, 2 + 32 + 16),
+    GGMLQuantizationType.TURBO4_0: (128, 2 + 2 + 64),
+    GGMLQuantizationType.TQ3_1S:  (32, 2 + 2 + 12),
+    GGMLQuantizationType.TQ4_1S:  (32, 2 + 2 + 16),
+    # same layout as Q8_0, but the rows are rotated in groups of 256 (ConvRot)
+    GGMLQuantizationType.Q8_CR:   (256, 8 * (2 + 32)),
+    # same layout as Q5_0, but the rows are rotated in groups of 256 (ConvRot)
+    GGMLQuantizationType.Q5_CR:   (256, 8 * (2 + 4 + 16)),
+    # same layout as Q6_K (256 elements/block), but the rows are rotated in groups of 256 (ConvRot)
+    GGMLQuantizationType.Q6_CR:   (256, 2 + 128 + 64 + 16),   # block_q6_K: d(2)+ql(128)+qh(64)+scales(16)
 }
 
 

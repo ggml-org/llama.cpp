@@ -14,7 +14,7 @@ set "BIN_FILE=.\build\bin\llama-completion.exe"
 set "SEED=0"
 set "GPUS_SETTING="
 
-set "INPUT_PROMPT=Building a website can be done in 10 simple steps:^nStep 1:"
+set "INPUT_PROMPT=Building a website can be done in 10 simple steps:\nStep 1:"
 set "MODEL_FILE=..\models\llama-2-7b.Q4_0.gguf"
 set "NGL=99"
 set "CONTEXT=4096"
@@ -205,8 +205,7 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   echo Use %GGML_SYCL_DEVICE% as main GPU
   REM Use single GPU only.
   set "GPUS_SETTING=-mg %GGML_SYCL_DEVICE% -sm %SPLIT_MODE%"
-  )
-else (
+  ) else (
   echo Use Intel GPUs: %SYCL_DEVICES%
   set "GPUS_SETTING=-sm %SPLIT_MODE%"
 )

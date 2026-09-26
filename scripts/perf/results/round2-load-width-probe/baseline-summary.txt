@@ -1,0 +1,37 @@
+probe label : baseline
+repo HEAD   : 028084d00
+dirty       : 0 modified sycl files
+icpx        : Intel(R) oneAPI DPC++/C++ Compiler 2026.0.0 (2026.0.0.20260331)
+ocloc       : 26.22.38646
+
+---- canonical ----
+  global (ugm) load data types:
+       2129 d16u32
+       1919 d32
+        416 d32x4
+        176 d32x1t
+         96 d32x2t
+         16 d32x8t
+         16 d32x3t
+         14 d32x2
+          8 d64x2
+          5 d32x4t
+          2 d8u32
+          1 d32x3
+  narrow (d16*) global loads: 2129
+  total ugm loads          : 4798
+
+---- quants-first ----
+  global (ugm) load data types:
+        512 d16u32
+        424 d32
+         84 d32x4
+         66 d32x1t
+         32 d32x2t
+          6 d32x3t
+          4 d32x4t
+          4 d32x2
+          2 d8u32
+          2 d32x8t
+  narrow (d16*) global loads: 512
+  total ugm loads          : 1136

@@ -135,7 +135,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head = 1;
         n_ff   = 96;
         n_layer = 22; // hparams.n_layer_kv_from_start = 20 is hardcoded
-    } else if (arch == LLM_ARCH_DEEPSEEK4) {
+    } else if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH) {
         // head size 64 so that GPU flash attention kernels support the model
         n_embd  = 512;
         n_head  = 8;
@@ -214,11 +214,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, arch == LLM_ARCH_DEEPSEEK4 ? uint32_t(1) : n_head_kv);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH ? uint32_t(1) : n_head_kv);
     }
 
     ms.add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, 8.0f);
-    if (arch == LLM_ARCH_DEEPSEEK4) {
+    if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,   n_embd_head/2);
@@ -320,11 +320,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        ple_head_vocab_sizes);
     }
 
+    // The DSA fixtures use the default 64-wide indexer Hadamard rotation matrix.
+    const bool is_dsa_fixture = arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA ||
+            arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH;
     // minimax-m3 keeps one indexer head per GQA head; the rest use a fixed 64 to match the fused
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,   arch == LLM_ARCH_MINIMAX_M3 ? n_head : uint32_t(64));
     // qwen4exp ropes indexer keys with the main rotary width, so its head can't be < n_rot
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
-              arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
+              arch == LLM_ARCH_QWEN4EXP ? n_embd_head : is_dsa_fixture ? uint32_t(64) : uint32_t(128));
 
     // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
     //       a large value makes things deterministic since all data is selected by the indexer
@@ -357,14 +360,18 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
     }
 
-    if (arch == LLM_ARCH_DEEPSEEK4) {
+    if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH) {
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,          uint32_t(8));
         ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,            uint32_t(32));
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,             std::vector<uint32_t>({0, 0, 4, 128}));
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,
+                arch == LLM_ARCH_DFLASH ? std::vector<uint32_t>(n_layer, 0) : std::vector<uint32_t>({0, 0, 4, 128}));
         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,     160000.0f);
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,                uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,  uint32_t(2));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,              1.0e-6f);
+        if (arch == LLM_ARCH_DFLASH) {
+            ms.add_kv(LLM_KV_TARGET_LAYERS, std::vector<uint32_t>({0}));
+        }
         ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
@@ -406,7 +413,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
-        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         arch == LLM_ARCH_DEEPSEEK4 ? uint32_t(4) : uint32_t(2)); // sqrtsoftplus : sigmoid
+        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,
+                arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DFLASH ? uint32_t(4) : uint32_t(2)); // sqrtsoftplus : sigmoid
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
     }
@@ -437,7 +445,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(12));
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
-    ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
@@ -547,6 +554,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DOTS3NOTE:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_DFLASH:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
@@ -634,21 +642,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
-    // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
-#ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {
+    if (arch == LLM_ARCH_DEEPSEEK4) {
         return false;
     }
-#endif // GGML_USE_WEBGPU
-
-    // FIXME: jamba produces incorrect output (~0.55 NMSE vs CPU) on the HIP
-    // backend on RDNA3.5 (gfx1151); the SSM kernels need investigation.
-#ifdef GGML_USE_HIP
-    if (arch == LLM_ARCH_JAMBA) {
-        return false;
-    }
-#endif // GGML_USE_HIP
 
     return true;
 }
@@ -686,7 +682,7 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
         }
-        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
+        if (arch == LLM_ARCH_EAGLE3) {
             continue;
         }
         for (bool moe : {false, true}) {
@@ -696,7 +692,8 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            if (!llama_model_saver_supports_arch(arch) || !arch_supported(arch)) {
+            const bool graph_fixture_arch = arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_DEEPSEEK4;
+            if (!llama_model_saver_supports_arch(arch) || (!arch_supported(arch) && !graph_fixture_arch)) {
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }

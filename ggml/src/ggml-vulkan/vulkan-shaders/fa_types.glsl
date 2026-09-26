@@ -3,6 +3,14 @@
 
 #include "ggml_type_ids.glsl"
 
+// Fork type ids not covered by the shared header above (ids 43-47). Keep in
+// sync with the GGML_TYPE_TURBO*/TQ*_1S enum values in ggml.h.
+#define GGML_TYPE_TURBO2_0 43u
+#define GGML_TYPE_TURBO3_0 44u
+#define GGML_TYPE_TURBO4_0 45u
+#define GGML_TYPE_TQ3_1S   46u
+#define GGML_TYPE_TQ4_1S   47u
+
 // Number of matrix elements per buffer block, derived from the K/V type spec
 // constant. F32 is treated as a vec4 "block" of 4 floats. F16 uses block size 1
 // and bypasses the dequant path entirely. Quants follow their ggml block sizes.
@@ -17,6 +25,11 @@ uint fa_block_elems(uint ty) {
         case GGML_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
         case GGML_TYPE_IQ4_NL: return uint(QUANT_K_IQ4_NL);
         case GGML_TYPE_BF16: return 1u;
+        case GGML_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        case GGML_TYPE_Q2_0: return uint(QUANT_K_Q2_0);
+        case GGML_TYPE_TURBO2_0: return uint(QUANT_K_TURBO2_0);
+        case GGML_TYPE_TURBO3_0: return uint(QUANT_K_TURBO3_0);
+        case GGML_TYPE_TURBO4_0: return uint(QUANT_K_TURBO4_0);
         default:           return 1u;
     }
 }

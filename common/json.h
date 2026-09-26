@@ -266,53 +266,60 @@ class common_json {
 
     // walks an array by index, or an object in insertion order
     // a plain value gives itself once, same as the backing library
-    class iterator {
+    // Node is common_json or const common_json: a const object hands out
+    // const references, so nothing can write through it while iterating
+    template <typename Node> class basic_iterator {
       public:
         using iterator_category = std::forward_iterator_tag;
         using value_type        = common_json;
         using difference_type   = std::ptrdiff_t;
-        using pointer           = common_json *;
-        using reference         = common_json &;
+        using pointer           = Node *;
+        using reference         = Node &;
 
-        iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
+        basic_iterator(Node * node, size_t idx) : node(node), idx(idx) {}
 
-        common_json & operator*() const;
-        common_json & value()     const { return **this; }
-        std::string   key()       const;
+        Node &      operator*() const;
+        Node &      value()     const { return **this; }
+        std::string key()       const;
 
-        iterator & operator++() {
+        basic_iterator & operator++() {
             idx++;
             return *this;
         }
 
-        bool operator!=(const iterator & other) const { return idx != other.idx; }
-        bool operator==(const iterator & other) const { return idx == other.idx; }
+        bool operator!=(const basic_iterator & other) const { return idx != other.idx; }
+        bool operator==(const basic_iterator & other) const { return idx == other.idx; }
 
       private:
-        common_json * node;
-        size_t        idx;
+        Node * node;
+        size_t idx;
     };
 
-    iterator begin() const;
-    iterator end()   const;
+    using iterator       = basic_iterator<common_json>;
+    using const_iterator = basic_iterator<const common_json>;
+
+    iterator       begin();
+    iterator       end();
+    const_iterator begin() const;
+    const_iterator end()   const;
 
     // allows: for (const auto & [key, val] : obj.items())
-    class items_view {
+    template <typename Node> class basic_items_view {
       public:
         // the members are public, so an entry also works with structured bindings
         struct entry {
-            std::string   k;
-            common_json & v;
+            std::string k;
+            Node &      v;
 
             const std::string & key()   const { return k; }
-            common_json &       value() const { return v; }
+            Node &              value() const { return v; }
         };
 
-        items_view(common_json * node, size_t n) : node(node), n(n) {}
+        basic_items_view(Node * node, size_t n) : node(node), n(n) {}
 
         class iterator {
           public:
-            iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
+            iterator(Node * node, size_t idx) : node(node), idx(idx) {}
 
             entry operator*() const;
 
@@ -324,19 +331,23 @@ class common_json {
             bool operator!=(const iterator & other) const { return idx != other.idx; }
 
           private:
-            common_json * node;
-            size_t        idx;
+            Node * node;
+            size_t idx;
         };
 
         iterator begin() const { return iterator(node, 0); }
         iterator end()   const { return iterator(node, n); }
 
       private:
-        common_json * node;
-        size_t        n;
+        Node * node;
+        size_t n;
     };
 
-    items_view items() const;
+    using items_view       = basic_items_view<common_json>;
+    using const_items_view = basic_items_view<const common_json>;
+
+    items_view       items();
+    const_items_view items() const;
 
   private:
     // a negative index must not turn into a huge size_t

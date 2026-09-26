@@ -182,7 +182,7 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 
 ### API for tools
 
-This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+This endpoint is intended to be used internally by the Web UI and subject to change or removal. Enabling any built-in tool requires at least one configured API key, and requests are checked by the normal timing-safe API-key middleware. MCP-only operation is unaffected by that startup requirement.
 
 **GET /tools**
 
@@ -200,8 +200,10 @@ Invoke a tool call, request body is a JSON object with:
 - `params` (object): a mapping from argument name (string) to argument value
 
 Headers:
-- `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
-- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host
+- `x-tool-cwd`: optional and valid only for built-in tools using the local host runtime. The operator must configure `--tools-cwd-root`; the header must be relative and resolve to an existing directory canonically contained beneath that root. Absolute paths, `..` traversal, symlink escapes, missing paths, and files are rejected. SSH and container runtimes reject this header because local canonicalization cannot prove containment in their filesystems. This bounds only the working-directory header, not tool path arguments or shell commands
+- `x-tool-runtime`: optional; if present and nonempty, it must exactly repeat the original `--tools-runtime` value and cannot select or override an SSH host, container ID, or image. If absent or empty, the configured runtime is used. A nonempty header without a configured runtime is rejected. Execution always uses the configured runtime's server-resolved effective target
+
+Both routing headers are ignored for MCP tools. Network or Tailscale reachability alone does not authorize outbound SSH under the `llama-server` host identity.
 
 Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 

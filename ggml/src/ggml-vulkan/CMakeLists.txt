@@ -37,14 +37,17 @@ endfunction()
 #  RESULT_VARIABLE - Name of the variable to set (ON/OFF) based on test result
 function(test_shader_extension_support EXTENSION_NAME TEST_SHADER_FILE RESULT_VARIABLE)
     execute_process(
-        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -o - -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}"
+        COMMAND ${Vulkan_GLSLC_EXECUTABLE} -O -o - -fshader-stage=compute --target-env=vulkan1.3 "${TEST_SHADER_FILE}"
+        RESULT_VARIABLE glslc_result
         OUTPUT_VARIABLE glslc_output
         ERROR_VARIABLE glslc_error
     )
 
-    if (${glslc_error} MATCHES ".*extension not supported: ${EXTENSION_NAME}.*")
+    if (NOT glslc_result EQUAL 0)
         message(STATUS "${EXTENSION_NAME} not supported by glslc")
         set(${RESULT_VARIABLE} OFF PARENT_SCOPE)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -D${RESULT_VARIABLE}=OFF)
+        set(VULKAN_SHADER_GEN_CMAKE_ARGS "${VULKAN_SHADER_GEN_CMAKE_ARGS}" PARENT_SCOPE)
     else()
         message(STATUS "${EXTENSION_NAME} supported by glslc")
         set(${RESULT_VARIABLE} ON PARENT_SCOPE)
@@ -61,6 +64,7 @@ if (Vulkan_FOUND)
 
     ggml_add_backend_library(ggml-vulkan
                              ggml-vulkan.cpp
+                             ggml-vulkan-moe-cache.cpp
                              ../../include/ggml-vulkan.h
                              ggml-vulkan-types.h
                              ggml-vulkan-push-constants.h

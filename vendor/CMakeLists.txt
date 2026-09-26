@@ -5,7 +5,7 @@ add_subdirectory(nlohmann)
 add_subdirectory(sheredom)
 add_subdirectory(stb)
 
-# only used by common
-if (LLAMA_BUILD_COMMON)
+# used by the server and download helpers
+if (LLAMA_BUILD_SERVER OR LLAMA_DOWNLOAD)
     add_subdirectory(cpp-httplib)
 endif()

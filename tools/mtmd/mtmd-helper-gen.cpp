@@ -316,6 +316,10 @@ public:
             *out_data_len = audio_pcm.size() * sizeof(float);
             return 0;
         }
+        if (out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV) {
+            LOG_ERR("mtmd_helper_gen_audio: unknown out_type %d\n", (int) out_type);
+            return 1;
+        }
 
         out_buf.clear();
         if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
@@ -677,6 +681,10 @@ public:
             *out_data     = (const char *) audio_pcm.data();
             *out_data_len = audio_pcm.size() * sizeof(float);
             return 0;
+        }
+        if (out_type != MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV) {
+            LOG_ERR("mtmd_helper_gen_audio: unknown out_type %d\n", (int) out_type);
+            return 1;
         }
 
         out_buf.clear();

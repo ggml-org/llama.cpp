@@ -34,7 +34,8 @@ class Dots3NoteModel(DeepseekV2Model):
         hparams = self.hparams
 
         # config file doesn't specify MTP block, detect it from model weight
-        self.n_nextn = 1 if "model.mtp.embed_tokens.weight" in self.model_tensors else 0
+        # (gated on no_mtp so --no-mtp doesn't advertise a block whose tensors filter_tensors then drops)
+        self.n_nextn = 1 if not self.no_mtp and "model.mtp.embed_tokens.weight" in self.model_tensors else 0
         if self.n_nextn:
             self.block_count += self.n_nextn
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)

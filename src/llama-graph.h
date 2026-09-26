@@ -281,6 +281,11 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // DRC phase 2: pending-replay length baked into this graph's topology (an extra
+    // ggml_gated_delta_net(K=1) reconstruction per replay step) -- must match for valid reuse,
+    // same as head/rs_z above.
+    uint32_t replay_len = 0;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -755,15 +760,12 @@ public:
     std::map<llama_seq_id, llama_sampler *> samplers;
 };
 
-//
-// llm_graph_result
-//
+struct llm_graph_fused_node {
+    llm_fused_op op;
+    ggml_tensor * tensor;
+    int il;
+};
 
-// these objects deliver the result from the graph build process back to the llama_context
-// note that the input tensors created for the graph are referenced here - the goal is to be able to populate their
-//   specific data, by calling the set_inputs() method
-// along with the input tensors, the object also provides commonly used outputs tensors, such as logits, embeddings, etc.
-//   these are used by the llama_context to extact the relevant data, based on the compute parameters
 
 // callback that allows us to apply custom logic to each tensor (e.g. ggml-alloc, offloading, etc.)
 using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il)>;
@@ -878,6 +880,7 @@ struct llm_graph_params {
             cparams.embeddings              == other.cparams.embeddings              &&
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
+            cparams.mtp_chain               == other.cparams.mtp_chain               &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
             arch  == other.arch  &&
             gtype == other.gtype &&
@@ -885,12 +888,6 @@ struct llm_graph_params {
             loras == other.loras &&
             cross == other.cross;
     }
-};
-
-struct llm_graph_fused_node {
-    llm_fused_op op;
-    ggml_tensor * tensor;
-    int il;
 };
 
 class llm_graph_result {
@@ -931,6 +928,8 @@ public:
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
 
     void set_params(const llm_graph_params & params);
+
+
 
     // important graph nodes
     ggml_tensor * t_inp_tokens  = nullptr;
@@ -1182,6 +1181,26 @@ struct llm_graph_context {
     // attention
     //
 
+    // TurboQuant: zero-pad q to a turbo-typed k's 128-element block width and
+    // apply the matching forward WHT rotation. No-op when k is not turbo-typed.
+    // For attention paths that bypass build_attn_mha (e.g. the DSA lightning
+    // indexer), which must enter the same rotated domain as the cached K.
+    ggml_tensor * build_attn_pad_turbo_query(
+            ggml_tensor       * q,
+      const ggml_tensor       * k,
+            ggml_tensor       * innerq_scale) const;
+
+    // TurboQuant: strip the zero-padding a turbo-typed V introduces to reach
+    // its 128-element block width, restoring the caller's true head width.
+    // No-op when v is not turbo-typed or already matches original_v_head.
+    // For attention paths that call build_attn_mha() directly instead of
+    // through one of the build_attn() overloads above, which already do this.
+    ggml_tensor * build_attn_strip_padded_turbo_v(
+            ggml_tensor       * cur,
+      const ggml_tensor       * v,
+              int64_t            original_v_head,
+              int64_t            n_head) const;
+
     ggml_tensor * build_attn_mha(
             ggml_tensor * q,       // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k,       // [n_embd_head_k, n_head_k, n_tokens]
@@ -1304,6 +1323,7 @@ struct llm_graph_context {
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_cross * inp,
+
             ggml_tensor * wo,
             ggml_tensor * wo_b,
             ggml_tensor * wo_s,

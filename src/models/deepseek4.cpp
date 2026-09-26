@@ -624,7 +624,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
     indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f/sqrtf(float(n_embd_indexer_head*n_indexer_head)));
     cb(indexer_weights, "lid_weights", il);
 
-    ggml_tensor * indexer_k = inp_dsv4->mctx->get_lid()->get_k(ctx0, il);
+    const auto * mctx_lid = inp_dsv4->mctx->get_lid();
+    ggml_tensor * indexer_k = mctx_lid->get_k(ctx0, il);
     const int64_t n_lid = inp_lid.kq_mask->ne[0];
     GGML_ASSERT(n_lid > 0);
     GGML_ASSERT(n_lid <= indexer_k->ne[2]);
@@ -633,6 +634,13 @@ ggml_tensor * llama_model_deepseek4::graph::build_lid_top_k(
             indexer_k->ne[0], indexer_k->ne[1], n_lid, indexer_k->ne[3],
             indexer_k->nb[1], indexer_k->nb[2], indexer_k->nb[3], 0);
     cb(indexer_k, "lid_k", il);
+
+    // TurboQuant: turbo K is padded to a 128-element block and WHT-rotated
+    // at quantize time; match indexer_q so the dot product with
+    // ggml_lightning_indexer (or the manual fallback below) stays width-aligned.
+    // llama_kv_cache_dsv4_comp_context does not expose the InnerQ scale (and
+    // InnerQ is dormant/off by default fork-wide), so pass null here.
+    indexer_q = build_attn_pad_turbo_query(indexer_q, indexer_k, nullptr);
 
     const int64_t n_stream = indexer_k->ne[3];
     indexer_q = ggml_view_4d(ctx0, indexer_q,
@@ -757,8 +765,15 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
     cb(kq_mask, "csa_lid_kq_mask", il);
 
+    // n_kv_max bounds the finite (non -INFINITY) mask entries per row that
+    // flash_attn_mask_to_sparse_indices will keep; entries past it are silently dropped.
+    // n_swa == 0 would zero out the raw SWA window and leave only the csa top-k entries,
+    // which is never a valid config for this path.
+    GGML_ASSERT(hparams.n_swa > 0);
     const int64_t n_kv_max = std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + top_k->ne[0];
+    GGML_ASSERT(n_kv_max <= k_all->ne[2]); // must not exceed raw_k + csa_k concat length
     ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, n_kv_max, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k_all, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -814,6 +829,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     cb(kq_mask, "hca_kq_mask", il);
 
     ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k_all, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -850,6 +866,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
 
     ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, 0, kq_scale, il);
+    out = build_attn_strip_padded_turbo_v(out, k, n_embd_head_v, n_head);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }

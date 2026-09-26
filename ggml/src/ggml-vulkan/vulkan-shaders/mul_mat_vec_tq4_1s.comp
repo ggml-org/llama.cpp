@@ -1,0 +1,119 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+#include "mul_mat_vec_base.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// Lloyd-Max centroids for TQ4_1S (4-bit, 16 levels) — N(0, 1) optimal
+const float TQ4_CENTROIDS[16] = float[16](
+    -2.732590, -2.069017, -1.618046, -1.256231,
+    -0.942340, -0.656759, -0.388048, -0.128395,
+     0.128395,  0.388048,  0.656759,  0.942340,
+     1.256231,  1.618046,  2.069017,  2.732590
+);
+
+// WHT sign pattern for 32-element blocks (shared by TQ3 and TQ4)
+const float TQ4_SIGNS[32] = float[32](
+    +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+    -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+);
+
+const float TQ4_INV_SQRT32 = 0.17677669529663688;
+
+// See the commit message on a850ccc for the full derivation and portability
+// rationale.  Short version: pre-rotate the activation block via forward WHT
+// in shared memory, then dot-product against the raw centroid*scale weights.
+//
+// Shared memory budget: NUM_COLS * 32 floats (max 1 KiB at NUM_COLS=8)
+// plus whatever tmpsh the reduction helper allocates.
+
+shared float tq4_smem[8 * 32];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid = gl_LocalInvocationID.x;
+
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < NUM_ROWS; ++n) {
+            temp[j][n] = FLOAT_TYPE(0);
+        }
+    }
+
+    const uint num_blocks_per_row = p.ncols / 32u;
+    const uint byte_idx     = tid / 2u;
+    const uint nibble_shift = (tid & 1u) * 4u;
+    const float sign_tid    = TQ4_SIGNS[tid];
+
+    for (uint blk = 0; blk < num_blocks_per_row; blk++) {
+        // --- Stage 1: load activation, sign-flip, write to shared memory ---
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const uint b_base = c * p.batch_stride_b + b_offset + blk * 32u;
+            tq4_smem[c * 32u + tid] = float(data_b[b_base + tid]) * sign_tid;
+        }
+        barrier();
+
+        // --- Stage 2: forward WHT butterfly in shared memory (5 stages) ---
+        [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u) {
+            if ((tid & step) == 0u) {
+                const uint partner = tid + step;
+                [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+                    const uint base = c * 32u;
+                    const float a = tq4_smem[base + tid];
+                    const float b = tq4_smem[base + partner];
+                    tq4_smem[base + tid]     = a + b;
+                    tq4_smem[base + partner] = a - b;
+                }
+            }
+            barrier();
+        }
+
+        // --- Stage 3: dequant all rows' weights for this block position ---
+        // Pre-computing the weight for every row before touching the column
+        // accumulator lets the compiler treat the smem read in stage 4 as
+        // loop-invariant across rows, which is the Vulkan analogue of the
+        // "hot loop load dedup" optimisation in the CUDA kernel (PR #57).
+        float w_vals[NUM_ROWS];
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib  = (first_row + n) * num_blocks_per_row + blk;
+            const uint idx = (uint(data_a[a_offset + ib].qs[byte_idx]) >> nibble_shift) & 0xFu;
+            const float d  = (tid < 16u)
+                ? float(data_a[a_offset + ib].d0)
+                : float(data_a[a_offset + ib].d1);
+            w_vals[n] = TQ4_CENTROIDS[idx] * d * TQ4_INV_SQRT32;
+        }
+
+        // --- Stage 4: accumulate dot products ---
+        // Read the rotated activation once per column; reuse across all rows.
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const float b_rotated = tq4_smem[c * 32u + tid];
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                temp[c][n] += FLOAT_TYPE(w_vals[n] * b_rotated);
+            }
+        }
+
+        // Ensure every thread is done reading before the next block's store.
+        barrier();
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

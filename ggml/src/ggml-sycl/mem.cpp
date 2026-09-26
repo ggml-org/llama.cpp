@@ -6,12 +6,12 @@
 #include <level_zero/zes_api.h>
 #endif
 
+#include "base.hpp"
+#include "mem.hpp"
+
 #include <cstdint>
 #include <iostream>
 #include <vector>
-
-#include "base.hpp"
-#include "mem.hpp"
 
 const char * mem_api_int2str(int mem_api) {
     if (mem_api == MEMORY_API_TYPE_SYCL) {

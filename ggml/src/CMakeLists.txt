@@ -206,6 +206,8 @@ add_library(ggml-base
             ggml-threading.h
             ggml-quants.c
             ggml-quants.h
+            ggml-turbo-quant.c
+            ggml-innerq.c
             gguf.cpp)
 
 set_target_properties(ggml-base PROPERTIES
@@ -434,6 +436,11 @@ function(ggml_add_backend backend)
         if (NOT GGML_BACKEND_DL)
             string(TOUPPER "GGML_USE_${backend}" backend_use)
             target_compile_definitions(ggml PUBLIC ${backend_use})
+            # ggml-backend.cpp (the synchronous compute wrappers that consume per-backend
+            # sticky error status, e.g. ggml_backend_maybe_consume_sycl_status) is compiled
+            # as part of ggml-base, not ggml, so it never saw this define via the line above -
+            # its #ifdef GGML_USE_<BACKEND> guards silently compiled to their no-op branch.
+            target_compile_definitions(ggml-base PUBLIC ${backend_use})
         endif()
     endif()
 endfunction()
@@ -587,21 +594,8 @@ elseif (GGML_CPU)
 endif()
 
 ggml_add_backend(BLAS)
-ggml_add_backend(CANN)
-ggml_add_backend(CUDA)
-ggml_add_backend(ET)
-ggml_add_backend(HIP)
-ggml_add_backend(METAL)
-ggml_add_backend(MUSA)
-ggml_add_backend(RPC)
-ggml_add_backend(VirtGPU)
 ggml_add_backend(SYCL)
 ggml_add_backend(Vulkan)
-ggml_add_backend(WebGPU)
-ggml_add_backend(zDNN)
-ggml_add_backend(OpenCL)
-ggml_add_backend(Hexagon)
-ggml_add_backend(ZenDNN)
 ggml_add_backend(OPENVINO)
 
 foreach (target ggml-base ggml)

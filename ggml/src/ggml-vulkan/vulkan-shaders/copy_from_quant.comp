@@ -30,6 +30,41 @@ void main() {
 
     const uint a_offset = 0;
     const uint ib = src_idx;
+
+#if defined(DATA_A_TQ4_1S)
+    // TQ4_1S requires full inverse WHT after centroid*scale dequant.
+    // Dequant all 32 elements into a buffer, apply butterfly, then write.
+    const float tq4_signs[32] = float[32](
+        +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+        -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+    );
+    const float TQ4_INV_SQRT32 = 0.17677669529663688;
+
+    float buf[32];
+    for (int j = 0; j < 32; j += 2) {
+        vec2 v = dequantize(ib, j, a_offset);
+        buf[j]   = v.x;
+        buf[j+1] = v.y;
+    }
+
+    // Inverse WHT butterfly (5 stages for 32 elements)
+    for (uint step = 1u; step < 32u; step <<= 1u) {
+        for (uint i = 0u; i < 32u; i += step * 2u) {
+            for (uint j2 = i; j2 < i + step; j2++) {
+                float a2 = buf[j2], b2 = buf[j2 + step];
+                buf[j2]        = a2 + b2;
+                buf[j2 + step] = a2 - b2;
+            }
+        }
+    }
+
+    // Normalize and apply sign pattern
+    for (int j = 0; j < 32; j++) {
+        data_d[dst_idx + j] = buf[j] * TQ4_INV_SQRT32 * tq4_signs[j];
+    }
+#else
     const vec2 dm = get_dm(ib, a_offset);
 
     [[unroll]] for (int j = 0; j < QUANT_K; j += 4) {
@@ -48,4 +83,5 @@ void main() {
         data_d[dst_idx + j + 3] = v[3];
 #endif
     }
+#endif
 }

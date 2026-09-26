@@ -16,23 +16,33 @@ GREP_MARKER = "llama_cpp_test_tools_builtin_marker_grep_search"
 # image the container runtime tests run their shell in
 CONTAINER_IMAGE = "busybox"
 
+TEST_API_KEY = "llama-tools-test-key"
+
 
 @pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.router()
     server.server_tools = "all"
+    server.api_key = TEST_API_KEY
+
+
+def make_tool_request(data: dict, headers: dict | None = None):
+    request_headers = {"Authorization": f"Bearer {TEST_API_KEY}"}
+    if headers:
+        request_headers.update(headers)
+    return server.make_request("POST", "/tools", data=data, headers=request_headers)
 
 
 def call_tool(name: str, params: dict, headers: dict | None = None) -> dict:
-    res = server.make_request("POST", "/tools", data={"tool": name, "params": params}, headers=headers)
+    res = make_tool_request({"tool": name, "params": params}, headers)
     assert res.status_code == 200, res.body
     assert "error" not in res.body, res.body
     return res.body
 
 
 def call_tool_expect_error(name: str, params: dict) -> str:
-    res = server.make_request("POST", "/tools", data={"tool": name, "params": params})
+    res = make_tool_request({"tool": name, "params": params})
     assert res.status_code == 200, res.body
     assert "error" in res.body, res.body
     return res.body["error"]
@@ -114,11 +124,16 @@ def test_tools_builtin_exec_shell_command_stream():
     global server
     server.start()
 
-    events = list(server.make_stream_request("POST", "/tools", data={
-        "tool": "exec_shell_command",
-        "params": {"command": "echo hello"},
-        "stream": True,
-    }))
+    events = list(server.make_stream_request(
+        "POST",
+        "/tools",
+        data={
+            "tool": "exec_shell_command",
+            "params": {"command": "echo hello"},
+            "stream": True,
+        },
+        headers={"Authorization": f"Bearer {TEST_API_KEY}"},
+    ))
 
     assert len(events) >= 2
     assert events[-1]["done"] is True
@@ -130,10 +145,11 @@ def test_tools_builtin_exec_shell_command_stream():
 
 def test_tools_builtin_cwd_header():
     global server
+    server.server_tools_cwd_root = PROJECT_ROOT
     server.start()
 
     cwd_dir = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit")
-    headers = {"x-tool-cwd": cwd_dir}
+    headers = {"x-tool-cwd": "tools/server/tests/unit"}
 
     res = call_tool("read_file", {"path": "test_tools_builtin.py"}, headers=headers)
     assert GREP_MARKER in res["plain_text_response"]
@@ -149,6 +165,121 @@ def test_tools_builtin_cwd_header():
     finally:
         if os.path.exists(marker_path):
             os.remove(marker_path)
+
+
+def test_tools_builtin_cwd_header_requires_configured_root():
+    global server
+    server.start()
+
+    res = make_tool_request(
+        {"tool": "read_file", "params": {"path": "test_tools_builtin.py"}},
+        {"x-tool-cwd": "tools/server/tests/unit"},
+    )
+    assert res.status_code == 400, res.body
+    assert "requires a configured --tools-cwd-root" in str(res.body)
+
+
+@pytest.mark.parametrize("cwd_header", ["/tmp", "../outside"], ids=["absolute", "traversal"])
+def test_tools_builtin_cwd_header_rejects_uncontained_paths(tmp_path, cwd_header: str):
+    global server
+    server.server_tools_cwd_root = str(tmp_path)
+    server.start()
+
+    res = make_tool_request(
+        {"tool": "get_info", "params": {}},
+        {"x-tool-cwd": cwd_header},
+    )
+    assert res.status_code == 400, res.body
+
+
+def test_tools_builtin_cwd_header_rejects_symlink_escape(tmp_path):
+    global server
+    root = tmp_path / "root"
+    outside = tmp_path / "outside"
+    root.mkdir()
+    outside.mkdir()
+    try:
+        (root / "escape").symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlinks are unavailable: {exc}")
+    server.server_tools_cwd_root = str(root)
+    server.start()
+
+    res = make_tool_request(
+        {"tool": "get_info", "params": {}},
+        {"x-tool-cwd": "escape"},
+    )
+    assert res.status_code == 400, res.body
+    assert "resolves outside" in str(res.body)
+
+
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_tools_builtin_cwd_header_rejects_non_directory(tmp_path, kind: str):
+    global server
+    root = tmp_path / "root"
+    root.mkdir()
+    requested = root / kind
+    if kind == "file":
+        requested.write_text("not a directory")
+    server.server_tools_cwd_root = str(root)
+    server.start()
+
+    res = make_tool_request(
+        {"tool": "get_info", "params": {}},
+        {"x-tool-cwd": kind},
+    )
+    assert res.status_code == 400, res.body
+    assert "existing directory" in str(res.body)
+
+
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_tools_builtin_rejects_invalid_cwd_root_at_startup(tmp_path, kind: str):
+    global server
+    invalid_root = tmp_path / kind
+    if kind == "file":
+        invalid_root.write_text("not a directory")
+    log_path = tmp_path / f"{kind}.log"
+    server.server_tools_cwd_root = str(invalid_root)
+    server.log_path = str(log_path)
+
+    with pytest.raises(RuntimeError, match="Server process died"):
+        server.start(timeout_seconds=5)
+    server.stop()
+    assert "--tools-cwd-root must name an existing directory" in log_path.read_text()
+
+
+def test_tools_builtin_requires_api_key_at_startup(tmp_path):
+    global server
+    log_path = tmp_path / "server.log"
+    server.api_key = None
+    server.log_path = str(log_path)
+
+    with pytest.raises(RuntimeError, match="Server process died"):
+        server.start(timeout_seconds=5)
+    server.stop()
+    assert "built-in server tools or MCP servers require an API key" in log_path.read_text()
+
+
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        "ssh:configured.example",
+        "docker-container:configured-container",
+        "podman-container:configured-container",
+    ],
+)
+def test_tools_builtin_remote_runtime_rejects_cwd_override(tmp_path, runtime: str):
+    global server
+    server.server_tools_runtime = runtime
+    server.server_tools_cwd_root = str(tmp_path)
+    server.start()
+
+    res = make_tool_request(
+        {"tool": "get_info", "params": {}},
+        {"x-tool-runtime": runtime, "x-tool-cwd": "."},
+    )
+    assert res.status_code == 400, res.body
+    assert "not supported with SSH or container" in str(res.body)
 
 
 def _container_engine_unavailable_reason(engine: str) -> str | None:
@@ -190,11 +321,13 @@ def container_id(container_engine: str):
         subprocess.run([container_engine, "rm", "-f", cid], capture_output=True)
 
 
-def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
+def test_tools_builtin_runtime_header_exact_configured_target(container_engine: str, container_id: str):
     global server
+    configured_runtime = f"{container_engine}-container:{container_id}"
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    headers = {"x-tool-runtime": f"{container_engine}-container:{container_id}", "x-tool-cwd": "/tmp"}
+    headers = {"x-tool-runtime": configured_runtime}
 
     write_res = call_tool("write_file", {"path": "test.log", "content": "hello container\n"}, headers=headers)
     assert write_res["result"] == "file written successfully"
@@ -206,42 +339,104 @@ def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
     assert "hello container" in exec_res["plain_text_response"]
 
 
-def test_tools_builtin_runtime_header_unknown_scheme():
+@pytest.mark.parametrize("runtime_header", [None, ""], ids=["absent", "empty"])
+def test_tools_builtin_runtime_header_absent_or_empty_uses_configured_target(
+    container_engine: str, container_id: str, runtime_header: str | None,
+):
+    global server
+    server.server_tools_runtime = f"{container_engine}-container:{container_id}"
+    server.start()
+
+    marker_name = f"llama-tools-runtime-{container_id[:12]}-{runtime_header is not None}.txt"
+    host_marker = os.path.join("/tmp", marker_name)
+    headers = {}
+    if runtime_header is not None:
+        headers["x-tool-runtime"] = runtime_header
+
+    try:
+        call_tool("write_file", {"path": marker_name, "content": "configured runtime\n"}, headers=headers)
+        assert not os.path.exists(host_marker), "tool unexpectedly ran on the host"
+        read_res = call_tool("read_file", {"path": marker_name}, headers=headers)
+        assert read_res["plain_text_response"] == "configured runtime\n"
+    finally:
+        if os.path.exists(host_marker):
+            os.remove(host_marker)
+
+
+def test_tools_builtin_runtime_header_requires_configured_runtime():
     global server
     server.start()
 
-    # an unknown runtime must fail, never silently fall back to running on the host
-    res = server.make_request("POST", "/tools",
-                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "fake:does-not-exist"})
-    assert res.status_code == 500, res.body
-    assert "unknown tool runtime" in str(res.body)
+    res = make_tool_request(
+        {"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+        {"x-tool-runtime": "ssh:unconfigured.example"},
+    )
+    assert res.status_code == 400, res.body
+    assert "requires a configured --tools-runtime" in str(res.body)
 
 
-def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
+@pytest.mark.parametrize(
+    ("configured_runtime", "requested_runtime"),
+    [
+        ("ssh:configured.example", "ssh:different.example"),
+        ("docker-container:configured-container", "docker-container:different-container"),
+        ("podman-container:configured-container", "podman-container:different-container"),
+    ],
+)
+def test_tools_builtin_runtime_header_rejects_configured_runtime_mismatch(
+    configured_runtime: str,
+    requested_runtime: str,
+):
     global server
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    # ssh reads options from its argv, so a target starting with '-' must be rejected
-    res = server.make_request("POST", "/tools",
-                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": "ssh:-oProxyCommand=touch /tmp/pwned"})
-    assert res.status_code == 500, res.body
-    assert "invalid ssh target" in str(res.body)
+    res = make_tool_request(
+        {"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+        {"x-tool-runtime": requested_runtime},
+    )
+    assert res.status_code == 400, res.body
+    assert "must exactly match the configured --tools-runtime" in str(res.body)
 
 
-@pytest.mark.parametrize("engine", ["docker", "podman"])
-def test_tools_builtin_runtime_header_rejects_container_option_injection(engine: str):
+def test_tools_builtin_authentication_precedes_runtime_execution():
     global server
+    configured_runtime = "ssh:configured.example"
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    # the container id lands on the `<engine> exec` command line, so an id that looks
-    # like an option must be rejected
-    res = server.make_request("POST", "/tools",
-                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
-                              headers={"x-tool-runtime": f"{engine}-container:--privileged"})
-    assert res.status_code == 500, res.body
-    assert "invalid container id" in str(res.body)
+    res = server.make_request(
+        "POST",
+        "/tools",
+        data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+        headers={"x-tool-runtime": configured_runtime},
+    )
+    assert res.status_code == 401, res.body
+    assert res.body["error"]["type"] == "authentication_error"
+
+
+def test_tools_builtin_runtime_header_accepts_exact_configured_ssh_target(monkeypatch, tmp_path):
+    if os.name == "nt":
+        pytest.skip("fake ssh transport fixture requires a POSIX executable")
+
+    global server
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_ssh = fake_bin / "ssh"
+    fake_ssh.write_text("#!/bin/sh\nprintf 'configured ssh target\\n'\n")
+    fake_ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    configured_runtime = "ssh:configured.example"
+    server.server_tools_runtime = configured_runtime
+    server.start()
+
+    res = call_tool(
+        "exec_shell_command",
+        {"command": "echo ignored by fake transport"},
+        headers={"x-tool-runtime": configured_runtime},
+    )
+    assert "configured ssh target" in res["plain_text_response"]
 
 
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
@@ -252,12 +447,14 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
         pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     global server
-    server.server_tools_runtime = f"docker:{CONTAINER_IMAGE}"
+    configured_runtime = f"docker:{CONTAINER_IMAGE}"
+    server.server_tools_runtime = configured_runtime
     server.start()
 
-    # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
-    # the container's hostname to its own short id, so this also tells us which one to check
-    res = call_tool("exec_shell_command", {"command": "hostname"})
+    # The header authorizes the original image spec, while execution must use the
+    # runtime object's effective docker-container:<generated-id> attachment spec.
+    res = call_tool("exec_shell_command", {"command": "hostname"},
+                    headers={"x-tool-runtime": configured_runtime})
     container_id = res["plain_text_response"].splitlines()[0].strip()
     assert len(container_id) >= 8, res
 
@@ -374,27 +571,32 @@ def test_tools_builtin_file_glob_search_rejects_invalid_type(tmp_path):
 
 def test_tools_builtin_cwd_header_overrides_model_param(tmp_path):
     global server
+    server.server_tools_cwd_root = str(tmp_path)
     server.start()
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     (workdir / "marker.txt").write_text("marker")
 
-    # a model-provided "cwd" in the params is overridden by the x-tool-cwd header
-    res = call_tool("read_file", {"path": "marker.txt", "cwd": "/definitely/not/a/real/path"},
-                    headers={"x-tool-cwd": str(workdir)})
+    # A model-provided "cwd" in params is discarded; only the contained header is trusted.
+    res = call_tool(
+        "read_file",
+        {"path": "marker.txt", "cwd": "/definitely/not/a/real/path"},
+        headers={"x-tool-cwd": "workdir"},
+    )
     assert "marker" in res["plain_text_response"]
 
 
 def test_tools_builtin_cwd_relative_paths(tmp_path):
     global server
+    server.server_tools_cwd_root = str(tmp_path)
     server.start()
 
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     (workdir / "rel.txt").write_text("relative-content")
 
-    headers = {"x-tool-cwd": str(workdir)}
+    headers = {"x-tool-cwd": "workdir"}
 
     # relative paths in file tools resolve against the header cwd
     res = call_tool("read_file", {"path": "rel.txt"}, headers=headers)

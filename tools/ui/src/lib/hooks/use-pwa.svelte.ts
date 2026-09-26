@@ -54,7 +54,6 @@ export function usePwa() {
 	// This comparison detects server upgrades for non-PWA users.
 	$effect(() => {
 		if (!browser) return;
-
 		// PWA pages update via the service worker path; the storage check is the non-PWA fallback only
 		if (navigator.serviceWorker?.controller) return;
 

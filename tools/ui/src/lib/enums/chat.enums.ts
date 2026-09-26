@@ -20,6 +20,7 @@ export enum StreamConnectionState {
 	STREAMING = 'streaming'
 }
 
+
 /**
  * Reasoning format options for API requests.
  */

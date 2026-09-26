@@ -30,10 +30,6 @@
 #include <sstream>
 #include <cstring>
 
-#ifndef _WIN32
-extern char **environ;
-#endif
-
 #if defined(__APPLE__) && defined(__MACH__)
 // macOS: use _NSGetExecutablePath to get the executable path
 #include <mach-o/dyld.h>
@@ -297,7 +293,7 @@ struct server_lru_sched {
             return;
         }
         queue.push_back({ model_id, 1, false });
-        SRV_INF("request for name=%s queued at position %zu\n",
+        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
                 model_id.c_str(), queue.size());
     }
 
@@ -475,6 +471,13 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_MODELS_MAX");
     preset.unset_option("LLAMA_ARG_MODELS_PRESET");
     preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    // router-level tool/MCP config (may carry secrets, e.g. env vars embedded in
+    // --mcp-servers-json) must not leak into a spawned model child's environment
+    preset.unset_option("LLAMA_ARG_TOOLS");
+    preset.unset_option("LLAMA_ARG_TOOLS_RUNTIME");
+    preset.unset_option("LLAMA_ARG_TOOLS_CWD_ROOT");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_CONFIG");
+    preset.unset_option("LLAMA_ARG_MCP_SERVERS_JSON");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
         preset.unset_option("LLAMA_ARG_MMPROJ");
@@ -483,28 +486,18 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
-static std::vector<std::string> get_environment() {
-    std::vector<std::string> env;
-
-#ifdef _WIN32
-    LPWCH env_block = GetEnvironmentStringsW();
-    if (!env_block) {
-        return env;
+// mask argument values that may carry secrets (e.g. MCP server env vars embedded in
+// --mcp-servers-json) before the rendered child argv is logged or exposed via the
+// router's status API; the raw args are still used to spawn the child process itself
+static std::vector<std::string> redact_sensitive_args(const std::vector<std::string> & args) {
+    static const std::set<std::string> sensitive_flags = { "--mcp-servers-json" };
+    std::vector<std::string> out = args;
+    for (size_t i = 0; i + 1 < out.size(); i++) {
+        if (sensitive_flags.count(out[i])) {
+            out[i + 1] = "<redacted>";
+        }
     }
-    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
-        env.emplace_back(wstring_to_utf8(e));
-    }
-    FreeEnvironmentStringsW(env_block);
-#else
-    if (environ == nullptr) {
-        return env;
-    }
-    for (char ** e = environ; *e != nullptr; e++) {
-        env.emplace_back(*e);
-    }
-#endif
-
-    return env;
+    return out;
 }
 
 void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
@@ -561,11 +554,11 @@ server_models::server_models(
         char ** argv)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
-              base_env(get_environment()),
+              base_env(common_get_process_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)),
               sched(std::make_unique<server_lru_sched>(*this)),
               monitor(std::make_unique<server_monitor>(*this)) {
-    // propagate base params to child
+    // clean up base preset
     unset_reserved_args(base_preset, true);
 
     // do not propagate these options, but allow preset to explicitly set them
@@ -1166,10 +1159,10 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
 
         SRV_INF("%s", "spawning server instance with args:\n");
-        for (const auto & arg : child_args) {
+        for (const auto & arg : redact_sensitive_args(child_args)) {
             SRV_INF("  %s\n", arg.c_str());
         }
-        inst.meta.args = child_args; // save for debugging
+        inst.meta.args = redact_sensitive_args(child_args); // save for debugging/display only
 
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging
@@ -1600,6 +1593,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
 
     return proxy;
 }
+
 
 void server_models::handle_child_state(const std::string & name, const std::string & raw_input) {
     server_state state;

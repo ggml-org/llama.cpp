@@ -366,6 +366,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"   },
     { LLM_KV_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual" },
     { LLM_KV_NORM_BEFORE_FC,        "%s.norm_before_fc"       },
+    { LLM_KV_DECODER_ARCH,          "%s.decoder_arch"         },
 
     { LLM_KV_DFLASH_BLOCK_SIZE,       "%s.block_size"       },
     { LLM_KV_DFLASH_CONV_KERNEL_SIZE, "%s.conv_kernel_size" },
@@ -430,6 +431,8 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_PREFIX_ID, "tokenizer.ggml.prefix_token_id" },
     { LLM_KV_TOKENIZER_SUFFIX_ID, "tokenizer.ggml.suffix_token_id" },
     { LLM_KV_TOKENIZER_MIDDLE_ID, "tokenizer.ggml.middle_token_id" },
+
+
 };
 
 static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
@@ -485,6 +488,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_CLS_OUT,                                "cls.output" },
     { LLM_TENSOR_CLS_NORM,                               "cls.norm" },
     { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
+    { LLM_TENSOR_ENC_AUX_NORM,                           "enc.aux_norm" },
     { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
     { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
     { LLM_TENSOR_SSM_CONV1D,                             "blk.%d.ssm_conv1d" },
@@ -523,6 +527,40 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ATTN_Q_A,                               "blk.%d.attn_q_a" },
     { LLM_TENSOR_ATTN_Q_B,                               "blk.%d.attn_q_b" },
     { LLM_TENSOR_ATTN_KV_A_MQA,                          "blk.%d.attn_kv_a_mqa" },
+    { LLM_TENSOR_ATTN_KV,                                "blk.%d.attn_kv" },
+    { LLM_TENSOR_ATTN_KV_NORM,                           "blk.%d.attn_kv_a_norm" },
+    { LLM_TENSOR_ATTN_OUT_A,                             "blk.%d.attn_output_a" },
+    { LLM_TENSOR_ATTN_OUT_B,                             "blk.%d.attn_output_b" },
+    { LLM_TENSOR_HC_HEAD_FN,                             "output_hc_fn" },
+    { LLM_TENSOR_HC_HEAD_BASE,                           "output_hc_base" },
+    { LLM_TENSOR_HC_HEAD_SCALE,                          "output_hc_scale" },
+    { LLM_TENSOR_HC_HEAD_NORM,                           "output_hc_norm" },
+    { LLM_TENSOR_HC_HEAD_DOWN,                           "output_hc_down" },
+    { LLM_TENSOR_HC_HEAD_UP,                             "output_hc_up" },
+    { LLM_TENSOR_HC_ATTN_FN,                             "blk.%d.hc_attn_fn" },
+    { LLM_TENSOR_HC_ATTN_BASE,                           "blk.%d.hc_attn_base" },
+    { LLM_TENSOR_HC_ATTN_SCALE,                          "blk.%d.hc_attn_scale" },
+    { LLM_TENSOR_HC_FFN_FN,                              "blk.%d.hc_ffn_fn" },
+    { LLM_TENSOR_HC_FFN_BASE,                            "blk.%d.hc_ffn_base" },
+    { LLM_TENSOR_HC_FFN_SCALE,                           "blk.%d.hc_ffn_scale" },
+    { LLM_TENSOR_HC_ATTN_NORM,                           "blk.%d.hc_attn_norm" },
+    { LLM_TENSOR_HC_ATTN_DOWN,                           "blk.%d.hc_attn_down" },
+    { LLM_TENSOR_HC_ATTN_UP,                             "blk.%d.hc_attn_up" },
+    { LLM_TENSOR_HC_ATTN_INJECT,                         "blk.%d.hc_attn_inject" },
+    { LLM_TENSOR_HC_FFN_NORM,                            "blk.%d.hc_ffn_norm" },
+    { LLM_TENSOR_HC_FFN_DOWN,                            "blk.%d.hc_ffn_down" },
+    { LLM_TENSOR_HC_FFN_UP,                              "blk.%d.hc_ffn_up" },
+    { LLM_TENSOR_HC_FFN_INJECT,                          "blk.%d.hc_ffn_inject" },
+    { LLM_TENSOR_PLE_KEY,                                "blk.%d.ple_key" },
+    { LLM_TENSOR_PLE_VALUE,                              "blk.%d.ple_value" },
+    { LLM_TENSOR_PLE_NORM_KEY,                           "blk.%d.ple_norm_key" },
+    { LLM_TENSOR_PLE_NORM_QUERY,                         "blk.%d.ple_norm_query" },
+    { LLM_TENSOR_PLE_NORM_CONV,                          "blk.%d.ple_norm_conv" },
+    { LLM_TENSOR_PLE_CONV1D,                             "blk.%d.ple_conv1d" },
+    { LLM_TENSOR_ATTN_COMPRESSOR_WKV,                    "blk.%d.attn_compressor_kv" },
+    { LLM_TENSOR_ATTN_COMPRESSOR_WGATE,                  "blk.%d.attn_compressor_gate" },
+    { LLM_TENSOR_ATTN_COMPRESSOR_APE,                    "blk.%d.attn_compressor_ape" },
+    { LLM_TENSOR_ATTN_COMPRESSOR_NORM,                   "blk.%d.attn_compressor_norm" },
     { LLM_TENSOR_ATTN_KV_B,                              "blk.%d.attn_kv_b" },
     { LLM_TENSOR_ATTN_KV,                                "blk.%d.attn_kv" },
     { LLM_TENSOR_ATTN_KV_NORM,                           "blk.%d.attn_kv_a_norm" },
@@ -587,6 +625,9 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_NEXTN_HNORM,                            "blk.%d.nextn.hnorm" },
     { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,                 "blk.%d.nextn.shared_head_head" },
     { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,                 "blk.%d.nextn.shared_head_norm" },
+    { LLM_TENSOR_NEXTN_HC_HEAD_NORM,                     "blk.%d.nextn.hc_head_norm" },
+    { LLM_TENSOR_NEXTN_HC_HEAD_DOWN,                     "blk.%d.nextn.hc_head_down" },
+    { LLM_TENSOR_NEXTN_HC_HEAD_UP,                       "blk.%d.nextn.hc_head_up" },
     { LLM_TENSOR_ATTN_SUB_NORM,                          "blk.%d.attn_sub_norm" },
     { LLM_TENSOR_FFN_SUB_NORM,                           "blk.%d.ffn_sub_norm" },
     { LLM_TENSOR_DEC_OUTPUT_NORM,                        "dec.output_norm" },
@@ -734,6 +775,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_OUTPUT_NORM_LFM2,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_DEC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_ENC_OUTPUT_NORM,            {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_ENC_AUX_NORM,               {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_ROPE_FREQS,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
     {LLM_TENSOR_ROPE_FACTORS_LONG,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
     {LLM_TENSOR_ROPE_FACTORS_SHORT,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ROPE}},
@@ -977,6 +1019,9 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_NEXTN_HC_HEAD_NORM,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_NEXTN_HC_HEAD_DOWN,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NEXTN_HC_HEAD_UP,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     // Nemotron 3 Super
     // latent projections feed ggml_mul_mat, the buft probe must use MUL_MAT to keep them on GPU
     {LLM_TENSOR_FFN_LATENT_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1093,6 +1138,30 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_MINIMAX_01:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Fork addition: identifies the Qwen model family, used by the KV-cache
+// auto-asymmetric turbo-K policy. Over-matching a new Qwen sibling only costs
+// KV capacity; missing one can silently retain a broken quantized K cache.
+bool llm_arch_is_qwen(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN:
+        case LLM_ARCH_QWEN2:
+        case LLM_ARCH_QWEN2MOE:
+        case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_QWEN3VL:
+        case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+        case LLM_ARCH_QWEN4EXP:
+        case LLM_ARCH_QWEN3TTS:
             return true;
         default:
             return false;

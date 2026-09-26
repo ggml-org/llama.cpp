@@ -103,11 +103,18 @@ void string::mark_input_based_on(const string & other) {
     }
 }
 
-string & string::append(const string & other) {
+string & string::append(const string & other) & {
     for (const auto & part : other.parts) {
         parts.push_back(part);
     }
     return *this;
+}
+
+string string::append(const string & other) && {
+    // *this is an lvalue expression inside a member, so this picks the
+    // in-place overload above, then moves the result out
+    append(other);
+    return std::move(*this);
 }
 
 // in-place transformation

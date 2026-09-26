@@ -119,18 +119,28 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
             return false;
         }
 
-        // if rms norm is the B operand, then we don't handle broadcast
-        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm)) {
+        const bool rms_is_src0 = mul->src[0] == rms_norm;
+        const bool rms_is_src1 = mul->src[1] == rms_norm;
+        if (rms_is_src0 == rms_is_src1) {
             return false;
         }
 
-        const ggml_tensor * mul_w = (mul->src[0] == rms_norm) ? mul->src[1] : mul->src[0];
-        // the fused kernel indexes the weight as mul[col], so it must span ncols contiguously
-        if (mul_w->ne[0] != rms_norm->ne[0] || mul_w->nb[0] != ggml_type_size(mul_w->type)) {
+        const ggml_tensor * mul_w = rms_is_src0 ? mul->src[1] : mul->src[0];
+        // The fused kernel selects the broadcast row once, then indexes mul_w[col].
+        // Accept only one densely packed F32 vector, independent of operand order.
+        if (mul_w->type != GGML_TYPE_F32 ||
+            mul_w->ne[0] != rms_norm->ne[0] ||
+            mul_w->ne[1] != 1 ||
+            mul_w->ne[2] != 1 ||
+            mul_w->ne[3] != 1 ||
+            mul_w->nb[0] != sizeof(float) ||
+            mul_w->nb[1] != mul_w->nb[0] * mul_w->ne[0] ||
+            mul_w->nb[2] != mul_w->nb[1] ||
+            mul_w->nb[3] != mul_w->nb[2]) {
             return false;
         }
 
-        if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+        if (!ggml_is_contiguous_rows(rms_norm)) {
             return false;
         }
 

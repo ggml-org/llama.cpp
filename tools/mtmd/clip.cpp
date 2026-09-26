@@ -1412,7 +1412,8 @@ struct clip_model_loader {
             }
 
             // Load the vision/audio feature layer indices if they are explicitly provided
-            // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
+            // NOTE: gguf conversions should standardize the values of the vision feature layer to
+            // be non-negative, since we use -1 to mark values as unset here.
             get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
             for (const auto & v : hparams.feature_layers) {
                 if (v > (int) hparams.n_layer) {
@@ -4508,13 +4509,28 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
 
-    // upload the decoder state from the previous call, or zero-fill on a cold start
-    auto set_gen_state_in = [&]() {
+    // upload the decoder state from the previous call, or zero-fill on a cold start.
+    // A nonempty state_in must match the expected total size exactly - a caller only
+    // ever produces this buffer via a prior gen_out_state (see the append call below),
+    // so a wrong size means the caller passed state from a different model/config, not
+    // a legitimate partial-history case. Silently zero-filling the remainder in that
+    // case would run generation against a mismatched decoder state instead of failing.
+    auto set_gen_state_in = [&]() -> bool {
+        const auto slots = list_gen_state_slots(hparams, model);
+        size_t total = 0;
+        for (const auto & slot : slots) {
+            total += ggml_nbytes(get_inp_tensor(("state_in_" + slot.name).c_str()));
+        }
+        if (params->state_in && params->state_in->size() != total) {
+            LOG_ERR("%s: gen decoder state_in size %zu does not match expected %zu\n",
+                    __func__, params->state_in->size(), total);
+            return false;
+        }
         size_t offset = 0;
-        for (const auto & slot : list_gen_state_slots(hparams, model)) {
+        for (const auto & slot : slots) {
             ggml_tensor * t = get_inp_tensor(("state_in_" + slot.name).c_str());
             const size_t nb = ggml_nbytes(t);
-            if (params->state_in && params->state_in->size() >= offset + nb) {
+            if (params->state_in) {
                 ggml_backend_tensor_set(t, params->state_in->data() + offset, 0, nb);
             } else {
                 std::vector<uint8_t> zeros(nb, 0);
@@ -4522,6 +4538,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             }
             offset += nb;
         }
+        return true;
     };
 
     // rope positions and attention mask of the mimi transformers (pocket-tts).
@@ -5195,7 +5212,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     GGML_ASSERT(params->feats != nullptr);
                     set_input_f32("inp_feats", *params->feats);
                     // positions and mask are derived in-graph from the persisted counter
-                    set_gen_state_in();
+                    if (!set_gen_state_in()) {
+                        return false;
+                    }
                 } else {
                     // flow matching starts from gaussian noise, std = sqrt(temp)
                     ggml_tensor * t = get_inp_tensor("inp_noise");
@@ -5333,7 +5352,9 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                         }
                     }
                     set_input_i32("inp_codes", codes);
-                    set_gen_state_in();
+                    if (!set_gen_state_in()) {
+                        return false;
+                    }
                 } else {
                     // code0 indexes gen_code_out_embd_w via ggml_get_rows; bound it
                     const int64_t vocab0 = model.gen_code_out_embd_w->ne[1];

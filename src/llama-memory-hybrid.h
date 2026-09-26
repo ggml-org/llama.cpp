@@ -35,6 +35,7 @@ public:
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                     bool   gdn_replay_req,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -59,6 +60,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // P3.2.4a: cascade clear_data_only to attn + recr sub-memories.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -119,6 +122,12 @@ public:
 
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
+
+    // TurboQuant: delegate to the KV cache context
+    ggml_tensor * get_turbo_rot_forward() const override;
+    ggml_tensor * get_turbo_rot_inverse() const override;
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) override;
 
     //
     // llama_memory_hybrid_context

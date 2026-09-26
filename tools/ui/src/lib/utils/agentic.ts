@@ -18,6 +18,7 @@ import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
 
@@ -361,13 +362,18 @@ export function parseToolResultWithMedia(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
-	// Cache key includes image attachment names so we recompute when
-	// attachments change, even if the count stays the same.
-	const imageNames = (extras ?? [])
-		.filter((e): e is DatabaseMessageExtraImageFile => e.type === AttachmentType.IMAGE)
+	// Cache key includes media attachment names so we recompute when
+	// attachments change, even if the count stays the same. Both image and
+	// audio extras are included - the mapping below matches both types, so a
+	// key built from image names alone would miss audio-only changes.
+	const mediaNames = (extras ?? [])
+		.filter(
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO
+		)
 		.map((e) => e.name)
 		.join(NEWLINE);
-	const cacheKey = `${imageNames}:${toolResult}`;
+	const cacheKey = `${mediaNames}:${toolResult}`;
 	const cached = toolResultLinesCache.get(cacheKey);
 
 	if (cached !== undefined) return cached;

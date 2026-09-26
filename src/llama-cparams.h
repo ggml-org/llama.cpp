@@ -14,12 +14,16 @@ struct llama_cparams {
     uint32_t n_ubatch;
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
+    bool     gdn_replay;      // DRC: ingredient-replay rollback instead of full K-snapshots (opt-in)
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 
     int32_t  nextn_layer_offset = 0;
+
+    enum llama_moe_cache_mode moe_cache_mode;
+    size_t moe_cache_budget_mib;
 
     float rope_freq_base;
     float rope_freq_scale;
@@ -35,15 +39,16 @@ struct llama_cparams {
     bool embeddings;
     bool embeddings_nextn;        // also extract the hidden state before the final output norm
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
+    bool mtp_chain;               // DECODER_MTP: chain rows in-graph from the first row's inputs
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
     bool auto_fa;
+    bool fused_lid;          // use fused lightning indexer
+    bool auto_flid;
     bool fused_gdn_ar;       // use fused gated delta net (autoregressive)
     bool fused_gdn_ch;       // use fused gated delta net (chunked)
     bool auto_fgdn;
-    bool fused_lid;          // use fused lightning indexer
-    bool auto_flid;
     bool fused_dsv4_hc_pre;
     bool fused_dsv4_hc_comb;
     bool fused_dsv4_hc_post;

@@ -18,6 +18,10 @@ import type {
 	ApiErrorResponse,
 	ApiLlamaCppServerProps,
 	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsSseProgress,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
 	ApiModelListResponse,
 	ApiModelLoadStage,
 	ApiModelsSseData,
@@ -54,6 +58,7 @@ import type {
 	ExportedConversations,
 	ModelLoadProgress,
 	// Model types
+	ModelLoadProgress,
 	ModelModalities,
 	ModelOption,
 	// Settings types

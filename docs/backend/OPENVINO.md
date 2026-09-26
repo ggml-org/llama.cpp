@@ -342,7 +342,7 @@ echo "  ./build/ReleaseOV/bin/llama-cli -m model.gguf"
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
+> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release.
 
 </details>
 
@@ -552,7 +552,7 @@ endlocal
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
+> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top -- edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction -- `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
 
 </details>
 
@@ -715,7 +715,7 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
 | `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
-| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for the frontend compiled-model cache. When set, OpenVINO compiled models are exported as blobs and imported on later runs to skip weight requantization, graph conversion, and compilation for matching single-graph models. |
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for the frontend compiled-model cache. When set, OpenVINO compiled models are exported as blobs and imported on later runs to skip weight requantization, graph conversion, and compilation for matching single-graph models. Blobs are keyed on the full ggml graph (every node's op, shape, type, parameters and edges), the sampled weight contents, the device and the compile configuration, so any change to those recompiles rather than reusing a stale blob; blobs written by earlier builds with a different key or manifest format are simply never matched and can be deleted. |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_NPU_COMPILE_CONFIG` | String | `not set` | NPU-only compiler mode parameters forwarded to OpenVINO as `NPU_COMPILATION_MODE_PARAMS`, for example `optimization-level=3`. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |

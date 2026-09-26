@@ -277,6 +277,7 @@ class LazyChunkedTensor:
         return LazyChunkedTensor(self._chunks, self.shape, self.dtype, self._qtype, not self._byteswap)
 
     def tofile(self, *args, **kwargs) -> None:
+        from .constants import GGMLQuantizationType
         from .quants import quantize
 
         written = 0
@@ -286,7 +287,26 @@ class LazyChunkedTensor:
                 # exact only because chunks split on rows, and blocks never cross one
                 chunk = quantize(chunk, self._qtype)
             if self._byteswap:
-                chunk = chunk.byteswap(inplace=False)
+                if self._qtype == GGMLQuantizationType.BF16:
+                    # BF16 is packed as raw uint8 bytes, but each element is a
+                    # plain 2-byte value with no other embedded fields, so a
+                    # uint16 view can be swapped directly (same special case
+                    # as gguf.scripts.gguf_convert_endian.convert_byteorder).
+                    chunk = chunk.view(np.uint16).byteswap(inplace=False).view(np.uint8)
+                elif self._qtype is not None and chunk.dtype == np.uint8:
+                    # Byte-swapping the raw uint8 container of a block-quantized
+                    # type is a silent no-op (single-byte elements), leaving
+                    # embedded f16/f32 scale fields in host order while the
+                    # file declares the opposite endianness. Swapping only
+                    # those fields needs per-type block-layout knowledge
+                    # (see gguf.scripts.gguf_convert_endian.byteswap_tensors)
+                    # that isn't available here, so refuse rather than write
+                    # a corrupted file.
+                    raise NotImplementedError(
+                        f"Writing byteswapped {self._qtype.name} quantized data is not supported"
+                    )
+                else:
+                    chunk = chunk.byteswap(inplace=False)
             chunk.tofile(*args, **kwargs)
             written += chunk.nbytes
             del chunk

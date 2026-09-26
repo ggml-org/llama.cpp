@@ -33,6 +33,7 @@ export function splitGluedClosingCodeFences(markdown: string): string {
 	const lines = markdown.split(NEWLINE);
 
 	let inside = false;
+	let openLength = 0;
 	let changed = false;
 
 	for (let i = 0; i < lines.length; i++) {
@@ -40,11 +41,20 @@ export function splitGluedClosingCodeFences(markdown: string): string {
 
 		if (!match) continue;
 
+		const fenceLength = match[1].length;
+
 		if (!inside) {
 			inside = true;
+			openLength = fenceLength;
 
 			continue;
 		}
+
+		// A shorter backtick run than the opening fence does not close it (a
+		// ```lang example line shown inside a longer ````-fenced block, say):
+		// per CommonMark it stays literal content, so it must not flip the
+		// open/close state either.
+		if (fenceLength < openLength) continue;
 
 		inside = false;
 

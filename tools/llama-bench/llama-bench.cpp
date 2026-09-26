@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cinttypes>
 #include <clocale>
@@ -290,6 +291,86 @@ static std::string pair_str(const std::pair<int, int> & p) {
     return buf;
 }
 
+static std::string parse_moe_cache_mode(const std::string & value) {
+    if (value == "off" || value == "0") {
+        return "off";
+    }
+    if (value == "auto" || value == "on" || value == "soft") {
+        return value;
+    }
+
+    char * end = nullptr;
+    errno = 0;
+    const long long budget_mb = strtoll(value.c_str(), &end, 10);
+    if (errno != 0 || end == value.c_str() || *end != '\0' ||
+        budget_mb <= 0 || budget_mb > 1024 * 1024) {
+        throw std::invalid_argument("expected auto, on, off, 0, or a positive MiB budget");
+    }
+    return std::to_string(budget_mb);
+}
+
+static bool moe_cache_mode_forces_canonical_weights(const std::string & mode) {
+    return mode == "on" || (mode != "auto" && mode != "off" && mode != "soft");
+}
+
+static common_moe_cache_params common_moe_cache_from_bench_mode(const std::string & mode) {
+    common_moe_cache_params result;
+    result.mode_explicit = true;
+    if (mode == "off") {
+        result.mode = COMMON_MOE_CACHE_MODE_OFF;
+    } else if (mode == "auto") {
+        result.mode = COMMON_MOE_CACHE_MODE_AUTO;
+    } else if (mode == "soft") {
+        result.mode = COMMON_MOE_CACHE_MODE_SOFT;
+    } else {
+        result.mode = COMMON_MOE_CACHE_MODE_ON;
+        if (mode != "on") {
+            result.budget_mib = std::stoull(mode);
+        }
+    }
+    return result;
+}
+
+static std::string parse_repack_mode(const std::string & value) {
+    if (value == "auto" || value == "on" || value == "off") {
+        return value;
+    }
+    throw std::invalid_argument("expected auto, on, or off");
+}
+
+static bool get_effective_repack(const std::string & cache_mode, const std::string & repack_mode) {
+    if (moe_cache_mode_forces_canonical_weights(cache_mode)) {
+        if (repack_mode == "on") {
+            throw std::invalid_argument("repack=on is incompatible with MoE cache on or a fixed cache budget");
+        }
+        return false;
+    }
+    return repack_mode != "off";
+}
+
+static void apply_moe_cache_mode(llama_context_params & cparams, const std::string & mode) {
+    if (mode == "off") {
+        cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_OFF;
+        cparams.moe_cache_budget_mib = 0;
+    } else if (mode == "auto") {
+        cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_AUTO;
+        cparams.moe_cache_budget_mib = 0;
+    } else if (mode == "on" || mode == "soft") {
+        cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_ON;
+        cparams.moe_cache_budget_mib = 0;
+    } else {
+        cparams.moe_cache_mode = LLAMA_MOE_CACHE_MODE_ON;
+        cparams.moe_cache_budget_mib = std::stoull(mode);
+    }
+}
+
+static std::string get_moe_cache_mode_from_env() {
+    if (const char * mode = getenv("LLAMA_ARG_MOE_CACHE")) {
+        return parse_moe_cache_mode(mode);
+    }
+    return "auto";
+}
+
 static std::vector<int> parse_int_range(const std::string & s, bool allow_negative = false) {
     // first[-last[(+|*)step]]
     std::regex range_regex(allow_negative
@@ -340,6 +421,7 @@ struct cmd_params {
     bool                             offline;
     std::vector<int>                 n_prompt;
     std::vector<int>                 n_gen;
+    int                              n_gen_warmup;
     std::vector<std::pair<int, int>> n_pg;
     std::vector<int>                 n_depth;
     std::vector<int>                 n_batch;
@@ -352,6 +434,8 @@ struct cmd_params {
     std::vector<int>                 poll;
     std::vector<int>                 n_gpu_layers;
     std::vector<int>                 n_cpu_moe;
+    std::vector<std::string>         moe_cache;
+    std::string                      repack;
     std::vector<llama_split_mode>    split_mode;
     std::vector<llama_load_mode>     load_mode;
     std::vector<llama_lazy_mode>     lazy_mode;
@@ -364,7 +448,6 @@ struct cmd_params {
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
-    std::vector<bool>                repack;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
     ggml_numa_strategy               numa;
@@ -374,6 +457,9 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    bool                             moe_cache_explicit;
+    bool                             n_gen_warmup_explicit;
+    bool                             repack_explicit;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -386,6 +472,7 @@ static const cmd_params cmd_params_defaults = {
     /* offline              */ false,
     /* n_prompt             */ { 512 },
     /* n_gen                */ { 128 },
+    /* n_gen_warmup         */ 1,
     /* n_pg                 */ {},
     /* n_depth              */ { 0 },
     /* n_batch              */ { 2048 },
@@ -398,6 +485,8 @@ static const cmd_params cmd_params_defaults = {
     /* poll                 */ { 50 },
     /* n_gpu_layers         */ { -1 },
     /* n_cpu_moe            */ { 0 },
+    /* moe_cache            */ { "auto" },
+    /* repack               */ "auto",
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* load_mode            */ { LLAMA_LOAD_MODE_AUTO },
     /* lazy_mode            */ { LLAMA_LAZY_MODE_AUTO },
@@ -410,7 +499,6 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
-    /* repack               */ { llama_model_default_params().use_extra_bufts },
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
@@ -420,6 +508,9 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* moe_cache_explicit   */ false,
+    /* n_gen_warmup_explicit*/ false,
+    /* repack_explicit      */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -440,6 +531,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --n-gen-warmup <n>                         generation tokens to run before timing (default: %d)\n", cmd_params_defaults.n_gen_warmup);
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 4096)\n");
     if (llama_supports_rpc()) {
@@ -472,6 +564,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --poll <0...100>                                  (default: %s)\n", join(cmd_params_defaults.poll, ",").c_str());
     printf("  -ngl, --n-gpu-layers <n>                          (default: %s)\n", join(cmd_params_defaults.n_gpu_layers, ",").c_str());
     printf("  -ncmoe, --n-cpu-moe <n>                           (default: %s)\n", join(cmd_params_defaults.n_cpu_moe, ",").c_str());
+    printf("  --moe-cache <auto|on|soft|off|0|MiB>                   (default: %s)\n", join(cmd_params_defaults.moe_cache, ",").c_str());
+    printf("                                                    on and fixed budgets disable weight repacking\n");
+    printf("  --repack <auto|on|off>                            weight repacking policy (default: %s)\n", cmd_params_defaults.repack.c_str());
+    printf("  -nr, --no-repack                                  equivalent to --repack off\n");
     printf("  -sm, --split-mode <none|layer|row|tensor>         (default: %s)\n", join(transform_to_str(cmd_params_defaults.split_mode, split_mode_str), ",").c_str());
     printf("  -mg, --main-gpu <i>                               (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>                      (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
@@ -479,17 +575,18 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
+    printf("  -mmp, --mmap <0|1>                                (DEPRECATED IN FAVOUR OF --load-mode)\n");
+    printf("  -dio, --direct-io <0|1>                           (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                         (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>                  (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                                    (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>                      (default: 0)\n");
     printf("  --no-host <0|1>                                   (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
-    printf("  --repack <0|1>                                    (default: %s)\n", join(cmd_params_defaults.repack, ",").c_str());
     printf("\n");
     printf(
-        "Multiple values can be given for each parameter by separating them with ','\n"
-        "or by specifying the parameter multiple times. Ranges can be given as\n"
+        "Multiple values can be given for list-valued parameters by separating them with ','\n"
+        "or by specifying the parameter multiple times. Supported ranges can be given as\n"
         "'first-last' or 'first-last+step' or 'first-last*mult'.\n");
 }
 
@@ -502,6 +599,15 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     }
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
+    }
+    if (s == "turbo2") {
+        return GGML_TYPE_TURBO2_0;
+    }
+    if (s == "turbo3") {
+        return GGML_TYPE_TURBO3_0;
+    }
+    if (s == "turbo4") {
+        return GGML_TYPE_TURBO4_0;
     }
     if (s == "q4_0") {
         return GGML_TYPE_Q4_0;
@@ -517,6 +623,21 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     }
     if (s == "iq4_nl") {
         return GGML_TYPE_IQ4_NL;
+    }
+    if (s == "turbo2") {
+        return GGML_TYPE_TURBO2_0;
+    }
+    if (s == "turbo3") {
+        return GGML_TYPE_TURBO3_0;
+    }
+    if (s == "turbo4") {
+        return GGML_TYPE_TURBO4_0;
+    }
+    if (s == "tq3_1s") {
+        return GGML_TYPE_TQ3_1S;
+    }
+    if (s == "tq4_1s") {
+        return GGML_TYPE_TQ4_1S;
     }
 
     return GGML_TYPE_COUNT;
@@ -539,6 +660,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
     params.offline              = cmd_params_defaults.offline;
+    params.n_gen_warmup         = cmd_params_defaults.n_gen_warmup;
+    params.repack               = cmd_params_defaults.repack;
+    params.moe_cache_explicit    = cmd_params_defaults.moe_cache_explicit;
+    params.n_gen_warmup_explicit = cmd_params_defaults.n_gen_warmup_explicit;
+    params.repack_explicit       = cmd_params_defaults.repack_explicit;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -600,6 +726,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_gen.insert(params.n_gen.end(), p.begin(), p.end());
+            } else if (arg == "--n-gen-warmup") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                if (p.size() != 1) {
+                    invalid_param = true;
+                    break;
+                }
+                params.n_gen_warmup = p[0];
+                params.n_gen_warmup_explicit = true;
             } else if (arg == "-pg") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -735,6 +873,26 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_cpu_moe.insert(params.n_cpu_moe.end(), p.begin(), p.end());
+            } else if (arg == "--moe-cache") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                for (const auto & value : p) {
+                    params.moe_cache.push_back(parse_moe_cache_mode(value));
+                }
+                params.moe_cache_explicit = true;
+            } else if (arg == "--repack") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.repack = parse_repack_mode(argv[i]);
+                params.repack_explicit = true;
+            } else if (arg == "-nr" || arg == "--no-repack") {
+                params.repack = "off";
+                params.repack_explicit = true;
             } else if (llama_supports_rpc() && (arg == "-rpc" || arg == "--rpc")) {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -888,6 +1046,44 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.flash_attn.insert(params.flash_attn.end(), types.begin(), types.end());
+            } else if (arg == "-mmp" || arg == "--mmap") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                LOG_WRN("DEPRECATED: -mmp and --mmap are deprecated in favour of --load-mode. Please use --load-mode mmap instead.\n");
+                auto p = string_split<bool>(argv[i], split_delim);
+
+                std::vector<llama_load_mode> modes;
+                for (const auto & m : p) {
+                    llama_load_mode mode;
+                    if (m) {
+                        mode = LLAMA_LOAD_MODE_MMAP;
+                    } else {
+                        mode = LLAMA_LOAD_MODE_NONE;
+                    }
+                    modes.push_back(mode);
+                }
+                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
+            } else if (arg == "-dio" || arg == "--direct-io") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                LOG_WRN("DEPRECATED: -dio and --direct-io are deprecated in favour of --load-mode. Please use --load-mode dio instead.\n");
+                auto p = string_split<bool>(argv[i], split_delim);
+
+                std::vector<llama_load_mode> modes;
+                for (const auto & m : p) {
+                    llama_load_mode mode;
+                    if (m) {
+                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
+                    } else {
+                        mode = LLAMA_LOAD_MODE_NONE;
+                    }
+                    modes.push_back(mode);
+                }
+                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -909,13 +1105,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_host.insert(params.no_host.end(), p.begin(), p.end());
-            } else if (arg == "--repack") {
-                if (++i >= argc) {
-                    invalid_param = true;
-                    break;
-                }
-                auto p = string_split<bool>(argv[i], split_delim);
-                params.repack.insert(params.repack.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1147,6 +1336,14 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_cpu_moe.empty()) {
         params.n_cpu_moe = cmd_params_defaults.n_cpu_moe;
     }
+    if (params.moe_cache.empty()) {
+        try {
+            params.moe_cache = { get_moe_cache_mode_from_env() };
+        } catch (const std::invalid_argument & e) {
+            fprintf(stderr, "error: invalid LLAMA_ARG_MOE_CACHE: %s\n", e.what());
+            exit(1);
+        }
+    }
     if (params.split_mode.empty()) {
         params.split_mode = cmd_params_defaults.split_mode;
     }
@@ -1204,6 +1401,17 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.fit_params_min_ctx.empty()) {
         params.fit_params_min_ctx = cmd_params_defaults.fit_params_min_ctx;
     }
+    if (params.no_warmup) {
+        params.n_gen_warmup = 0;
+    }
+    for (const auto & cache_mode : params.moe_cache) {
+        try {
+            (void) get_effective_repack(cache_mode, params.repack);
+        } catch (const std::invalid_argument & e) {
+            fprintf(stderr, "error: %s\n", e.what());
+            exit(1);
+        }
+    }
 
     return params;
 }
@@ -1212,6 +1420,7 @@ struct cmd_params_instance {
     std::string        model;
     int                n_prompt;
     int                n_gen;
+    int                n_gen_warmup;
     int                n_depth;
     int                n_batch;
     int                n_ubatch;
@@ -1223,6 +1432,8 @@ struct cmd_params_instance {
     int                poll;
     int                n_gpu_layers;
     int                n_cpu_moe;
+    std::string        moe_cache;
+    bool               repack;
     llama_split_mode   split_mode;
     llama_load_mode    load_mode;
     llama_lazy_mode    lazy_mode;
@@ -1235,7 +1446,6 @@ struct cmd_params_instance {
     bool               embeddings;
     bool               no_op_offload;
     bool               no_host;
-    bool               repack;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
 
@@ -1295,17 +1505,18 @@ struct cmd_params_instance {
 
     bool equal_mparams(const cmd_params_instance & other) const {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
+               repack == other.repack &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
                load_mode == other.load_mode && lazy_mode == other.lazy_mode &&
-               devices == other.devices && no_host == other.no_host && repack == other.repack &&
+               devices == other.devices && no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
     llama_context_params to_llama_cparams() const {
         llama_context_params cparams = llama_context_default_params();
 
-        cparams.n_ctx           = n_prompt + n_gen + n_depth;
+        cparams.n_ctx           = n_prompt + std::max(n_gen + n_depth, n_gen_warmup);
         cparams.n_batch         = n_batch;
         cparams.n_ubatch        = n_ubatch;
         cparams.type_k          = type_k;
@@ -1330,6 +1541,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & fpc : params.fit_params_min_ctx)
     for (const auto & nl : params.n_gpu_layers)
     for (const auto & ncmoe : params.n_cpu_moe)
+    for (const auto & mc : params.moe_cache)
     for (const auto & sm : params.split_mode)
     for (const auto & lm : params.load_mode)
     for (const auto & lzm : params.lazy_mode)
@@ -1338,7 +1550,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ts : params.tensor_split)
     for (const auto & ot : params.tensor_buft_overrides)
     for (const auto & noh : params.no_host)
-    for (const auto & rpk : params.repack)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1360,6 +1571,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .model                 = */ m,
                 /* .n_prompt              = */ n_prompt,
                 /* .n_gen                 = */ 0,
+                /* .n_gen_warmup          = */ 0,
                 /* .n_depth               = */ nd,
                 /* .n_batch               = */ nb,
                 /* .n_ubatch              = */ nub,
@@ -1371,6 +1583,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
+                /* .moe_cache             = */ mc,
+                /* .repack                = */ get_effective_repack(mc, params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1383,7 +1597,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
-                /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
             };
@@ -1398,6 +1611,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .model                 = */ m,
                 /* .n_prompt              = */ 0,
                 /* .n_gen                 = */ n_gen,
+                /* .n_gen_warmup          = */ params.n_gen_warmup,
                 /* .n_depth               = */ nd,
                 /* .n_batch               = */ nb,
                 /* .n_ubatch              = */ nub,
@@ -1409,6 +1623,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
+                /* .moe_cache             = */ mc,
+                /* .repack                = */ get_effective_repack(mc, params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1421,7 +1637,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
-                /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
             };
@@ -1436,6 +1651,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .model                 = */ m,
                 /* .n_prompt              = */ n_pg.first,
                 /* .n_gen                 = */ n_pg.second,
+                /* .n_gen_warmup          = */ n_pg.second > 0 ? params.n_gen_warmup : 0,
                 /* .n_depth               = */ nd,
                 /* .n_batch               = */ nb,
                 /* .n_ubatch              = */ nub,
@@ -1447,6 +1663,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .poll                  = */ pl,
                 /* .n_gpu_layers          = */ nl,
                 /* .n_cpu_moe             = */ ncmoe,
+                /* .moe_cache             = */ mc,
+                /* .repack                = */ get_effective_repack(mc, params.repack),
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
                 /* .lazy_mode             = */ lzm,
@@ -1459,7 +1677,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings            = */ embd,
                 /* .no_op_offload         = */ nopo,
                 /* .no_host               = */ noh,
-                /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
             };
@@ -1490,6 +1707,9 @@ struct test {
     ggml_type                type_v;
     int                      n_gpu_layers;
     int                      n_cpu_moe;
+    std::string              moe_cache;
+    bool                     moe_cache_fit;
+    bool                     repack;
     llama_split_mode         split_mode;
     llama_load_mode          load_mode;
     llama_lazy_mode          lazy_mode;
@@ -1502,16 +1722,17 @@ struct test {
     bool                     embeddings;
     bool                     no_op_offload;
     bool                     no_host;
-    bool                     repack;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
     int                      n_prompt;
     int                      n_gen;
+    int                      n_gen_warmup;
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
 
-    test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
+    test(const cmd_params_instance & inst, const llama_model_params & mparams,
+            bool cache_fit_selected, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
         gpu_info(get_gpu_info()) {
 
@@ -1527,27 +1748,51 @@ struct test {
         cpu_mask       = inst.cpu_mask;
         cpu_strict     = inst.cpu_strict;
         poll           = inst.poll;
-        type_k         = inst.type_k;
-        type_v         = inst.type_v;
-        n_gpu_layers   = inst.n_gpu_layers;
+        // report the *effective* cache types, not just what was requested: some memory
+        // implementations silently rewrite the requested type at context-creation time
+        // (e.g. TurboQuant auto-asymmetric upgrading K to q8_0 for high-GQA-ratio models
+        // - see llama_kv_cache's ctor). fall back to the requested type when the memory
+        // object has no single meaningful K/V type (llama_get_kv_cache_type_k/v returns
+        // GGML_TYPE_COUNT in that case, e.g. recurrent-only or composite DSV4 memory).
+        const ggml_type eff_type_k = llama_get_kv_cache_type_k(ctx);
+        const ggml_type eff_type_v = llama_get_kv_cache_type_v(ctx);
+        type_k         = eff_type_k != GGML_TYPE_COUNT ? eff_type_k : inst.type_k;
+        type_v         = eff_type_v != GGML_TYPE_COUNT ? eff_type_v : inst.type_v;
+        n_gpu_layers   = mparams.n_gpu_layers;
         n_cpu_moe      = inst.n_cpu_moe;
-        split_mode     = inst.split_mode;
-        load_mode      = inst.load_mode;
+        moe_cache      = inst.moe_cache;
+        moe_cache_fit  = cache_fit_selected;
+        repack         = mparams.use_extra_bufts;
+        split_mode     = mparams.split_mode;
+        load_mode      = mparams.load_mode;
+        main_gpu       = mparams.main_gpu;
         lazy_mode      = inst.lazy_mode;
-        main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
         devices        = inst.devices;
-        tensor_split   = inst.tensor_split;
-        tensor_buft_overrides = inst.tensor_buft_overrides;
+        if (mparams.tensor_split) {
+            tensor_split.assign(mparams.tensor_split, mparams.tensor_split + llama_max_devices());
+        } else {
+            tensor_split.assign(llama_max_devices(), 0.0f);
+        }
+        if (mparams.tensor_buft_overrides) {
+            for (size_t i = 0; i < llama_max_tensor_buft_overrides(); ++i) {
+                tensor_buft_overrides.push_back(mparams.tensor_buft_overrides[i]);
+                if (!mparams.tensor_buft_overrides[i].pattern) {
+                    break;
+                }
+            }
+        } else {
+            tensor_buft_overrides.push_back({nullptr, nullptr});
+        }
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
         no_host        = inst.no_host;
-        repack         = inst.repack;
         fit_target     = inst.fit_target;
         fit_min_ctx    = inst.fit_min_ctx;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
+        n_gen_warmup   = inst.n_gen_warmup;
         n_depth        = inst.n_depth;
         // RFC 3339 date-time format
         time_t t       = time(NULL);
@@ -1600,12 +1845,13 @@ struct test {
             "build_commit",   "build_number",   "cpu_info",      "gpu_info",       "backends",
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
-            "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
+            "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "moe_cache",
+            "moe_cache_fit",  "repack",         "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
-            "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
-            "n_prompt",       "n_gen",          "n_depth",
+            "no_op_offload",  "no_host",        "fit_target",    "fit_min_ctx",
+            "n_prompt",       "n_gen",          "n_gen_warmup",  "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
         return fields;
@@ -1616,13 +1862,14 @@ struct test {
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
-            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
+            field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_gen_warmup" ||
+            field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
             field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
-            field == "embeddings" || field == "no_host" || field == "repack") {
+            field == "embeddings" || field == "no_host" || field == "moe_cache_fit" || field == "repack") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1690,6 +1937,9 @@ struct test {
                                             ggml_type_name(type_v),
                                             std::to_string(n_gpu_layers),
                                             std::to_string(n_cpu_moe),
+                                            moe_cache,
+                                            std::to_string(moe_cache_fit),
+                                            std::to_string(repack),
                                             split_mode_str(split_mode),
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
@@ -1702,11 +1952,11 @@ struct test {
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
-                                            std::to_string(repack),
                                             std::to_string(fit_target),
                                             std::to_string(fit_min_ctx),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
+                                            std::to_string(n_gen_warmup),
                                             std::to_string(n_depth),
                                             test_time,
                                             std::to_string(avg_ns()),
@@ -1720,6 +1970,7 @@ struct test {
         std::map<std::string, std::string> map;
         auto                               fields = get_fields();
         auto                               values = get_values();
+        GGML_ASSERT(fields.size() == values.size());
         std::transform(fields.begin(), fields.end(), values.begin(), std::inserter(map, map.end()),
                        std::make_pair<const std::string &, const std::string &>);
         return map;
@@ -1863,6 +2114,18 @@ struct markdown_printer : public printer {
         if (field == "n_gpu_layers") {
             return 3;
         }
+        if (field == "moe_cache") {
+            return -9;
+        }
+        if (field == "moe_cache_fit") {
+            return 5;
+        }
+        if (field == "repack") {
+            return -6;
+        }
+        if (field == "n_gen_warmup") {
+            return 9;
+        }
         if (field == "n_threads") {
             return 7;
         }
@@ -1896,9 +2159,6 @@ struct markdown_printer : public printer {
         if (field == "no_host") {
             return 4;
         }
-        if (field == "repack") {
-            return 3;
-        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1914,6 +2174,15 @@ struct markdown_printer : public printer {
         }
         if (field == "split_mode") {
             return "sm";
+        }
+        if (field == "moe_cache") {
+            return "moe-cache";
+        }
+        if (field == "moe_cache_fit") {
+            return "fit";
+        }
+        if (field == "n_gen_warmup") {
+            return "warmup";
         }
         if (field == "n_threads") {
             return "threads";
@@ -1971,6 +2240,27 @@ struct markdown_printer : public printer {
         }
         if (params.n_cpu_moe.size() > 1 || params.n_cpu_moe != cmd_params_defaults.n_cpu_moe) {
             fields.emplace_back("n_cpu_moe");
+        }
+        if (params.moe_cache_explicit || params.moe_cache.size() > 1 ||
+            params.moe_cache != cmd_params_defaults.moe_cache) {
+            fields.emplace_back("moe_cache");
+        }
+        const bool fitting =
+            params.fit_params_target.size() > 1 ||
+            params.fit_params_target != cmd_params_defaults.fit_params_target ||
+            params.fit_params_min_ctx.size() > 1 ||
+            params.fit_params_min_ctx != cmd_params_defaults.fit_params_min_ctx;
+        if (fitting && std::any_of(
+                params.moe_cache.begin(), params.moe_cache.end(),
+                [](const std::string & mode) { return mode != "off"; })) {
+            fields.emplace_back("moe_cache_fit");
+        }
+        const bool cache_forces_canonical_weights =
+            std::any_of(params.moe_cache.begin(), params.moe_cache.end(),
+                moe_cache_mode_forces_canonical_weights);
+        if (params.repack_explicit || params.repack != cmd_params_defaults.repack ||
+            cache_forces_canonical_weights) {
+            fields.emplace_back("repack");
         }
         if (params.n_threads.size() > 1 || params.n_threads != cmd_params_defaults.n_threads || is_cpu_backend) {
             fields.emplace_back("n_threads");
@@ -2032,14 +2322,15 @@ struct markdown_printer : public printer {
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
         }
-        if (params.repack.size() > 1 || params.repack != cmd_params_defaults.repack) {
-            fields.emplace_back("repack");
-        }
         if (params.fit_params_target.size() > 1 || params.fit_params_target != cmd_params_defaults.fit_params_target) {
             fields.emplace_back("fit_target");
         }
         if (params.fit_params_min_ctx.size() > 1 || params.fit_params_min_ctx != cmd_params_defaults.fit_params_min_ctx) {
             fields.emplace_back("fit_min_ctx");
+        }
+        if (params.n_gen_warmup_explicit ||
+            params.n_gen_warmup != cmd_params_defaults.n_gen_warmup) {
+            fields.emplace_back("n_gen_warmup");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
@@ -2066,6 +2357,8 @@ struct markdown_printer : public printer {
             char        buf[128];
             if (field == "model") {
                 value = t.model_type;
+            } else if (field == "repack") {
+                value = t.repack ? "on" : "off";
             } else if (field == "size") {
                 if (t.model_size < 1024 * 1024 * 1024) {
                     snprintf(buf, sizeof(buf), "%.2f MiB", t.model_size / 1024.0 / 1024.0);
@@ -2161,11 +2454,23 @@ struct sql_printer : public printer {
 
 struct ctx_state {
     int depth = 0; // in tokens
+    const cmd_params_instance * instance = nullptr;
+    std::string moe_cache;
+    bool repack = false;
 
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
+static llama_token bench_random_token(uint64_t & state, int32_t n_vocab) {
+    state += 0x9e3779b97f4a7c15ULL;
+    uint64_t value = state;
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    value ^= value >> 31;
+    return (llama_token) (value % (uint32_t) n_vocab);
+}
+
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, uint64_t seed) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2178,9 +2483,9 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
 
     while (n_processed < n_prompt) {
         int n_tokens = std::min(n_prompt - n_processed, n_batch);
-        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : bench_random_token(seed, n_vocab);
         for (int i = 1; i < n_tokens; i++) {
-            tokens[i] = std::rand() % n_vocab;
+            tokens[i] = bench_random_token(seed, n_vocab);
         }
         int res = llama_decode(ctx, llama_batch_get_one(tokens.data(), n_tokens));
         if (res != 0) {
@@ -2194,14 +2499,14 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
-static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
+static bool test_gen(llama_context * ctx, int n_gen, int n_threads, uint64_t seed) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
-    llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+    llama_token token = llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : bench_random_token(seed, n_vocab);
 
     for (int i = 0; i < n_gen; i++) {
         int res = llama_decode(ctx, llama_batch_get_one(&token, 1));
@@ -2210,7 +2515,7 @@ static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
             return false;
         }
         llama_synchronize(ctx);
-        token = std::rand() % n_vocab;
+        token = bench_random_token(seed, n_vocab);
     }
     return true;
 }
@@ -2304,7 +2609,7 @@ int llama_bench(int argc, char ** argv) {
     llama_model *               lmodel    = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
 
-    // store the llama_context state at the previous depth that we performed a test
+    // store context state for repeated benchmarks with matching cache and repack settings
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
 
@@ -2317,9 +2622,11 @@ int llama_bench(int argc, char ** argv) {
         }
         auto mparams = inst.to_llama_mparams();
         auto cparams = inst.to_llama_cparams();
+        apply_moe_cache_mode(cparams, inst.moe_cache);
 
         bool do_fit = inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
                       inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
+        bool cache_fit_selected = false;
 
         std::vector<float> fit_tensor_split(llama_max_devices(), 0.0f);
         std::vector<llama_model_tensor_buft_override> fit_overrides(llama_max_tensor_buft_overrides(), {nullptr, nullptr});
@@ -2340,16 +2647,28 @@ int llama_bench(int argc, char ** argv) {
 
             std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
 
-            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
+            uint32_t n_ctx_needed = inst.n_prompt + std::max(inst.n_gen + inst.n_depth, inst.n_gen_warmup);
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
+            common_moe_cache_params fit_moe_cache = common_moe_cache_from_bench_mode(inst.moe_cache);
 
-            common_fit_params(inst.model.c_str(), &mparams, &cparams,
+            const common_params_fit_status fit_status = common_fit_params(
+                inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
+                &fit_moe_cache,
                 margins.data(),
                 inst.fit_min_ctx,
                 nullptr,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            if (fit_status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
+                // Never report PP/TG numbers for a failed fit. The logger is
+                // suppressed by default, so print an unconditional diagnostic.
+                fprintf(stderr,
+                    "%s: error: failed to fit parameters for benchmark %d/%zu (status=%d); skipping this case\n",
+                    __func__, params_idx, params_count, (int) fit_status);
+                continue;
+            }
+            cache_fit_selected = fit_moe_cache.fit_selected;
        }
 
         // keep the same model between tests when possible
@@ -2373,7 +2692,7 @@ int llama_bench(int argc, char ** argv) {
             return 1;
         }
 
-        test t(inst, lmodel, ctx);
+        test t(inst, mparams, cache_fit_selected, lmodel, ctx);
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
@@ -2409,8 +2728,8 @@ int llama_bench(int argc, char ** argv) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
-                //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads,
+                                       0x6a09e667f3bcc909ULL ^ (uint64_t) t.n_prompt);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2418,11 +2737,13 @@ int llama_bench(int argc, char ** argv) {
                     exit(1);
                 }
             }
-            if (t.n_gen > 0) {
+            if (t.n_gen_warmup > 0) {
                 if (params.progress) {
-                    fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
+                    fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run (%d tokens)\n",
+                            params_idx, params_count, t.n_gen_warmup);
                 }
-                bool res = test_gen(ctx, 1, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen_warmup, t.n_threads,
+                                    0xbb67ae8584caa73bULL ^ (uint64_t) t.n_gen_warmup);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                     llama_free(ctx);
@@ -2436,10 +2757,13 @@ int llama_bench(int argc, char ** argv) {
             llama_memory_clear(llama_get_memory(ctx), false);
 
             if (t.n_depth > 0) {
-                bool is_cached = t.n_depth == cstate.depth;
+                bool is_cached = cstate.instance == &inst &&
+                                 t.n_depth == cstate.depth &&
+                                 t.moe_cache == cstate.moe_cache &&
+                                 t.repack == cstate.repack;
 
                 if (is_cached) {
-                    // if previously we have computed at this depth, just restore the state
+                    // restore state from the same cache and repack configuration
                     const size_t ret = llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
                     if (ret == 0) {
                         // if the old state is incompatible with the current context - reprocess from scratch
@@ -2452,7 +2776,8 @@ int llama_bench(int argc, char ** argv) {
                         fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
                                 i + 1, params.reps);
                     }
-                    bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
+                    bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads,
+                                           0x3c6ef372fe94f82bULL ^ (uint64_t) t.n_depth);
                     if (!res) {
                         fprintf(stderr, "%s: error: failed to run depth\n", __func__);
                         llama_free(ctx);
@@ -2460,8 +2785,11 @@ int llama_bench(int argc, char ** argv) {
                         exit(1);
                     }
 
-                    // store the context state for reuse in later runs
-                    cstate.depth = t.n_depth;
+                    // store the context state for reuse by matching later runs
+                    cstate.instance  = &inst;
+                    cstate.depth     = t.n_depth;
+                    cstate.moe_cache = t.moe_cache;
+                    cstate.repack    = t.repack;
                     cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
                     llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
                 } else {
@@ -2479,7 +2807,8 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads,
+                                       0xa54ff53a5f1d36f1ULL ^ (uint64_t) i);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
@@ -2492,7 +2821,8 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                bool res = test_gen(ctx, t.n_gen, t.n_threads,
+                                    0x510e527fade682d1ULL ^ (uint64_t) i);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     llama_free(ctx);

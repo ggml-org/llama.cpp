@@ -33,6 +33,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                     bool   gdn_replay_req,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -43,13 +44,14 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         model,
         type_k, type_v, v_trans, kv_size, n_pad, n_swa, swa_type,
         type_r, type_s, rs_size,
-        n_seq_max, n_rs_seq, offload, unified,
+        n_seq_max, n_rs_seq, gdn_replay_req, offload, unified,
         filter_attn, filter_recr),
     hparams_idx(model.hparams),
     mem_idx(filter_idx == nullptr ? nullptr : [&] {
         // MQA with a single key head of indexer_head_size, as llama_kv_cache_dsa shapes its own
         std::fill(hparams_idx.n_head_kv_arr.begin(), hparams_idx.n_head_kv_arr.end(), 1);
         hparams_idx.n_embd_head_k_full = model.hparams.indexer_head_size;
+        hparams_idx.n_embd_head_v_full = model.hparams.indexer_head_size;
 
         // the cached indexer keys are raw, rotation happens after pooling at read time, so a
         // K-shift must not rotate them while the stream copies in the same update still apply

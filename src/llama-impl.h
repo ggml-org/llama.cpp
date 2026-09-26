@@ -54,6 +54,7 @@ static inline dst_t llama_cast(src_t v) {
     }
 }
 
+// Helper: apply Hadamard rotation matrix to the last dimension via mul_mat
 static inline ggml_tensor * llama_mul_mat_hadamard(
         ggml_context * ctx,
         ggml_tensor * cur,

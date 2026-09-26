@@ -334,17 +334,17 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     assert res.status_code == 200
     assert res.body["n_restored"] == n_saved
 
-    res = server.make_request("POST", "/completions", data={
+    res_slot0 = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
         "id_slot": 0,
         "cache_prompt": True,
         "prompt": prompt,
     })
-    assert res.status_code == 200
-    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
-    assert res.body["timings"]["prompt_n"] == 1
-    content = res.body["content"]
+    assert res_slot0.status_code == 200
+    assert res_slot0.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res_slot0.body["timings"]["prompt_n"] == 1
+    content_slot0 = res_slot0.body["content"]
 
     res = server.make_request("POST", "/slots/1?action=restore", data={
         "filename": "mm_slot_two_images.bin",
@@ -355,16 +355,16 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
-        "id_slot": 0,
+        "id_slot": 1,
         "cache_prompt": True,
         "prompt": prompt,
     })
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == prompt_n_full - 1
     assert res.body["timings"]["prompt_n"] == 1
-    content = res.body["content"]
+    content_slot1 = res.body["content"]
 
-    assert res.body["content"] == content
+    assert content_slot1 == content_slot0
 
 
 def test_slot_save_restore_with_image_across_restart(mmproj_server):
@@ -546,3 +546,37 @@ def test_slot_restore_media_file_without_mmproj(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == 0
     assert res.body["content"] == content
+
+
+@pytest.mark.parametrize("damage", ["stale", "truncated", "oversized"])
+def test_slot_restore_ignores_invalid_checkpoint_sidecar(damage):
+    server.start()
+    prompt = "What is the capital of France?"
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 1, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    result = server.make_request("POST", "/slots/1?action=save", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+
+    # Make a version-2 sidecar bound to this primary file, then damage it.
+    state_hash = 14695981039346656037
+    checkpoint_path = os.path.join(server.slot_save_path, "checkpoint.bin")
+    with open(checkpoint_path, "rb") as state:
+        for value in state.read():
+            state_hash = ((state_hash ^ value) * 1099511628211) & ((1 << 64) - 1)
+    if damage == "stale":
+        state_hash ^= 1
+    sidecar = struct.pack("=IIQI", 0x4C434B50, 2, state_hash, 1)
+    if damage == "oversized":
+        sidecar += struct.pack("=qiiQ", 1, 0, 0, 1 << 63)
+    with open(checkpoint_path + ".ckpt", "wb") as output:
+        output.write(sidecar)
+
+    result = server.make_request("POST", "/slots/0?action=restore", data={"filename": "checkpoint.bin"})
+    assert result.status_code == 200
+    result = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 0, "cache_prompt": True,
+    })
+    assert result.status_code == 200
+    assert match_regex("(Whiskers|Flana)+", result.body["content"])

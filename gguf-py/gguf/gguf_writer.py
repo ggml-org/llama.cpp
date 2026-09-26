@@ -386,7 +386,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
         if self.use_temp_file and self.temp_file is None:
             fp = tempfile.SpooledTemporaryFile(mode="w+b", max_size=256 * 1024 * 1024)
             fp.seek(0)
@@ -402,12 +402,38 @@ class GGUFWriter:
         tensor.tofile(self.temp_file)
         self.write_padding(self.temp_file, tensor.nbytes)
 
+    @staticmethod
+    def _byteswap_tensor_data(
+        tensor: np.ndarray[Any, Any], raw_dtype: GGMLQuantizationType | None,
+    ) -> np.ndarray[Any, Any]:
+        # A block-quantized tensor (raw_dtype set, packed as a flat uint8 buffer)
+        # embeds multi-byte fields (e.g. f16/f32 block scales) inside those bytes.
+        # ndarray.byteswap() swaps whole elements, so on a uint8 view it is a
+        # silent no-op: the file's declared endianness would not match the
+        # scale fields actually written. BF16 has no such embedded fields - it
+        # is a plain 2-byte value per element - so it can be swapped via a
+        # uint16 view (same special case as
+        # gguf.scripts.gguf_convert_endian.convert_byteorder). Any other
+        # quantized type needs per-type block-layout knowledge that isn't
+        # available here (see gguf.scripts.gguf_convert_endian.byteswap_tensors),
+        # so refuse rather than write a corrupted file.
+        if raw_dtype == GGMLQuantizationType.BF16:
+            return tensor.view(np.uint16).byteswap(inplace=False).view(np.uint8)
+        if raw_dtype is not None and tensor.dtype == np.uint8:
+            raise NotImplementedError(
+                f"Writing byteswapped {raw_dtype.name} quantized data is not supported"
+            )
+        return tensor.byteswap(inplace=False)
+
     def write_padding(self, fp: IO[bytes], n: int, align: int | None = None) -> None:
         pad = GGUFWriter.ggml_pad(n, align if align is not None else self.data_alignment) - n
         if pad != 0:
             fp.write(bytes([0] * pad))
 
-    def write_tensor_data(self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None) -> None:
+    def write_tensor_data(
+        self, tensor: np.ndarray[Any, Any], tensor_endianess: GGUFEndian | None = None,
+        raw_dtype: GGMLQuantizationType | None = None,
+    ) -> None:
         if self.state is not WriterState.TI_DATA and self.state is not WriterState.WEIGHTS:
             raise ValueError(f'Expected output file to contain tensor info or weights, got {self.state}')
         assert self.fout is not None
@@ -418,7 +444,7 @@ class GGUFWriter:
 
         if tensor_endianess != self.endianess:
             # Don't byteswap inplace since lazy copies cannot handle it
-            tensor = tensor.byteswap(inplace=False)
+            tensor = self._byteswap_tensor_data(tensor, raw_dtype)
 
         file_id = -1
         for i, tensors in enumerate(self.tensors):
@@ -1049,6 +1075,9 @@ class GGUFWriter:
     def add_target_hidden_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.TARGET_HIDDEN_SIZE.format(arch=self.arch), value)
 
+    def add_decoder_arch(self, value: str) -> None:
+        self.add_string(Keys.LLM.DECODER_ARCH.format(arch=self.arch), value)
+
     def add_norm_before_residual(self, value: bool) -> None:
         self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
 
@@ -1282,7 +1311,16 @@ class GGUFWriter:
 
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]] | None) -> None:
         if value is None:
+            # a prior call may have written the multi-template form (the default key,
+            # one tokenizer.chat_template.<name> key per named template, and the
+            # tokenizer.chat_templates name list below) - clear all of it, not just
+            # the default, or a "no chat template" caller's intent is only half applied.
             self.remove_key(Keys.Tokenizer.CHAT_TEMPLATE)
+            self.remove_key(Keys.Tokenizer.CHAT_TEMPLATES)
+            named_prefix = Keys.Tokenizer.CHAT_TEMPLATE_N.format(name="")
+            for kv_data in self.kv_data:
+                for key in [k for k in kv_data if k.startswith(named_prefix)]:
+                    kv_data.pop(key, None)
             return
 
         if not isinstance(value, str):

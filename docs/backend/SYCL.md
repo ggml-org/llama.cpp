@@ -339,7 +339,7 @@ as `-cl-fp32-correctly-rounded-divide-sqrt`
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Obtaining and quantizing models*](../../README.md#obtaining-and-quantizing-models) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_0.gguf?download=true) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Obtaining and quantizing models*](../models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_0.gguf?download=true) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -655,7 +655,7 @@ Once it is completed, final results will be in **build/Release/bin**
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Obtaining and quantizing models*](../../README.md#obtaining-and-quantizing-models) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Obtaining and quantizing models*](../models.md) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -804,12 +804,16 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_FA_ONEDNN | 1 (default) or 0 | Enable the oneDNN fused SDPA (flash-attention) path on supported GPUs. Set to 0 to always use the native SYCL flash-attention kernel. |
 | GGML_SYCL_FA_ONEDNN_MAX_KV | 0 (default, disabled) or positive integer | By default (0), all sequences are handled by the oneDNN fused SDPA path, regardless of KV length; a positive value caps that length, past which sequences fall back to the native kernel. If GPU driver watchdog resets (DEVICE_LOST) occur during long-context inference, set this near the context depth where they start, e.g. 24576. |
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
-| GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with quantized KV cache. Automatically activates during prefill (prompt processing) when all conditions are met: (1) flash-attn enabled (`-fa` or `--flash-attn on`), (2) KV cache quantized (`--cache-type-k q8_0 --cache-type-v q8_0` or other `*_0/*_1` types), (3) batch size ≥ 1024 (`--batch-size 1024`), (4) prompt length ≥ 1024 tokens. Set to 0 to force the TILE kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
+| GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with non-turbo K/V. Activates when all conditions are met: mask present, no sinks/ALiBi/softcap, GQA ratio >= 2, head dim a multiple of 64 in [64, 512] with matching K/V head size, `Q->ne[1] >= 32` and `K->ne[1] >= 1024`. Set to 0 to force the TILE/VEC kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
 | GGML_SYCL_MKL_FA_DEBUG | 0 (default) or 1 | Enable per-call diagnostic logging for MKL flash attention: GEMM/softmax timings, interleaved-head detection, and buffer memory usage. |
 | GGML_SYCL_MEMTRACE | 0 (default), 1, 2 | Enable record and output memory allocation diagnostics. Requires `-lv 4`. <br>0 -  Disable<br>1 - Basic memory info, including current and peak allocations, as well allocations from other sources, around 50 lines per model load.<br>2 - More verbose, logging around 900 specific allocations and deallocations. |
 | GGML_SYCL_MEMTRACE_STEP | 64 (default) or positive integer | With GGML_SYCL_MEMTRACE=1, the minimum growth in memory usage to trigger another log record. |
-| GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv ≥ 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
-| GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute. Unsupported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
+| GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv >= 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
+| GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch for top-k MoE gating in graph compute (`ggml_sycl_fuse()`, topk-moe.cpp). RMS_NORM+MUL and UNARY+MUL fusion run unconditionally and are not gated by this flag. |
+| GGML_SYCL_MAX_WG_PER_CU | Integer 1-1024 (16 default) | Set the flash-attention resident work-group cap per Xe-core/SM. This is not a cap per SYCL compute unit/EU. Invalid values are ignored with a warning. |
+| GGML_SYCL_FFN_FUSION | 0 or 1 (default) | Enable fused dense Q4_K single-token SwiGLU. Promoted to default 2026-08-12 after a paired campaign against the fixed kernel; set to 0 to opt out. |
+| GGML_SYCL_FFN_FUSION_DEBUG | Unset (default) or set | Log tensor shape and layout details for the first fused FFN launch attempt. |
+| GGML_SYCL_FFN_FUSION_PROFILE | 0 (default) or 1 | Report fused FFN graph eligibility and rejection counters at process exit. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
@@ -817,6 +821,18 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
+| GGML_SYCL_Q8_KV_QUANTS_FIRST | 1 (default) or 0 | Store `q8_0` KV cache rows as 128 contiguous quant values followed by four fp16 scales, instead of four interleaved 34-byte `block_q8_0` records. Applies only to SYCL devices with `q8_0` K and V and 128-element heads; every other cache keeps canonical blocks either way. Set to 0 to fall back. |
+
+### Intel Arc (A770 / DG2) flash-attention KV cache
+
+For flash attention (`-fa on`) with a quantized KV cache on Arc, use `q8_0`
+(`--cache-type-k q8_0 --cache-type-v q8_0`): it is near-lossless and runs at
+mainline parity. Both `GGML_SYCL_F16=ON` and `OFF` builds work; `F16=ON` gives
+faster prompt processing. TurboQuant KV cache types (`turbo2`/`turbo3`/`turbo4`)
+run on the SYCL flash-attention VEC path; Arc validation and optimization
+currently cover `-fa on` only. The non-FA graph handles block-quantized V via a
+dequant-before-transpose and inverse-WHT sequence, but that path remains
+unqualified for production use with turbo KV.
 
 ## Compile-time Flags
 
@@ -859,6 +875,26 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 - Missed the AOT (Ahead-of-Time) in building.
   - Good: Builds quickly, smaller size of binary file.
   - Bad: The startup is slow (JIT) in first time, but subsequent performance is unaffected.
+
+- Intel Arc A770 (DG2 / Xe-HPG) known-good stack (verified 2026-07, JIT build):
+  oneAPI 2026.0 (icx/icpx), Intel Graphics Compiler (IGC) 2.36.3, intel-compute-runtime
+  26.22.x, level-zero-loader 1.28.6. `sycl-ls` should list the Arc under `level_zero:gpu`.
+
+- IGC internal compiler error on `joint_matrix` (XMX). Bleeding-edge IGC (e.g. the 2.38.x
+  git builds) can crash with `IGC: Internal Compiler Error: Floating point exception` when
+  JIT-compiling any `joint_matrix` kernel on DG2. Use a stable IGC release (2.36.3 verified).
+
+- XMX `joint_matrix` on DG2 requires sub-group size 8, not 16. Forcing
+  `[[sycl::reqd_sub_group_size(16)]]` on a `joint_matrix` kernel triggers the IGC ICE above;
+  the DG2 XMX systolic depth is 8 (the device reports N=8 in `matrix_combinations`). A
+  correct SG=8 kernel lowers to real `dpas` and runs several x scalar FMA. Note the rest of
+  the ggml-sycl backend uses sub-group 16 (`GGML_SYCL_WARP_SIZE=16`), so any XMX matmul
+  region must run in an SG=8 scope.
+
+- Host build-flag injection corrupts the SYCL device pipeline. When packaging (e.g. Arch
+  `makepkg`), disable injected compiler flags (`options=(!buildflags)`); host `-march`
+  microarch flags leaking into the device compile can produce garbage GPU output. Do not add
+  host CFLAGS to the SYCL build.
 
 ## Q&A
 

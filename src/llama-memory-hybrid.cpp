@@ -25,6 +25,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                     bool   gdn_replay_req,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -59,6 +60,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         rs_size,
         n_seq_max,
         n_rs_seq,
+        gdn_replay_req,
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
@@ -138,6 +140,11 @@ bool llama_memory_hybrid::get_can_shift() const {
 void llama_memory_hybrid::clear(bool data) {
     mem_attn->clear(data);
     mem_recr->clear(data);
+}
+
+void llama_memory_hybrid::clear_data_only() {
+    mem_attn->clear_data_only();
+    mem_recr->clear_data_only();
 }
 
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -284,6 +291,24 @@ const llama_ubatch & llama_memory_hybrid_context::get_ubatch() const {
 
 const llama_kv_cache_context * llama_memory_hybrid_context::get_attn() const {
     return static_cast<const llama_kv_cache_context *>(ctx_attn.get());
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_rot_forward() const {
+    return ctx_attn ? ctx_attn->get_turbo_rot_forward() : nullptr;
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_rot_inverse() const {
+    return ctx_attn ? ctx_attn->get_turbo_rot_inverse() : nullptr;
+}
+
+ggml_tensor * llama_memory_hybrid_context::get_turbo_innerq_scale_inv() const {
+    return ctx_attn ? ctx_attn->get_turbo_innerq_scale_inv() : nullptr;
+}
+
+void llama_memory_hybrid_context::turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) {
+    if (ctx_attn) {
+        ctx_attn->turbo_innerq_publish_scale_inv(scale_inv, n, finalized);
+    }
 }
 
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {

@@ -91,7 +91,8 @@ void mtmd_serialization::write<std::string>(std::string value) {
 template <>
 std::string mtmd_serialization::read<std::string>() {
     uint64_t len = read<uint64_t>();
-    if (read_pos + len > data.size()) {
+    // overflow-safe: read_pos + len can wrap a corrupted/malicious uint64_t len past data.size()
+    if (len > data.size() - read_pos) {
         throw std::runtime_error("read_string OOB");
     }
     std::string str(data.data() + read_pos, len);
@@ -1975,6 +1976,11 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         out->n_feats   = ctx->gen_out_feats.size();
         out->is_eos    = is_eos;
         return 0;
+    }
+
+    if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV) {
+        LOG_ERR("%s: unknown gen process type %d\n", __func__, (int) inp->type);
+        return 1;
     }
 
     // MTMD_GEN_PROCESS_TYPE_GEN_WAV

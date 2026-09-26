@@ -32,7 +32,8 @@ int llama_fit_params(int argc, char ** argv) {
 
     if (!params.fit_params_print) {
         const common_params_fit_status status = common_fit_params(params.model.path.c_str(), &mparams, &cparams,
-                params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
+                params.tensor_split, params.tensor_buft_overrides.data(), &params.moe_cache,
+                params.fit_params_target.data(), params.fit_params_min_ctx,
                 nullptr,
                 params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
         if (status != COMMON_PARAMS_FIT_STATUS_SUCCESS) {
@@ -43,6 +44,17 @@ int llama_fit_params(int argc, char ** argv) {
         LOG_INF("%s: printing fitted CLI arguments to stdout...\n", __func__);
         common_log_flush(common_log_main());
         printf("-c %" PRIu32 " -ngl %" PRIi32, cparams.n_ctx, mparams.n_gpu_layers);
+
+        if (params.moe_cache.fit_selected) {
+            if (params.moe_cache.budget_mib > 0) {
+                printf(" --moe-cache %zu", params.moe_cache.budget_mib);
+            } else {
+                printf(" --moe-cache %s", params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO ? "auto" : "on");
+            }
+            if (!mparams.use_extra_bufts) {
+                printf(" --no-repack");
+            }
+        }
 
         size_t nd = llama_max_devices();
         while (nd > 1 && mparams.tensor_split[nd - 1] == 0.0f) {

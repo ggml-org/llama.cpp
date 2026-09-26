@@ -1,0 +1,65 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+// 256 threads per workgroup, each thread fully dequants one TQ4_1S block
+// (32 elements, 20 bytes). Workgroups process 256 blocks = 8192 elements each
+// so the x dispatch stays under maxComputeWorkGroupCount[0] for large tensors.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_tq4_1s data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    // Lloyd-Max centroids for 4-bit normal quantization
+    const float centroids[16] = float[16](
+        -2.732590, -2.069017, -1.618046, -1.256231,
+        -0.942340, -0.656759, -0.388048, -0.128395,
+         0.128395,  0.388048,  0.656759,  0.942340,
+         1.256231,  1.618046,  2.069017,  2.732590
+    );
+
+    // WHT sign pattern for inverse RHT normalization
+    const float signs[32] = float[32](
+        +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+        -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+    );
+
+    const float INV_SQRT32 = 0.17677669529663688;
+
+    const uint ib = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (ib >= p.nel / 32) return;
+
+    const float d0 = float(data_a[ib].d0);
+    const float d1 = float(data_a[ib].d1);
+
+    // Load centroid*scale into per-thread buffer
+    float buf[32];
+    for (int j = 0; j < 32; j++) {
+        const uint byte_idx = uint(j) / 2u;
+        const uint nibble_shift = (uint(j) & 1u) * 4u;
+        const uint idx = (uint(data_a[ib].qs[byte_idx]) >> nibble_shift) & 0xFu;
+        const float d = (j < 16) ? d0 : d1;
+        buf[j] = centroids[idx] * d;
+    }
+
+    // Inverse WHT butterfly (5 stages for 32 elements) — matches CPU reference
+    for (uint step = 1u; step < 32u; step <<= 1u) {
+        for (uint i = 0u; i < 32u; i += step * 2u) {
+            for (uint j = i; j < i + step; j++) {
+                const float a = buf[j];
+                const float b = buf[j + step];
+                buf[j]        = a + b;
+                buf[j + step] = a - b;
+            }
+        }
+    }
+
+    // Normalize and apply sign pattern
+    const uint out_base = ib * 32u;
+    for (int j = 0; j < 32; j++) {
+        data_b[out_base + uint(j)] = D_TYPE(buf[j] * INV_SQRT32 * signs[j]);
+    }
+}

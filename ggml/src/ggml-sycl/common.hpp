@@ -47,7 +47,13 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #define GGML_COMMON_IMPL_SYCL
 #define SYCL_FLASH_ATTN //remove it to disable FLASH_ATTENTION in building.
 #define SYCL_FAST_FP16  //don't change. remove it will break fattn-tile.hpp building
-#define GGML_SYCL_FA_ALL_QUANTS //define it to enable all quantization types in flash attention. undefine it to only support F16, Q4_0 and Q8_0 in flash attention.
+// GGML_SYCL_FA_ALL_QUANTS: default OFF. Defining this enables the
+// full mixed-K flash_attn_ext_vec<...,42/43,44,...> dispatch matrix
+// (see ASSUMPTIONS.md:553-583 and RALPH_TASKS.md:1237-1251).
+// Leave commented to keep the restricted default dispatch set in
+// fattn.cpp. To re-enable the full mixed-K FA matrix, uncomment the
+// line below.
+//#define GGML_SYCL_FA_ALL_QUANTS
 
 /* suppress warning spam */
 #pragma clang diagnostic push
@@ -72,6 +78,8 @@ extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
+extern int g_ggml_sycl_fa_force_vec_standard;
+extern int g_ggml_sycl_fa_q8_gqa_tile;
 
 
 #define CHECK_TRY_ERROR(expr)                                            \
@@ -321,6 +329,11 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
+
+static inline bool ggml_sycl_tensor_is_kv_q8_quants_first(const ggml_tensor * tensor) {
+    return ggml_tensor_is_kv_q8_quants_first(tensor);
+}
+
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
                                ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
@@ -444,6 +457,13 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
 #endif
 
+    // True while the main stream is being recorded into a SYCL command graph.
+    // oneAPI forbids queue::wait()/wait_and_throw() on a queue in that state,
+    // so op code that would otherwise synchronize (e.g. the FA decode timing
+    // profile) must check this and skip. Not gated by GGML_SYCL_GRAPH so it is
+    // always a valid false default when graphs are compiled out.
+    bool graph_recording = false;
+
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
             host_pools[device] = new_pool_for_host(stream(device, 0), device);
@@ -458,21 +478,23 @@ struct ggml_backend_sycl_context {
 
 static __dpct_inline__ float warp_reduce_sum(float x,
     const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), x, mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        x += dpct::permute_sub_group_by_xor(sg, x, mask, sg_size);
     }
     return x;
 }
 
 static __dpct_inline__ sycl::float2
 warp_reduce_sum(sycl::float2 a, const sycl::nd_item<3>& item_ct1) {
+    auto sg = item_ct1.get_sub_group();
+    const int sg_size = sg.get_local_range()[0];
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        a.x() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.x(),
-            mask);
-        a.y() += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), a.y(),
-            mask);
+    for (int mask = sg_size / 2; mask > 0; mask >>= 1) {
+        a.x() += dpct::permute_sub_group_by_xor(sg, a.x(), mask, sg_size);
+        a.y() += dpct::permute_sub_group_by_xor(sg, a.y(), mask, sg_size);
     }
     return a;
 }

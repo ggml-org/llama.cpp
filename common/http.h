@@ -187,5 +187,8 @@ static int common_http_get_free_port() {
     WSACleanup();
 #endif
 
+#undef INVALID_SOCKET_VAL
+#undef CLOSE_SOCKET
+
     return port;
 }

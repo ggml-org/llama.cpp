@@ -100,4 +100,3 @@ with torch.no_grad():
     print(f"\nToken reference:")
     for i, token in enumerate(tokens):
         print(f"  Token {i}: {repr(token)}")
-

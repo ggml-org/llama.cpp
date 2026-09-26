@@ -10,6 +10,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <set>
 #include <vector>
@@ -488,6 +489,7 @@ int main(int argc, char ** argv) {
     common_params params;
     params.sampling.seed = 1234;
     params.n_predict = 1;
+    params.gdn_replay = std::getenv("LLAMA_TEST_GDN_REPLAY") != nullptr;
 
     common_init();
 

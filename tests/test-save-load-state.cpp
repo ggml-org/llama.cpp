@@ -762,6 +762,7 @@ static bool test_state_restore_failure(struct llama_model * model, const struct 
 
 struct test_suite {
     std::vector<test_status> results;
+    bool skipped = false;
 
     bool all_passed() const {
         return std::all_of(results.begin(), results.end(), [](test_status s) { return s == test_status::PASS; });
@@ -775,7 +776,7 @@ static const std::vector<const char *> test_names = {
 
 // Run the full save/load test suite (tests 1-9) for a single model.
 // Returns the per-test results.
-static test_suite run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+static test_suite run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params, bool skip_draft_only = false) {
     test_suite suite;
 
     struct common_params params = base_params;
@@ -787,6 +788,16 @@ static test_suite run_save_load_tests_for_model(const std::string & model_path, 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
         suite.results.assign(test_names.size(), test_status::SKIP);
+        return suite;
+    }
+
+    // Draft-only graph fixtures need a target model and cannot run this standalone suite.
+    char arch[64] = {};
+    llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
+    if (skip_draft_only && (strcmp(arch, "dflash") == 0 || strcmp(arch, "eagle3") == 0)) {
+        LOG_INF("%s: skipping draft-only fixture %s\n", __func__, arch);
+        suite.results.assign(test_names.size(), test_status::SKIP);
+        suite.skipped = true;
         return suite;
     }
 
@@ -954,13 +965,14 @@ int main(int argc, char ** argv) {
 
         size_t n_pass = 0;
         size_t n_fail = 0;
+        size_t n_skip = 0;
         for (const auto & model_path : models) {
             const auto name = std::filesystem::path(model_path).filename().string();
 
             LOG("%-*s", (int) name_width, name.c_str());
             common_log_flush(common_log_main());
 
-            const test_suite suite = run_save_load_tests_for_model(model_path, params);
+            const test_suite suite = run_save_load_tests_for_model(model_path, params, true);
 
             for (size_t i = 0; i < suite.results.size(); i++) {
                 LOG("  %s%*s", test_status_str(suite.results[i]), col_width(test_names[i]) - 4, "");
@@ -968,7 +980,9 @@ int main(int argc, char ** argv) {
             LOG("\n");
             common_log_flush(common_log_main());
 
-            if (suite.all_passed()) {
+            if (suite.skipped) {
+                n_skip++;
+            } else if (suite.all_passed()) {
                 n_pass++;
             } else {
                 n_fail++;
@@ -978,7 +992,7 @@ int main(int argc, char ** argv) {
         common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
         common_log_flush(common_log_main());
 
-        LOG_INF("%s: summary: %zu passed, %zu failed (of %zu)\n", __func__, n_pass, n_fail, models.size());
+        LOG_INF("%s: summary: %zu passed, %zu failed, %zu skipped (of %zu)\n", __func__, n_pass, n_fail, n_skip, models.size());
 
         return n_fail == 0 ? 0 : 1;
     }

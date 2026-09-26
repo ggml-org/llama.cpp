@@ -50,6 +50,20 @@ server_http_context::~server_http_context() {
     }
 }
 
+// Equal-length key contents are compared without content-dependent early exit.
+// Length mismatches are intentionally rejected up front.
+static bool api_key_equals(const std::string & lhs, const std::string & rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+
+    volatile unsigned char mismatch = 0;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        mismatch |= static_cast<unsigned char>(lhs[i]) ^ static_cast<unsigned char>(rhs[i]);
+    }
+    return mismatch == 0;
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -281,8 +295,12 @@ bool server_http_context::init_listener(const common_params & params) {
             req_api_key = req_api_key.substr(prefix.size());
         }
 
-        // validate the API key
-        if (std::find(api_keys.begin(), api_keys.end(), req_api_key) != api_keys.end()) {
+        // validate against every configured key; do not leak the matching key's position
+        bool api_key_valid = false;
+        for (const auto & api_key : api_keys) {
+            api_key_valid |= api_key_equals(api_key, req_api_key);
+        }
+        if (api_key_valid) {
             return true; // API key is valid
         }
 
@@ -329,23 +347,37 @@ bool server_http_context::init_listener(const common_params & params) {
 
     // register server middlewares
     srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        if (params.cors_credentials && params.cors_origins == "*") {
-            // special case: echo back the Origin header to allow any origin to access the server with credentials
-            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
-        } else if (params.cors_origins == "localhost") {
+        const std::string origin = req.get_header_value("Origin");
+        bool origin_matches = false;
+
+        if (params.cors_origins == "*") {
+            res.set_header("Access-Control-Allow-Origin", "*");
+        } else if (!origin.empty() && params.cors_origins == "localhost") {
             // special case: only reflect the Origin header if it is a localhost origin
-            std::string origin = req.get_header_value("Origin");
-            if (!origin.empty() && origin_is_localhost(origin)) {
+            if (origin_is_localhost(origin)) {
                 res.set_header("Access-Control-Allow-Origin", origin);
-            } else if (!origin.empty()) {
+                origin_matches = true;
+            } else {
                 SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
             }
-        } else {
-            res.set_header("Access-Control-Allow-Origin", params.cors_origins);
+        } else if (!origin.empty()) {
+            for (const std::string & configured_origin : string_split<std::string>(params.cors_origins, ',')) {
+                if (origin == string_strip(configured_origin)) {
+                    res.set_header("Access-Control-Allow-Origin", origin);
+                    origin_matches = true;
+                    break;
+                }
+            }
         }
+
+        const bool cors_credentials = params.cors_credentials && origin_matches;
+        if (cors_credentials && req.method != "OPTIONS") {
+            res.set_header("Access-Control-Allow-Credentials", "true");
+        }
+
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Credentials", params.cors_credentials ? "true" : "false");
+            res.set_header("Access-Control-Allow-Credentials", cors_credentials ? "true" : "false");
             res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
             res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data

@@ -2239,6 +2239,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 escape_whitespaces = true;
                 clean_spaces = false;
             } else if (
+                    tokenizer_pre == "minicpm5") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_MINICPM5;
+                ignore_merges = true;
+            } else if (
                     tokenizer_pre == "jina-v1-en" ||
                     tokenizer_pre == "jina-v2-code" ||
                     tokenizer_pre == "roberta-bpe") {

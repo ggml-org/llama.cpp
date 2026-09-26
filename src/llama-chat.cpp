@@ -50,6 +50,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "deepseek2",         LLM_CHAT_TEMPLATE_DEEPSEEK_2        },
     { "deepseek3",         LLM_CHAT_TEMPLATE_DEEPSEEK_3        },
     { "deepseek-ocr",      LLM_CHAT_TEMPLATE_DEEPSEEK_OCR      },
+    { "deepseek4",         LLM_CHAT_TEMPLATE_DEEPSEEK_4         },
     { "command-r",         LLM_CHAT_TEMPLATE_COMMAND_R         },
     { "llama3",            LLM_CHAT_TEMPLATE_LLAMA_3           },
     { "chatglm3",          LLM_CHAT_TEMPLATE_CHATGLM_3         },
@@ -183,6 +184,11 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
     } else if (tmpl_contains("'Assistant: ' + message['content'] + eos_token")) {
         return LLM_CHAT_TEMPLATE_DEEPSEEK_2;
     } else if (tmpl_contains(LU8("<｜Assistant｜>")) && tmpl_contains(LU8("<｜User｜>")) && tmpl_contains(LU8("<｜end▁of▁sentence｜>"))) {
+        // DeepSeek-V4 Flash template includes additional features
+        // Check for V4-specific patterns before falling through to V3
+        if (tmpl_contains("response_format_header") || tmpl_contains("latest_reminder") || tmpl_contains("reasoning_effort")) {
+            return LLM_CHAT_TEMPLATE_DEEPSEEK_4;
+        }
         return LLM_CHAT_TEMPLATE_DEEPSEEK_3;
     } else if (tmpl_contains("[|system|]") && tmpl_contains("[|assistant|]") && tmpl_contains("[|endofturn|]")) {
         if (tmpl_contains("[|tool|]")) {
@@ -559,6 +565,21 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << LU8("<｜Assistant｜>");
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK_4) {
+        // DeepSeek-V4-Flash
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "system") {
+                ss << message->content << "\n\n";
+            } else if (role == "user") {
+                ss << LU8("<\uff5cUser\uff5c>") << message->content;
+            } else if (role == "assistant") {
+                ss << LU8("<\uff5cAssistant\uff5c>") << message->content << LU8("<\uff5cend\u2581of\u2581sentence\uff5c>");
+            }
+        }
+        if (add_ass) {
+            ss << LU8("<\uff5cAssistant\uff5c>");
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK_OCR) {
         for (auto message : chat) {

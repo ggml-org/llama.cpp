@@ -72,6 +72,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
+| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
+| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
+| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
 | `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `-lzm, --lazy-mode MODE` | on-demand reading of certain tensors, for example per-layer embeddings (default: auto)<br/>- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)<br/>- auto: on, but only for tensors larger than 4 GiB<br/>- off: always keep them resident<br/>(env: LLAMA_ARG_LAZY_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
@@ -164,7 +167,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--kv-unified-per-slot N` | context limit per parallel slot (default: unset, behavior unchanged).<br/>when set without -c/--ctx-size, the shared KV pool is sized to n_parallel*N<br/>(env: LLAMA_ARG_KV_UNIFIED_PER_SLOT) |
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
-| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - half of the free host memory at startup, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
@@ -196,13 +199,15 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
 | `--cors-methods METHODS` | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS) |
 | `--cors-headers HEADERS` | comma-separated list of allowed headers for CORS (default: *)<br/>(env: LLAMA_ARG_CORS_HEADERS) |
-| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
+| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: disabled)<br/>credentials are allowed only when the request Origin matches an explicitly configured origin; wildcard CORS origin ('*') forces credentials off<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
-| `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--ui-mcp-proxy-allow HOST[,HOST]` | direct targets with non-global numeric, local, or metadata hosts are blocked by default; this option adds exact normalized host exceptions (DNS names are case-insensitive with one trailing dot ignored)<br/>automatic redirect destinations and DNS answers are not validated or pinned, so operators must account for residual redirect and DNS-rebinding risk<br/>(env: LLAMA_ARG_UI_MCP_PROXY_ALLOW) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>requires at least one `--api-key` or `--api-key-file` entry<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/>requests without x-tool-runtime use the configured runtime; if present, x-tool-runtime must exactly repeat the original --tools-runtime value and cannot select a different destination; execution always uses the configured runtime's effective target<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--tools-cwd-root PATH` | experimental: operator-approved root for local x-tool-cwd overrides<br/>request values must name an existing relative directory beneath this root; SSH and container runtimes do not accept x-tool-cwd<br/>(env: LLAMA_ARG_TOOLS_CWD_ROOT) |
 | `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
@@ -262,13 +267,15 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN) |
 | `--spec-synth-len L` | target mean synthetic acceptance length, including the target token (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_LEN) |
 | `--spec-synth-rates P0,P1,...` | comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)<br/>(env: LLAMA_ARG_SPEC_SYNTH_RATES) |
+| `--spec-draft-n-min-adaptive N` | minimum adaptive MTP draft depth; the depth starts here and never drops below it (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN_ADAPTIVE) |
+| `--spec-chain 0\|1\|N` | chained MTP drafting: all draft tokens in one decode (default: off). Use --spec-chain N to enable and set depth (e.g. --spec-chain 8).<br/>(env: LLAMA_ARG_SPEC_CHAIN) |
 | `--spec-draft-p-split, --draft-p-split P` | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT) |
 | `--spec-draft-p-min, --draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.00)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_MIN) |
 | `--spec-draft-backend-sampling, --no-spec-draft-backend-sampling` | offload draft sampling to the backend (default: enabled)<br/>(env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING) |
 | `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload, default: follows --device)<br/>use --list-devices to see a list of available devices |
 | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-mtp-adaptive,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
 | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
 | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
 | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
@@ -346,9 +353,65 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ### Server tools support
 
-The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI. Built-in tools are available only when at least one API key is configured; start the server with `--tools all --api-key KEY`, or enable a comma-separated subset with `--tools name1,name2,...`. MCP-only tools do not require this built-in-tools startup check.
 
-To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
+`x-tool-runtime` cannot choose an execution target. A nonempty header must exactly match the single operator-configured `--tools-runtime`; an absent or empty header uses that configured runtime, and a header is rejected when no runtime was configured. This applies to SSH hosts and existing or newly spawned Docker/Podman containers. Network or Tailscale reachability is not authorization to run SSH as the `llama-server` host identity.
+
+For the local host runtime, per-request working directories are disabled unless the operator configures `--tools-cwd-root PATH`. `x-tool-cwd` must then be a relative path naming an existing directory whose canonical path remains beneath that root; absolute paths, `..` traversal, symlink escapes, missing paths, and files are rejected. SSH and container runtimes reject `x-tool-cwd` because the server cannot prove local canonical containment in those filesystems. This bounds only the working-directory header; it is not a sandbox for tool path arguments or shell commands.
+
+### MCP servers
+
+Besides the built-in tools, the server can expose tools coming from MCP servers, added in [#26062](https://github.com/ggml-org/llama.cpp/pull/26062). Only the stdio transport is supported: such a server is a child process reading JSON-RPC messages on its stdin and writing replies on its stdout, so nothing has to be started or maintained outside `llama-server`.
+
+Servers are declared in a Cursor-compatible JSON file:
+
+```json
+{
+  "mcpServers": {
+    "example": { "command": "/path/to/server", "args": [] }
+  }
+}
+```
+
+```sh
+llama-server -m model.gguf --mcp-servers-config mcp.json
+```
+
+The same JSON can be passed inline with `--mcp-servers-json`. Each entry under `mcpServers` accepts:
+
+| Key | Explanation |
+| --- | ----------- |
+| `command` | executable to spawn, required, entries without it are skipped |
+| `args` | array of arguments |
+| `env` | object merged over the parent environment |
+| `cwd` | working directory of the child process |
+| `timeout_ms` | per-tool-call timeout (default: 30000) |
+
+Every server is spawned once at startup to list its tools, then stopped, and respawned on demand when one of its tools is called. Tools are exposed as `<server>_<tool>` alongside the built-in ones: they show up in the Web UI and in `GET /tools`, and the model calls them like any other tool. A name colliding with an already registered tool is skipped. This is independent of `--tools`, MCP servers can be the only tools available.
+
+The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
+
+The MCP CORS proxy permits direct targets only when their numeric address is IANA-global, while loopback, private, link-local, IPv4-mapped loopback, and metadata destinations are denied. `--ui-mcp-proxy-allow` adds exact normalized host exceptions. Redirect destinations and post-resolution DNS addresses are not currently revalidated or pinned, so enabling the proxy still carries redirect and DNS-rebinding risk.
+
+Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
+
+Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
+
+### CORS
+
+By default `--cors-origins` remains `*`, but CORS credentials are disabled. `--cors-credentials` takes effect only when the request `Origin` matches an explicitly configured origin; wildcard `*` forces credentials off.
+
+Enabling `--tools` or `--agent` exposes file read/write over the API, so in that case `--cors-origins` defaults to `localhost` instead: only pages served from localhost can reach the server. Pass `--cors-origins` explicitly to override either default.
+
+Recommended `--cors-origins` setting, depending on where the server runs:
+
+| Deployment | Recommendation |
+| ---------- | --------------- |
+| Public | set an API key, put the server behind a reverse proxy, `--cors-origins` optional |
+| Local network | set `--cors-origins` to your frontend's origin |
+| Same machine | `--cors-origins localhost` (default once `--agent` is set) |
+
+Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-credentials` / `--no-cors-credentials`. Background and rationale: [#25655](https://github.com/ggml-org/llama.cpp/pull/25655).
 
 ### MCP servers
 
@@ -1150,6 +1213,8 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 *Options:*
 
 `filename`: Name of the file to save the slot's prompt cache. The file will be saved in the directory specified by the `--slot-save-path` server parameter.
+
+With context checkpoints enabled, the server also writes a `.ckpt` sidecar containing target, draft, and speculative checkpoint state. Keep it alongside the main state file. Restore ignores missing, stale, or malformed sidecars and falls back to a checkpoint at the restored prompt tip.
 
 **Response format**
 

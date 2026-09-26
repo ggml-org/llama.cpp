@@ -20,7 +20,9 @@ import {
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
-	private static readonly SSE_RECONNECT_MS = 1000;
+	private static readonly SSE_RECONNECT_BACKOFF_MULTIPLIER = 2;
+	private static readonly SSE_RECONNECT_INITIAL_MS = 1000;
+	private static readonly SSE_RECONNECT_MAX_MS = 30000;
 
 	/**
 	 * Check if a model is loaded based on its metadata.
@@ -226,15 +228,21 @@ export class ModelsService {
 
 	/**
 	 * Read the /models/sse feed and invoke onEvent for each parsed envelope.
-	 * Reconnects on network drops until the signal aborts. Splits the byte
-	 * stream into SSE records on the blank line boundary; the payload rides in
-	 * the data lines as a JSON envelope with its own model, event and data fields.
+	 * Reconnects on network drops and HTTP failures until the signal aborts,
+	 * backing off exponentially (capped) so a persistent failure - including one
+	 * that will never clear on its own, e.g. a 404 for a missing route - does not
+	 * hammer the server every second forever. A non-ok response backs off straight
+	 * to the cap since it is a definite rejection, not a transient drop; the delay
+	 * resets once a connection is actually established. Splits the byte stream
+	 * into SSE records on the blank line boundary; the payload rides in the data
+	 * lines as a JSON envelope with its own model, event and data fields.
 	 */
 	static async watchModelEvents(
 		signal: AbortSignal,
 		onEvent: (event: ApiModelsSseEvent) => void
 	): Promise<void> {
 		const decoder = new TextDecoder();
+		let reconnectDelayMs: number = ModelsService.SSE_RECONNECT_INITIAL_MS;
 
 		while (!signal.aborted) {
 			try {
@@ -244,6 +252,8 @@ export class ModelsService {
 				});
 
 				if (response.ok && response.body) {
+					reconnectDelayMs = ModelsService.SSE_RECONNECT_INITIAL_MS;
+
 					const reader = response.body.getReader();
 
 					let buffer = '';
@@ -265,6 +275,10 @@ export class ModelsService {
 							if (event) onEvent(event);
 						}
 					}
+				} else {
+					// HTTP-level rejection (e.g. 401/404): not going to resolve by
+					// retrying immediately, so skip straight to the capped delay.
+					reconnectDelayMs = ModelsService.SSE_RECONNECT_MAX_MS;
 				}
 			} catch {
 				// network drop or abort falls through to the reconnect delay
@@ -272,7 +286,12 @@ export class ModelsService {
 
 			if (signal.aborted) return;
 
-			await new Promise((resolve) => setTimeout(resolve, ModelsService.SSE_RECONNECT_MS));
+			await new Promise((resolve) => setTimeout(resolve, reconnectDelayMs));
+
+			reconnectDelayMs = Math.min(
+				reconnectDelayMs * ModelsService.SSE_RECONNECT_BACKOFF_MULTIPLIER,
+				ModelsService.SSE_RECONNECT_MAX_MS
+			);
 		}
 	}
 

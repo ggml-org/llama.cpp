@@ -204,7 +204,9 @@ common_json common_json::parse(const std::string & text) {
         common_json out;
         as_json(&out) = ordered_json::parse(text);
         return out;
-    } catch (const std::exception & e) {
+    } catch (const ordered_json::exception & e) {
+        // only the backing library's own errors mean "not valid JSON"; a resource failure
+        // such as std::bad_alloc must propagate as itself, not be relabeled a parse error
         throw common_json_error(e.what());
     }
 }
@@ -345,9 +347,12 @@ std::string common_json::dump_safe(int indent) const {
 }
 
 // an array is indexed directly, an object needs a walk from the start
-common_json & common_json::iterator::operator*() const {
-    return guard([&]() -> common_json & {
-        ordered_json & j = as_json(node);
+// as_json() and as_common() keep the constness of Node, so a const node
+// yields const references without a cast
+template <typename Node>
+Node & common_json::basic_iterator<Node>::operator*() const {
+    return guard([&]() -> Node & {
+        auto & j = as_json(node);
 
         if (j.is_object()) {
             return as_common(std::next(j.begin(), idx).value());
@@ -361,22 +366,37 @@ common_json & common_json::iterator::operator*() const {
     });
 }
 
-std::string common_json::iterator::key() const {
+template <typename Node>
+std::string common_json::basic_iterator<Node>::key() const {
     return guard([&] { return std::next(as_json(node).begin(), idx).key(); });
 }
 
-common_json::iterator common_json::begin() const {
-    return iterator(const_cast<common_json *>(this), 0);
+template common_json &       common_json::basic_iterator<common_json>::operator*() const;
+template const common_json & common_json::basic_iterator<const common_json>::operator*() const;
+template std::string         common_json::basic_iterator<common_json>::key() const;
+template std::string         common_json::basic_iterator<const common_json>::key() const;
+
+common_json::iterator common_json::begin() {
+    return iterator(this, 0);
 }
 
-common_json::iterator common_json::end() const {
-    return iterator(const_cast<common_json *>(this), size());
+common_json::iterator common_json::end() {
+    return iterator(this, size());
+}
+
+common_json::const_iterator common_json::begin() const {
+    return const_iterator(this, 0);
+}
+
+common_json::const_iterator common_json::end() const {
+    return const_iterator(this, size());
 }
 
 // the keys follow the backing library: the index for an array, "" for a plain value
-common_json::items_view::entry common_json::items_view::iterator::operator*() const {
+template <typename Node>
+typename common_json::basic_items_view<Node>::entry common_json::basic_items_view<Node>::iterator::operator*() const {
     return guard([&]() -> entry {
-        ordered_json & j = as_json(node);
+        auto & j = as_json(node);
 
         if (j.is_object()) {
             auto it = std::next(j.begin(), idx);
@@ -391,8 +411,15 @@ common_json::items_view::entry common_json::items_view::iterator::operator*() co
     });
 }
 
-common_json::items_view common_json::items() const {
-    return items_view(const_cast<common_json *>(this), size());
+template common_json::basic_items_view<common_json>::entry       common_json::basic_items_view<common_json>::iterator::operator*() const;
+template common_json::basic_items_view<const common_json>::entry common_json::basic_items_view<const common_json>::iterator::operator*() const;
+
+common_json::items_view common_json::items() {
+    return items_view(this, size());
+}
+
+common_json::const_items_view common_json::items() const {
+    return const_items_view(this, size());
 }
 
 // the backing library cannot build a common_json, so this one is just a copy

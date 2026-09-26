@@ -40,16 +40,23 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
-    // set when --tools-runtime is configured; routes every tool call through an isolate
+    // set when --tools-runtime is configured; routes built-in server tool calls through an isolate
     std::unique_ptr<server_tools_runtime> runtime;
+
+    // Canonical local root used to validate per-request x-tool-cwd overrides.
+    std::string cwd_root;
 
     void setup(const std::vector<std::string> & enabled_tools,
                server_mcp & mcp_mgr,
-               const std::string & tools_runtime);
+               const std::string & tools_runtime,
+               const std::string & tools_cwd_root);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
 
     server_tools();
     ~server_tools();
+
+private:
+    std::string resolve_tool_cwd(const std::string & header_value) const;
 };

@@ -10,13 +10,6 @@
 
 #include <clocale>
 
-#ifdef GGML_USE_CUDA
-#include "ggml-cuda.h"
-#endif
-
-#ifdef GGML_USE_METAL
-#include "ggml-metal.h"
-#endif
 
 #include <algorithm>
 #include <climits>

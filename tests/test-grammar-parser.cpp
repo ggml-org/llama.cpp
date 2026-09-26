@@ -132,6 +132,27 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 }
 
+// large bounds must parse to a small rule set with exact semantics: this checks
+// the parse and the rule count, test-grammar-integration checks the strings
+static void verify_bounded_parsing(const char * grammar_bytes, size_t max_rules) {
+    fprintf(stderr, "Testing bounded grammar:%s\n", grammar_bytes);
+    llama_grammar_parser parsed_grammar;
+    if (!parsed_grammar.parse(grammar_bytes)) {
+        fprintf(stderr, "expected the grammar to parse\n");
+        abort();
+    }
+    if (parsed_grammar.rules.size() > max_rules) {
+        fprintf(stderr, "expected at most %zu rules, got %zu\n", max_rules, parsed_grammar.rules.size());
+        abort();
+    }
+    for (const auto & rule : parsed_grammar.rules) {
+        if (rule.empty()) {
+            fprintf(stderr, "a synthesized rule was left undefined\n");
+            abort();
+        }
+    }
+}
+
 static void verify_failure(const char * grammar_bytes) {
     fprintf(stderr, "Testing expected failure:%s\n", grammar_bytes);
     llama_grammar_parser result;
@@ -145,60 +166,46 @@ int main()
         root ::= "a"{,}"
     )""");
 
-    verify_failure(R"""(
+    // nested bounds used to be refused because unrolling them would have
+    // produced 99^6 rules; the logarithmic encoding keeps them small
+    verify_bounded_parsing(R"""(
         root ::= (((((([^x]*){0,99}){0,99}){0,99}){0,99}){0,99}){0,99}
-    )""");
+    )""", 160);
 
     verify_failure(R"""(
         root ::= "a"{,10}"
     )""");
 
-    verify_failure(R"""(
+    // large bounds keep their meaning and stay small (logarithmic encoding);
+    // test-grammar-integration checks the accepted strings
+    verify_bounded_parsing(R"""(
         root ::= "a"{5000}
-    )""");
+    )""", 20);
 
-    verify_failure(R"""(
+    verify_bounded_parsing(R"""(
         root ::= "a"{5000,}
-    )""");
+    )""", 20);
+
+    verify_bounded_parsing(R"""(
+        root ::= "a"{5000,6000}
+    )""", 64);
+
+    verify_bounded_parsing(R"""(
+        root ::= "a"{0,5000}
+    )""", 64);
+
+    verify_bounded_parsing(R"""(
+        root ::= "a"{3,5000}
+    )""", 64);
+
+    verify_bounded_parsing(R"""(
+        root ::= ("ab" | "c"){0,1000000000}
+    )""", 128);
 
     verify_failure(R"""(
-        root ::= "a"{5000,6000}
+        root ::= "a"{5,3}
     )""");
 
-    verify_parsing(R"""(
-        root ::= "a"{0,5000}
-    )""", {
-        {"root", 0},
-        {"root_1", 1},
-    }, {
-        // root (index 0)
-        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
-        {LLAMA_GRETYPE_END, 0},
-        // root_1 (index 1)
-        {LLAMA_GRETYPE_CHAR, 'a'},
-        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
-        {LLAMA_GRETYPE_ALT, 0},
-        {LLAMA_GRETYPE_END, 0},
-    });
-
-    verify_parsing(R"""(
-        root ::= "a"{3,5000}
-    )""", {
-        {"root", 0},
-        {"root_1", 1},
-    }, {
-        // root (index 0)
-        {LLAMA_GRETYPE_CHAR, 'a'},
-        {LLAMA_GRETYPE_CHAR, 'a'},
-        {LLAMA_GRETYPE_CHAR, 'a'},
-        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
-        {LLAMA_GRETYPE_END, 0},
-        // root_1 (index 1)
-        {LLAMA_GRETYPE_CHAR, 'a'},
-        {LLAMA_GRETYPE_RULE_REF, /* root_1 */ 1},
-        {LLAMA_GRETYPE_ALT, 0},
-        {LLAMA_GRETYPE_END, 0},
-    });
 
     verify_parsing(R"""(
         root  ::= "a"

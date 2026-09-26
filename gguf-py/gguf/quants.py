@@ -402,6 +402,65 @@ class Q8_0(__Quant, qtype=GGMLQuantizationType.Q8_0):
         return (x * d)
 
 
+_CONVROT_H4 = np.array([[1, 1, 1, -1], [1, 1, -1, 1], [1, -1, 1, 1], [-1, 1, 1, 1]], dtype=np.float32)
+
+
+def _convrot_rows(x: np.ndarray, qtype: str) -> np.ndarray:
+    shape = x.shape
+    group = 256
+    if shape[-1] % group != 0:
+        raise ValueError(f"{qtype} requires the last dimension to be a multiple of {group}, got {shape[-1]}")
+
+    x = x.reshape((-1, group))
+    length = 4
+    while length <= group:
+        half = length // 4
+        x = x.reshape((-1, length))
+        y = np.empty_like(x)
+        for i in range(4):
+            y[:, i * half:(i + 1) * half] = sum(
+                _CONVROT_H4[i, j] * x[:, j * half:(j + 1) * half] for j in range(4)
+            )
+        x[:] = y
+        length *= 4
+    x *= 1.0 / np.sqrt(group)
+
+    return x.reshape(shape)
+
+
+class Q8_CR(Q8_0, __Quant, qtype=GGMLQuantizationType.Q8_CR):
+
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("Q8_CR quantization requires rotating the rows first, use the llama.cpp tools")
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        shape = blocks.shape[:-1]
+        values = Q8_0.dequantize_blocks(blocks.reshape((-1, 2 + 32)))
+        return values.reshape((*shape, 256))
+
+    @classmethod
+    def dequantize_rows(cls, rows: np.ndarray) -> np.ndarray:
+        return _convrot_rows(super().dequantize_rows(rows), "Q8_CR")
+
+
+class Q5_CR(Q5_0, __Quant, qtype=GGMLQuantizationType.Q5_CR):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("Q5_CR quantization requires rotating the rows first, use the llama.cpp tools")
+
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        shape = blocks.shape[:-1]
+        values = Q5_0.dequantize_blocks(blocks.reshape((-1, 2 + 4 + 16)))
+        return values.reshape((*shape, 256))
+
+    @classmethod
+    def dequantize_rows(cls, rows: np.ndarray) -> np.ndarray:
+        return _convrot_rows(super().dequantize_rows(rows), "Q5_CR")
+
+
 class Q2_K(__Quant, qtype=GGMLQuantizationType.Q2_K):
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
@@ -571,6 +630,16 @@ class Q6_K(__Quant, qtype=GGMLQuantizationType.Q6_K):
         q = q.reshape((n_blocks, QK_K // 16, -1)).astype(np.float32)
 
         return (d * q).reshape((n_blocks, QK_K))
+
+
+class Q6_CR(Q6_K, __Quant, qtype=GGMLQuantizationType.Q6_CR):
+    @classmethod
+    def quantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        raise NotImplementedError("Q6_CR quantization requires rotating the rows first, use the llama.cpp tools")
+
+    @classmethod
+    def dequantize_rows(cls, rows: np.ndarray) -> np.ndarray:
+        return _convrot_rows(super().dequantize_rows(rows), "Q6_CR")
 
 
 class TQ1_0(__Quant, qtype=GGMLQuantizationType.TQ1_0):

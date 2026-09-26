@@ -32,6 +32,10 @@ layout(push_constant) uniform Parameters {
     uint neq1, rq3;
     float scale;
     uint K;
+    // 0 = full state snapshots (default), 1 = per-token replay ingredients (k,v,g,beta).
+    // see ggml_gated_delta_net's emit_mode contract (ggml.h) and the CPU reference
+    // (ggml-cpu/ops.cpp) for the exact layout.
+    uint emit_mode;
 };
 
 layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
@@ -106,7 +110,26 @@ void main() {
     const uint state_in_base       = (seq_id * H + head_id) * state_size;
     // output state layout per slot: same per-(seq,head) offset as the single-slot case.
     const uint state_out_base      = (seq_id * H + head_id) * state_size;
-    const uint state_size_per_snap = state_size * H * n_seqs;
+
+    // emit_mode==0: full state snapshots (existing behavior). emit_mode==1: per-token replay
+    // ingredients (k,v,g,beta), a fixed-cost trailing final-state block, and (when n_tokens>K)
+    // a checkpoint block holding the state immediately before the K-token retained window
+    // starts -- see ggml_gated_delta_net's emit_mode contract (ggml.h) and the CPU reference
+    // (ggml-cpu/ops.cpp) for the exact layout this mirrors.
+    const bool emit_ingr = (emit_mode == 1u);
+    const uint snap_rows_per_head  = emit_ingr ? 4u : S_V;
+    const uint state_size_per_snap = snap_rows_per_head * S_V * H * n_seqs;
+    // per-(seq,head) offset within a slot -- ingredient layout (emit_mode==1 only; no per-column
+    // term, since k/v/g/beta are packed as 4 whole S_V-wide rows per head, not per-column)
+    const uint ingr_head_off = (seq_id * H + head_id) * (4u * S_V);
+
+    // emit_mode==1 only: fixed-cost trailing final-state block, and (when n_tokens>K) a
+    // checkpoint block -- both free to capture since the recurrence already passes through
+    // them, avoiding a second op call over the prefix on the caller's side.
+    const bool  needs_ckpt       = emit_ingr && (n_tokens > K);
+    const int   t_ckpt           = int(n_tokens) - int(K) - 1;
+    const uint  final_state_base = s_off + K * state_size_per_snap;
+    const uint  ckpt_state_base  = final_state_base + state_size * H * n_seqs;
 
     FLOAT_TYPE s_shard[ROWS_PER_LANE];
     [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
@@ -168,22 +191,62 @@ void main() {
             data_dst[attn_off + col] = attn_col * scale;
         }
 
-        attn_off += S_V * H;
-
-        if (K > 1u) {
-            const int target_slot = int(n_tokens) - 1 - int(t);
+        if (K > 1u || emit_ingr) {
+            const int target_slot = emit_ingr
+                ? (int(t) - (int(n_tokens) - int(K)))
+                : (int(n_tokens) - 1 - int(t));
             if (target_slot >= 0 && target_slot < int(K)) {
-                const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
-                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
-                    data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                if (!emit_ingr) {
+                    const uint slot_base = s_off + uint(target_slot) * state_size_per_snap + state_out_base;
+                    [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                        data_dst[slot_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+                    }
+                } else {
+                    // ingredients: k, v, g, beta -- each padded/broadcast to width S_V, packed
+                    // as 4 consecutive rows in that order.
+                    const uint ingr_base = s_off + uint(target_slot) * state_size_per_snap + ingr_head_off;
+                    // v: per-column scalar (v_val is this column's own element of the v vector)
+                    // -- every column writes its own element, via lane 0.
+                    if (lane == 0) {
+                        data_dst[ingr_base + S_V + col] = v_val;
+                    }
+                    // k, g, beta: don't vary by column, so only column 0 writes them -- it still
+                    // covers the full S_V range cooperatively via its own lane/r loop, the same
+                    // range it already reads k_reg/q_reg over above.
+                    if (col == 0) {
+                        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                            const uint i = r * LANES_PER_COLUMN + lane;
+                            data_dst[ingr_base + i]          = FLOAT_TYPE(data_k[k_off + i]);
+                            data_dst[ingr_base + 2u*S_V + i] = (KDA == 0)
+                                ? FLOAT_TYPE(data_g[gb_off])
+                                : FLOAT_TYPE(data_g[gb_off * S_V + i]); // raw, pre-exp
+                            data_dst[ingr_base + 3u*S_V + i] = beta_val;
+                        }
+                    }
                 }
             }
         }
+
+        if (needs_ckpt && int(t) == t_ckpt) {
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                data_dst[ckpt_state_base + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            }
+        }
+
+        attn_off += S_V * H;
     }
 
-    if (K == 1u) {
+    if (K == 1u && !emit_ingr) {
         [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
             data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+        }
+    }
+
+    // emit_mode==1: also write the true final state (s_shard holds it, updated in place through
+    // the whole token loop) -- fixed cost, not scaled by K, unconditional on K.
+    if (emit_ingr) {
+        [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+            data_dst[final_state_base + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
         }
     }
 }

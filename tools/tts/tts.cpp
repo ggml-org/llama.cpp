@@ -205,8 +205,13 @@ int main(int argc, char ** argv) {
         LOG_ERR("failed to open %s\n", params.out_file.c_str());
         return 1;
     }
-    fwrite(data, 1, data_len, f);
-    fclose(f);
+    const size_t n_written = fwrite(data, 1, data_len, f);
+    const int    close_rc  = fclose(f);
+    if (n_written != data_len || close_rc != 0) {
+        LOG_ERR("failed to write %s (wrote %zu/%zu bytes, close rc=%d)\n",
+                params.out_file.c_str(), n_written, data_len, close_rc);
+        return 1;
+    }
     LOG_INF("wrote %s\n", params.out_file.c_str());
 
     llama_backend_free();

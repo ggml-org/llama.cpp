@@ -257,6 +257,26 @@ uint32_t llama_hparams::n_embd_s() const {
     return ssm_d_state * ssm_d_inner;
 }
 
+uint32_t llama_hparams::n_embd_s_ingredient() const {
+    // 4 per-token ingredient rows (k, v, g, beta) instead of a full [S_v, S_v, H_v] state --
+    // see ggml_gated_delta_net's emit_mode==1 output contract (ggml.h). Mirrors n_embd_s()'s
+    // branches, but returns 0 for wkv (RWKV's recurrence is not a delta-net rank-1 update, so
+    // ingredient-replay doesn't apply).
+    if (wkv_head_size != 0) {
+        return 0;
+    }
+
+    if (n_embd_head_kda != 0) {
+        // Kimi KDA layers: 4 * head_dim * n_head (see n_embd_s()'s KDA branch above).
+        return 4 * n_embd_head_kda * n_head();
+    }
+
+    // qwen35/qwen3next-style GDN (llm_build_delta_net_base): head_v_dim * num_v_heads ==
+    // ssm_d_inner by construction (see build_layer_attn_linear), and S_k == S_v is already
+    // required by ggml_gated_delta_net, so 4 * S_v * H_v simplifies to 4 * ssm_d_inner.
+    return 4 * ssm_d_inner;
+}
+
 bool llama_hparams::is_recr(uint32_t il) const {
     if (il < n_layer_all) {
         return is_recr_impl[il];
@@ -347,6 +367,16 @@ bool llama_hparams::has_rope(uint32_t il) const {
 
 uint32_t llama_hparams::n_layer() const {
     return n_layer_all - n_layer_nextn;
+}
+
+uint32_t llama_hparams::n_layer_kv() const {
+    uint32_t res = 0;
+    for (uint32_t il = 0; il < n_layer(); ++il) {
+        if (has_kv(il)) {
+            res++;
+        }
+    }
+    return res;
 }
 
 bool llama_hparams::use_mrope() const {

@@ -26,20 +26,34 @@ export class SettingsService {
 			return { config: {}, isFirstVisit: false, userOverrides: [] };
 		}
 
+		let config: Record<string, unknown>;
+		let isFirstVisit: boolean;
+
 		try {
 			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
-			const isFirstVisit = storedConfigRaw === null;
-			const config = JSON.parse(storedConfigRaw || '{}') as Record<string, unknown>;
-			const userOverrides = JSON.parse(
-				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
-			) as string[];
 
-			return { config, isFirstVisit, userOverrides };
+			isFirstVisit = storedConfigRaw === null;
+			config = JSON.parse(storedConfigRaw || '{}') as Record<string, unknown>;
 		} catch (error) {
 			console.warn('Failed to parse config from localStorage, using defaults:', error);
-
-			return { config: {}, isFirstVisit: false, userOverrides: [] };
+			config = {};
+			isFirstVisit = false;
 		}
+
+		let userOverrides: string[];
+
+		try {
+			const parsed = JSON.parse(localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]');
+
+			userOverrides = Array.isArray(parsed) ? (parsed as string[]) : [];
+		} catch (error) {
+			// A malformed or wrong-shaped overrides value must not discard an
+			// otherwise-valid config (e.g. apiKey) parsed above.
+			console.warn('Failed to parse user overrides from localStorage, using defaults:', error);
+			userOverrides = [];
+		}
+
+		return { config, isFirstVisit, userOverrides };
 	}
 
 	/**

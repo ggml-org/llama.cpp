@@ -7,7 +7,7 @@
 <DialogPrimitive.Close bind:ref data-slot="dialog-close" {...restProps} />
 
 <style>
-	:global([data-dialog-close]) {
+	:global([data-slot="dialog-close"]) {
 		z-index: 999;
 	}
 </style>

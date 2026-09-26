@@ -908,6 +908,10 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
     n_rs_seq(n_rs_seq) {
     const llama_hparams & hparams = model.hparams;
 
+    // one view per physical plane (n_stream current + n_stream*n_rs_seq rollback),
+    // not just one per stream - must match the per-layer view count built below
+    const uint32_t n_planes = n_stream*(1 + n_rs_seq);
+
     struct ggml_backend_buft_comparator {
         bool operator()(const ggml_backend_buffer_type_t & lhs, const ggml_backend_buffer_type_t & rhs) const {
             return strcmp(ggml_backend_buft_name(lhs), ggml_backend_buft_name(rhs)) < 0;
@@ -920,7 +924,7 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*(1 + n_stream)*hparams.n_layer()*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*(1 + n_planes)*hparams.n_layer()*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -961,7 +965,6 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
             throw std::runtime_error("failed to create ggml context for DSV4 compressor state");
         }
 
-        const uint32_t n_planes = n_stream*(1 + n_rs_seq);
         ggml_tensor * kv    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_state, state_size, n_planes);
         ggml_tensor * score = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_state, state_size, n_planes);
 
@@ -971,9 +974,16 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
         std::vector<ggml_tensor *> kv_stream;
         std::vector<ggml_tensor *> score_stream;
 
-        for (uint32_t s = 0; s < n_stream; ++s) {
-            kv_stream.push_back(ggml_view_2d(ctx, kv, n_embd_state, state_size, kv->nb[1], s*kv->nb[2]));
-            score_stream.push_back(ggml_view_2d(ctx, score, n_embd_state, state_size, score->nb[1], s*score->nb[2]));
+        // One view per physical plane: planes [0, n_stream) are each stream's
+        // current state (what seq_cp/apply_copies historically copied), and
+        // planes [n_stream, n_planes) are the n_rs_seq rollback snapshots per
+        // stream (physical plane index = d*n_stream + stream, d in [1, n_rs_seq] -
+        // same addressing dsv4_clear_tensor_stream already uses). Building all of
+        // them up front lets seq_cp_rollback() below reuse the same tensor_copy
+        // path as the current-plane copy instead of a separate mechanism.
+        for (uint32_t p = 0; p < n_planes; ++p) {
+            kv_stream.push_back(ggml_view_2d(ctx, kv, n_embd_state, state_size, kv->nb[1], p*kv->nb[2]));
+            score_stream.push_back(ggml_view_2d(ctx, score, n_embd_state, state_size, score->nb[1], p*score->nb[2]));
         }
 
         map_layer_ids[il] = layers.size();
@@ -1034,6 +1044,26 @@ void llama_dsv4_comp_state::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_
 
     sc_info.ssrc.push_back((uint32_t) seq_id_src);
     sc_info.sdst.push_back((uint32_t) seq_id_dst);
+}
+
+void llama_dsv4_comp_state::seq_cp_rollback(uint32_t rollback, llama_seq_id seq_id_src, llama_seq_id seq_id_dst) {
+    GGML_ASSERT(seq_id_src >= 0 && (uint32_t) seq_id_src < n_stream);
+    GGML_ASSERT(seq_id_dst >= 0 && (uint32_t) seq_id_dst < n_stream);
+    GGML_ASSERT(rollback >= 1 && rollback <= n_rs_seq);
+
+    if (seq_id_src == seq_id_dst) {
+        return;
+    }
+
+    // Physical plane index = rollback*n_stream + stream, matching clear()'s
+    // "stream" addressing above. seq_cp()'s own clear(seq_id_dst, true) call
+    // (invoked by the caller before this) already zeroed every plane of
+    // seq_id_dst, including this one - this queues the real snapshot data on
+    // top of that zeroed plane via the same deferred copy path as the current
+    // plane, so the destination ends up with dst's rollback plane holding a
+    // copy of src's, not the zero clear() left there.
+    sc_info.ssrc.push_back(rollback*n_stream + (uint32_t) seq_id_src);
+    sc_info.sdst.push_back(rollback*n_stream + (uint32_t) seq_id_dst);
 }
 
 void llama_dsv4_comp_state::apply_copies(const stream_copy_info & sc_info) const {
@@ -1228,7 +1258,8 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     hparams_lid(model.hparams),
     n_seq_max(n_seq_max),
     n_rs_seq(n_rs_seq),
-    rs_idx(n_seq_max, 0) {
+    rs_idx(n_seq_max, 0),
+    rs_pos(n_seq_max, -1) {
 
     const layer_filter_cb filter_raw = [&](int32_t il) {
         if (filter && !filter(il)) {
@@ -1466,6 +1497,20 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
             return false;
         }
 
+        commit_settle(seq_id);
+
+        // Drop uncommitted tokens first: their raw-KV slots were assigned by a
+        // ubatch's apply() but the graph never completed, so no compressor
+        // state or snapshot reflects them. They must not feed the rollback
+        // distance below, and removing them must not consume the pending
+        // marker - this is the path decode()'s failure recovery takes.
+        if (kv_raw->seq_pos_max(seq_id) > rs_pos[seq_id]) {
+            kv_raw->seq_rm(seq_id, rs_pos[seq_id] + 1, -1);
+            if (p0 > rs_pos[seq_id]) {
+                return true;
+            }
+        }
+
         const llama_pos pos_max = kv_raw->seq_pos_max(seq_id);
         if (p0 > pos_max) {
             bool res = true;
@@ -1495,6 +1540,7 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
         const bool res = kv_raw->seq_rm(seq_id, p0, p1);
         if (res) {
             rs_idx[seq_id] = (uint32_t) rollback;
+            rs_pos[seq_id] = p0 - 1;
         }
 
         return res;
@@ -1522,7 +1568,25 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
     lid_state->seq_cp(seq_id_src, seq_id_dst);
 
     if (seq_id_src != seq_id_dst) {
-        rs_idx[seq_id_dst] = 0;
+        commit_settle(seq_id_src);
+        commit_settle(seq_id_dst);
+
+        // seq_id_src may have a pending rollback snapshot (rs_idx[seq_id_src] != 0)
+        // from an earlier partial seq_rm. The *_state->seq_cp() calls above only
+        // copy each stream's current compressor-state plane, not its rollback
+        // snapshot planes, so without this the destination would end up with
+        // rs_idx[seq_id_dst] == 0 even though its data is now byte-identical to
+        // a source that still has a real, restorable snapshot - the copy silently
+        // dropped the ability to roll it back. Queue the matching snapshot-plane
+        // copy on each compressor state so the destination actually carries it.
+        const uint32_t rollback = (uint32_t) seq_id_src < rs_idx.size() ? rs_idx[seq_id_src] : 0;
+        if (rollback > 0 && rollback <= n_rs_seq) {
+            csa_state->seq_cp_rollback(rollback, seq_id_src, seq_id_dst);
+            hca_state->seq_cp_rollback(rollback, seq_id_src, seq_id_dst);
+            lid_state->seq_cp_rollback(rollback, seq_id_src, seq_id_dst);
+        }
+        rs_idx[seq_id_dst] = rollback;
+        rs_pos[seq_id_dst] = rs_pos[seq_id_src];
     }
 }
 
@@ -1664,11 +1728,18 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     hca_state->state_read(io, seq_id, flags);
     lid_state->state_read(io, seq_id, flags);
 
+    // a loaded state carries no uncommitted tokens: everything now in the raw
+    // cache is the committed baseline
+    commit_settle(seq_id);
     if (seq_id >= 0) {
         GGML_ASSERT((uint32_t) seq_id < n_seq_max);
         rs_idx[seq_id] = 0;
+        rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        for (uint32_t s = 0; s < n_seq_max; ++s) {
+            rs_pos[s] = kv_raw->seq_pos_max((llama_seq_id) s);
+        }
     }
 }
 
@@ -1708,19 +1779,57 @@ const std::vector<uint32_t> & llama_kv_cache_dsv4::get_rs_idx() const {
     return rs_idx;
 }
 
-void llama_kv_cache_dsv4::reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches) {
-    if (n_rs_seq == 0) {
-        return;
-    }
+void llama_kv_cache_dsv4::commit_ubatch(const llama_ubatch & ubatch) {
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+            const llama_seq_id seq_id = ubatch.seq_id[i][s];
+            if (seq_id < 0 || (uint32_t) seq_id >= n_seq_max) {
+                continue;
+            }
 
-    for (const llama_ubatch & ubatch : ubatches) {
-        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
-                const llama_seq_id seq_id = ubatch.seq_id[i][s];
-                if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
-                    rs_idx[seq_id] = 0;
+            bool logged = false;
+            for (const auto & undo : commit_log) {
+                if (undo.seq_id == seq_id) {
+                    logged = true;
+                    break;
                 }
             }
+            if (!logged) {
+                commit_log.push_back({ seq_id, rs_idx[seq_id], rs_pos[seq_id] });
+            }
+
+            rs_idx[seq_id] = 0;
+            rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);
+        }
+    }
+}
+
+void llama_kv_cache_dsv4::on_graph_compute_synced(ggml_status status) {
+    if (status != GGML_STATUS_SUCCESS) {
+        // The graphs behind these commits did not complete: put back the
+        // markers they consumed and drop the raw tokens they slotted, so the
+        // retry restores from the snapshot and re-feeds them. Compressed rows
+        // are positional and get overwritten by that retry.
+        for (const auto & undo : commit_log) {
+            rs_idx[undo.seq_id] = undo.rs_idx;
+            rs_pos[undo.seq_id] = undo.rs_pos;
+            if (kv_raw->seq_pos_max(undo.seq_id) > undo.rs_pos) {
+                kv_raw->seq_rm(undo.seq_id, undo.rs_pos + 1, -1);
+            }
+        }
+    }
+    commit_log.clear();
+}
+
+void llama_kv_cache_dsv4::commit_settle(llama_seq_id seq_id) {
+    if (seq_id < 0) {
+        commit_log.clear();
+        return;
+    }
+    for (size_t i = 0; i < commit_log.size(); ++i) {
+        if (commit_log[i].seq_id == seq_id) {
+            commit_log.erase(commit_log.begin() + i);
+            return;
         }
     }
 }
@@ -1753,10 +1862,17 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
     hca_state->clear(seq_id, data);
     lid_state->clear(seq_id, data);
 
+    // compressor state is gone, so whatever raw tokens remain are the new
+    // committed baseline for rollback-distance purposes
+    commit_settle(seq_id);
     if (seq_id >= 0) {
         rs_idx[seq_id] = 0;
+        rs_pos[seq_id] = kv_raw->seq_pos_max(seq_id);
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        for (uint32_t s = 0; s < n_seq_max; ++s) {
+            rs_pos[s] = kv_raw->seq_pos_max((llama_seq_id) s);
+        }
     }
 }
 
@@ -2083,13 +2199,23 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     hca_state(kv->get_hca_state()),
     lid_state(kv->get_lid_state()),
     status(ctx_raw->get_status()) {
-    kv->reset_rs_idx_for_ubatches(this->ubatches);
+    // Pending rollback markers are consumed per ubatch in next(), i.e. only
+    // after that ubatch's graph fully completed - never here, where nothing
+    // has run yet. See llama_kv_cache_dsv4::commit_ubatch().
+    this->kv = kv;
 }
 
 llama_kv_cache_dsv4_context::~llama_kv_cache_dsv4_context() = default;
 
 bool llama_kv_cache_dsv4_context::next() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+    // The ubatch that just ran completed its graph: commit it, consuming any
+    // rollback marker it restored from. On a failure decode() never reaches
+    // next(), so the marker survives for the retry.
+    if (kv && i_next < ubatches.size()) {
+        kv->commit_ubatch(ubatches[i_next]);
+    }
 
     ctx_raw->next();
     ctx_csa->next();

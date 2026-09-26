@@ -245,6 +245,11 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
 
                 indexer_k = mctx_lid->get_k(ctx0, il);
 
+                // TurboQuant: turbo K is padded to a 128-element block and
+                // WHT-rotated at quantize time; match indexer_q so the dot
+                // product with ggml_lightning_indexer stays width-aligned.
+                indexer_q = build_attn_pad_turbo_query(indexer_q, indexer_k, mctx_lid->get_turbo_innerq_scale_inv());
+
                 // split the batch into streams if needed
                 const auto n_stream = indexer_k->ne[3];
                 indexer_q = ggml_view_4d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2]/n_stream, n_stream, indexer_q->nb[1], indexer_q->nb[2], indexer_q->nb[3]/n_stream, 0);

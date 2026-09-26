@@ -99,6 +99,49 @@ patches = {
         "  uint32_t W[16];\n",
         "  uint32_t W[16] = {0};\n"
     )],
+
+    # without this, subprocess_join and subprocess_alive collapse all signal
+    # deaths (SIGABRT, SIGTERM, SIGKILL) to EXIT_FAILURE(1), making them
+    # indistinguishable from normal errors. Store the negated signal number
+    # so callers can report the actual cause of death.
+    "vendor/sheredom/subprocess.h": [
+        (
+            "    if (WIFEXITED(status)) {\n"
+            "      process->return_status = WEXITSTATUS(status);\n"
+            "    } else {\n"
+            "      process->return_status = EXIT_FAILURE;\n"
+            "    }\n",
+
+            "    if (WIFEXITED(status)) {\n"
+            "      process->return_status = WEXITSTATUS(status);\n"
+            "    } else if (WIFSIGNALED(status)) {\n"
+            "        // Store negated signal number so callers can distinguish signal death\n"
+            "        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from\n"
+            "        // normal error exit (positive exit code) and clean exit (exit code 0).\n"
+            "        process->return_status = -WTERMSIG(status);\n"
+            "    } else {\n"
+            "      process->return_status = EXIT_FAILURE;\n"
+            "    }\n"
+        ),
+        (
+            "      if (WIFEXITED(status)) {\n"
+            "        process->return_status = WEXITSTATUS(status);\n"
+            "      } else {\n"
+            "        process->return_status = EXIT_FAILURE;\n"
+            "      }\n",
+
+            "      if (WIFEXITED(status)) {\n"
+            "        process->return_status = WEXITSTATUS(status);\n"
+            "      } else if (WIFSIGNALED(status)) {\n"
+            "        // Store negated signal number so callers can distinguish signal death\n"
+            "        // (e.g. -6 for SIGABRT from OOM, -15 for SIGTERM from force-kill) from\n"
+            "        // normal error exit (positive exit code) and clean exit (exit code 0).\n"
+            "        process->return_status = -WTERMSIG(status);\n"
+            "      } else {\n"
+            "        process->return_status = EXIT_FAILURE;\n"
+            "      }\n"
+        ),
+    ],
 }
 
 for url, filename in vendor.items():

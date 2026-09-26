@@ -1085,3 +1085,120 @@ def test_anthropic_thinking_with_reasoning_model(stream):
         # should also have text block
         text_blocks = [b for b in content if b.get("type") == "text"]
         assert len(text_blocks) > 0, "Should have text content block"
+
+
+# Output config / reasoning effort tests
+
+def test_anthropic_output_config_effort():
+    """Test that output_config.effort is accepted"""
+    server.start()
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 50,
+        "output_config": {"effort": "low"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+
+    assert res.status_code == 200
+    assert res.body["type"] == "message"
+
+
+def test_anthropic_output_config_effort_xhigh():
+    """Test that non-standard effort values are forwarded unchanged"""
+    server.start()
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 50,
+        "output_config": {"effort": "xhigh"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+
+    assert res.status_code == 200
+    assert res.body["type"] == "message"
+
+
+def test_anthropic_output_config_effort_preserves_kwargs():
+    """Test that existing chat_template_kwargs are preserved alongside output_config.effort"""
+    server.start()
+
+    res = server.make_request("POST", "/v1/messages", data={
+        "model": "test",
+        "max_tokens": 50,
+        "output_config": {"effort": "high"},
+        "chat_template_kwargs": {"some_key": "some_value"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+
+    assert res.status_code == 200
+    assert res.body["type"] == "message"
+
+
+def test_anthropic_output_config_effort_reaches_template():
+    """Test that output_config.effort reaches the Jinja template as reasoning_effort."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/upstage-Solar-Open-100B.jinja'
+    server.start()
+
+    res_without = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+    assert res_without.status_code == 200
+
+    res_with = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "output_config": {"effort": "low"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+    assert res_with.status_code == 200
+
+    # Solar template adds an empty think block when reasoning_effort is "low",
+    # so the token count should increase
+    assert res_with.body["input_tokens"] > res_without.body["input_tokens"], \
+        f"Expected more tokens with effort=low ({res_with.body['input_tokens']}) than without ({res_without.body['input_tokens']})"
+
+
+def test_anthropic_output_config_effort_precedence():
+    """Test that output_config.effort takes precedence over chat_template_kwargs.reasoning_effort."""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/upstage-Solar-Open-100B.jinja'
+    server.start()
+
+    # Baseline: reasoning_effort="high" via chat_template_kwargs (no extra think block)
+    res_high = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "chat_template_kwargs": {"reasoning_effort": "high"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+    assert res_high.status_code == 200
+
+    # output_config.effort="low" should override chat_template_kwargs
+    res_override = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "output_config": {"effort": "low"},
+        "chat_template_kwargs": {"reasoning_effort": "high"},
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    })
+    assert res_override.status_code == 200
+
+    # If output_config.effort takes precedence, "low" adds the extra think block
+    assert res_override.body["input_tokens"] > res_high.body["input_tokens"], \
+        f"Expected output_config.effort='low' to override chat_template_kwargs.reasoning_effort='high'"

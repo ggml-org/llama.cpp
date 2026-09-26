@@ -10,6 +10,7 @@
 
 #include "ggml.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <float.h>
@@ -58,6 +59,38 @@ typedef void (*fattn_kernel_t)(
     const int32_t nb31,
     const int32_t nb32,
     const int64_t nb33);
+
+bool ggml_sycl_fattn_profile_enabled();
+
+void ggml_sycl_fattn_profile_record(
+    bool tile_route,
+    bool quants_first,
+    uint64_t conversion_us,
+    uint64_t conversion_bytes,
+    uint64_t stage1_us,
+    uint64_t combine_us,
+    uint64_t gqa_ratio,
+    uint64_t repeated_packed_kv_bytes,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm);
+
+// Sync-free launch-geometry record. Covers every route and KV type, unlike the
+// timing profile which synchronizes the queue and stays limited to q8 decode.
+void ggml_sycl_fattn_profile_record_geometry(
+    bool tile_route,
+    bool decode,
+    const char * type_k,
+    uint64_t parallel_blocks,
+    uint64_t ntiles_total,
+    uint64_t blocks_total,
+    uint64_t work_items_total,
+    uint64_t max_wg_per_cu,
+    uint64_t nsm,
+    uint64_t stream_k);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -289,6 +322,93 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__
         const float          Q_d  = Q_ds[k_KQ_0 / nthreads].x();
 
         sum += vec_dot_q8_0_q8_1_impl<float, 1>(&v, &Q_q8[k_KQ_0/nthreads], K_q8_0[ib].d, Q_d);
+    }
+
+    return sum;
+}
+
+template <int D, int nthreads, int warp_size>
+static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0_quants_first(
+        const char * __restrict__ K_c,
+        const void * __restrict__ Q_v,
+        const int * __restrict__ Q_q8,
+        const void * __restrict__ Q_ds_v) {
+    static_assert(D == 128, "quants-first q8_0 groups span one 128-element head");
+    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int8_t * quants = reinterpret_cast<const int8_t *>(K_c);
+    const sycl::half * scales = reinterpret_cast<const sycl::half *>(K_c + 4 * QK8_0);
+    GGML_UNUSED(Q_v);
+
+    float sum = 0.0f;
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < int(D / sizeof(int)); k_KQ_0 += nthreads) {
+        const int k_KQ =
+            k_KQ_0 + (nthreads == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads);
+        const int ib = k_KQ / QI8_0;
+        const int iqs = k_KQ % QI8_0;
+        int v;
+        // Quants-first groups have a 136-byte stride, and within a group the payload
+        // offset ib*QK8_0 + 4*iqs is always a multiple of 4, so the dword load is
+        // 4-byte aligned. Unlike the canonical 34-byte block_q8_0 rows, this does not
+        // need the 2-byte split copy.
+        ggml_sycl_memcpy_1<sizeof(v), 4>(&v, quants + ib * QK8_0 + 4 * iqs);
+        const sycl::float2 * Q_ds = (const sycl::float2 *) Q_ds_v;
+        const float Q_d = Q_ds[k_KQ_0 / nthreads].x();
+        sum += vec_dot_q8_0_q8_1_impl<float, 1>(
+            &v, &Q_q8[k_KQ_0 / nthreads], scales[ib], Q_d);
+    }
+    return sum;
+}
+
+#include "turbo-quants.hpp"
+
+template <int D, int nthreads, typename block_t, int QK, float (*dequantize_fn)(const block_t *, int, float)>
+static __dpct_inline__ float vec_dot_fattn_vec_KQ_turbo_generic(const char * __restrict__ K_c,
+                                                                const void * __restrict__ Q_v,
+                                                                const int * __restrict__ Q_q8,
+                                                                const void * __restrict__ Q_ds_v) {
+    const block_t * K_turbo = (const block_t *) K_c;
+    GGML_UNUSED(Q_q8);
+    GGML_UNUSED(Q_ds_v);
+
+    constexpr int cpy_nb = ggml_sycl_get_max_cpy_bytes();
+    constexpr int cpy_ne = cpy_nb / 4;
+
+    // Layout invariants: the loop below walks element pairs (i0, i0+1) and
+    // maps them to blocks via division/modulo by QK, with each of nthreads
+    // lanes covering cpy_ne pairs per outer step. Head sizes that do not
+    // tile exactly would read out of bounds (see FATTN_VEC_CASES_TURBO_D).
+    static_assert(D % 2 == 0, "D must be even to process element pairs");
+    static_assert(QK % 2 == 0, "QK must be even: (iqs, iqs+1) must stay in one block");
+    static_assert(D % QK == 0, "rows must be a whole number of turbo blocks");
+    static_assert((D/2) % (nthreads*cpy_ne) == 0, "pairs must tile exactly across lanes");
+
+    // Q_v is this thread's register slice of Q, not the full row: cpy_ne consecutive
+    // half2/float2 pairs per outer step (same layout as vec_dot_fattn_vec_KQ_f16).
+    // Dequantize the matching K elements and let the caller's warp_reduce_sum
+    // combine the per-thread partial sums.
+    const int lane = sycl::ext::oneapi::this_work_item::get_nd_item<3>().get_local_id(2) % nthreads;
+
+    float sum = 0.0f;
+
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < D/2; k_KQ_0 += nthreads*cpy_ne) {
+#pragma unroll
+        for (int k_KQ_1 = 0; k_KQ_1 < cpy_ne; ++k_KQ_1) {
+            const int   i0   = 2*(k_KQ_0 + lane*cpy_ne + k_KQ_1);
+            const int   ib   = i0 / QK;
+            const int   iqs  = i0 % QK;
+            const float norm = __half2float(K_turbo[ib].norm);
+            const float k0   = dequantize_fn(&K_turbo[ib], iqs + 0, norm);
+            const float k1   = dequantize_fn(&K_turbo[ib], iqs + 1, norm);
+#ifdef GGML_SYCL_F16
+            const sycl::half2 q = ((const sycl::half2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += k0 * (float) q.x() + k1 * (float) q.y();
+#else
+            const sycl::float2 q = ((const sycl::float2 *) Q_v)[k_KQ_0/nthreads + k_KQ_1];
+            sum += k0 * q.x() + k1 * q.y();
+#endif
+        }
     }
 
     return sum;
@@ -550,7 +670,9 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     const int     iqs = i0 % QK8_0;
 
     static_assert(ne % 2 == 0, "bad ne");
-    int8_t qs[ne];
+    // Same destination-alignment requirement as the quants-first path below: the
+    // 2-byte copy stores through short *, which int8_t[] does not guarantee.
+    alignas(4) int8_t qs[ne];
     ggml_sycl_memcpy_1<ne, 2>(qs, x[ib].qs + iqs);
 
 #ifdef GGML_SYCL_F16
@@ -575,6 +697,68 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
     }
 }
 
+template <typename T, int ne>
+static __dpct_inline__ void dequantize_V_q8_0_quants_first(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const char * group = reinterpret_cast<const char *>(vx);
+    const int8_t * quants = reinterpret_cast<const int8_t *>(group);
+    const sycl::half * scales = reinterpret_cast<const sycl::half *>(group + 4 * QK8_0);
+    const int64_t ib = i0 / QK8_0;
+    const int iqs = i0 % QK8_0;
+    static_assert(ne % 2 == 0, "bad ne");
+    // i0 advances in multiples of V_rows_per_thread (4 for quantized V), so iqs is a
+    // multiple of 4 and the quants-first payload is dword-aligned here. The explicit 4
+    // documents that and fails to compile if ne ever stops being a multiple of it.
+    static_assert(ne % 4 == 0, "quants-first V load assumes dword-aligned runs");
+    // ggml_sycl_memcpy_1 stores through the aligned type, so the destination needs
+    // the same alignment as the source; int8_t[] is only byte-aligned by default.
+    alignas(4) int8_t qs[ne];
+    ggml_sycl_memcpy_1<ne, 4>(qs, quants + ib * QK8_0 + iqs);
+
+#ifdef GGML_SYCL_F16
+    if constexpr (std::is_same<T, sycl::half>::value) {
+        const sycl::half2 d = sycl::half2(scales[ib]);
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((sycl::half2 *) dst)[l0 / 2] = d * make_half2(qs[l0], qs[l0 + 1]);
+        }
+    } else
+#endif
+    if constexpr (std::is_same<T, float>::value) {
+        const float d = scales[ib];
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((float *) dst)[l] = d * qs[l];
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
+    }
+}
+
+template <typename T, int ne, typename block_t, int QK, float (*dequantize_fn)(const block_t *, int, float)>
+static __dpct_inline__ void dequantize_V_turbo_generic(const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const block_t * x = (const block_t *) vx;
+
+    const int64_t ib    =  i0 / QK;
+    const int     idq   =  i0 % QK;
+
+    const float norm = __half2float(x[ib].norm);
+
+    if constexpr (std::is_same_v<T, sycl::half>) {
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((sycl::half *) dst)[l] = (sycl::half)(dequantize_fn(&x[ib], idq + l, norm));
+        }
+    } else if constexpr (std::is_same_v<T, float>) {
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((float *) dst)[l] = dequantize_fn(&x[ib], idq + l, norm);
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
+    }
+}
+
 template <int type_K, int D, int nthreads, int warp_size>
 constexpr vec_dot_KQ_t get_vec_dot_KQ() {
     if constexpr (type_K == GGML_TYPE_F16) {
@@ -589,6 +773,12 @@ constexpr vec_dot_KQ_t get_vec_dot_KQ() {
         return vec_dot_fattn_vec_KQ_q5_1<D, nthreads, warp_size>;
     } else if constexpr (type_K == GGML_TYPE_Q8_0) {
         return vec_dot_fattn_vec_KQ_q8_0<D, nthreads, warp_size>;
+    } else if constexpr (type_K == GGML_TYPE_TURBO2_0) {
+        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo2_0, QK_TURBO2, dequantize_turbo2_0>;
+    } else if constexpr (type_K == GGML_TYPE_TURBO3_0) {
+        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo3_0, QK_TURBO3, dequantize_turbo3_0>;
+    } else if constexpr (type_K == GGML_TYPE_TURBO4_0) {
+        return vec_dot_fattn_vec_KQ_turbo_generic<D, nthreads, block_turbo4_0, QK_TURBO4, dequantize_turbo4_0>;
     } else {
         static_assert(type_K == -1, "bad type");
         return nullptr;
@@ -609,6 +799,12 @@ constexpr dequantize_V_t get_dequantize_V() {
         return dequantize_V_q5_1<T, ne>;
     } else if constexpr (type_V == GGML_TYPE_Q8_0) {
         return dequantize_V_q8_0<T, ne>;
+    } else if constexpr (type_V == GGML_TYPE_TURBO2_0) {
+        return dequantize_V_turbo_generic<T, ne, block_turbo2_0, QK_TURBO2, dequantize_turbo2_0>;
+    } else if constexpr (type_V == GGML_TYPE_TURBO3_0) {
+        return dequantize_V_turbo_generic<T, ne, block_turbo3_0, QK_TURBO3, dequantize_turbo3_0>;
+    } else if constexpr (type_V == GGML_TYPE_TURBO4_0) {
+        return dequantize_V_turbo_generic<T, ne, block_turbo4_0, QK_TURBO4, dequantize_turbo4_0>;
     } else {
         static_assert(type_V == -1, "bad type");
         return nullptr;
@@ -895,7 +1091,8 @@ static void lauch_kernel(
 template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size>
 void launch_fattn(
     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k,
+    const bool tile_route) {
 
     constexpr int ncols = ncols1 * ncols2;
 
@@ -925,6 +1122,33 @@ void launch_fattn(
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
+    // Profiling synchronizes the queue and is intentionally limited to q8 decode.
+    // Also off while the stream is being recorded into a SYCL graph: oneAPI
+    // forbids wait()/wait_and_throw() on a queue in that state.
+    using profile_clock = std::chrono::steady_clock;
+    const bool profile =
+        ggml_sycl_fattn_profile_enabled() &&
+        !ctx.graph_recording &&
+        Q->ne[1] == 1 &&
+        K->type == GGML_TYPE_Q8_0 &&
+        V->type == GGML_TYPE_Q8_0;
+    profile_clock::time_point profile_start;
+    profile_clock::time_point profile_after_conversion;
+    profile_clock::time_point profile_after_stage1;
+    uint64_t profile_conversion_bytes = 0;
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_start = profile_clock::now();
+        if (need_f16_K) {
+            profile_conversion_bytes +=
+                ggml_nbytes(K) + ggml_nelements(K) * sizeof(sycl::half);
+        }
+        if (need_f16_V && !V_is_K_view) {
+            profile_conversion_bytes +=
+                ggml_nbytes(V) + ggml_nelements(V) * sizeof(sycl::half);
+        }
+    }
+
     ggml_sycl_fattn_alloc        K_f16(fbuf.K);
     ggml_sycl_fattn_alloc        V_f16(fbuf.V);
     const ggml_sycl_fattn_extra  extra = ggml_sycl_fattn_get_extra(dst);
@@ -949,7 +1173,7 @@ void launch_fattn(
         sycl::half * K_f16_ptr = extra.K_buffer_ptr ? (sycl::half *) extra.K_buffer_ptr
                                                     : K_f16.alloc(ggml_nelements(K));
         if (ggml_is_contiguously_allocated(K)) {
-            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
+            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, K);
             to_fp16(K_data, K_f16_ptr, ggml_nelements(K), main_stream);
 
             nb11 = nb11 * bs * sizeof(sycl::half) / ts;
@@ -957,7 +1181,7 @@ void launch_fattn(
             nb13 = nb13 * bs * sizeof(sycl::half) / ts;
         } else {
             GGML_ASSERT(K->nb[0] == ts);
-            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
+            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type, K);
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
@@ -983,7 +1207,7 @@ void launch_fattn(
             sycl::half * V_f16_ptr = extra.V_buffer_ptr ? (sycl::half *) extra.V_buffer_ptr
                                                         : V_f16.alloc(ggml_nelements(V));
             if (ggml_is_contiguously_allocated(V)) {
-                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, V);
                 to_fp16(V_data, V_f16_ptr, ggml_nelements(V), main_stream);
                 V_data = (char *) V_f16_ptr;
 
@@ -992,7 +1216,7 @@ void launch_fattn(
                 nb23 = nb23 * bs * sizeof(sycl::half) / ts;
             } else {
                 GGML_ASSERT(V->nb[0] == ts);
-                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type, V);
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;
@@ -1004,6 +1228,10 @@ void launch_fattn(
             }
             V_data = (char *) V_f16_ptr;
         }
+    }
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_after_conversion = profile_clock::now();
     }
 
     const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
@@ -1068,17 +1296,30 @@ void launch_fattn(
     } else {
         const int ntiles_KQ = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by tensor size.
 
+        // Split-K is a way to manufacture parallelism when the tile count alone
+        // cannot fill the device; it is not free. Every extra split multiplies the
+        // dst_tmp scratch and widens the combine reduction over every output
+        // element. So start at one split and let the efficiency search below grow
+        // it only while the machine is still underfilled, bounded by occupancy.
+        //
+        // Starting at max_blocks_per_sm instead makes it a floor rather than a
+        // cap. That is harmless while the value is 2, but once it reflects real
+        // occupancy it forces splits onto work that never needed them: prefill has
+        // ntiles_total = 4096 against a 512 blocks_per_wave and is already
+        // saturated, yet it was measured launching 4x the blocks and regressing
+        // 15.08% (f16 pp512) and 3.48% (q8_0 pp512) at depth 0.
+        parallel_blocks = 1;
+
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KQ);
-        // todo fix the hard code change
-        // parallel_blocks = ntiles_KQ;
+        const int max_parallel_blocks = std::min(max_blocks_per_sm, ntiles_KQ);
+        parallel_blocks = std::min(parallel_blocks, max_parallel_blocks);
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KQ; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= max_parallel_blocks; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_total * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
@@ -1103,6 +1344,25 @@ void launch_fattn(
             dst_tmp.alloc(parallel_blocks*ggml_nelements(KQV));
             dst_tmp_meta.alloc(parallel_blocks*ggml_nrows(KQV));
         }
+    }
+
+    // Launch geometry is a pure function of device properties and tensor shapes, so
+    // unlike the timing profile above it needs no queue synchronization and is not
+    // restricted to q8 decode. Recording it for every route is what makes the VEC and
+    // TILE grids directly comparable.
+    if (ggml_sycl_fattn_profile_enabled()) {
+        ggml_sycl_fattn_profile_record_geometry(
+            tile_route,
+            Q->ne[1] == 1,
+            ggml_type_name(K->type),
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm,
+            (uint64_t) stream_k);
     }
 
     float scale         = 1.0f;
@@ -1137,6 +1397,10 @@ void launch_fattn(
         mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0, mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0,
         mask ? mask->nb[3] : 0);
     SYCL_CHECK(0);
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_after_stage1 = profile_clock::now();
+    }
 
     if (stream_k) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
@@ -1182,4 +1446,35 @@ void launch_fattn(
         });
     }
     SYCL_CHECK(0);
+    if (profile) {
+        main_stream->wait_and_throw();
+        const profile_clock::time_point profile_after_combine = profile_clock::now();
+        // Bytes beyond one packed KV read quantify GQA duplication without KV-head sharing.
+        const uint64_t packed_kv_bytes = ggml_nbytes(K) + ggml_nbytes(V);
+        const bool quants_first =
+            ggml_sycl_tensor_is_kv_q8_quants_first(K) ||
+            ggml_sycl_tensor_is_kv_q8_quants_first(V);
+        ggml_sycl_fattn_profile_record(
+            tile_route,
+            quants_first,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_conversion - profile_start).count(),
+            profile_conversion_bytes,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_stage1 - profile_after_conversion).count(),
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_combine - profile_after_stage1).count(),
+            gqa_ratio,
+            packed_kv_bytes * (gqa_ratio - 1),
+            // Launch geometry: blocks_total and work_items_total are the realized
+            // grid for both the stream-k and split-k paths, so they can be compared
+            // directly against device residency.
+            (uint64_t) parallel_blocks,
+            (uint64_t) ntiles_total,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
+            (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
+                block_dim.x * block_dim.y * block_dim.z,
+            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) nsm);
+    }
 }

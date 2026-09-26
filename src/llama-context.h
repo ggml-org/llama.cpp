@@ -57,6 +57,8 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    ggml_status last_sync_status = GGML_STATUS_SUCCESS;
+
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -73,6 +75,16 @@ struct llama_context {
     uint32_t n_threads_batch() const;
 
     llama_memory_t get_memory() const;
+
+    // return the *effective* K/V cache tensor types currently in use by the memory object.
+    // this can differ from what was requested via llama_context_params.type_k/type_v because
+    // some memory implementations silently rewrite the requested type (e.g. TurboQuant
+    // auto-asymmetric upgrades K to q8_0 for high-GQA-ratio models - see llama_kv_cache ctor).
+    // returns GGML_TYPE_COUNT if the memory object has no single meaningful K/V type
+    // (e.g. pure recurrent memory, or a composite cache like DSV4 whose sub-caches can
+    // legitimately hold different types).
+    enum ggml_type get_kv_type_k() const;
+    enum ggml_type get_kv_type_v() const;
 
     // return true if the memory was updated
     bool memory_update(bool optimize);
@@ -117,6 +129,7 @@ struct llama_context {
     void set_embeddings_nextn(bool value, bool masked);
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
+    void set_mtp_chain(bool value);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 

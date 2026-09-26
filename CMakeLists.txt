@@ -134,13 +134,14 @@ option(LLAMA_BUILD_TOOLS     "llama: build tools"                               
 option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
-option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       OFF)
+option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
 option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available" ON)
 
 option(LLAMA_TOOLS_INSTALL "llama: install tools" ${LLAMA_TOOLS_INSTALL_DEFAULT})
 option(LLAMA_TESTS_INSTALL "llama: install tests" ON)
 
 # 3rd party libs
+option(LLAMA_DOWNLOAD   "llama-common: enable model download support (cpp-httplib/OpenSSL); OFF builds a stub" ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_SUBPROCESS "llama-common: use subprocess, required by server tools and server router mode" ${LLAMA_SUBPROCESS_DEFAULT})
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
@@ -166,9 +167,6 @@ if (NOT DEFINED GGML_LLAMAFILE)
     set(GGML_LLAMAFILE_DEFAULT ON)
 endif()
 
-if (NOT DEFINED GGML_CUDA_GRAPHS)
-    set(GGML_CUDA_GRAPHS_DEFAULT ON)
-endif()
 
 # transition helpers
 function (llama_option_depr TYPE OLD)
@@ -183,15 +181,9 @@ function (llama_option_depr TYPE OLD)
     endif()
 endfunction()
 
-llama_option_depr(FATAL_ERROR LLAMA_CUBLAS              GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_CUDA                GGML_CUDA)
-llama_option_depr(WARNING     LLAMA_METAL               GGML_METAL)
-llama_option_depr(WARNING     LLAMA_METAL_EMBED_LIBRARY GGML_METAL_EMBED_LIBRARY)
 llama_option_depr(WARNING     LLAMA_NATIVE              GGML_NATIVE)
-llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
 llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
-llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
 llama_option_depr(WARNING     LLAMA_CURL)
 
 include("cmake/license.cmake")
@@ -224,6 +216,76 @@ if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
 
+if (GGML_SYCL_DEVICE_ARCH)
+    set(LLAMA_SYCL_BUILD_MODE "AOT")
+else()
+    set(LLAMA_SYCL_BUILD_MODE "JIT")
+endif()
+set(LLAMA_BUILD_COMMIT_FULL_RESULT 1)
+if (Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --show-toplevel
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE LLAMA_GIT_TOPLEVEL
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LLAMA_GIT_TOPLEVEL_RESULT
+    )
+    get_filename_component(LLAMA_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0)
+        get_filename_component(LLAMA_GIT_ROOT "${LLAMA_GIT_TOPLEVEL}" REALPATH)
+    endif()
+    if (LLAMA_GIT_TOPLEVEL_RESULT EQUAL 0 AND LLAMA_GIT_ROOT STREQUAL LLAMA_SOURCE_ROOT)
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_BUILD_COMMIT_FULL
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_BUILD_COMMIT_FULL_RESULT
+        )
+        foreach(LLAMA_GIT_METADATA_NAME HEAD index packed-refs logs/HEAD)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_METADATA_NAME}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_METADATA_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_METADATA_FILE "${LLAMA_GIT_METADATA_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_METADATA_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_METADATA_FILE}")
+            endif()
+        endforeach()
+
+        execute_process(
+            COMMAND ${GIT_EXECUTABLE} symbolic-ref -q HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE LLAMA_GIT_HEAD_REF_RESULT
+        )
+        if (LLAMA_GIT_HEAD_REF_RESULT EQUAL 0)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --git-path "${LLAMA_GIT_HEAD_REF}"
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE LLAMA_GIT_HEAD_REF_FILE
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+            )
+            get_filename_component(LLAMA_GIT_HEAD_REF_FILE "${LLAMA_GIT_HEAD_REF_FILE}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if (EXISTS "${LLAMA_GIT_HEAD_REF_FILE}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${LLAMA_GIT_HEAD_REF_FILE}")
+            endif()
+        endif()
+    endif()
+endif()
+if (NOT LLAMA_BUILD_COMMIT_FULL_RESULT EQUAL 0)
+    set(LLAMA_BUILD_COMMIT_FULL "unknown")
+endif()
+file(GENERATE
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/build-metadata.json"
+    CONTENT "{\n  \"source_sha\": \"${LLAMA_BUILD_COMMIT_FULL}\",\n  \"build_mode\": \"${LLAMA_SYCL_BUILD_MODE}\",\n  \"sycl_device_arch\": \"${GGML_SYCL_DEVICE_ARCH}\"\n}\n"
+)
+
 #
 # build the library
 #
@@ -245,16 +307,25 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     add_subdirectory(tests)
 endif()
 
+# IS_DIRECTORY guards: the generated lib branch (scripts/prune-to-lib.sh) removes
+# these directories; a standalone checkout of that branch must still configure
+# cleanly. IS_DIRECTORY rather than EXISTS so a stray file cannot satisfy the
+# guard, and the paths are quoted so a source tree containing spaces or
+# semicolons cannot word-split the condition.
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
-    add_subdirectory(examples)
-    add_subdirectory(pocs)
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+        add_subdirectory(examples)
+    endif()
+    if (IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/pocs")
+        add_subdirectory(pocs)
+    endif()
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-if (LLAMA_BUILD_APP)
+if (LLAMA_BUILD_APP AND IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/app")
     add_subdirectory(app)
 endif()
 
@@ -289,8 +360,22 @@ set_target_properties(llama
 
 install(TARGETS llama LIBRARY PUBLIC_HEADER)
 
-if (LLAMA_BUILD_COMMON)
+# Shared builds only, and enforced rather than merely documented: with a static
+# llama-common the artifact is an ARCHIVE, so `install(TARGETS ... LIBRARY)`
+# would install no library while still installing the headers and vendored
+# nlohmann, leaving a header-only SDK surface with nothing to link against.
+# Installing ARCHIVE instead would not fix it either, since llama-common-base
+# is only folded into the shared object; a static llama-common.a would ship
+# without its objects.
+if (LLAMA_BUILD_COMMON AND BUILD_SHARED_LIBS)
     install(TARGETS llama-common LIBRARY)
+    # SDK surface for the helper library: headers land under include/llama-common,
+    # plus the nlohmann headers its public headers reference.
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/common/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/llama-common
+            FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp")
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/vendor/nlohmann
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 endif()
 
 configure_package_config_file(

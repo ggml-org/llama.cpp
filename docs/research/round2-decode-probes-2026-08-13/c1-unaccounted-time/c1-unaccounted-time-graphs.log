@@ -1,0 +1,8 @@
+GGML_SYCL_FA_ROUTE: route=VEC phase=decode q_tokens=1 head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 k_quants_first=1 v_quants_first=1
+| model                          |       size |     params | backend    | ngl | type_k | type_v |  fa |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | -----: | --: | --------------: | -------------------: |
+wait cannot be called for a queue which is recording to a command graph.Exception caught at file:/mnt/mrgr/llama-cpp-sycl-turbo/Raudbjorn-fork/ggml/src/ggml-sycl/ggml-sycl.cpp, line:5335
+Error OP FLASH_ATTN_EXT
+test_gen: failed to decode generation batch, res = -3
+llama_bench: error: failed to run gen warmup
+GGML_SYCL_GRAPH_PROFILE: graph_calls=1 direct_calls=0 nodes=997 prepare_us=811 record_us=1771 finalize_calls=0 finalize_us=0 update_calls=0 update_fallbacks=0 update_us=0 submit_us=0 wait_us=0 direct_enqueue_us=0

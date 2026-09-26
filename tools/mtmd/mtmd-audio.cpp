@@ -1350,6 +1350,11 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
     {
         const double eps = 1e-5;
         int valid_frames = n_samples_in / frame_step;
+        // too few valid frames to get a meaningful mean/variance (would divide by
+        // zero for very short/degenerate audio); fall back to every frame, padding included
+        if (valid_frames < 2) {
+            valid_frames = out_full.n_len;
+        }
 
         for (int j = 0; j < out_full.n_mel; j++) {
             double sum = 0.0;
@@ -1359,7 +1364,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
             for (int i = 0; i < valid_frames; i++) {
                 sum += (double)out_full.data[j * out_full.n_len + i];
             }
-            double mean = sum / valid_frames;
+            double mean = valid_frames > 0 ? sum / valid_frames : 0.0;
 
             // Calculate Variance ONLY on valid audio frames
             for (int i = 0; i < valid_frames; i++) {
@@ -1367,7 +1372,7 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
                 sq_diff_sum += diff * diff;
             }
 
-            double std_dev = std::sqrt(sq_diff_sum / (valid_frames - 1.0));
+            double std_dev = valid_frames > 1 ? std::sqrt(sq_diff_sum / (valid_frames - 1.0)) : 0.0;
             double denominator = std_dev + eps;
 
             // Apply to ALL frames (including the padded ones)

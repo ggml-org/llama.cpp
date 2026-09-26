@@ -115,18 +115,33 @@ This starts:
 - **Vite dev server** at `http://localhost:5173` - The main UI frontend app
 - **Storybook** at `http://localhost:6006` - Component documentation
 
-The Vite dev server proxies API requests to `SERVER_ORIGIN` (with fallback to default llama-server `8080` port):
+The Vite dev server proxies API requests to the mode-specific
+`VITE_PUBLIC_SERVER_ORIGIN`, with `http://localhost:8080` as the fallback.
+
+For a backend on another origin, copy `.env.example` to the gitignored local
+`.env` file and override `VITE_PUBLIC_SERVER_ORIGIN`.
 
 ```typescript
 // vite.config.ts proxy configuration
-proxy: {
-	'/v1': SERVER_ORIGIN,
-	'/props': SERVER_ORIGIN,
-	'/models': SERVER_ORIGIN,
-	'/tools': SERVER_ORIGIN,
-	'/slots': SERVER_ORIGIN,
-	'/cors-proxy': SERVER_ORIGIN
-},
+const createServerProxy = (mode: string) => {
+	const serverOrigin =
+		loadEnv(mode, process.cwd(), 'VITE_').VITE_PUBLIC_SERVER_ORIGIN ||
+		'http://localhost:8080';
+
+	return {
+		'/v1': serverOrigin,
+		'/props': serverOrigin,
+		'/models': serverOrigin,
+		'/tools': serverOrigin,
+		'/slots': serverOrigin,
+		'/cors-proxy': serverOrigin
+	};
+};
+
+// inside defineConfig(({ mode }) => ...)
+server: {
+	proxy: createServerProxy(mode),
+}
 ```
 
 ### Development Workflow

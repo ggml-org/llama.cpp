@@ -1,0 +1,10 @@
+0.00.015.907 W DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead
+0.01.936.344 I 
+0.01.936.391 I system_info: n_threads = 12 (n_threads_batch = 12) / 24 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.01.936.399 I perplexity: tokenizing the input ..
+0.02.068.927 I perplexity: tokenization took 132.522 ms
+0.02.069.001 I perplexity: calculating perplexity over 8 chunks, n_ctx=512, batch_size=512, n_seq=1
+0.02.936.454 I perplexity: 0.87 seconds per pass - ETA 0.10 minutes
+[1]4.5213,[2]5.5515,[3]6.0849,[4]6.4610,[5]6.8620,[6]7.2192,[7]7.5978,[8]8.1344,
+0.06.400.987 I Final estimate: PPL = 8.1344 +/- 0.43432
+

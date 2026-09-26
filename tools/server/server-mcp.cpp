@@ -178,6 +178,7 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
 //
 
 static constexpr const char * MCP_PROTOCOL_VERSION = "2024-11-05";
+static constexpr int MCP_LIST_TOOLS_MAX_PAGES = 1000; // guard against a server that never stops paginating
 
 static std::string rpc_error_message(const json & resp) {
     if (resp.contains("error")) {
@@ -290,27 +291,51 @@ std::vector<server_mcp_tool_def> server_mcp_transport::list_tools(const std::fun
         return tools;
     }
 
-    json req = {{"jsonrpc", "2.0"}, {"id", next_id++}, {"method", "tools/list"}};
-    json resp = send_rpc(req, should_stop);
-    if (!resp.contains("result")) {
-        last_error = "tools/list failed: " + rpc_error_message(resp);
-        return {};
-    }
+    // accumulate into a local so a mid-pagination failure never leaves the `tools` cache
+    // half-populated (a later call would short-circuit on `!tools.empty()` above and
+    // silently serve the partial list as if it were complete)
+    std::vector<server_mcp_tool_def> found;
+    std::string cursor;
+    for (int page = 0; page < MCP_LIST_TOOLS_MAX_PAGES; page++) {
+        json req = {{"jsonrpc", "2.0"}, {"id", next_id++}, {"method", "tools/list"}};
+        if (!cursor.empty()) {
+            req["params"] = {{"cursor", cursor}};
+        }
+        json resp = send_rpc(req, should_stop);
+        if (!resp.contains("result")) {
+            last_error = "tools/list failed: " + rpc_error_message(resp);
+            return {};
+        }
 
-    const json & result = resp.at("result");
-    if (result.contains("tools") && result.at("tools").is_array()) {
-        for (const auto & t : result.at("tools")) {
-            server_mcp_tool_def def;
-            def.server_name = name;
-            def.name = t.value("name", "");
-            def.description = t.value("description", "");
-            if (t.contains("inputSchema")) {
-                def.input_schema = t.at("inputSchema");
+        const json & result = resp.at("result");
+        if (result.contains("tools") && result.at("tools").is_array()) {
+            for (const auto & t : result.at("tools")) {
+                server_mcp_tool_def def;
+                def.server_name = name;
+                def.name = t.value("name", "");
+                def.description = t.value("description", "");
+                if (t.contains("inputSchema")) {
+                    def.input_schema = t.at("inputSchema");
+                }
+                found.push_back(std::move(def));
             }
-            tools.push_back(std::move(def));
+        }
+
+        cursor.clear();
+        if (result.contains("nextCursor") && result.at("nextCursor").is_string()) {
+            cursor = result.at("nextCursor").get<std::string>();
+        }
+        if (cursor.empty()) {
+            tools = std::move(found);
+            return tools;
+        }
+        if (should_stop && should_stop()) {
+            break; // cancelled/timed out mid-pagination: report what we saw, but do not cache it
         }
     }
-    return tools;
+    SRV_WRN("MCP '%s': tools/list did not finish paginating after %d pages, returning partial list\n",
+            name.c_str(), MCP_LIST_TOOLS_MAX_PAGES);
+    return found;
 }
 
 json server_mcp_transport::call_tool(const std::string & tool_name,
@@ -796,4 +821,3 @@ std::shared_ptr<server_mcp_transport> server_mcp::get_or_create(const std::strin
 
     return result;
 }
-

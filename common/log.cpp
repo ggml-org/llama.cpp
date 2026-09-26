@@ -370,11 +370,18 @@ public:
 
     void pause() {
         {
-            std::lock_guard<std::mutex> lock(mtx);
+            std::unique_lock<std::mutex> lock(mtx);
 
             if (!running) {
                 return;
             }
+
+            // wait for a free slot before pushing the end entry: writing it
+            // while the queue is full would wrap tail onto head, which makes
+            // is_empty() true and parks the worker in cv_new forever, so the
+            // join() below would never return. The worker is still alive here
+            // (it only exits on the end entry), so it will drain and notify.
+            cv_full.wait(lock, [this]() { return !is_full(); });
 
             running = false;
 

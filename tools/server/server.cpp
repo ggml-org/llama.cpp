@@ -108,9 +108,6 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
     const int result = llama_server(params, argc, argv);
     common_log_flush(common_log_main());
     return result;
@@ -139,6 +136,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty()
                                && params.model.docker_repo.empty();
+
+    // accelerator backend/NUMA init also touches the GPU (device enumeration, primary
+    // context creation on some backends), so it must be skipped for router-only servers
+    if (!is_router_server) {
+        llama_backend_init();
+        llama_numa_init(params.numa);
+    }
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);
@@ -325,7 +329,28 @@ int llama_server(common_params & params, int argc, char ** argv) {
     };
 
     if (params.cors_origins == "*" && params.api_keys.empty()) {
-        SRV_WRN("%s", "security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)\n");
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
+        SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
+        SRV_WRN("%s", "more info: https://github.com/ggml-org/llama.cpp/pull/25655\n");
+        SRV_WRN("%s", "-----------------\n");
+    }
+
+    // mcp_mgr must be started before the API-key gate below so mcp_mgr.empty() reflects
+    // whether any MCP servers are actually configured, not just default-constructed state
+    try {
+        mcp_mgr.start(params);
+    } catch (const std::exception & e) {
+        SRV_ERR("MCP starting failed: %s\n", e.what());
+        return 1;
+    }
+
+    // router-spawned children are always bound to loopback only (see CHILD_ADDR in
+    // server-models.cpp) and have their API key stripped by design (unset_reserved_args);
+    // the network-exposure risk this check guards against does not apply to them
+    if ((!params.server_tools.empty() || !mcp_mgr.empty()) && params.api_keys.empty() && !child.is_child()) {
+        SRV_ERR("%s", "built-in server tools or MCP servers require an API key (use --api-key)\n");
+        return 1;
     }
 
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
@@ -335,24 +360,21 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     if (params.ui_mcp_proxy) {
-        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
-        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get(params.ui_mcp_proxy_allow)));
+        ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post(params.ui_mcp_proxy_allow)));
         warn_names.push_back("MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
 
-    try {
-        mcp_mgr.start(params);
-    } catch (const std::exception & e) {
-        SRV_ERR("MCP starting failed: %s\n", e.what());
-        return 1;
-    }
-
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools, mcp_mgr, params.server_tools_runtime);
+            tools.setup(
+                params.server_tools,
+                mcp_mgr,
+                params.server_tools_runtime,
+                params.server_tools_cwd_root);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
@@ -373,13 +395,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(res_403));
     }
 
-    if (!warn_names.empty()) {
-        std::string features;
+    if (warn_names.size() > 0) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "the following feature(s) are enabled:\n");
         for (const auto & name : warn_names) {
-            if (!features.empty()) features += ", ";
-            features += name;
+            SRV_WRN("    %s\n", name.c_str());
         }
-        SRV_WRN("security: %s enabled - do not expose to untrusted environments\n", features.c_str());
+        SRV_WRN("%s", "do not expose the server to untrusted environments\n");
+        SRV_WRN("%s", "-----------------\n");
     }
 
     //

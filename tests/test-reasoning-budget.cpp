@@ -316,6 +316,21 @@ static void test_reasoning_budget_end_match() {
         llama_sampler_free(sampler);
     }
 
+    // an end sequence matched before the final forced token remains available on DONE
+    {
+        auto * sampler = common_reasoning_budget_init(nullptr, start, end, {101, 102}, 0, REASONING_BUDGET_FORCING);
+
+        llama_sampler_accept(sampler, 101);
+        llama_sampler_accept(sampler, 102); // forced sequence complete after the earlier end match
+
+        const llama_tokens * matched = common_reasoning_budget_get_end_match(sampler);
+        GGML_ASSERT(matched != nullptr);
+        GGML_ASSERT(*matched == llama_tokens({101}));
+
+        llama_sampler_free(sampler);
+    }
+
+
     // forced_tokens not ending with a known end sequence records nothing
     {
         auto * sampler = common_reasoning_budget_init(nullptr, start, end, {102}, 0, REASONING_BUDGET_FORCING);

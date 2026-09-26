@@ -4,7 +4,10 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-turbo-innerq-runtime.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
@@ -16,6 +19,29 @@ struct llama_context;
 //
 // llama_kv_cache
 //
+
+// Selects the TURBO_LAYER_ADAPTIVE layer-precision mode for one KV cache
+// construction. env_val is the raw TURBO_LAYER_ADAPTIVE value (nullptr when
+// unset). Pure and process-state-free: a second cache in the same process
+// must select from its own inputs, never inherit the first construction's.
+int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
+
+// Shared policy matrix for the non-uniform layer-adaptive modes.
+bool llama_kv_cache_adaptive_mode_is_supported(int mode);
+bool llama_kv_cache_adaptive_mode_changes_k(int mode);
+bool llama_kv_cache_adaptive_mode_changes_v(int mode);
+
+// Decides whether to auto-upgrade turbo K to q8_0 to prevent quality
+// degradation, given the two independent triggers (GQA ratio, Qwen-family
+// architecture), the opt-out, and the symmetric-KV precondition. See the
+// call site in the constructor for the measurements backing each trigger,
+// and llm_arch_is_qwen() (llama-arch.h) for the family test.
+bool llama_kv_cache_auto_asymmetric_turbo_k(
+    bool disabled, uint32_t gqa_ratio, bool is_qwen_family, ggml_type type_k, ggml_type type_v);
+
+// Converts complete 4-block q8_0 groups between canonical block_q8_0 bytes
+// and the fork-local quants-first KV layout used only in SYCL device memory.
+void llama_kv_cache_q8_repack_groups(uint8_t * data, size_t size, bool to_quants_first);
 
 class llama_kv_cache : public llama_memory_i {
 public:
@@ -134,6 +160,8 @@ public:
     bool get_can_shift() const override;
 
     void clear(bool data) override;
+    // Preserves InnerQ calibration across chunk boundaries; see do_clear.
+    void clear_data_only() override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -157,14 +185,15 @@ public:
 
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
+    std::vector<uint32_t> get_layer_ids() const;
+    ggml_tensor * get_k_storage(int32_t il) const;
+    ggml_tensor * get_v_storage(int32_t il) const;
+    bool get_v_transposed() const;
 
     bool get_has_shift() const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
-
-    std::vector<uint32_t> get_layer_ids() const;
-    ggml_tensor * get_k_storage(int32_t il) const;
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
@@ -192,6 +221,29 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
+    // TurboQuant: get rotation matrices (stored as row-major C arrays)
+    // turbo_rotation = R (forward rotation, for Q pre-rotate-queries)
+    // turbo_rotation_inv = R^T = R^{-1} (inverse rotation, for V output un-rotation)
+    ggml_tensor * get_turbo_rotation() const { return turbo_rotation; }
+    ggml_tensor * get_turbo_rotation_inv() const { return turbo_rotation_inv; }
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization.
+    // Raw accessor = always returns the owned tensor; active accessor returns
+    // nullptr unless runtime state says the scale should participate in the
+    // graph (finalized or frozen-last-good).
+    ggml_tensor * get_turbo_innerq_scale_inv_raw() const { return turbo_innerq_scale_inv; }
+    ggml_tensor * get_turbo_innerq_scale_inv() const;
+
+    // Publish/consume mutable InnerQ runtime state for this cache.
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized);
+    void turbo_innerq_publish_abort(int abort_reason, int retry_count, bool freeze_last_good);
+    bool turbo_innerq_consume_runtime(llama_turbo_innerq_runtime_snapshot & out);
+    // P3.2.2a2a3b discriminator: non-mutating snapshot read for
+    // the consumer-side gate at apply(). Mirrors
+    // llama_turbo_innerq_runtime_state::peek() without clearing
+    // state.dirty; use this for diagnostics, not for the real
+    // consume path.
+    llama_turbo_innerq_runtime_snapshot turbo_innerq_peek_runtime() const;
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
@@ -247,6 +299,10 @@ public:
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
+    // data: zero ctxs_bufs; reset_innerq: drop in-flight InnerQ calibration.
+    // reset_innerq=false keeps the published scale alive across chunk clears.
+    void do_clear(bool data, bool reset_innerq);
+
     const llama_model & model;
     const llama_hparams & hparams;
 
@@ -312,6 +368,22 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    // TurboQuant rotation matrices (128x128, row-major stored)
+    ggml_tensor * turbo_rotation = nullptr;      // R (forward rotation)
+    ggml_tensor * turbo_rotation_inv = nullptr;   // R^T = R^{-1} (inverse rotation)
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization (128 floats)
+    ggml_tensor * turbo_innerq_scale_inv = nullptr;
+
+    llama_turbo_innerq_runtime_state turbo_innerq_runtime;
+
+    // Per-context InnerQ opt-in flag. Set once at construction from the
+    // canonical LLAMA_ENABLE_INNERQ env gate (mirrors llama-context.cpp
+    // innerq_env_enabled and ggml_innerq_state_decide's env-var half).
+    // When false, get_turbo_innerq_scale_inv() returns nullptr so the
+    // graph-build src[1] matches the off-by-default pre-P3.2.4a baseline.
+    bool innerq_active = false;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -402,6 +474,21 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+
+    // TurboQuant rotation accessors
+    ggml_tensor * get_turbo_rotation() const;
+    ggml_tensor * get_turbo_rotation_inv() const;
+
+    // Override virtual methods from llama_memory_context_i
+    ggml_tensor * get_turbo_rot_forward() const override;
+    ggml_tensor * get_turbo_rot_inverse() const override;
+
+    // TurboQuant InnerQ: per-channel scale_inv for Q/V equalization
+    ggml_tensor * get_turbo_innerq_scale_inv() const override;
+
+    void turbo_innerq_publish_scale_inv(const float * scale_inv, size_t n, bool finalized) override;
+
+    void on_graph_compute_failure(ggml_status status, int abort_reason = 0) override;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory

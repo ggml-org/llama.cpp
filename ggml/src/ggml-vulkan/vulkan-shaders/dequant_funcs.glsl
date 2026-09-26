@@ -754,3 +754,129 @@ vec2 get_dm(uint ib, uint a_offset) {
     return vec2(1, 0);
 }
 #endif
+
+#if defined(DATA_A_TURBO3_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // PolarQuant 3-bit centroids (Lloyd-Max for Gaussian)
+    const float centroids[8] = float[8](
+        -0.190207, -0.118786, -0.066822, -0.021663,
+         0.021663,  0.066822,  0.118786,  0.190207
+    );
+
+    // iqs is the element index within the block (0..31), we decode 2 consecutive elements
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    // Extract 2-bit low indices from qs (4 per byte)
+    const uint low2_0 = (uint(data_a[a_offset + ib].qs[j0 / 4]) >> ((j0 % 4) * 2)) & 0x3;
+    const uint low2_1 = (uint(data_a[a_offset + ib].qs[j1 / 4]) >> ((j1 % 4) * 2)) & 0x3;
+
+    // Extract 1-bit high from signs (8 per byte)
+    const uint hi1_0 = (uint(data_a[a_offset + ib].signs[j0 / 8]) >> (j0 % 8)) & 0x1;
+    const uint hi1_1 = (uint(data_a[a_offset + ib].signs[j1 / 8]) >> (j1 % 8)) & 0x1;
+
+    // Combine to 3-bit index
+    const uint idx0 = low2_0 | (hi1_0 << 2);
+    const uint idx1 = low2_1 | (hi1_1 << 2);
+
+    return vec2(centroids[idx0], centroids[idx1]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].norm), 0);
+}
+#endif
+
+#if defined(DATA_A_TQ3_1S)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TQ3_1S: 8-level Lloyd-Max centroids for N(0,1). ASYMMETRIC -- must match
+    // TQ3_0_CENTROIDS in ggml/src/ggml-turbo-quant.c byte for byte.
+    const float centroids[8] = float[8](
+        -1.996684, -1.291398, -0.740341, -0.247508,
+         0.230106,  0.725222,  1.277503,  1.988943
+    );
+
+    // iqs is the element pair index within the block (0..15)
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    // 8 three-bit indices per 3-byte group, index i at bits [3i, 3i+2] of the
+    // group read as a 24-bit little-endian word (see dequant_tq3_1s.comp).
+    const uint g0 = (j0 >> 3) * 3u;
+    const uint g1 = (j1 >> 3) * 3u;
+    const uint p0 = uint(data_a[a_offset + ib].qs[g0])
+                  | (uint(data_a[a_offset + ib].qs[g0 + 1u]) << 8)
+                  | (uint(data_a[a_offset + ib].qs[g0 + 2u]) << 16);
+    const uint p1 = uint(data_a[a_offset + ib].qs[g1])
+                  | (uint(data_a[a_offset + ib].qs[g1 + 1u]) << 8)
+                  | (uint(data_a[a_offset + ib].qs[g1 + 2u]) << 16);
+    const uint idx0 = (p0 >> ((j0 & 7u) * 3u)) & 7u;
+    const uint idx1 = (p1 >> ((j1 & 7u) * 3u)) & 7u;
+
+    // Scale by d0 (elements 0-15) or d1 (elements 16-31)
+    const float d0 = float(data_a[a_offset + ib].d0);
+    const float d1 = float(data_a[a_offset + ib].d1);
+    const float s0 = (j0 < 16) ? d0 : d1;
+    const float s1 = (j1 < 16) ? d0 : d1;
+
+    // Returns centroid * scale WITHOUT the inverse RHT, exactly like the
+    // TQ4_1S branch below. Any caller that wants true weights must apply the
+    // inverse WHT itself, or pre-rotate the activation instead (which is what
+    // mul_mat_vec_tq3_1s.comp does). Callers that do neither -- notably
+    // get_rows_quant.comp -- would get un-rotated values, which is why
+    // GET_ROWS support is not claimed for this type.
+    return vec2(centroids[idx0] * s0, centroids[idx1] * s1);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    // No global scale/min: scales are applied per-element in dequantize()
+    return vec2(1, 0);
+}
+#endif
+
+#if defined(DATA_A_TQ4_1S)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // TQ4_1S: 16-level Lloyd-Max centroids for N(0,1)
+    const float centroids[16] = float[16](
+        -2.732590, -2.069017, -1.618046, -1.256231,
+        -0.942340, -0.656759, -0.388048, -0.128395,
+         0.128395,  0.388048,  0.656759,  0.942340,
+         1.256231,  1.618046,  2.069017,  2.732590
+    );
+
+    // iqs is the element pair index within the block (0..15)
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    // Extract 4-bit nibble indices from qs (2 per byte)
+    const uint idx0 = (uint(data_a[a_offset + ib].qs[j0 / 2]) >> ((j0 & 1) * 4)) & 0xF;
+    const uint idx1 = (uint(data_a[a_offset + ib].qs[j1 / 2]) >> ((j1 & 1) * 4)) & 0xF;
+
+    // Scale by d0 (elements 0-15) or d1 (elements 16-31)
+    const float d0 = float(data_a[a_offset + ib].d0);
+    const float d1 = float(data_a[a_offset + ib].d1);
+    const float s0 = (j0 < 16) ? d0 : d1;
+    const float s1 = (j1 < 16) ? d0 : d1;
+
+    // Returns centroid * scale WITHOUT RHT inverse
+    // (caller must handle pre-rotation for correctness)
+    return vec2(centroids[idx0] * s0, centroids[idx1] * s1);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    vec2 v0 = dequantize(ib, iqs, a_offset);
+    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    // No global scale/min — scales are applied per-element in dequantize()
+    return vec2(1, 0);
+}
+#endif

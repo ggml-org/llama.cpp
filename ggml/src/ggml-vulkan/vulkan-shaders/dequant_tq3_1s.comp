@@ -1,0 +1,93 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+// 256 threads per workgroup, each thread fully dequants one TQ3_1S block
+// (32 elements, 16 bytes). Workgroups process 256 blocks = 8192 elements each
+// so the x dispatch stays under maxComputeWorkGroupCount[0] for large tensors.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_tq3_1s data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+// One WHT butterfly stage, as a flat 16-iteration loop over the 16 disjoint
+// pairs, with a compile-time constant stride supplied by the macro argument.
+//
+// This is deliberately NOT the rolled triple loop of tq3_0_rht_inverse()
+// (ggml/src/ggml-turbo-quant.c) or of dequant_tq4_1s.comp. Those have a
+// non-constant inner increment, so glslang cannot unroll them, buf[] stays a
+// dynamically indexed function-local array, and it is not promotable to
+// registers -- it becomes scratch. This shader runs over the *entire* weight
+// tensor on the prefill path, so that matters. With a literal STEP and a
+// constant trip count every subscript folds: the compiled SPIR-V for this file
+// contains zero loops and no function-local array at all.
+//
+// lo enumerates the same (j, j + step) pairs, in the same order, as the
+// reference triple loop -- verified for all five stages. The pairs within a
+// stage are disjoint, so order is not load-bearing, but keeping it identical
+// makes the floating-point result bit-for-bit equal to the CPU reference.
+#define TQ3_WHT_STAGE(STEP)                                             \
+    [[unroll]] for (uint k = 0u; k < 16u; k++) {                        \
+        const uint lo = ((k / (STEP)) * (2u * (STEP))) + (k % (STEP));  \
+        const float a = buf[lo];                                        \
+        const float b = buf[lo + (STEP)];                               \
+        buf[lo]          = a + b;                                       \
+        buf[lo + (STEP)] = a - b;                                       \
+    }
+
+void main() {
+    // Lloyd-Max centroids for 3-bit normal quantization. ASYMMETRIC -- must
+    // match TQ3_0_CENTROIDS in ggml/src/ggml-turbo-quant.c byte for byte.
+    const float centroids[8] = float[8](
+        -1.996684, -1.291398, -0.740341, -0.247508,
+         0.230106,  0.725222,  1.277503,  1.988943
+    );
+
+    // WHT sign pattern for inverse RHT normalization (shared with TQ4_1S)
+    const float signs[32] = float[32](
+        +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+        -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+        -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+    );
+
+    const float INV_SQRT32 = 0.17677669529663688;
+
+    const uint ib = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x;
+    if (ib >= p.nel / 32) return;
+
+    const float d0 = float(data_a[ib].d0);
+    const float d1 = float(data_a[ib].d1);
+
+    // Load centroid*scale into per-thread buffer.
+    // TQ3 packs 8 three-bit indices into each 3-byte group, 4 groups per block.
+    // Reading the group as a 24-bit little-endian word turns the extraction
+    // into a single shift: quantize_row_tq3_1s_ref() lays index i at bits
+    // [3i, 3i+2] of that word, including indices 2 and 5 which straddle a byte.
+    float buf[32];
+    [[unroll]] for (uint g = 0u; g < 4u; g++) {
+        const uint qb = g * 3u;
+        const uint packed = uint(data_a[ib].qs[qb])
+                          | (uint(data_a[ib].qs[qb + 1u]) << 8)
+                          | (uint(data_a[ib].qs[qb + 2u]) << 16);
+        [[unroll]] for (uint i = 0u; i < 8u; i++) {
+            const uint j   = g * 8u + i;
+            const uint idx = (packed >> (i * 3u)) & 7u;
+            const float d  = (j < 16u) ? d0 : d1;
+            buf[j] = centroids[idx] * d;
+        }
+    }
+
+    // Inverse WHT butterfly (5 stages for 32 elements) -- matches CPU reference
+    TQ3_WHT_STAGE(1u)
+    TQ3_WHT_STAGE(2u)
+    TQ3_WHT_STAGE(4u)
+    TQ3_WHT_STAGE(8u)
+    TQ3_WHT_STAGE(16u)
+
+    // Normalize and apply sign pattern
+    const uint out_base = ib * 32u;
+    [[unroll]] for (uint j = 0u; j < 32u; j++) {
+        data_b[out_base + j] = D_TYPE(buf[j] * INV_SQRT32 * signs[j]);
+    }
+}

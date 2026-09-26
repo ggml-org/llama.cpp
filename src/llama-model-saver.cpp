@@ -20,6 +20,10 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_T5:
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MUSE_GLIMMER:
+        case LLM_ARCH_MELLUM:
+        case LLM_ARCH_LAGUNA:
+        case LLM_ARCH_GRANITE_SWA:
             return false;
         default:
             return true;
@@ -293,6 +297,7 @@ void llama_model_saver::add_kv_from_model() {
         add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>(
                 hparams.is_swa_impl.begin(), hparams.is_swa_impl.begin() + hparams.n_layer_all));
     }
+    add_kv(LLM_KV_TARGET_LAYERS,                      model->target_layer_ids, false);
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
     add_kv(LLM_KV_ATTENTION_OUTPUT_SCALE,            hparams.f_attn_out_scale);
     add_kv(LLM_KV_ATTENTION_VALUE_SCALE,             hparams.f_attn_value_scale);
@@ -302,9 +307,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,        hparams.n_embd_head_v_mla_impl);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,          hparams.n_embd_head_k_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,        hparams.n_embd_head_v_swa);
+    add_kv(LLM_KV_ATTENTION_KV_LORA_RANK_SWA,        hparams.n_lora_kv_swa);
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,      hparams.n_embd_head_k_mla_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA,    hparams.n_embd_head_v_mla_swa);
-    add_kv(LLM_KV_ATTENTION_KV_LORA_RANK_SWA,        hparams.n_lora_kv_swa);
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
@@ -481,6 +486,17 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->nextn_proj_pre);
     add_tensor(model->nextn_proj_post);
     add_tensor(model->cls);
+    add_tensor(model->fc);
+    add_tensor(model->fc_s);
+    add_tensor(model->d2t);
+    add_tensor(model->dflash_selector_prev);
+    add_tensor(model->dflash_selector_next);
+    add_tensor(model->dflash_selector_hidden);
+    add_tensor(model->dspark_markov_w1);
+    add_tensor(model->dspark_markov_w2);
+    add_tensor(model->dspark_markov_w2_s);
+    add_tensor(model->dspark_conf_proj);
+    add_tensor(model->dspark_conf_proj_b);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);
     add_tensor(model->cls_out_b);

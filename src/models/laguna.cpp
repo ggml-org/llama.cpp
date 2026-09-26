@@ -36,7 +36,9 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
     if (hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
-        load_swa_pattern(ml, 4, /*dense_first=*/true);  // XS.2: FULL at il%4==0
+        uint32_t swa_period = 4;
+        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
+        hparams.set_swa_pattern(swa_period, /*dense_first=*/true);  // XS.2: FULL at il%4==0
 
         // Per-layer-type RoPE: full layers use YaRN θ=500000 over 64 dims;
         // SWA layers use default RoPE θ=10000 over 128 dims. Base load_hparams
@@ -170,6 +172,9 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
+        // residual-stream capture for speculative drafters (EAGLE3 / DFlash)
+        res->t_layer_inp[il] = inpL;
+
         const bool    is_swa_il   = hparams.is_swa(il);
         const int64_t n_head_il   = hparams.n_head(il);
         const int64_t n_head_kv_il = hparams.n_head_kv(il);
@@ -259,7 +264,10 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
             cb(cur, "attn_o_proj", il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids) {
+        // When unmasked nextn extraction is on (DFlash needs the pre-norm
+        // hidden state for every token), defer the output-row gather to
+        // after the final-norm capture below (qwen35 pattern).
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -319,7 +327,18 @@ llama_model_laguna::graph::graph(const llama_model & model, const llm_graph_para
     }
 
     cur = inpL;
+
+    // pre-final-norm residual stream: the DFlash drafter's last capture point
+    // ("input of layer n_layer" in the training convention)
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 

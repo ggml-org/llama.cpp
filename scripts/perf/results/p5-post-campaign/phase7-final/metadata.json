@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-07-22T21:00:44.940Z",
+  "source_commit": "d7a2bcf1d06c7b706add29ba9db6446690666aa1",
+  "baseline_commit": "d66649dae2f877a572269b84aaeefde9e8ad4780",
+  "compiler": {
+    "argv": [
+      "/opt/intel/oneapi/compiler/2026.0/bin/icpx",
+      "--version"
+    ],
+    "exit_code": 0,
+    "stdout": "Intel(R) oneAPI DPC++/C++ Compiler 2026.0.0 (2026.0.0.20260331)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /opt/intel/oneapi/compiler/2026.0/bin/compiler\nConfiguration file: /opt/intel/oneapi/compiler/2026.0/bin/compiler/../icpx.cfg\n",
+    "stderr": ""
+  },
+  "packages": {
+    "argv": [
+      "pacman",
+      "-Q",
+      "intel-compute-runtime",
+      "intel-graphics-compiler",
+      "level-zero-loader"
+    ],
+    "exit_code": 0,
+    "stdout": "intel-compute-runtime 26.22.38646.4-1.1\nintel-graphics-compiler 1:2.36.3-1.1\nlevel-zero-loader 1.28.6-1.1\n",
+    "stderr": ""
+  },
+  "device": {
+    "argv": [
+      "bash",
+      "-lc",
+      "source /opt/intel/oneapi/setvars.sh >/dev/null 2>&1; ONEAPI_DEVICE_SELECTOR=level_zero:0 sycl-ls --verbose"
+    ],
+    "exit_code": 0,
+    "stdout": "[level_zero:gpu] Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.15.38646]\n\nPlatforms: 1\nPlatform [#1]:\n    Version  : 1.15\n    Name     : Intel(R) oneAPI Unified Runtime over Level-Zero\n    Vendor   : Intel(R) Corporation\n    Devices  : 1\n        Type              : gpu\n        Version           : 12.55.8\n        Name              : Intel(R) Arc(TM) A770 Graphics\n        Vendor            : Intel(R) Corporation\n        Driver            : 1.15.38646\n        UUID              : 8680a056-0800-0000-0300-000000000000\n        DeviceID          : 22176\n        Num SubDevices    : 0\n        Num SubSubDevices : 0\n        Aspects           : gpu fp16 online_compiler online_linker queue_profiling usm_device_allocations usm_host_allocations usm_shared_allocations ext_intel_pci_address ext_intel_gpu_eu_count ext_intel_gpu_eu_simd_width ext_intel_gpu_slices ext_intel_gpu_subslices_per_slice ext_intel_gpu_eu_count_per_subslice atomic64 ext_intel_device_info_uuid ext_oneapi_native_assert ext_intel_gpu_hw_threads_per_eu ext_intel_free_memory ext_intel_device_id ext_intel_memory_clock_rate ext_intel_memory_bus_width ext_intel_legacy_image ext_oneapi_bindless_images ext_oneapi_bindless_images_1d_usm ext_oneapi_bindless_images_2d_usm ext_oneapi_external_memory_import ext_oneapi_external_semaphore_import ext_intel_esimd ext_oneapi_fragment ext_oneapi_chunk ext_oneapi_tangle ext_intel_matrix ext_oneapi_limited_graph ext_oneapi_private_alloca ext_oneapi_bindless_sampled_image_fetch_1d_usm ext_oneapi_bindless_sampled_image_fetch_1d ext_oneapi_bindless_sampled_image_fetch_2d_usm ext_oneapi_bindless_sampled_image_fetch_2d ext_oneapi_bindless_sampled_image_fetch_3d ext_oneapi_queue_profiling_tag ext_oneapi_virtual_mem ext_oneapi_image_array ext_oneapi_virtual_functions ext_intel_spill_memory_size ext_intel_current_clock_throttle_reasons ext_intel_power_limits ext_oneapi_async_memory_alloc ext_oneapi_exportable_device_mem ext_oneapi_clock_sub_group ext_oneapi_ipc_memory ext_oneapi_device_wait\n        info::device::sub_group_sizes: 8 16 32\n        Architecture: intel_gpu_acm_g10\ndefault_selector()      : gpu, Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.15.38646]\naccelerator_selector()  : No device of requested type available. Please chec...\ncpu_selector()          : No device of requested type available. Please chec...\ngpu_selector()          : gpu, Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.15.38646]\ncustom_selector(gpu)    : gpu, Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.15.38646]\ncustom_selector(cpu)    : No device of requested type available. Please chec...\ncustom_selector(acc)    : No device of requested type available. Please chec...\n",
+    "stderr": "/etc/profile.d/advixe-vars.sh: line 36: cd: /etc/profile.d//opt/intel/oneapi/advisor/2026.0/env: No such file or directory\nINFO: Output filtered by ONEAPI_DEVICE_SELECTOR environment variable, which is set to level_zero:0.\nTo see device ids, use the --ignore-device-selectors CLI option.\n\n<LOADER>[INFO]: loaded adapter 0x0x55db8679af20 (libur_adapter_level_zero.so.0) from /opt/intel/oneapi/compiler/2026.0/lib/libur_adapter_level_zero.so.0\n<LOADER>[INFO]: loaded adapter 0x0x55db8679eea0 (libur_adapter_level_zero_v2.so.0) from /opt/intel/oneapi/compiler/2026.0/lib/libur_adapter_level_zero_v2.so.0\n"
+  },
+  "hashes": {
+    "argv": [
+      "sha256sum",
+      "build-campaign-final/bin/llama-bench",
+      "build-campaign-final/bin/llama-server",
+      "build-campaign-final/bin/test-backend-ops",
+      "build-campaign-final/bin/test-sycl-turbo-correctness",
+      "build-campaign-final/bin/libggml-sycl.so"
+    ],
+    "exit_code": 0,
+    "stdout": "7e8be5a5debc9f6b1c05e2b81c2d32c3b81ac7d3d008e605e3f024d17cd73ed8  build-campaign-final/bin/llama-bench\na5e6b7fb3ed54a681cf807a98aa4b296e1f41da554c4f8c0bfa90f0d7e7d3bad  build-campaign-final/bin/llama-server\n762443bc3a1443fb494a5445567e644f814b8429b1c1bb00c0cb4ad13d4d435d  build-campaign-final/bin/test-backend-ops\n2611f2eff5845caece4186f1a6491b3f35f6c6d4430637560c6a07b80a646e07  build-campaign-final/bin/test-sycl-turbo-correctness\ned01c665c711db233d0d45a773a858820b9118769e4f613bd828f9f32a19bb92  build-campaign-final/bin/libggml-sycl.so\n",
+    "stderr": ""
+  },
+  "cmake_cache": "CMakeCache.txt"
+}

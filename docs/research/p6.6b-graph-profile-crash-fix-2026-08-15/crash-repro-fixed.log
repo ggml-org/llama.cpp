@@ -1,0 +1,10 @@
+GGML_SYCL_FA_ROUTE: route=VEC phase=decode q_tokens=1 head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 k_quants_first=1 v_quants_first=1
+GGML_SYCL_FA_ROUTE: route=TILE phase=prefill q_tokens=512 head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 k_quants_first=1 v_quants_first=1
+| model                          |       size |     params | backend    | ngl | type_k | type_v |  fa | dev          |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | -----: | -----: | --: | ------------ | --------------: | -------------------: |
+| llama 7B Q4_K - Medium         |   4.07 GiB |     7.24 B | SYCL       | 999 |   q8_0 |   q8_0 |   1 | SYCL0        |   tg32 @ d16384 |         25.22 ± 0.30 |
+GGML_SYCL_FA_GEOMETRY: route=VEC phase=decode type_k=q8_0 launches=3104 parallel_blocks=16 ntiles_total=32 blocks_total=512 work_items_total=65536 max_wg_per_cu=16 nsm=32 stream_k=0
+GGML_SYCL_FA_GEOMETRY: route=TILE phase=prefill type_k=q8_0 launches=1024 parallel_blocks=1 ntiles_total=4096 blocks_total=4096 work_items_total=524288 max_wg_per_cu=16 nsm=32 stream_k=0
+GGML_SYCL_GRAPH_PROFILE: graph_calls=129 direct_calls=0 nodes=128613 prepare_us=2540 record_us=342415 finalize_calls=129 finalize_us=693876 update_calls=0 update_fallbacks=0 update_us=0 submit_us=39181 wait_us=80521257 direct_enqueue_us=0
+
+build: 65a019379 (10129)

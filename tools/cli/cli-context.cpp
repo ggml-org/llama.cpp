@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <set>
 
@@ -509,6 +511,9 @@ int cli_context::run() {
 
         // skip empty messages
         if (buffer.empty()) {
+            if (std::cin.eof() || feof(stdin)) {
+                break; // EOF on stdin: end the interactive session
+            }
             continue;
         }
 

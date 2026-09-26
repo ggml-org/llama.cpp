@@ -1,0 +1,162 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+#include "mul_mat_vec_base.glsl"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+// Lloyd-Max centroids for TQ3_1S (3-bit, 8 levels) -- N(0, 1) optimal.
+// These are ASYMMETRIC (unlike TQ4's mirrored table); they must match
+// TQ3_0_CENTROIDS in ggml/src/ggml-turbo-quant.c byte for byte.
+const float TQ3_CENTROIDS[8] = float[8](
+    -1.996684, -1.291398, -0.740341, -0.247508,
+     0.230106,  0.725222,  1.277503,  1.988943
+);
+
+// WHT sign pattern for 32-element blocks (shared by TQ3 and TQ4);
+// TQ3_0_SIGNS in ggml-turbo-quant.c, TQ_WEIGHT_SIGNS in turbo-quant.cuh.
+const float TQ3_SIGNS[32] = float[32](
+    +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+    -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+);
+
+const float TQ3_INV_SQRT32 = 0.17677669529663688;
+
+// ---------------------------------------------------------------------------
+// Why this kernel never dequantizes a weight
+// ---------------------------------------------------------------------------
+//
+// A stored TQ3_1S block holds c[j] = centroid[idx_j] * d_j, i.e. the block
+// *after* the rotation that quantization applied. The true weight is recovered
+// by the inverse RHT in dequantize_row_tq3_1s():
+//
+//     w = k * S * H * c
+//
+// with H the 32x32 natural-ordered (Sylvester) Hadamard matrix realised by the
+// in-place butterfly, S = diag(TQ3_SIGNS), and k = 1/sqrt(32). H is symmetric
+// and S is diagonal, so for any activation block x:
+//
+//     <w, x> = <k*S*H*c, x>
+//            = k * sum_j (H*c)[j] * (S*x)[j]
+//            = k * <H*c, S*x>
+//            = k * <c, H^T*S*x>
+//            = k * <c, H*S*x>          (H symmetric)
+//
+// The rotation can therefore be moved off the weights and onto the activation:
+// sign-flip and butterfly the *activation* block once per workgroup, then dot
+// it against the raw centroid*scale values straight out of memory. That is why
+// there is no inverse WHT anywhere below, and why the loads of data_a are used
+// unmodified. The k factor is folded into the per-row weight term rather than
+// the shared activation, which is equivalent by linearity and saves a pass over
+// shared memory.
+//
+// Cost: one 32-point WHT per (block, column) instead of one per (block, row).
+// For a 5120-row projection that is a ~5000x reduction in butterfly work, and
+// it is what the CUDA (tq_prerotate_activation, ggml-cuda/mmvq-tq.cu) and Metal
+// (kernel_mul_mv_tq3_1s_f32_impl, ggml-metal.metal) kernels both do.
+//
+// Shared memory budget: NUM_COLS * 32 floats (max 1 KiB at NUM_COLS=8)
+// plus whatever tmpsh the reduction helper allocates.
+// ---------------------------------------------------------------------------
+
+shared float tq3_smem[8 * 32];
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid = gl_LocalInvocationID.x;
+
+    uint a_offset, b_offset, d_offset;
+    get_offsets(a_offset, b_offset, d_offset);
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < NUM_ROWS; ++n) {
+            temp[j][n] = FLOAT_TYPE(0);
+        }
+    }
+
+    const uint num_blocks_per_row = p.ncols / 32u;
+
+    // TQ3 packs 8 three-bit indices into each 3-byte group, 4 groups per block.
+    // Loading the group as a 24-bit little-endian word makes the extraction a
+    // single shift: the C packer in quantize_row_tq3_1s_ref() lays index i at
+    // bits [3i, 3i+2] of that word, including the two indices (2 and 5) that
+    // straddle a byte boundary.
+    const uint group  = tid >> 3u;          // 3-byte group, 0..3
+    const uint qs_base = group * 3u;        // byte offset of the group
+    const uint shift  = (tid & 7u) * 3u;    // bit offset within the group
+    const float sign_tid = TQ3_SIGNS[tid];
+
+    for (uint blk = 0; blk < num_blocks_per_row; blk++) {
+        // --- Stage 1: load activation, sign-flip, write to shared memory ---
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const uint b_base = c * p.batch_stride_b + b_offset + blk * 32u;
+            tq3_smem[c * 32u + tid] = float(data_b[b_base + tid]) * sign_tid;
+        }
+        barrier();
+
+        // --- Stage 2: forward WHT butterfly in shared memory (5 stages) ---
+        // Pairs (tid, tid + step) with (tid & step) == 0, matching the
+        // (j, j + step) pairing of tq3_0_rht_forward() in ggml-turbo-quant.c.
+        [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u) {
+            if ((tid & step) == 0u) {
+                const uint partner = tid + step;
+                [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+                    const uint base = c * 32u;
+                    const float a = tq3_smem[base + tid];
+                    const float b = tq3_smem[base + partner];
+                    tq3_smem[base + tid]     = a + b;
+                    tq3_smem[base + partner] = a - b;
+                }
+            }
+            barrier();
+        }
+
+        // --- Stage 3: dequant all rows' weights for this block position ---
+        // Pre-computing the weight for every row before touching the column
+        // accumulator lets the compiler treat the smem read in stage 4 as
+        // loop-invariant across rows, which is the Vulkan analogue of the
+        // "hot loop load dedup" optimisation in the CUDA kernel (PR #57).
+        float w_vals[NUM_ROWS];
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint ib = (first_row + n) * num_blocks_per_row + blk;
+            const uint packed = uint(data_a[a_offset + ib].qs[qs_base])
+                              | (uint(data_a[a_offset + ib].qs[qs_base + 1u]) << 8)
+                              | (uint(data_a[a_offset + ib].qs[qs_base + 2u]) << 16);
+            const uint idx = (packed >> shift) & 7u;
+            const float d  = (tid < 16u)
+                ? float(data_a[a_offset + ib].d0)
+                : float(data_a[a_offset + ib].d1);
+            w_vals[n] = TQ3_CENTROIDS[idx] * d * TQ3_INV_SQRT32;
+        }
+
+        // --- Stage 4: accumulate dot products ---
+        // Read the rotated activation once per column; reuse across all rows.
+        [[unroll]] for (uint c = 0; c < NUM_COLS; ++c) {
+            const float b_rotated = tq3_smem[c * 32u + tid];
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                temp[c][n] += FLOAT_TYPE(w_vals[n] * b_rotated);
+            }
+        }
+
+        // Ensure every thread is done reading before the next block's store.
+        barrier();
+    }
+
+    reduce_result(temp, d_offset, first_row, num_rows, tid);
+}
+
+void main() {
+    const uint first_row = NUM_ROWS * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z);
+
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}

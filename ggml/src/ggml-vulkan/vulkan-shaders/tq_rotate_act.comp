@@ -1,0 +1,98 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+// Pre-rotate an activation for the TurboQuant rotated matmul path.
+//
+// A stored TQ3_1S/TQ4_1S block holds c[j] = centroid[idx_j] * d_j, i.e. the
+// block *after* the rotation quantization applied. Recovering true weights costs
+// an inverse RHT per weight block. Instead use
+//
+//     <S.H.y.k, x> == k.<y, H.S.x>
+//
+// with H the symmetric 32x32 natural-ordered (Sylvester) Hadamard realised by
+// the in-place butterfly, S = diag(TQ_SIGNS) and k = 1/sqrt(32): rotate the
+// *activation* once per tile and dot it against raw centroid*scale weights.
+// mul_mm_funcs.glsl loads the A side as centroid*d with no inverse WHT and no
+// k, so k belongs here, on the activation. (mul_mat_vec_tq3_1s.comp folds k
+// into the weight instead; either is fine, but exactly one must apply it.)
+//
+// This runs in place, but ONLY ever on ctx->prealloc_y -- the context-owned
+// staging copy of the activation -- never on the graph's src1. The host forces
+// src1 to be staged for these types precisely so that d_Y cannot alias the real
+// tensor. In-place is safe here because each workgroup reads, transforms and
+// writes back exactly its own 32 contiguous elements, with no cross-workgroup
+// dependency.
+//
+// Metal instead rotates src1 itself, matmuls, then un-rotates, which needs a
+// hazard flag (ggml_metal_op_mutates_tq_src1) plus barriers on both sides --
+// and its rotate indexes src1 flat while the matmul reads it with
+// nb11/nb12/nb13 strides, so a padded or strided src1 rotates different
+// elements than the matmul consumes. Rotating a packed scratch copy removes
+// that entire class: the staging pass has already made it contiguous.
+//
+// f32 throughout: the butterfly is 5 rounds of adds, and doing that in f16
+// would lose precision the quantization did not. The host selects the f32 B
+// variant of the matmul for these types to match.
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) buffer S {float data_s[];};
+
+layout (push_constant) uniform parameter {
+    uint k;            // elements per row, guaranteed a multiple of 32
+    uint nrows;        // total rows: ne11 * ne12 * ne13
+    uint stride;       // row stride in elements of the packed staging buffer
+} p;
+
+// TQ3_0_SIGNS in ggml-turbo-quant.c / TQ_WEIGHT_SIGNS in turbo-quant.cuh.
+// Shared by TQ3 and TQ4, which is why one rotate shader serves both types.
+const float TQ_SIGNS[32] = float[32](
+    +1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, +1.0, -1.0, +1.0,
+    -1.0, -1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0,
+    -1.0, +1.0, +1.0, -1.0, +1.0, -1.0, -1.0, +1.0
+);
+
+const float TQ_INV_SQRT32 = 0.17677669529663688;
+
+// 32 threads, one 32-element group per workgroup. Fixed at 32 for the same
+// reason as the TQ mat-vec kernels: the butterfly pairs lanes (tid, tid + step)
+// through a 32-entry shared array, so it is only correct when the workgroup is
+// exactly the block size. RADV on gfx1151 reports warp size 64, so this must
+// not be widened and must not use subgroup ops.
+shared float tq_smem[32];
+
+void main() {
+    const uint groups_per_row = p.k / 32u;
+    const uint gid            = gl_WorkGroupID.x;
+    const uint row            = gid / groups_per_row;
+
+    if (row >= p.nrows) {
+        return;
+    }
+
+    const uint g   = gid % groups_per_row;
+    const uint tid = gl_LocalInvocationID.x;
+    const uint idx = row * p.stride + g * 32u + tid;
+
+    // Stage 1: sign flip
+    tq_smem[tid] = data_s[idx] * TQ_SIGNS[tid];
+    barrier();
+
+    // Stage 2: forward WHT butterfly, 5 stages. Pairs (tid, tid + step) with
+    // (tid & step) == 0, matching tq3_0_rht_forward() in ggml-turbo-quant.c and
+    // stage 2 of mul_mat_vec_tq3_1s.comp.
+    [[unroll]] for (uint step = 1u; step < 32u; step <<= 1u) {
+        if ((tid & step) == 0u) {
+            const uint partner = tid + step;
+            const float a = tq_smem[tid];
+            const float b = tq_smem[partner];
+            tq_smem[tid]     = a + b;
+            tq_smem[partner] = a - b;
+        }
+        barrier();
+    }
+
+    data_s[idx] = tq_smem[tid] * TQ_INV_SQRT32;
+}

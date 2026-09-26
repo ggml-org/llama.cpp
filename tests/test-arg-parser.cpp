@@ -3,9 +3,12 @@
 #include "download.h"
 #include "llama.h"
 #include "speculative.h"
+#include "gguf.h"
 
 #include <cmath>
+#include <cstdio>
 #include <limits>
+#include <cstdlib>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -89,6 +92,91 @@ static void test(void) {
         spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
         spec.synth_len = 3.0;
         assert_invalid(spec, 4);
+    }
+    {
+        common_params_speculative spec_params;
+        spec_params.types                = { COMMON_SPECULATIVE_TYPE_NGRAM_MOD };
+        spec_params.ngram_mod.n_match    = 2;
+        spec_params.ngram_mod.n_min      = 1;
+        spec_params.ngram_mod.n_max      = 2;
+        spec_params.ngram_mod.n_dead_off = 2;
+
+        common_speculative_ptr spec(common_speculative_init(spec_params, 2));
+        const llama_tokens corpus = {1, 2, 3, 1, 2, 3};
+        common_speculative_begin(spec.get(), 0, corpus);
+        common_speculative_begin(spec.get(), 1, corpus);
+
+        const llama_tokens too_short = {1};
+        const llama_tokens live      = {9, 1};
+        std::vector<llama_tokens> draft_results(2);
+        auto draft = [&](llama_seq_id seq_id, const llama_tokens & prompt) {
+            auto & dp    = common_speculative_get_draft_params(spec.get(), seq_id);
+            dp.drafting  = true;
+            dp.id_last   = 2;
+            dp.prompt    = &prompt;
+            dp.result    = &draft_results.at(seq_id);
+            common_speculative_draft(spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        assert(draft(0, too_short).empty());
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 1);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+        common_speculative_accept(spec.get(), 0, 0);
+
+        assert(draft(0, live).empty());
+        assert(draft(1, live) == llama_tokens({3, 1}));
+
+        common_speculative_begin(spec.get(), 0, corpus);
+        assert(draft(0, live) == llama_tokens({3, 1}));
+
+        common_params_speculative low_params = spec_params;
+        low_params.ngram_mod.n_dead_off = 0;
+        common_speculative_ptr low_spec(common_speculative_init(low_params, 1));
+        common_speculative_begin(low_spec.get(), 0, corpus);
+
+        llama_tokens low_draft_result;
+        auto draft_low = [&](const llama_tokens & prompt) {
+            auto & dp   = common_speculative_get_draft_params(low_spec.get(), 0);
+            dp.drafting = true;
+            dp.id_last  = 2;
+            dp.prompt   = &prompt;
+            dp.result   = &low_draft_result;
+            common_speculative_draft(low_spec.get());
+            auto result = *dp.result;
+            dp.result->clear();
+            return result;
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            assert(draft_low(live) == llama_tokens({3, 1}));
+            common_speculative_accept(low_spec.get(), 0, 0);
+        }
+
+        common_speculative_begin(low_spec.get(), 0, corpus);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+        common_speculative_accept(low_spec.get(), 0, 0);
+        assert(draft_low(live) == llama_tokens({3, 1}));
+    }
+
+    {
+        const char * path = "test-speculative-missing-block-count.gguf";
+        gguf_context * ctx = gguf_init_empty();
+        gguf_set_val_str(ctx, "general.architecture", "qwen3");
+        assert(gguf_write_to_file(ctx, path, false));
+        gguf_free(ctx);
+
+        assert(common_speculative_types_from_gguf(path).empty());
+        std::remove(path);
     }
 
     {
@@ -273,6 +361,48 @@ static void test(void) {
         argv = {"binary_name", "--spec-synth-len", "3.4x"};
         assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
     }
+    // speculative draft defaults and adaptive floor
+    argv = {"binary_name", "-m", "model_file.gguf"};
+    common_params spec_defaults;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_defaults, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(spec_defaults.speculative.draft.n_max == 3);
+    assert(spec_defaults.speculative.draft.n_min_adaptive == 3);
+
+    argv = {"binary_name", "-m", "model_file.gguf", "--spec-draft-n-min-adaptive", "5"};
+    common_params adaptive_params;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), adaptive_params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(adaptive_params.speculative.draft.n_min_adaptive == 5);
+
+    argv = {"binary_name", "-m", "model_file.gguf", "--spec-chain", "8"};
+    common_params chain_params;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), chain_params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(chain_params.speculative.draft.chain);
+    assert(chain_params.speculative.draft.n_max == 8);
+
+    chain_params.n_batch = 8;
+    chain_params.n_ubatch = 8;
+    chain_params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    const llama_context_params chain_ctx_params = common_context_params_to_llama(chain_params);
+    assert(chain_ctx_params.n_rs_seq == 8);
+    assert(chain_ctx_params.n_batch == 10);
+    assert(chain_ctx_params.n_ubatch == 10);
+
+    argv = {"binary_name", "-m", "model_file.gguf", "--spec-chain", "0"};
+    common_params no_chain_params;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), no_chain_params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(!no_chain_params.speculative.draft.chain);
+    assert(no_chain_params.speculative.draft.n_max == 3);
+
+    // the adaptive MTP type parses to the dedicated enum value
+    argv = {"binary_name", "-m", "model_file.gguf", "--spec-type", "draft-mtp-adaptive"};
+    common_params spec_params;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), spec_params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(std::find(spec_params.speculative.types.begin(), spec_params.speculative.types.end(),
+                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != spec_params.speculative.types.end());
+
+    argv = {"binary_name", "-m", "model_file.gguf", "--spec-type", "draft-mtp-adaptive", "--spec-draft-n-max", "2"};
+    common_params invalid_adaptive_params;
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), invalid_adaptive_params, LLAMA_EXAMPLE_SPECULATIVE));
 
     argv = {"binary_name", "-lm", "none"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
@@ -302,6 +432,105 @@ static void test(void) {
     assert(params.lora_adapters[1].path == "file2,2.gguf");
     assert(params.lora_adapters[2].path == "file3\"3\".gguf");
     assert(params.lora_adapters[3].path == "file4\".gguf");
+
+    printf("test-arg-parser: test MoE cache and repack modes\n\n");
+
+    {
+        common_params mode_params;
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO);
+        assert(mode_params.moe_cache.mode_explicit == false);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_UNSPECIFIED);
+    }
+
+    const std::vector<std::vector<std::string>> invalid_moe_cache_args = {
+        {"binary_name", "--moe-cache"},
+        {"binary_name", "--moe-cache", "invalid"},
+        {"binary_name", "--moe-cache", "-1"},
+        {"binary_name", "--moe-cache", "1048577"},
+        {"binary_name", "--moe-cache", "256x"},
+        {"binary_name", "--moe-cache", "999999999999999999999999"},
+    };
+    for (auto invalid_argv : invalid_moe_cache_args) {
+        common_params mode_params;
+        assert(false == common_params_parse(
+                invalid_argv.size(), list_str_to_char(invalid_argv).data(),
+                mode_params, LLAMA_EXAMPLE_COMMON));
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "auto"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO);
+        assert(mode_params.moe_cache.budget_mib == 0);
+        assert(mode_params.moe_cache.mode_explicit == true);
+        assert(mode_params.no_extra_bufts == false);
+        const llama_context_params cparams = common_context_params_to_llama(mode_params);
+        assert(cparams.moe_cache_mode == LLAMA_MOE_CACHE_MODE_AUTO);
+        assert(cparams.moe_cache_budget_mib == 0);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "on", "--repack"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON);
+        assert(mode_params.moe_cache.budget_mib == 0);
+        assert(mode_params.no_extra_bufts == true);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_ON);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--repack", "--moe-cache", "256"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON);
+        assert(mode_params.moe_cache.budget_mib == 256);
+        assert(mode_params.no_extra_bufts == true);
+        const llama_context_params cparams = common_context_params_to_llama(mode_params);
+        assert(cparams.moe_cache_mode == LLAMA_MOE_CACHE_MODE_ON);
+        assert(cparams.moe_cache_budget_mib == 256);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "1048576"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON);
+        assert(mode_params.moe_cache.budget_mib == 1048576);
+        assert(mode_params.no_extra_bufts == true);
+        assert(common_context_params_to_llama(mode_params).moe_cache_budget_mib == 1048576);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "256", "--moe-cache", "auto"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_AUTO);
+        assert(mode_params.moe_cache.budget_mib == 0);
+        assert(mode_params.no_extra_bufts == false);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_AUTO);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "off", "--repack"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF);
+        assert(mode_params.moe_cache.budget_mib == 0);
+        assert(mode_params.no_extra_bufts == false);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_OFF);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache", "0"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF);
+        assert(mode_params.moe_cache.budget_mib == 0);
+        assert(mode_params.no_extra_bufts == false);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_OFF);
+    }
 
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
@@ -333,6 +562,32 @@ static void test(void) {
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
+    unsetenv("LLAMA_ARG_LOAD_MODE");
+    setenv("LLAMA_ARG_MOE_CACHE", "invalid", true);
+    argv = {"binary_name"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
+    setenv("LLAMA_ARG_MOE_CACHE", "on", true);
+    {
+        common_params mode_params;
+        argv = {"binary_name"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_ON);
+        assert(mode_params.moe_cache.mode_explicit == true);
+        assert(mode_params.no_extra_bufts == true);
+    }
+
+    {
+        common_params mode_params;
+        argv = {"binary_name", "--moe-cache", "off"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), mode_params, LLAMA_EXAMPLE_COMMON));
+        assert(mode_params.moe_cache.mode == COMMON_MOE_CACHE_MODE_OFF);
+        assert(mode_params.moe_cache.mode_explicit == true);
+        assert(mode_params.no_extra_bufts == false);
+        assert(common_context_params_to_llama(mode_params).moe_cache_mode == LLAMA_MOE_CACHE_MODE_OFF);
+    }
+    unsetenv("LLAMA_ARG_MOE_CACHE");
 
     setenv("LLAMA_ARG_LOAD_MODE", "mmap+mlock", true);
     argv = {"binary_name"};

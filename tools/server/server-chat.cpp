@@ -606,6 +606,17 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // Handle Anthropic-specific output_config param
+    if (body.contains("output_config") && body.at("output_config").is_object()) {
+        const json & output_config = body.at("output_config");
+        if (output_config.contains("effort") && output_config.at("effort").is_string()) {
+            if (!oai_body.contains("chat_template_kwargs")) {
+                oai_body["chat_template_kwargs"] = json::object();
+            }
+            oai_body["chat_template_kwargs"]["reasoning_effort"] = output_config.at("effort");
+        }
+    }
+
     // Handle Anthropic-specific metadata param
     if (body.contains("metadata")) {
         json metadata = json_value(body, "metadata", json::object());
