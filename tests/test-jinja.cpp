@@ -1153,7 +1153,7 @@ static void test_tests(testing & t) {
     );
 
     test_template(t, "is not equalto",
-        "{{ 'yes' if 3 is not equalto(4) }}",
+        "{{ 'yes' if 3 is not equalto 4 }}",
         json::object(),
         "yes"
     );
@@ -1165,7 +1165,7 @@ static void test_tests(testing & t) {
     );
 
     test_template(t, "is gt",
-        "{{ 'yes' if 3 is gt(2) }}",
+        "{{ 'yes' if 3 is gt 2 }}",
         json::object(),
         "yes"
     );
@@ -1177,7 +1177,7 @@ static void test_tests(testing & t) {
     );
 
     test_template(t, "is lt",
-        "{{ 'yes' if 2 is lt(3) }}",
+        "{{ 'yes' if 2 is lt 3 }}",
         json::object(),
         "yes"
     );
@@ -1191,6 +1191,12 @@ static void test_tests(testing & t) {
     test_template(t, "is ne",
         "{{ 'yes' if 2 is ne(3) }}",
         json::object(),
+        "yes"
+    );
+
+    test_template(t, "is lt and gt",
+        "{{ 'yes' if x is lt 3 and x is gt 1 }}",
+        {{"x", 2}},
         "yes"
     );
 
@@ -1245,6 +1251,12 @@ static void test_tests(testing & t) {
     test_template(t, "is integer",
         "{{ 'yes' if x is integer }}",
         {{"x", 1}},
+        "yes"
+    );
+
+    test_template(t, "is integer or float",
+        "{{ 'yes' if x.y is integer or x.y is float else 'no' }}",
+        {{"x", {{"y", 1.1}}}},
         "yes"
     );
 
