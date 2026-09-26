@@ -61,12 +61,21 @@ static system_one_kind kind_of(const std::string & s) {
 }
 
 // The wire format's `criteria`: an object for a choice (key -> description), an array for a
-// score (the levels in order). noul's two options are the template's, not the caller's.
+// score (the levels in order), and for a noul the optional wording of its two sides. The two
+// options themselves are the template's -- a caller names what they mean, not what they are
+// called -- and this is the same reading `/v1/systemone` gives them, which is the point: the
+// two front ends have to build the same prompt from the same request.
 static void parse_question(const json & q, system_one_question & out) {
     out.kind = kind_of(q.at("type").get<std::string>());
     out.text = q.value("instructions", std::string());
     if (out.kind == SYSTEM_ONE_KIND_NOUL) {
         out.options = {"no", "yes"};
+        if (q.contains("criteria") && q.at("criteria").is_object()) {
+            const json & c = q.at("criteria");
+            out.descs.assign(out.options.size(), std::string());
+            if (c.contains("false") && c.at("false").is_string()) out.descs[0] = c.at("false").get<std::string>();
+            if (c.contains("true")  && c.at("true").is_string())  out.descs[1] = c.at("true").get<std::string>();
+        }
         return;
     }
     if (!q.contains("criteria")) {
