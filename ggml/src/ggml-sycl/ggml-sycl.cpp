@@ -6754,9 +6754,11 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 // fall through to the blocking path on is not graph-capturable even if it
                 // superficially looks like a decode-shaped MUL_MAT_ID.
                 // opt_for_reorder_id() (used inside the fused path) uses sycl_reorder_temp_buffer
-                // (USM malloc/free), which requires async USM allocation to be graph-capturable.
-                // When the reorder optimization is disabled (GGML_SYCL_ENABLE_OPT=0 /
-                // !g_ggml_sycl_enable_optimize), no reorder runs and async USM is not needed.
+                // (USM malloc/free) only for its supported types (Q4_K/Q5_K/Q6_K), which is the
+                // only case that needs async USM allocation to be graph-capturable; for any other
+                // type it returns immediately without touching USM, so gating on the type here
+                // avoids rejecting graph capture for MoE models (MXFP4, Q4_0, Q8_0, IQ*, ...) that
+                // never exercise this allocation at all.
                 const ggml_tensor * mmid_dst  = cgraph->nodes[i];
                 const ggml_tensor * mmid_src0 = mmid_dst->src[0];
                 const ggml_tensor * mmid_src1 = mmid_dst->src[1];
@@ -6780,7 +6782,11 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                     ggml_is_contiguous(mmid_src1) &&
                     mmid_ids->ne[1] == 1 &&
                     (mmid_src1->ne[1] == 1 || mmid_src1->ne[1] == mmid_ids->ne[0]);
-                if (!fused_dispatchable || (!g_ggml_sycl_use_async_mem_op && g_ggml_sycl_enable_optimize)) {
+                const bool id_reorder_needs_async_alloc =
+                    g_ggml_sycl_enable_optimize &&
+                    (mmid_src0->type == GGML_TYPE_Q4_K || mmid_src0->type == GGML_TYPE_Q5_K ||
+                     mmid_src0->type == GGML_TYPE_Q6_K);
+                if (!fused_dispatchable || (id_reorder_needs_async_alloc && !g_ggml_sycl_use_async_mem_op)) {
                     GGML_LOG_INFO("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
                                   ggml_op_name(node_op));
                     return false;
