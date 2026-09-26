@@ -40,6 +40,18 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
+static __device__ __forceinline__ int ggml_cuda_vsubss4_nonnegative(const int a, const int b) {
+#if defined(GGML_USE_HIP)
+    // Each byte of a and b must be in [0, 127]. The result is therefore in [-127, 127],
+    // so signed saturation is unnecessary and the subtraction can be done with packed integer arithmetic.
+    const uint32_t ua = static_cast<uint32_t>(a);
+    const uint32_t ub = static_cast<uint32_t>(b);
+    return static_cast<int>((ua + (0x80808080u - ub)) ^ 0x80808080u);
+#else
+    return __vsubss4(a, b);
+#endif // defined(GGML_USE_HIP)
+}
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
