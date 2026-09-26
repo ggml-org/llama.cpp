@@ -3844,6 +3844,14 @@ void llm_graph_context::build_sampling() const {
             assert(sampler->iface->backend_apply);
             sampler->iface->backend_apply(sampler, ctx0, gf, &data);
 
+            // mark the results of inactive samplers as outputs too, so that the graph outputs do not
+            // depend on which sequences are sampled and graphs of the same shape can share an allocation
+            for (ggml_tensor * t : { data.sampled, data.probs, data.logits, data.candidates }) {
+                if (t != nullptr) {
+                    ggml_set_output(t);
+                }
+            }
+
             if (data.sampled != nullptr) {
                 if (active) {
                     res->t_sampled[rows[i]] = data.sampled;

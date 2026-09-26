@@ -468,6 +468,7 @@ struct tensor_alloc {
     int buffer_id;
     struct buffer_address addr;
     size_t size_max; // 0 = pre-allocated, unused, or view
+    int32_t flags;   // tensor flags the allocation was planned with (see ggml_gallocr_plan_flags)
 };
 
 struct leaf_alloc {
@@ -584,6 +585,12 @@ typedef struct ggml_gallocr * ggml_gallocr_t;
 static struct hash_node * ggml_gallocr_hash_get(ggml_gallocr_t galloc, struct ggml_tensor * t) {
     size_t i = ggml_hash_find_or_insert(&galloc->hash_set, t);
     return &galloc->hash_values[i];
+}
+
+// flags that change the lifetime of a tensor in the allocation plan:
+// inputs are allocated before any node is computed and outputs are never freed
+static int32_t ggml_gallocr_plan_flags(const struct ggml_tensor * t) {
+    return t->flags & (GGML_TENSOR_FLAG_INPUT | GGML_TENSOR_FLAG_OUTPUT);
 }
 
 static bool ggml_gallocr_is_own(ggml_gallocr_t galloc, struct ggml_tensor * t) {
@@ -857,6 +864,7 @@ static bool ggml_gallocr_reserve_n_impl(
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
         struct node_alloc * node_alloc = &galloc->node_allocs[i];
+        node_alloc->dst.flags = ggml_gallocr_plan_flags(node);
         if (node->view_src || node->data) {
             node_alloc->dst.buffer_id = -1;
             node_alloc->dst.addr = GGML_BUFFER_ADDRESS_INVALID;
@@ -869,6 +877,7 @@ static bool ggml_gallocr_reserve_n_impl(
         }
         for (int j = 0; j < GGML_MAX_SRC; j++) {
             struct ggml_tensor * src = node->src[j];
+            node_alloc->src[j].flags = src ? ggml_gallocr_plan_flags(src) : 0;
             if (!src || src->view_src || src->data) {
                 node_alloc->src[j].buffer_id = -1;
                 node_alloc->src[j].addr = GGML_BUFFER_ADDRESS_INVALID;
@@ -995,6 +1004,10 @@ static void ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct ggml_tensor *
 }
 
 static bool ggml_gallocr_node_needs_realloc(ggml_gallocr_t galloc, struct ggml_tensor * node, struct tensor_alloc * talloc) {
+    // the plan is only valid for the lifetimes it was computed with
+    if (ggml_gallocr_plan_flags(node) != talloc->flags) {
+        return false;
+    }
     size_t node_size = 0;
     if (!node->data && !node->view_src) {
         // If we previously had data but don't now then reallocate
