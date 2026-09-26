@@ -1250,13 +1250,7 @@ void llama_context::set_nextn_layer_offset(int32_t offset) {
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
-    if (cparams.causal_attn == value) {
-        return;
-    }
-
     cparams.causal_attn = value;
-
-    sched_need_reserve = true;
 }
 
 void llama_context::set_warmup(bool value) {
