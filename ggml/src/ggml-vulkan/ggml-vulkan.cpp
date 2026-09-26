@@ -3975,6 +3975,8 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     }
 }
 
+static void ggml_vk_device_start_keepalive(vk_device& device);
+
 vk_device ggml_vk_get_device(size_t idx) {
     VK_LOG_DEBUG("ggml_vk_get_device(" << idx << ")");
 
@@ -4897,6 +4899,8 @@ vk_device ggml_vk_get_device(size_t idx) {
         } else if (getenv("GGML_VK_FORCE_MMVQ")) {
             device->mmvq_mode = 1;
         }
+
+        ggml_vk_device_start_keepalive(device);
 
         return device;
     }
@@ -16272,8 +16276,78 @@ void vk_queue_handle_unsynchronized::submit(vk::ArrayProxy<const vk::SubmitInfo>
     }
 }
 
+// Prototype: periodic fillBuffer on a dedicated keepalive buffer to keep the
+// adapter active under Windows WDDM idle eviction. Off unless GGML_VK_KEEPALIVE_MS > 0.
+static void ggml_vk_device_keepalive_once(vk_device& device) {
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+
+    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue->cmd_pool);
+    ggml_vk_ctx_begin(device, subctx);
+    subctx->s->buffer->buf.fillBuffer(device->keepalive_buffer->buffer, 0, 4, 0);
+    ggml_vk_ctx_end(subctx);
+
+    ggml_vk_submit(subctx, device->keepalive_fence);
+    VK_CHECK(device->device.waitForFences({ device->keepalive_fence }, true, UINT64_MAX), "vk_keepalive waitForFences", device);
+    device->device.resetFences({ device->keepalive_fence });
+    ggml_vk_queue_command_pools_cleanup(device);
+}
+
+static void ggml_vk_device_start_keepalive(vk_device& device) {
+    const char * env = getenv("GGML_VK_KEEPALIVE_MS");
+    if (env == nullptr) {
+        return;
+    }
+
+    const int ms = atoi(env);
+    if (ms <= 0) {
+        return;
+    }
+
+    device->keepalive_ms = ms;
+    device->keepalive_stop.store(false);
+    device->keepalive_fence = device->device.createFence({});
+    device->keepalive_buffer = ggml_vk_create_buffer_check(device, 4, vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    GGML_LOG_INFO("ggml_vulkan: GGML_VK_KEEPALIVE_MS=%d on %s\n", ms, device->name.c_str());
+
+    device->keepalive_thread = std::thread([dev = vk_device_ref(device)]() {
+        while (true) {
+            vk_device device = dev.lock();
+            if (!device || device->keepalive_stop.load()) {
+                return;
+            }
+            const int ms = device->keepalive_ms;
+            device.reset();
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+
+            device = dev.lock();
+            if (!device || device->keepalive_stop.load()) {
+                return;
+            }
+
+            try {
+                ggml_vk_device_keepalive_once(device);
+            } catch (const vk::SystemError & e) {
+                GGML_LOG_WARN("ggml_vulkan: keepalive failed on %s: %s\n", device->name.c_str(), e.what());
+            }
+        }
+    });
+}
+
 vk_device_struct::~vk_device_struct() {
     VK_LOG_DEBUG("destroy device " << name);
+
+    keepalive_stop.store(true);
+    if (keepalive_thread.joinable()) {
+        keepalive_thread.join();
+    }
+
+    if (keepalive_fence) {
+        device.destroyFence(keepalive_fence);
+        keepalive_fence = nullptr;
+    }
+    ggml_vk_destroy_buffer(keepalive_buffer);
 
     device.destroyFence(fence);
 
