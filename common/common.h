@@ -902,6 +902,9 @@ std::string fs_path_to_utf8(const std::filesystem::path & path);
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
 
+// reads a path from the environment, an unset variable gives an empty path
+std::filesystem::path common_get_path_from_env(const std::string & name);
+
 //
 // Filesystem utils
 //
