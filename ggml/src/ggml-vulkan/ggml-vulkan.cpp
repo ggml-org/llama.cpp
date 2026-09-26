@@ -4011,6 +4011,26 @@ vk_device ggml_vk_get_device(size_t idx) {
         const char* GGML_VK_DISABLE_GRAPH_OPTIMIZE = getenv("GGML_VK_DISABLE_GRAPH_OPTIMIZE");
         device->disable_graph_optimize = GGML_VK_DISABLE_GRAPH_OPTIMIZE != nullptr;
 
+        static const std::map<std::string, vk::QueueGlobalPriorityKHR> priorityMap {
+            { "low", vk::QueueGlobalPriorityKHR::eLow },
+            { "medium", vk::QueueGlobalPriorityKHR::eMedium },
+            { "high", vk::QueueGlobalPriorityKHR::eHigh },
+            { "realtime", vk::QueueGlobalPriorityKHR::eRealtime },
+        };
+        const char* GGML_VK_GLOBAL_PRIO = getenv("GGML_VK_GLOBAL_PRIO");
+        if (GGML_VK_GLOBAL_PRIO != nullptr) {
+            auto itr = priorityMap.find(GGML_VK_GLOBAL_PRIO);
+            if (itr != priorityMap.end()) {
+                device->global_priority = itr->second;
+            } else {
+                throw std::runtime_error(
+                    "Invalid GGML_VK_GLOBAL_PRIO value: " + std::string(GGML_VK_GLOBAL_PRIO)
+                );
+            }
+        } else {
+            device->global_priority = std::nullopt;
+        }
+
         bool fp16_storage = false;
         bool fp16_compute = false;
         bool maintenance4_support = false;
@@ -4096,6 +4116,8 @@ vk_device ggml_vk_get_device(size_t idx) {
                 internally_sync_support = true;
             } else if (strcmp("VK_EXT_device_fault", properties.extensionName) == 0) {
                 device->device_fault = true;
+            } else if (strcmp(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME, properties.extensionName) == 0) {
+                device->global_priority_support = true;
             }
         }
 
@@ -4470,13 +4492,43 @@ vk_device ggml_vk_get_device(size_t idx) {
                                                 eInternallySynchronizedKHR :
                                                 vk::DeviceQueueCreateFlags();
 
+        vk::DeviceQueueGlobalPriorityCreateInfoKHR *pNext = nullptr;
+        std::optional<vk::DeviceQueueGlobalPriorityCreateInfoKHR> global_priority_info;
+        if (device->global_priority.has_value()) {
+            if (!device->global_priority_support)
+                throw std::runtime_error("GGML_VK_GLOBAL_PRIO was specified, but VK_KHR_global_priority is not supported");
+
+            global_priority_info.emplace(device->global_priority.value());
+            pNext = &*global_priority_info;
+            device_extensions.push_back(VK_KHR_GLOBAL_PRIORITY_EXTENSION_NAME);
+        }
         if (compute_queue_family_index != transfer_queue_family_index) {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
-            device_queue_create_infos.push_back({queue_flags, transfer_queue_family_index, 1, priorities + 1});
+            device_queue_create_infos.push_back(vk::DeviceQueueCreateInfo{}
+                .setFlags(queue_flags)
+                .setQueueFamilyIndex(compute_queue_family_index)
+                .setQueueCount(1)
+                .setPQueuePriorities(priorities)
+                .setPNext(pNext));
+            device_queue_create_infos.push_back(vk::DeviceQueueCreateInfo{}
+                .setFlags(queue_flags)
+                .setQueueFamilyIndex(transfer_queue_family_index)
+                .setQueueCount(1)
+                .setPQueuePriorities(priorities + 1)
+                .setPNext(pNext));
         } else if(!device->single_queue) {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 2, priorities});
+            device_queue_create_infos.push_back(vk::DeviceQueueCreateInfo{}
+                .setFlags(queue_flags)
+                .setQueueFamilyIndex(compute_queue_family_index)
+                .setQueueCount(2)
+                .setPQueuePriorities(priorities)
+                .setPNext(pNext));
         } else {
-            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+            device_queue_create_infos.push_back(vk::DeviceQueueCreateInfo{}
+                .setFlags(queue_flags)
+                .setQueueFamilyIndex(compute_queue_family_index)
+                .setQueueCount(1)
+                .setPQueuePriorities(priorities)
+                .setPNext(pNext));
         }
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
