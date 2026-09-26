@@ -1193,6 +1193,13 @@ private:
     std::vector<ggml_backend_t> backends;
     const char * cache_dir;
     std::unordered_set<ggml_backend_buffer_t> buffers;
+    // PATCH(rpc-max-alloc): optional hard cap on device memory handed out to the client, for
+    // rpc-servers on a desktop GPU that must keep headroom. GGML_RPC_MAX_ALLOC_MB unset/0 = no cap.
+    size_t alloc_bytes = 0;
+    size_t alloc_cap   = [] {
+        const char * e = std::getenv("GGML_RPC_MAX_ALLOC_MB");
+        return e != nullptr ? (size_t) std::atoll(e) * 1024 * 1024 : (size_t) 0;
+    }();
     // store the last computed graph for each backend
     std::vector<stored_graph> stored_graphs;
 };
@@ -1250,10 +1257,16 @@ bool rpc_server::alloc_buffer(const rpc_msg_alloc_buffer_req & request, rpc_msg_
         return false;
     }
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backends[dev_id]);
-    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, request.size);
     response.remote_ptr = 0;
     response.remote_size = 0;
+    if (alloc_cap > 0 && alloc_bytes + request.size > alloc_cap) { // PATCH(rpc-max-alloc)
+        GGML_LOG_ERROR("[%s] refusing %" PRIu64 " MiB: would exceed GGML_RPC_MAX_ALLOC_MB (%zu of %zu MiB in use)\n",
+            __func__, request.size / (1024 * 1024), alloc_bytes / (1024 * 1024), alloc_cap / (1024 * 1024));
+        return true;
+    }
+    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, request.size);
     if (buffer != nullptr) {
+        alloc_bytes += buffer->size;
         response.remote_ptr = reinterpret_cast<uint64_t>(buffer);
         response.remote_size = buffer->size;
         LOG_DBG("[%s] device: %d, size: %" PRIu64 " -> remote_ptr: %" PRIx64 ", remote_size: %" PRIu64 "\n",
@@ -1313,6 +1326,7 @@ bool rpc_server::free_buffer(const rpc_msg_free_buffer_req & request) {
     for (auto & sg : stored_graphs) {
         sg.graph = nullptr;
     }
+    alloc_bytes -= std::min(alloc_bytes, buffer->size); // PATCH(rpc-max-alloc)
     ggml_backend_buffer_free(buffer);
     buffers.erase(buffer);
     return true;
@@ -1805,6 +1819,10 @@ bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request
     size_t free, total;
     ggml_backend_dev_t dev = ggml_backend_get_device(backends[dev_id]);
     ggml_backend_dev_memory(dev, &free, &total);
+    if (alloc_cap > 0) { // PATCH(rpc-max-alloc)
+        free  = std::min(free, alloc_cap - std::min(alloc_cap, alloc_bytes));
+        total = std::min(total, alloc_cap);
+    }
     response.free_mem = free;
     response.total_mem = total;
     LOG_DBG("[%s] device: %u, free_mem: %" PRIu64 ", total_mem: %" PRIu64 "\n", __func__, dev_id, response.free_mem, response.total_mem);
