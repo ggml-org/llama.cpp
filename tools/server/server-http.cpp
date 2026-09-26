@@ -252,6 +252,7 @@ bool server_http_context::init_listener(const common_params & params) {
         std::unordered_set<std::string> endpoints {
             "/health",
             "/v1/health",
+            "/metrics",
         };
         endpoints.insert(frontend_paths.begin(), frontend_paths.end());
         return endpoints;
