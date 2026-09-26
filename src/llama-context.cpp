@@ -1,5 +1,6 @@
 #include "llama-context.h"
 
+#include "ggml-backend.h"
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
@@ -31,6 +32,26 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
     }
     throw std::runtime_error("Unsupported ctx type");
+}
+
+using ggml_backend_vk_set_op_offload_min_batch_t = void (*)(ggml_backend_dev_t dev, int min_batch_size);
+
+static void llama_backend_set_op_offload_min_batch(const std::vector<ggml_backend_ptr> & backends, int min_batch_size) {
+    for (const auto & backend : backends) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+        if (!dev) {
+            continue;
+        }
+        auto * reg = ggml_backend_dev_backend_reg(dev);
+        if (!reg) {
+            continue;
+        }
+        auto fn = (ggml_backend_vk_set_op_offload_min_batch_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_set_op_offload_min_batch");
+        if (!fn) {
+            continue;
+        }
+        fn(dev, min_batch_size);
+    }
 }
 
 struct llm_fused_op_probe {
@@ -273,6 +294,43 @@ llama_context::llama_context(
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
 
+    {
+        bool has_igpu = false;
+        bool has_gpu = false;
+        bool has_meta = false;
+
+        for (const auto & dev : model.devices) {
+            ggml_backend_dev_props props;
+            ggml_backend_dev_get_props(dev.dev, &props);
+            if (props.type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                has_igpu = true;
+            } else if (props.type == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                has_gpu = true;
+            } else if (props.type == GGML_BACKEND_DEVICE_TYPE_META) {
+                has_meta = true;
+            }
+        }
+
+        const bool gpu_pill_allowed = has_igpu && !has_gpu && !has_meta;
+
+        if (params.gpu_pill > 0 && !gpu_pill_allowed) {
+            LLAMA_LOG_WARN("%s: gpu_pill requested but UMA device not selected - disabled\n", __func__);
+        }
+
+        if (params.gpu_pill == 0) {
+            cparams.gpu_pill = false;
+        } else if (params.gpu_pill > 0) {
+            cparams.gpu_pill = gpu_pill_allowed;
+        } else {
+            cparams.gpu_pill = gpu_pill_allowed;
+        }
+    }
+
+    if (cparams.gpu_pill && !cparams.op_offload) {
+        LLAMA_LOG_WARN("%s: gpu_pill requires op_offload; enabling\n", __func__);
+        cparams.op_offload = true;
+    }
+
     // initialized later
     cparams.pipeline_parallel = false;
 
@@ -312,6 +370,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+    LLAMA_LOG_INFO("%s: gpu_pill              = %s\n",   __func__, cparams.gpu_pill ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
@@ -388,6 +447,7 @@ llama_context::llama_context(
         llama_memory_params params_mem = {
             /*.type_k    =*/ params.type_k,
             /*.type_v    =*/ params.type_v,
+            /*.gpu_pill  =*/ cparams.gpu_pill,
             /*.swa_full  =*/ params.swa_full,
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
@@ -457,6 +517,10 @@ llama_context::llama_context(
 
         if (cparams.pipeline_parallel) {
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
+        }
+
+        if (cparams.gpu_pill && getenv("GGML_OP_OFFLOAD_MIN_BATCH") == nullptr) {
+            llama_backend_set_op_offload_min_batch(backends, 2);
         }
 
         sched_reserve();
@@ -3721,6 +3785,7 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.gpu_pill                    =*/ -1,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,

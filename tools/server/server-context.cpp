@@ -2371,6 +2371,90 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
+    static constexpr uint32_t SLOT_CKPT_MAGIC   = 0x504b4353;
+    static constexpr uint32_t SLOT_CKPT_VERSION = 1;
+
+    static bool ckpt_read(std::ifstream & ifs, void * dst, size_t size) {
+        return bool(ifs.read((char *) dst, size));
+    }
+
+    static bool ckpt_read_buf(std::ifstream & ifs, std::vector<uint8_t> & buf) {
+        uint64_t size = 0;
+        if (!ckpt_read(ifs, &size, sizeof(size)) || size > (1ull << 34)) {
+            return false;
+        }
+        buf.resize(size);
+        return size == 0 || ckpt_read(ifs, buf.data(), size);
+    }
+
+    static void ckpt_write(std::ofstream & ofs, const void * src, size_t size) {
+        ofs.write((const char *) src, size);
+    }
+
+    static void ckpt_write_buf(std::ofstream & ofs, const std::vector<uint8_t> & buf) {
+        const uint64_t size = buf.size();
+        ckpt_write(ofs, &size, sizeof(size));
+        if (size > 0) {
+            ckpt_write(ofs, buf.data(), size);
+        }
+    }
+
+    void save_slot_checkpoints(const std::string & filepath, const server_slot & slot) const {
+        std::ofstream ofs(filepath, std::ios::binary | std::ios::app);
+        if (!ofs) {
+            SRV_WRN("failed to append context checkpoints to '%s'\n", filepath.c_str());
+            return;
+        }
+        const uint32_t count = (uint32_t) slot.prompt.checkpoints.size();
+        ckpt_write(ofs, &SLOT_CKPT_MAGIC, sizeof(SLOT_CKPT_MAGIC));
+        ckpt_write(ofs, &SLOT_CKPT_VERSION, sizeof(SLOT_CKPT_VERSION));
+        ckpt_write(ofs, &count, sizeof(count));
+        for (const auto & cur : slot.prompt.checkpoints) {
+            ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens));
+            ckpt_write(ofs, &cur.pos_min, sizeof(cur.pos_min));
+            ckpt_write(ofs, &cur.pos_max, sizeof(cur.pos_max));
+            ckpt_write_buf(ofs, cur.data_tgt);
+            ckpt_write_buf(ofs, cur.data_dft);
+            ckpt_write_buf(ofs, cur.data_spec);
+        }
+    }
+
+    void load_slot_checkpoints(const std::string & filepath, size_t offset, server_slot & slot) const {
+        std::ifstream ifs(filepath, std::ios::binary);
+        if (!ifs || !ifs.seekg(offset)) {
+            return;
+        }
+        uint32_t magic = 0;
+        uint32_t version = 0;
+        uint32_t count = 0;
+        if (!ckpt_read(ifs, &magic, sizeof(magic)) || magic != SLOT_CKPT_MAGIC) {
+            return;
+        }
+        if (!ckpt_read(ifs, &version, sizeof(version)) || version != SLOT_CKPT_VERSION ||
+                !ckpt_read(ifs, &count, sizeof(count)) || count > 1024) {
+            SRV_WRN("invalid context checkpoint appendix in '%s'\n", filepath.c_str());
+            return;
+        }
+        std::list<common_prompt_checkpoint> checkpoints;
+        for (uint32_t i = 0; i < count; ++i) {
+            common_prompt_checkpoint cur;
+            if (!ckpt_read(ifs, &cur.n_tokens, sizeof(cur.n_tokens)) ||
+                    !ckpt_read(ifs, &cur.pos_min, sizeof(cur.pos_min)) ||
+                    !ckpt_read(ifs, &cur.pos_max, sizeof(cur.pos_max)) ||
+                    !ckpt_read_buf(ifs, cur.data_tgt) ||
+                    !ckpt_read_buf(ifs, cur.data_dft) ||
+                    !ckpt_read_buf(ifs, cur.data_spec)) {
+                SRV_WRN("truncated context checkpoint appendix in '%s'\n", filepath.c_str());
+                return;
+            }
+            checkpoints.push_back(std::move(cur));
+        }
+        while (checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
+            checkpoints.pop_front();
+        }
+        slot.prompt.checkpoints = std::move(checkpoints);
+    }
+
     // returns false to decline the task, it is offered again after the decode is done
     bool process_single_task(server_task && task, bool is_yielding) {
         // while yielding, an encode / decode is running and only reading the server state is safe
@@ -2578,6 +2662,7 @@ private:
                         send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
                         break;
                     }
+                    save_slot_checkpoints(filepath, *slot);
 
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
@@ -2638,6 +2723,7 @@ private:
 
                         slot->prompt.clear();
                         slot->prompt.tokens = std::move(restored);
+                        load_slot_checkpoints(filepath, nread, *slot);
                     } catch (const std::exception & err) {
                         slot->prompt_clear();
                         send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);

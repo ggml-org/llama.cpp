@@ -14,6 +14,11 @@
 #include <unordered_set>
 #include <vector>
 
+#ifdef GUANACO_ENABLED
+#include "guanaco/guanaco.h"
+#include "guanaco/guanaco_model_hook.h"
+#endif
+
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
@@ -814,8 +819,13 @@ struct llama_model_base : public llama_model {
     const int TENSOR_ALLOW_RESHAPE;
     const int TENSOR_READ_LAZY;
 
+#ifdef GUANACO_ENABLED
+    // Guanaco disk-streaming hook (created when load_mode is STREAMING)
+    void* guanaco_hook = nullptr;
+#endif
+
     explicit llama_model_base(const llama_model_params & params);
-    virtual ~llama_model_base() = default;
+    virtual ~llama_model_base();
 
     ggml_tensor * create_tensor(llama_model_loader & ml, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
 

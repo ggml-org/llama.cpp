@@ -210,6 +210,7 @@ extern "C" {
         LLAMA_LOAD_MODE_MLOCK      =  2, // force system to keep model in RAM rather than swapping or compressing
         LLAMA_LOAD_MODE_MMAP_MLOCK =  3, // mmap + force system to keep model in RAM rather than swapping or compressing
         LLAMA_LOAD_MODE_DIRECT_IO  =  4, // use direct I/O if available
+        LLAMA_LOAD_MODE_STREAMING  =  5, // mmap + stream MoE experts from disk on demand
     };
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
@@ -352,6 +353,13 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+#ifdef GUANACO_ENABLED
+        int32_t guanaco_max_experts;
+        bool    guanaco_io_uring;
+        bool    guanaco_pilot;
+        float   guanaco_pilot_mass;
+        bool    guanaco_imatrix;
+#endif
         bool load_mtp;        // whether to load MTP layers
     };
 
@@ -394,6 +402,9 @@ extern "C" {
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
+
+        // GPU-pill UMA KV writeback: -1 = auto (UMA only), 0 = disabled, 1 = enabled
+        int32_t gpu_pill;
 
         // Abort callback
         // if it returns true, execution of llama_decode() will be aborted
@@ -568,6 +579,11 @@ extern "C" {
     LLAMA_API bool llama_supports_mlock      (void);
     LLAMA_API bool llama_supports_gpu_offload(void);
     LLAMA_API bool llama_supports_rpc        (void);
+
+#ifdef GUANACO_ENABLED
+    LLAMA_API void llama_guanaco_enable_streaming(struct llama_context * ctx, bool enable);
+    LLAMA_API void llama_guanaco_set_max_experts(struct llama_context * ctx, int32_t max_experts);
+#endif
 
     // NOTE: After creating a llama_context, it is recommended to query the actual values using these functions
     //       In some cases the requested values via llama_context_params may differ from the actual values used by the context

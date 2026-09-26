@@ -33,6 +33,7 @@ public:
                  uint32_t   n_rs_seq,
                      bool   offload,
                      bool   unified,
+                     bool   gpu_pill,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
     const layer_filter_cb & filter_recr,

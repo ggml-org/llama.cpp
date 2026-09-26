@@ -2408,6 +2408,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_GRP_ATTN_W").set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
+        {"--gpu-pill"},
+        {"--no-gpu-pill"},
+        string_format("whether to enable GPU-pill UMA KV writeback (default: %s)",
+                      params.gpu_pill < 0 ? "auto" : (params.gpu_pill ? "enabled" : "disabled")),
+        [](common_params & params, bool value) {
+            params.gpu_pill = value ? 1 : 0;
+        }
+    ).set_env("LLAMA_GPU_PILL"));
+    add_opt(common_arg(
         {"-kvo", "--kv-offload"},
         {"-nkvo", "--no-kv-offload"},
         string_format("whether to enable KV cache offloading (default: %s)", params.no_kv_offload ? "disabled" : "enabled"),
@@ -2691,7 +2700,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
         "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
-        "- dio: use DirectIO if available\n",
+        "- dio: use DirectIO if available\n"
+        "- streaming: use Guanaco streaming loader when available\n",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "auto")       { params.load_mode = LLAMA_LOAD_MODE_AUTO;       }
             else if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
@@ -2699,6 +2709,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
             else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
             else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
+            else if (value == "streaming")  { params.load_mode = LLAMA_LOAD_MODE_STREAMING;  }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));

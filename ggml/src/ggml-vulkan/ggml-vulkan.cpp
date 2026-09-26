@@ -4877,6 +4877,12 @@ vk_device ggml_vk_get_device(size_t idx) {
             /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
         };
 
+        device->buffer_type_uma = {
+            /* .iface    = */ ggml_backend_vk_uma_buffer_type_interface,
+            /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), idx),
+            /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name + "_UMA", device },
+        };
+
         device->fence = device->device.createFence({});
 
         device->idx = idx;
@@ -12850,7 +12856,8 @@ void ggml_vk_get_device_description(int device, char * description, size_t descr
 }
 
 bool ggml_backend_buffer_is_vk(ggml_backend_buffer_t buffer) {
-    return buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_name;
+    return buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_name ||
+           buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_uma_name;
 }
 
 void ggml_backend_vk_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -12864,6 +12871,14 @@ void * ggml_backend_vk_buffer_get_base(ggml_backend_buffer_t buffer) {
     return vk_ptr_base;
 
     UNUSED(buffer);
+}
+
+void * ggml_backend_vk_buffer_get_base_host(ggml_backend_buffer_t buffer) {
+    ggml_backend_vk_buffer_context * ctx = (ggml_backend_vk_buffer_context *)buffer->context;
+    if (!ctx || !ctx->dev_buffer) {
+        return nullptr;
+    }
+    return ctx->dev_buffer->ptr;
 }
 
 enum ggml_status ggml_backend_vk_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
@@ -12974,6 +12989,12 @@ const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft) {
     return ctx->name.c_str();
 }
 
+const char * ggml_backend_vk_buffer_type_uma_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *)buft->context;
+
+    return ctx->name.c_str();
+}
+
 ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     VK_LOG_MEMORY("ggml_backend_vk_buffer_type_alloc_buffer(" << size << ")");
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
@@ -12990,12 +13011,44 @@ ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buff
     return ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface, bufctx, size);
 }
 
+ggml_backend_buffer_t ggml_backend_vk_buffer_type_uma_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    VK_LOG_MEMORY("ggml_backend_vk_buffer_type_uma_alloc_buffer(" << size << ")");
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
+    if (!ctx->device->uma) {
+        return nullptr;
+    }
+
+    vk_buffer dev_buffer = ggml_vk_create_buffer_check(
+        ctx->device, size,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+
+    if (dev_buffer == nullptr || dev_buffer->ptr == nullptr) {
+        ggml_vk_destroy_buffer(dev_buffer);
+        return nullptr;
+    }
+
+    ggml_backend_vk_buffer_context * bufctx = new ggml_backend_vk_buffer_context(ctx->device, std::move(dev_buffer), ctx->name);
+
+    return ggml_backend_buffer_init(buft, ggml_backend_vk_buffer_interface_host, bufctx, size);
+}
+
 size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
     return ctx->device->properties.limits.minStorageBufferOffsetAlignment;
 }
 
+size_t ggml_backend_vk_buffer_type_uma_get_alignment(ggml_backend_buffer_type_t buft) {
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
+    return ctx->device->properties.limits.minStorageBufferOffsetAlignment;
+}
+
 size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
+    return ctx->device->suballocation_block_size;
+}
+
+size_t ggml_backend_vk_buffer_type_uma_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_vk_buffer_type_context * ctx = (ggml_backend_vk_buffer_type_context *) buft->context;
     return ctx->device->suballocation_block_size;
 }
@@ -13006,6 +13059,17 @@ size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buf
     UNUSED(buft);
 }
 
+size_t ggml_backend_vk_buffer_type_uma_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
+    return ggml_nbytes(tensor);
+
+    UNUSED(buft);
+}
+
+bool ggml_backend_vk_buffer_type_uma_is_host(ggml_backend_buffer_type_t buft) {
+    UNUSED(buft);
+    return true;
+}
+
 ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num) {
     ggml_vk_instance_init();
 
@@ -13014,6 +13078,16 @@ ggml_backend_buffer_type_t ggml_backend_vk_buffer_type(size_t dev_num) {
     vk_device dev = ggml_vk_get_device(dev_num);
 
     return &dev->buffer_type;
+}
+
+ggml_backend_buffer_type_t ggml_backend_vk_buffer_type_uma(size_t dev_num) {
+    ggml_vk_instance_init();
+
+    VK_LOG_DEBUG("ggml_backend_vk_buffer_type_uma(" << dev_num << ")");
+
+    vk_device dev = ggml_vk_get_device(dev_num);
+
+    return &dev->buffer_type_uma;
 }
 
 static const char * ggml_backend_vk_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
@@ -13108,7 +13182,9 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_set_tensor_2d_async(" << size << ", " << n_copies << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
-    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
+    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) ||
+                 tensor->buffer->buft == ggml_backend_vk_host_buffer_type() ||
+                 tensor->buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_uma_name) && "unsupported buffer type");
 
     if (size == 0) {
         return;
@@ -13171,7 +13247,9 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_get_tensor_2d_async(" << size << ", " << n_copies << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
-    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
+    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) ||
+                 tensor->buffer->buft == ggml_backend_vk_host_buffer_type() ||
+                 tensor->buffer->buft->iface.get_name == ggml_backend_vk_buffer_type_uma_name) && "unsupported buffer type");
 
     if (size == 0) {
         return;
@@ -13232,7 +13310,8 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
         return true;
     }
 
-    if (dst->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend_dst)) {
+    if (dst->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend_dst) &&
+        dst->buffer->buft->iface.get_name != ggml_backend_vk_buffer_type_uma_name) {
         return false;
     }
 
@@ -15194,6 +15273,23 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_buffer_type(ggml_ba
     return ggml_backend_vk_buffer_type(ctx->device);
 }
 
+static ggml_backend_buffer_type_t ggml_backend_vk_device_get_uma_buffer_type(ggml_backend_dev_t dev) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    vk_device device = ggml_vk_get_device(ctx->device);
+    if (!device->uma) {
+        return nullptr;
+    }
+    return ggml_backend_vk_buffer_type_uma(ctx->device);
+}
+
+static void ggml_backend_vk_device_set_op_offload_min_batch(ggml_backend_dev_t dev, int min_batch_size) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    if (min_batch_size < 1) {
+        min_batch_size = 1;
+    }
+    ctx->op_offload_min_batch_size = min_batch_size;
+}
+
 static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     UNUSED(dev);
     return ggml_backend_vk_host_buffer_type();
@@ -15887,7 +15983,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
 }
 
 static bool ggml_backend_vk_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    if (buft->iface.get_name != ggml_backend_vk_buffer_type_name) {
+    if (buft->iface.get_name != ggml_backend_vk_buffer_type_name &&
+        buft->iface.get_name != ggml_backend_vk_buffer_type_uma_name) {
         return false;
     }
 
@@ -16064,7 +16161,16 @@ static const struct ggml_backend_reg_i ggml_backend_vk_reg_i = {
     /* .get_name         = */ ggml_backend_vk_reg_get_name,
     /* .get_device_count = */ ggml_backend_vk_reg_get_device_count,
     /* .get_device       = */ ggml_backend_vk_reg_get_device,
-    /* .get_proc_address = */ NULL,
+    /* .get_proc_address = */ [](ggml_backend_reg_t reg, const char * name) -> void * {
+        UNUSED(reg);
+        if (strcmp(name, "ggml_backend_vk_get_uma_buffer_type") == 0) {
+            return (void *)ggml_backend_vk_device_get_uma_buffer_type;
+        }
+        if (strcmp(name, "ggml_backend_vk_set_op_offload_min_batch") == 0) {
+            return (void *)ggml_backend_vk_device_set_op_offload_min_batch;
+        }
+        return nullptr;
+    },
 };
 
 ggml_backend_reg_t ggml_backend_vk_reg() {
@@ -16481,4 +16587,3 @@ void ggml_vk_debug_label::begin(vk_context & ctx, const std::string & name) {
     subctx->debug_labels.push_back(name);
     ggml_vk_cmd_label_begin(subctx->s->buffer->buf, subctx->debug_labels.back().c_str());
 }
-

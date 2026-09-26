@@ -481,6 +481,9 @@ struct common_params {
     // margin per device in bytes for fitting parameters to free memory:
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
+    // GPU-pill UMA KV writeback: -1 = auto (UMA only), 0 = disabled, 1 = enabled
+    int32_t gpu_pill = -1;
+
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
     enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
 
