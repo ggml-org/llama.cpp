@@ -456,7 +456,7 @@ struct my_llama_file {
 
     size_t tell() const {
 #ifdef _WIN32
-        __int64 ret = _ftelli64(fp);
+        int64_t ret = _ftelli64(fp);
 #else
         long ret = std::ftell(fp);
 #endif
@@ -466,7 +466,7 @@ struct my_llama_file {
 
     void seek(size_t offset, int whence) {
 #ifdef _WIN32
-        int ret = _fseeki64(fp, (__int64) offset, whence);
+        int ret = _fseeki64(fp, (int64_t) offset, whence);
 #else
         int ret = std::fseek(fp, (long) offset, whence);
 #endif
