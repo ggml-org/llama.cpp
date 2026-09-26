@@ -452,6 +452,7 @@ extern "C" {
         float target_bpw;                                           // target bits per weight (bpw)
         int64_t target_size;                                        // target file size in bytes
         const char * state_file;                                    // pointer to bpw state file
+        const enum ggml_type * target_exclude;                      // pointer to excluded GGML_TYPEs
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {

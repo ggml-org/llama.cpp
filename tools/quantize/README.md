@@ -70,6 +70,7 @@ Advanced options:
 * `--target-bpw` automatically choose quant types to meet an overall bits per weight (bpw) target
 * `--target-size` automatically choose quant types to meet a file size target
 * `--state-file` file name to use or save to the bpw/size error computations; if no name is provided it defaults to `<model name>-<model hash>.bpw_state`
+* `--target-exclude` comma-separated list of quant types (names or ordinals) that automatic quant type selection must ignore; for use with `--target-bpw`/`--target-size`. May be specified multiple times. A state checkpoint is not written while this option is active
 
 ## (Optional) Convert the multimodal components
 
@@ -140,6 +141,11 @@ python convert_hf_to_gguf.py --mmproj --outfile mmproj-gemma-4-E2B-it-Q8_0.gguf 
 ```bash
 # quantize model targeting a specific bpw average and save the target computations to the default file. Model type is optional and can be omitted
 ./llama-quantize --target-bpw 4.5678 --state-file --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
+```bash
+# quantize model targeting a specific bpw average using the default state checkpoint (if available) and ignoring IQ2_XXS, IQ2_XS and IQ2_S types (checkpoint is not saved)
+./llama-quantize --target-bpw 4.5678 --target-exclude IQ2_XXS,IQ2_XS,IQ2_S --state-file --imatrix imatrix.gguf input-model-f32.gguf 8
 ```
 
 ```bash

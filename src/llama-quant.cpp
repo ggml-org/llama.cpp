@@ -5,6 +5,7 @@
 #include "llama-quant.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cinttypes>
 #include <csignal>
@@ -159,13 +160,30 @@ struct quantize_state_impl {
     bool has_activations = false;
 
     // tensor type override patterns (compiled once, queried via tensor_type_override_for())
-    std::vector<std::pair<std::regex, ggml_type>> tensor_type_patterns;
+    struct tensor_type_pattern {
+        std::string pattern;
+        std::regex  regex;
+        ggml_type   type;
+    };
+
+    std::vector<tensor_type_pattern> tensor_type_patterns;
+    std::array<bool, GGML_TYPE_COUNT> ignored_types{};
+    bool has_ignored_types = false;
 
     quantize_state_impl(const llama_model & model, const llama_model_quantize_params * params) : model(model), params(params) {
         // compile regex patterns once - they are expensive
         if (params->tt_overrides) {
             for (const auto * o = params->tt_overrides; o->pattern != nullptr; o++) {
-                tensor_type_patterns.emplace_back(std::regex(o->pattern), o->type);
+                tensor_type_patterns.push_back({o->pattern, std::regex(o->pattern), o->type});
+            }
+        }
+
+        if (params->target_exclude) {
+            for (const auto * t = params->target_exclude; * t != GGML_TYPE_COUNT; t++) {
+                if (* t >= 0 && * t < GGML_TYPE_COUNT) {
+                    ignored_types[*t] = true;
+                    has_ignored_types = true;
+                }
             }
         }
     }
@@ -176,8 +194,8 @@ static ggml_type tensor_type_override_for(const quantize_state_impl & qs, const 
     if (qs.tensor_type_patterns.empty()) { return GGML_TYPE_COUNT; }
 
     const std::string name(tensor_name);
-    for (const auto & [pattern, qtype] : qs.tensor_type_patterns) {
-        if (std::regex_search(name, pattern)) { return qtype; }
+    for (const auto & p : qs.tensor_type_patterns) {
+        if (std::regex_search(name, p.regex)) { return p.type; }
     }
 
     return GGML_TYPE_COUNT;
@@ -804,6 +822,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr float boost_taper = 2.2f; // boost starves other tensors below 2.2 bpw
     const char * func = __func__;
 
+    // --target-exclude must leave at least one quant type in the pool
+    if (qs.has_ignored_types) {
+        bool all_ignored = true;
+        for (const ggml_type t : quant_types) {
+            if (!qs.ignored_types[t]) { all_ignored = false; break; }
+        }
+
+        if (all_ignored) { throw std::runtime_error(format("%s: --target-exclude bars every quant type in the selection pool\n", func)); }
+    }
+
     // Tensor size in bytes for a given type
     auto tensor_bytes = [](const ggml_tensor * gt, const ggml_type gq) -> size_t {
         return (size_t)ggml_nrows(gt) * ggml_row_size(gq, gt->ne[0]);
@@ -1024,8 +1052,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto check_signal_handler = [&](const std::vector<type_choice> & all_tensors) {
         if (bpw_stop.load(std::memory_order_relaxed)) {
             if (qs.params->state_file) {
-                LLAMA_LOG_INFO("\n\t%s: interrupted, saving progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
-                save_state(all_tensors);
+                if (qs.has_ignored_types) {
+                    LLAMA_LOG_WARN("\n\t%s: interrupted; state checkpoint is not written while --target-exclude is active\n", func);
+                } else {
+                    LLAMA_LOG_INFO("\n\t%s: interrupted, saving progress for %lu tensors to %s\n", func, all_tensors.size(), checkpoint_file.c_str());
+                    save_state(all_tensors);
+                }
             } else {
                 LLAMA_LOG_INFO("\n\t%s: interrupted\n", func);
             }
@@ -1830,8 +1862,32 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             tc.min_bpw = tn->second.min_bpw;
             tc.max_bpw = tn->second.max_bpw;
             tc.n_elements = tn->second.n_elements ? tn->second.n_elements : (size_t)ggml_nelements(tensor);
+            // remove ignored types
+            if (qs.has_ignored_types) {
+                tc.candidates.erase(std::remove_if(tc.candidates.begin(), tc.candidates.end(),
+                    [&](const type_scores & c) { return c.type >= 0 && c.type < GGML_TYPE_COUNT && qs.ignored_types[c.type]; }),
+                    tc.candidates.end());
+
+                if (tc.candidates.empty()) {
+                    // locked tensors are exempt
+                    const bool is_locked = locked_tensors && locked_tensors->find(name) != locked_tensors->end();
+                    if (!is_locked) {
+                        throw std::runtime_error(format("%s: tensor '%s' has %zu quant type candidates left after --target-exclude\n", func, name.c_str(), tc.candidates.size()));
+                    }
+
+                    type_scores fb;
+                    fb.type = tensor->type;
+                    fb.bytes = ggml_nbytes(tensor);
+                    fb.bpw = fb.bytes * 8.0f / tc.n_elements;
+                    tc.candidates.push_back(fb);
+                }
+
+                tc.choice = 0;
+            }
+
             return tc;
         }
+
         {
             std::lock_guard<std::mutex> lock(log_mutex);
             LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", func, name.c_str(), ggml_nelements(tensor));
@@ -2066,7 +2122,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         for (auto t : quant_types) {
             if (is_iq(t) && !valid_matrix) { continue; }
+            if (qs.ignored_types[t]) { continue; }
             ggml_type compat = make_compatible(tensor, t);
+            if (qs.ignored_types[compat]) { continue; }
             if (!is_compatible(tensor, compat)) { continue; }
             valid_types.push_back(compat);
             max_row_sz = std::max(max_row_sz, ggml_row_size(compat, n_per_row));
@@ -2138,6 +2196,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         if (ch.candidates.empty()) {
+            const bool is_locked = locked_tensors && locked_tensors->find(name) != locked_tensors->end();
+            if (qs.has_ignored_types && !is_locked) {
+                throw std::runtime_error(format("%s: tensor '%s' has %zu quant type candidates left after --target-exclude\n", func, name.c_str(), ch.candidates.size()));
+            }
+
             type_scores fb;
             fb.type = tensor->type;
             fb.bytes = ggml_nbytes(tensor);
@@ -2233,7 +2296,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     check_signal_handler(all_tensors);
-    if (qs.params->state_file) { save_state(all_tensors); }
+    if (qs.params->state_file) {
+        if (qs.has_ignored_types) { LLAMA_LOG_WARN("\t%s: state checkpoint cannot be saved while --target-exclude is active\n", func); }
+        else { save_state(all_tensors); }
+    }
+
     if (all_tensors.empty()) { return {}; }
 
     // Compute total elements across all tensors and bytes for non-quantizable tensors
@@ -2597,6 +2664,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 int fill_rank = 3;
                 for (const ggml_type t : quant_types) {
                     if (!ggml_is_quantized(t)) { continue; }
+                    if (qs.ignored_types[t]) { continue; }
                     const double nominal = (double)ggml_type_size(t) * 8.0 / (double)ggml_blck_size(t);
                     if (nominal < median_bpw) { continue; }
                     const int rank = family_rank(t);
@@ -2607,40 +2675,49 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                 }
 
-                size_t locked_bytes = 0;
-                std::vector<type_choice> remaining;
-                remaining.reserve(all_tensors.size());
-                for (size_t i = 0; i < all_tensors.size(); ++i) {
-                    auto & tn = all_tensors[i];
-                    if (!std::binary_search(outlier.begin(), outlier.end(), i)) {
-                        remaining.push_back(std::move(tn));
-                        continue;
+                if (fill_bpw == INFINITE && qs.ignored_types[fill]) {
+                    LLAMA_LOG_WARN("\t%s: ffn_down type %s is ignored by --target-exclude, keeping the auto-selected type\n", func, ggml_type_name(fill));
+                } else {
+                    size_t locked_bytes = 0;
+                    std::vector<type_choice> remaining;
+                    remaining.reserve(all_tensors.size());
+                    for (size_t i = 0; i < all_tensors.size(); ++i) {
+                        auto & tn = all_tensors[i];
+                        if (!std::binary_search(outlier.begin(), outlier.end(), i)) {
+                            remaining.push_back(std::move(tn));
+                            continue;
+                        }
+
+                        const ggml_tensor * tensor = tn.w->tensor;
+                        const ggml_type mc = make_compatible(tensor, fill);
+                        if (qs.ignored_types[mc]) {
+                            // the fill resolution is barred - keep the auction-chosen type
+                            remaining.push_back(std::move(tn));
+                            continue;
+                        }
+                        int idx = -1;
+                        for (int j = 0; j < (int)tn.candidates.size(); ++j) {
+                            if (tn.candidates[j].type == mc) { idx = j; break; }
+                        }
+
+                        if (idx == -1) {
+                            type_scores ts;
+                            ts.type = mc;
+                            ts.bpw = (float)tensor_bpw(tensor, mc);
+                            ts.bytes = tensor_bytes(tensor, mc);
+                            ts.error = std::numeric_limits<float>::quiet_NaN();
+                            tn.candidates.push_back(ts);
+                            idx = (int)tn.candidates.size() - 1;
+                        }
+
+                        tn.choice = idx;
+                        locked_bytes += tn.candidates[idx].bytes;
+                        pinned_tensors.push_back(std::move(tn));
                     }
 
-                    const ggml_tensor * tensor = tn.w->tensor;
-                    const ggml_type mc = make_compatible(tensor, fill);
-                    int idx = -1;
-                    for (int j = 0; j < (int)tn.candidates.size(); ++j) {
-                        if (tn.candidates[j].type == mc) { idx = j; break; }
-                    }
-
-                    if (idx == -1) {
-                        type_scores ts;
-                        ts.type = mc;
-                        ts.bpw = (float)tensor_bpw(tensor, mc);
-                        ts.bytes = tensor_bytes(tensor, mc);
-                        ts.error = std::numeric_limits<float>::quiet_NaN();
-                        tn.candidates.push_back(ts);
-                        idx = (int)tn.candidates.size() - 1;
-                    }
-
-                    tn.choice = idx;
-                    locked_bytes += tn.candidates[idx].bytes;
-                    pinned_tensors.push_back(std::move(tn));
+                    all_tensors = std::move(remaining);
+                    run_auction(budget_bytes > locked_bytes ? budget_bytes - locked_bytes : 0);
                 }
-
-                all_tensors = std::move(remaining);
-                run_auction(budget_bytes > locked_bytes ? budget_bytes - locked_bytes : 0);
             }
         }
     }
@@ -3090,6 +3167,26 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
             }
 
+            if (qs.has_ignored_types) {
+                std::string barred;
+                for (size_t i = 0; i < qs.ignored_types.size(); ++i) {
+                    if (qs.ignored_types[i]) {
+                        if (!barred.empty()) { barred += ", "; }
+                        barred += ggml_type_name((ggml_type)i);
+                    }
+                }
+
+                LLAMA_LOG_INFO("%s: --target-exclude ignores quant types: %s\n", __func__, barred.c_str());
+
+                // pinned types have precedence over ignored
+                for (const auto & p : qs.tensor_type_patterns) {
+                    if (p.type < GGML_TYPE_COUNT && qs.ignored_types[p.type]) {
+                        LLAMA_LOG_WARN("%s: --tensor-type pattern '%s' pins type %s which is ignored by --target-exclude, keeping the pinned type\n",
+                            __func__, p.pattern.c_str(), ggml_type_name(p.type));
+                    }
+                }
+            }
+
             // Build locked tensor type map from --tensor-type patterns
             std::unordered_map<std::string, ggml_type> locked_tensors;
             for (size_t i = 0; i < tensors.size(); ++i) {
@@ -3355,7 +3452,8 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.max_buf_size                =*/ LLAMA_QUANT_MAX_BUF_SIZE,
         /*.target_bpw                  =*/ -1.0f,
         /*.target_size                 =*/ -1,
-        /*.state_file                  =*/ nullptr
+        /*.state_file                  =*/ nullptr,
+        /*.target_exclude              =*/ nullptr
     };
 
     return result;

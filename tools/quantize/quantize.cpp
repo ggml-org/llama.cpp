@@ -110,7 +110,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
     printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--tensor-type-file] [--prune-layers]\n");
-    printf("       [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size] [--target-bpw] [--target-size] [--state-file]\n");
+    printf("       [--keep-split] [--override-kv] [--dry-run] [--max-buffer-size] [--target-bpw] [--target-size] [--target-exclude] [--state-file]\n");
     printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize\n");
     printf("                                      allow requantizing tensors that have already been quantized\n");
@@ -162,8 +162,12 @@ static void usage(const char * executable) {
     printf("                                      allowed units: b, k|kib, m|mib, g|gib, t|tib; defaults to b (bytes) if none is provided\n\n");
     printf("  --state-file [filename]\n");
     printf("                                      file name to use/save; if none is provided, the default name will be used\n\n");
+    printf("  --target-exclude type[,type...]\n");
+    printf("                                      comma-separated ggml_type (names or ordinals) that automatic quant type selection must ignore\n");
+    printf("                                      advanced option for --target-bpw/--target-size; may be specified multiple times\n\n");
     printf("note: --include-weights and --exclude-weights cannot be used together\n");
-    printf("      --target-bpw and --target-size cannot be used together\n\n");
+    printf("      --target-bpw and --target-size cannot be used together\n");
+    printf("      --exclude-weights excludes tensor NAMES, while --target-exclude excludes quant TYPES\n\n");
     printf("-----------------------------------------------------------------------------\n");
     printf(" allowed quantization types\n");
     printf("-----------------------------------------------------------------------------\n\n");
@@ -505,6 +509,44 @@ static bool parse_target_size(const char * data, int64_t & target_size) {
     return true;
 }
 
+static bool parse_target_exclude(const char * data, std::vector<ggml_type> & target_exclude) {
+    if (!data) {
+        printf("\n%s: no quant types provided\n\n", __func__);
+        return false;
+    }
+
+    const auto tokens = string_split<std::string>(data, ',');
+    for (const auto & token : tokens) {
+        ggml_type type = GGML_TYPE_COUNT;
+        for (int i = 0; i < GGML_TYPE_COUNT; ++i) {
+            const char * name = ggml_type_name((ggml_type)i);
+            if (name && striequals(name, token.c_str())) {
+                type = (ggml_type)i;
+                break;
+            }
+        }
+
+        if (type == GGML_TYPE_COUNT) {
+            const bool numeric = !token.empty() && std::all_of(token.begin(), token.end(), [](unsigned char c) { return std::isdigit(c); });
+            const long ordinal = numeric ? std::strtol(token.c_str(), nullptr, 10) : -1;
+            if (ordinal >= 0 && ordinal < GGML_TYPE_COUNT) {
+                type = (ggml_type)ordinal;
+            }
+        }
+
+        if (type == GGML_TYPE_COUNT) {
+            printf("\n%s: invalid quant type '%s' for --target-exclude\n\n", __func__, token.c_str());
+            return false;
+        }
+
+        if (std::find(target_exclude.begin(), target_exclude.end(), type) == target_exclude.end()) {
+            target_exclude.emplace_back(type);
+        }
+    }
+
+    return true;
+}
+
 static const char * get_ftype(const float bpw) {
     const std::map<float, const char *> quant_bpw = {
         {1.5625, "IQ1_S"},
@@ -544,6 +586,7 @@ int llama_quantize(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    std::vector<ggml_type> target_exclude;
     float target_bpw = -1.0f;
     int64_t target_size = -1;
 
@@ -582,6 +625,10 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--target-size") == 0) {
             if (arg_idx == argc-1 || !parse_target_size(argv[++arg_idx], target_size)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--target-exclude") == 0) {
+            if (arg_idx == argc-1 || !parse_target_exclude(argv[++arg_idx], target_exclude)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--state-file") == 0) {
@@ -721,6 +768,10 @@ int llama_quantize(int argc, char ** argv) {
         for (const auto & tt : tensor_type_opts) { tto.push_back({tt.name.c_str(), tt.type}); }
         tto.push_back({nullptr, GGML_TYPE_COUNT});  // array terminator
         params.tt_overrides = tto.data();
+    }
+    if (!target_exclude.empty()) {
+        target_exclude.push_back(GGML_TYPE_COUNT);  // array terminator
+        params.target_exclude = target_exclude.data();
     }
     if (!prune_layers.empty()) {
         prune_layers.push_back(-1);  // array terminator
