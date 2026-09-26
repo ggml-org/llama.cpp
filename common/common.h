@@ -215,10 +215,12 @@ inline const std::string & common_grammar_value(const common_grammar & g) {
 }
 
 // Returns true when the generation_prompt should be prefilled into the grammar sampler.
-// Only output-format and tool-call grammars need prefill; user-supplied grammars must not be prefilled.
+// Only tool-call grammars need prefill: they are built by the chat template and begin with the
+// generation prompt. Output-format grammars come straight from json_schema_to_grammar (server
+// --json-schema, or a request json_schema that the template did not wrap) and start at the first
+// generated token; user-supplied grammars must not be prefilled.
 inline bool common_grammar_needs_prefill(const common_grammar & g) {
-    return g.type == COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT
-        || g.type == COMMON_GRAMMAR_TYPE_TOOL_CALLS;
+    return g.type == COMMON_GRAMMAR_TYPE_TOOL_CALLS;
 }
 
 // sampling parameters
