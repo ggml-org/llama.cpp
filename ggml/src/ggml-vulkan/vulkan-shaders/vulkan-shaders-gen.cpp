@@ -1160,14 +1160,16 @@ void process_shaders() {
     string_to_spv("gated_delta_net_f32_shmem", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "0"}, {"USE_SUBGROUP_CLUSTERED", "0"}}));
 
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}}), true, false, true);
+    // Default V=64 block, processed as SEQ_HALF passes of VH=32 so the [D x 32] state mirror
+    // keeps the shared footprint (42240 B) under NVIDIA's 49152 B Vulkan compute-shared limit.
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"SEQ_HALF", "1"}, {"VH", "32"}}), true, false, true);
     // whole-head V=128 (gmem state mirror): kept for reference / non-shared fallback.
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"GMEM_MIRROR", "1"}, {"V", "128"}}), true, false, true, false, "_v128");
-    // whole-head V=128 processed as 2 sequential value passes (SEQ_HALF): keeps only a
-    // [D x 64] state mirror in shared (same LDS as V=64, fits NVIDIA's ~64KB Vulkan budget),
-    // full state in registers. 1 wg/head (no CU-grid tail) + gram/pmat/inversion once. Used
-    // for head counts that tail at V=64 (e.g. 48-head 27B).
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "128"}, {"SEQ_HALF", "1"}}), true, false, true, false, "_v128sh");
+    // whole-head V=128 processed as SEQ_HALF value passes of VH=32: keeps only a [D x 32]
+    // state mirror in shared (42240 B, under NVIDIA's 49152 B Vulkan limit), full state in
+    // registers. 1 wg/head (no CU-grid tail) + gram/pmat/inversion once. Used for head counts
+    // that tail at V=64 (e.g. 48-head 27B).
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "128"}, {"SEQ_HALF", "1"}, {"VH", "32"}}), true, false, true, false, "_v128sh");
 #endif
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}}), true, true, false, false, "_bf16acc");
