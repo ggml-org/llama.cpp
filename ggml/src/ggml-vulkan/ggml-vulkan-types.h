@@ -244,7 +244,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 // coopmat2 GDN prefill: workgroup size (subgroups of 32 split the D=128 value columns, 16 per subgroup)
 #define GGML_VK_GDN_CM2_WGS 256u
-#define GGML_VK_GDN_CM2_V 32u
+#define GGML_VK_GDN_CM2_V 64u
 
 struct vk_pipeline_struct;
 
