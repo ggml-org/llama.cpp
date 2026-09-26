@@ -163,6 +163,7 @@ enum llm_arch {
     LLM_ARCH_POCKETTTS,
     LLM_ARCH_MINIMAX_01,
     LLM_ARCH_HRM_TEXT,
+    LLM_ARCH_LIMITE,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -238,6 +239,7 @@ enum llm_kv {
     LLM_KV_ATTN_LOGIT_SOFTCAPPING,
     LLM_KV_ROUTER_LOGIT_SOFTCAPPING,
     LLM_KV_FINAL_LOGIT_SOFTCAPPING,
+    LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING,
     LLM_KV_SWIN_NORM,
     LLM_KV_RESCALE_EVERY_N_LAYERS,
     LLM_KV_TIME_MIX_EXTRA_DIM,
@@ -258,6 +260,9 @@ enum llm_kv {
     LLM_KV_HRM_H_CYCLES,
     LLM_KV_HRM_L_CYCLES,
     LLM_KV_HRM_PREFIX_LM,
+    LLM_KV_MUDD_FEED_FORWARD_LENGTH,
+    LLM_KV_MUDD_TAP_COUNT,
+    LLM_KV_MUDD_TAP_INDICES,
 
     LLM_KV_ATTENTION_HEAD_COUNT,
     LLM_KV_ATTENTION_HEAD_COUNT_KV,
@@ -281,6 +286,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_ROPE_PATTERN,
+    LLM_KV_ATTENTION_XSA_EPS,
 
     LLM_KV_ATTENTION_OUTPUT_SCALE,
     LLM_KV_ATTENTION_VALUE_SCALE,
@@ -543,6 +549,13 @@ enum llm_tensor {
     LLM_TENSOR_FFN_ROUTED_DOWN,     // kimi-k3: latent MoE down
     LLM_TENSOR_FFN_ROUTED_UP,       // kimi-k3: latent MoE up
     LLM_TENSOR_FFN_ROUTED_NORM,     // kimi-k3: latent MoE norm
+    LLM_TENSOR_VALUE_EMBD,          // limite: value embeddings
+    LLM_TENSOR_ATTN_VE_GATE,        // limite: value embedding gate
+    LLM_TENSOR_ATTN_XSA_ALPHA,      // limite: exclusive self attention
+    LLM_TENSOR_ATTN_RESID_SCALE,    // limite: residual scale (attn)
+    LLM_TENSOR_FFN_RESID_SCALE,     // limite: residual scale (ffn)
+    LLM_TENSOR_MUDD_DOWN,           // limite: dense connection mixer
+    LLM_TENSOR_MUDD_UP,             // limite: dense connection mixer
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,

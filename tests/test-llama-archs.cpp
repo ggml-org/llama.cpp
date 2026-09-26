@@ -145,6 +145,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
     } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
         n_head = 4;
+    } else if (arch == LLM_ARCH_LIMITE) {
+        n_head  = 4;
+        n_layer = 4; // dense connections on the last two layers
     } else if (arch == LLM_ARCH_DEEPSEEK2
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
@@ -171,7 +174,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     uint32_t n_head_kv = n_head;
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
-    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE) {
+    } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_LIMITE) {
         n_head_kv = 2; // GQA coverage
     }
     const uint32_t n_embd_head = n_embd / n_head;
@@ -380,6 +383,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_MAPLE) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
+    }
+
+    if (arch == LLM_ARCH_LIMITE) {
+        ms.add_kv(LLM_KV_ATTENTION_SCALE,             0.1f);
+        ms.add_kv(LLM_KV_ATTENTION_XSA_EPS,           1e-4f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SIGMOID_CAPPING, std::vector<float>({23.0f, 5.0f, 7.5f}));
+        ms.add_kv(LLM_KV_MUDD_FEED_FORWARD_LENGTH,    uint32_t(8));
+        ms.add_kv(LLM_KV_MUDD_TAP_COUNT,              uint32_t(2));
+        ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
