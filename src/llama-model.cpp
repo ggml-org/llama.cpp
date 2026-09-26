@@ -30,6 +30,7 @@
 #include <cfloat>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #include <functional>
 #include <map>
@@ -383,7 +384,6 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
     static const std::regex pattern_ds4_q_a_kv_weight ("blk\\.\\d*\\.attn_(q_a|kv)\\.weight");
-    static const std::regex pattern_ds4_q_b_weight    ("blk\\.\\d*\\.attn_q_b\\.weight");
     static const std::regex pattern_q_bias          ("blk\\.\\d*\\.attn_q\\.bias");
     static const std::regex pattern_kv_bias         ("blk\\.\\d*\\.attn_(k|v)\\.bias");
     static const std::regex pattern_qkv_bias        ("blk\\.\\d*\\.attn_qkv.bias");
@@ -533,7 +533,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // DS4 q_a/kv are low-rank down-projections feeding per-row norms; column split would split the norm row, so mirror them
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
-        if (std::regex_match(tensor_name, pattern_ds4_q_b_weight)) {
+        if (std::regex_match(tensor_name, pattern_attn_q_b_weight)) {
             // DS4 q_b is the up-projection; pair it with the attn_output_a output tensor
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output_a.weight", "attn_output_b.weight");
         }
@@ -1058,6 +1058,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_24B_A2B:       return "24B.A2B";
         case LLM_TYPE_26B_A4B:       return "26B.A4B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
+        case LLM_TYPE_118B_A8B:      return "118B.A8B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_32B_A9B:       return "32B.A9B";
         case LLM_TYPE_35B_A3B:       return "35B.A3B";
@@ -1068,7 +1069,6 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
         case LLM_TYPE_102B_A12B:     return "102B.A12B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
-        case LLM_TYPE_118B_A8B:      return "118B.A8B";
         case LLM_TYPE_120B_A12B:     return "120B.A12B";
         case LLM_TYPE_122B_A10B:     return "122B.A10B";
         case LLM_TYPE_124B_A5_1B:    return "124B.A5.1B";
@@ -2622,6 +2622,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         case LLM_ARCH_DEEPSEEK4:
             {
+
                 GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
                 if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
@@ -2913,7 +2914,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 nullptr,
                                 filter,
                                 nullptr,
-                                nullptr);
+                                nullptr,
+                                "");
                     }
                 }
             }

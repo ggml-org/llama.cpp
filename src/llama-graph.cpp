@@ -616,6 +616,9 @@ bool llm_graph_input_attn_k_dsa_iswa::can_reuse(const llm_graph_params & params)
     return res;
 }
 
+// dsv4 helpers
+
+
 void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     // base tensors may not be allocated if there are no non-SWA attention layers
     if (self_k_idxs && self_k_idxs->buffer) {
@@ -688,6 +691,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
 
     return res;
 }
+
 
 void llm_graph_input_attn_k_iswa::set_input(const llama_ubatch * ubatch) {
     // base tensors may not be allocated if there are no non-SWA attention layers
@@ -1056,6 +1060,7 @@ bool llm_graph_input_dsv4::can_reuse(const llm_graph_params & params) {
 
     return res;
 }
+
 
 void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(cross_kq_mask);
@@ -1430,31 +1435,13 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
 
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     if (!this->params.allow_reuse(params)) {
-        if (debug > 1) {
-            LLAMA_LOG_DEBUG("%s: cannot reuse graph due to incompatible graph parameters\n", __func__);
-        }
-
         return false;
-    }
-
-    if (debug > 1) {
-        LLAMA_LOG_DEBUG("%s: checking compatibility of %d inputs:\n", __func__, (int) inputs.size());
     }
 
     bool res = true;
 
     for (auto & input : inputs) {
-        const bool cur = input->can_reuse(params);
-
-        if (debug > 1) {
-            LLAMA_LOG_DEBUG("%s: can_reuse = %d\n", "placeholder", cur);
-        }
-
-        res = res && cur;
-    }
-
-    if (debug > 0) {
-        LLAMA_LOG_DEBUG("%s: can reuse graph = %d\n", __func__, res);
+        res = res && input->can_reuse(params);
     }
 
     return res;
@@ -1637,6 +1624,15 @@ ggml_tensor * llm_graph_context::build_norm(
     }
 
     if (mw) {
+        // the CUDA broadcast-mul kernel has no path for an F32 activation times an F16 operand
+        // (only the reverse, F16 activation times F32/F16 operand); most checkpoints keep norm
+        // weights in F32 so this is normally a no-op, but some conversions store them narrower.
+        // This re-inserts a cast node into the graph on every build (every token), but norm
+        // weight tensors are n_embd-sized (a few KB), so the added cost is not worth caching
+        // across builds versus upcasting these specific tensors once at load time.
+        if (mw->type != cur->type && cur->type == GGML_TYPE_F32) {
+            mw = ggml_cast(ctx0, mw, GGML_TYPE_F32);
+        }
         cur = ggml_mul(ctx0, cur, mw);
         if (mb) {
             cb(cur, "norm_w", il);
@@ -1644,6 +1640,10 @@ ggml_tensor * llm_graph_context::build_norm(
     }
 
     if (mb) {
+        // see mw cast note above
+        if (mb->type != cur->type && cur->type == GGML_TYPE_F32) {
+            mb = ggml_cast(ctx0, mb, GGML_TYPE_F32);
+        }
         cur = ggml_add(ctx0, cur, mb);
     }
 
@@ -2900,6 +2900,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
         }
     }
+
+    // TurboQuant: graph-side inverse WHT on attention output (undoes V rotation)
 
     ggml_build_forward_expand(gf, cur);
 

@@ -725,7 +725,7 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, const ggml_tensor * src) {
                 return dequantize_block_sycl<QK8_0, QR8_0, dequantize_q8_0>;
             }
         case GGML_TYPE_Q2_K:
-            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra && ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q2_K_sycl_reorder;
             } else {
                 return dequantize_row_q2_K_sycl;
@@ -776,23 +776,23 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, const ggml_tensor * src) {
             return dequantize_row_mxfp4_sycl;
         case GGML_TYPE_NVFP4:
             return dequantize_row_nvfp4_sycl;
-        case GGML_TYPE_F32:
-            return convert_unary_sycl<float>;
-#ifdef GGML_SYCL_HAS_BF16
-        case GGML_TYPE_BF16:
-            return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
-        #endif
         case GGML_TYPE_TURBO2_0:
             return dequantize_block_sycl<QK_TURBO2, 1, dequantize_turbo2_0>;
         case GGML_TYPE_TURBO3_0:
             return dequantize_block_sycl<QK_TURBO3, 1, dequantize_turbo3_0>;
         case GGML_TYPE_TURBO4_0:
             return dequantize_block_sycl<QK_TURBO4, 1, dequantize_turbo4_0>;
+        case GGML_TYPE_F32:
+            return convert_unary_sycl<float>;
+#ifdef GGML_SYCL_HAS_BF16
+        case GGML_TYPE_BF16:
+            return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
+#endif
         default:
             GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(type));
             return nullptr;
-        }
-        }
+    }
+}
 
 to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
     switch (type) {

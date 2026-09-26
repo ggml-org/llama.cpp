@@ -50,7 +50,8 @@ llama_memory_hybrid::llama_memory_hybrid(
             [&](int32_t il) { return !hparams.is_recr(il); }
             : filter_attn,
         nullptr,
-        nullptr
+        nullptr,
+        ""
     )),
     mem_recr(new llama_memory_recurrent(
         model,

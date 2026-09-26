@@ -8,12 +8,6 @@
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_8bit_storage : require
 
-
-#ifdef USE_OCP_FP4
-#extension GL_EXT_float_e2m1 : require
-#extension GL_EXT_float_e4m3 : require
-#endif
-
 #ifdef USE_OCP_FP4
 #extension GL_EXT_float_e2m1 : require
 #extension GL_EXT_float_e4m3 : require

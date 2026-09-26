@@ -181,6 +181,41 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
     FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,GGML_TYPE_TURBO4_0)
 #endif // GGML_SYCL_FA_ALL_QUANTS
 
+#ifdef GGML_SYCL_TURBO_QUANT
+    // Turbo KV cache type combos. Turbo blocks span 128 elements (D % 128 == 0
+    // required), so every row here uses FATTN_VEC_CASES_TURBO_D (D in
+    // {128,256,512}), never FATTN_VEC_CASES_ALL_D (which includes D=64).
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,       GGML_TYPE_TURBO2_0)
+
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,       GGML_TYPE_TURBO3_0)
+
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0, GGML_TYPE_F16)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_F16,       GGML_TYPE_TURBO4_0)
+
+    // q8_0 + turbo combos
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0,  GGML_TYPE_Q8_0)
+
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0,  GGML_TYPE_Q8_0)
+
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_Q8_0,      GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0,  GGML_TYPE_Q8_0)
+
+    // Cross-turbo K/V combos
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO3_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO2_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO2_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO3_0, GGML_TYPE_TURBO4_0)
+    FATTN_VEC_CASES_TURBO_D(GGML_TYPE_TURBO4_0, GGML_TYPE_TURBO3_0)
+#endif // GGML_SYCL_TURBO_QUANT
+
     GGML_ABORT("Not match KV type in vec");
 }
 
@@ -558,13 +593,23 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             return BEST_FATTN_KERNEL_NONE;
     }
 
+    const bool K_is_turbo = (K->type == GGML_TYPE_TURBO2_0 || K->type == GGML_TYPE_TURBO3_0 || K->type == GGML_TYPE_TURBO4_0);
+    const bool V_is_turbo = (V->type == GGML_TYPE_TURBO2_0 || V->type == GGML_TYPE_TURBO3_0 || V->type == GGML_TYPE_TURBO4_0);
+
+#ifndef GGML_SYCL_TURBO_QUANT
+    if (K_is_turbo || V_is_turbo) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+#endif // GGML_SYCL_TURBO_QUANT
+
 #ifndef GGML_SYCL_FA_ALL_QUANTS
-    // P3.2.2b0a1b4aab: admit the post-auto-asymmetric K=q8_0 + V=turbo
-    // pair so Qwen3 GQA 8:1 (after the auto-asymmetric K downgrade at
-    // src/llama-kv-cache.cpp:152 fires) can reach the VEC kernel.
-    const bool k_q8_0_v_turbo =
-        K->type == GGML_TYPE_Q8_0 && ggml_type_is_turbo(V->type);
-    if (K->type != V->type && !k_q8_0_v_turbo) {
+    // Mixed K/V types are rejected by default, except turbo combos: same-type
+    // turbo, cross-turbo (turbo2<->turbo3<->turbo4), and turbo+F16/turbo+Q8_0
+    // (e.g. the post-auto-asymmetric K=q8_0 + V=turbo pair so Qwen3 GQA 8:1,
+    // after the auto-asymmetric K downgrade at src/llama-kv-cache.cpp:152
+    // fires, can reach the VEC kernel). The precise combinations are
+    // re-validated below; this gate only needs to defer to it.
+    if (K->type != V->type && !K_is_turbo && !V_is_turbo) {
         return BEST_FATTN_KERNEL_NONE;
     }
 #endif // GGML_SYCL_FA_ALL_QUANTS
@@ -588,6 +633,20 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             break;
         default:
             return BEST_FATTN_KERNEL_NONE;
+    }
+
+    if (V_is_turbo || K_is_turbo) {
+        if (Q->ne[0] > 512) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        // Cross-turbo K/V combos supported (turbo2<->turbo3, turbo2<->turbo4, turbo3<->turbo4)
+        if (K_is_turbo && !V_is_turbo && V->type != GGML_TYPE_F16 && V->type != GGML_TYPE_Q8_0) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (V_is_turbo && !K_is_turbo && K->type != GGML_TYPE_F16 && K->type != GGML_TYPE_Q8_0) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        // softcap+turbo is valid for D<=512: softcap is applied post-dot-product, independent of K/V quantization.
     }
 
     if (mask && mask->ne[2] != 1) {
@@ -711,6 +770,9 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
                 return BEST_FATTN_KERNEL_VEC;
             }
         }
+    }
+    if (V_is_turbo || K_is_turbo) {
+        return BEST_FATTN_KERNEL_NONE;
     }
     return BEST_FATTN_KERNEL_TILE;
 }

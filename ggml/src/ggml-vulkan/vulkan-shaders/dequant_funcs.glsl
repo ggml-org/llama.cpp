@@ -782,9 +782,105 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(centroids[idx0], centroids[idx1]);
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
-    vec2 v0 = dequantize(ib, iqs, a_offset);
-    vec2 v1 = dequantize(ib, iqs + 2, a_offset);
-    return vec4(v0.x, v0.y, v1.x, v1.y);
+    // Optimized path for the vec4 case: iqs%4==0 (guaranteed by every caller,
+    // see flash_attn_dequant.glsl), so elements iqs..iqs+3 share a single qs
+    // byte (4 per byte) and a single signs byte (iqs/8 constant over the range).
+    // One qs load + one signs load instead of two of each via dequantize().
+    const float centroids[8] = float[8](
+        -0.190207, -0.118786, -0.066822, -0.021663,
+         0.021663,  0.066822,  0.118786,  0.190207
+    );
+
+    const uint qs_byte  = uint(data_a[a_offset + ib].qs[iqs / 4]);
+    const uint sgn_byte = uint(data_a[a_offset + ib].signs[iqs / 8]);
+    const uint base = iqs & 0x7u;
+
+    const uint idx0 = ((qs_byte     ) & 0x3) | (((sgn_byte >> (base    )) & 0x1u) << 2);
+    const uint idx1 = ((qs_byte >> 2) & 0x3) | (((sgn_byte >> (base + 1)) & 0x1u) << 2);
+    const uint idx2 = ((qs_byte >> 4) & 0x3) | (((sgn_byte >> (base + 2)) & 0x1u) << 2);
+    const uint idx3 = ((qs_byte >> 6) & 0x3) | (((sgn_byte >> (base + 3)) & 0x1u) << 2);
+
+    return vec4(centroids[idx0], centroids[idx1], centroids[idx2], centroids[idx3]);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].norm), 0);
+}
+#endif
+
+#if defined(DATA_A_TURBO2_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // 2-bit centroids, must match CENTROIDS_2BIT in ggml/src/ggml-turbo-quant.c
+    const float centroids[4] = float[4](-0.133462, -0.039994, 0.039994, 0.133462);
+
+    // iqs is the element index within the block (0..127), decode 2 consecutive elements
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const uint idx0 = (uint(data_a[a_offset + ib].qs[j0 / 4]) >> ((j0 % 4) * 2)) & 0x3;
+    const uint idx1 = (uint(data_a[a_offset + ib].qs[j1 / 4]) >> ((j1 % 4) * 2)) & 0x3;
+
+    return vec2(centroids[idx0], centroids[idx1]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    // Optimized path for the vec4 case: iqs%4==0 (guaranteed by every caller),
+    // so elements iqs..iqs+3 share a single qs byte (4 per byte). One qs load
+    // instead of two via dequantize().
+    const float centroids[4] = float[4](-0.133462, -0.039994, 0.039994, 0.133462);
+
+    const uint qs_byte = uint(data_a[a_offset + ib].qs[iqs / 4]);
+
+    const uint idx0 = (qs_byte     ) & 0x3;
+    const uint idx1 = (qs_byte >> 2) & 0x3;
+    const uint idx2 = (qs_byte >> 4) & 0x3;
+    const uint idx3 = (qs_byte >> 6) & 0x3;
+
+    return vec4(centroids[idx0], centroids[idx1], centroids[idx2], centroids[idx3]);
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].norm), 0);
+}
+#endif
+
+#if defined(DATA_A_TURBO4_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // 4-bit centroids, must match CENTROIDS_4BIT in ggml/src/ggml-turbo-quant.c
+    const float centroids[16] = float[16](
+        -0.241529, -0.182877, -0.143016, -0.111036,
+        -0.083292, -0.058050, -0.034299, -0.011349,
+         0.011349,  0.034299,  0.058050,  0.083292,
+         0.111036,  0.143016,  0.182877,  0.241529
+    );
+
+    // iqs is the element index within the block (0..127), decode 2 consecutive elements
+    // packed 2 per byte (nibble-packed)
+    const uint j0 = iqs;
+    const uint j1 = iqs + 1;
+
+    const uint idx0 = (uint(data_a[a_offset + ib].qs[j0 / 2]) >> ((j0 % 2) * 4)) & 0xF;
+    const uint idx1 = (uint(data_a[a_offset + ib].qs[j1 / 2]) >> ((j1 % 2) * 4)) & 0xF;
+
+    return vec2(centroids[idx0], centroids[idx1]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    // Optimized path for the vec4 case: iqs%4==0 (guaranteed by every caller),
+    // so elements iqs..iqs+3 span exactly 2 consecutive qs bytes (2 per byte,
+    // nibble-packed). Two qs loads instead of four via dequantize().
+    const float centroids[16] = float[16](
+        -0.241529, -0.182877, -0.143016, -0.111036,
+        -0.083292, -0.058050, -0.034299, -0.011349,
+         0.011349,  0.034299,  0.058050,  0.083292,
+         0.111036,  0.143016,  0.182877,  0.241529
+    );
+
+    const uint b0 = uint(data_a[a_offset + ib].qs[iqs / 2    ]);
+    const uint b1 = uint(data_a[a_offset + ib].qs[iqs / 2 + 1]);
+
+    const uint idx0 = (b0     ) & 0xF;
+    const uint idx1 = (b0 >> 4) & 0xF;
+    const uint idx2 = (b1     ) & 0xF;
+    const uint idx3 = (b1 >> 4) & 0xF;
+
+    return vec4(centroids[idx0], centroids[idx1], centroids[idx2], centroids[idx3]);
 }
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].norm), 0);
@@ -876,7 +972,7 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     return vec4(v0.x, v0.y, v1.x, v1.y);
 }
 vec2 get_dm(uint ib, uint a_offset) {
-    // No global scale/min — scales are applied per-element in dequantize()
+    // No global scale/min - scales are applied per-element in dequantize()
     return vec2(1, 0);
 }
 #endif

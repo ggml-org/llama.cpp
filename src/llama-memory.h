@@ -1,11 +1,12 @@
 #pragma once
 
-#include "llama.h"
 #include "llama-graph.h"
+#include "llama.h"
 
+#include <functional>
 #include <map>
 #include <memory>
-#include <functional>
+#include <vector>
 
 struct llama_ubatch;
 
@@ -13,6 +14,8 @@ class llama_batch_allocr;
 
 class llama_io_write_i;
 class llama_io_read_i;
+
+class llama_kv_cache;
 
 struct llama_memory_params {
     // kv cache
@@ -68,6 +71,7 @@ struct llama_memory_context_i {
     // TurboQuant: get rotation tensors for pre-rotate-queries optimization
     // Returns null for non-turbo memory types. Override in KV cache contexts.
     virtual ggml_tensor * get_turbo_rot_forward() const { return nullptr; }
+
     virtual ggml_tensor * get_turbo_rot_inverse() const { return nullptr; }
 
     // TurboQuant InnerQ: get per-channel scale_inv tensor for Q/V equalization.
@@ -114,10 +118,7 @@ struct llama_memory_i {
     // split the input batch into a set of ubatches and verify that they can fit into the cache
     // return a context object containing the ubatches and memory state required to process them
     // check the llama_memory_context_i::get_status() for the result
-    virtual llama_memory_context_ptr init_batch(
-            llama_batch_allocr & balloc,
-            uint32_t n_ubatch,
-            bool embd_all) = 0;
+    virtual llama_memory_context_ptr init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_context_ptr init_full() = 0;
@@ -138,11 +139,11 @@ struct llama_memory_i {
     // Default = clear(true); llama_kv_cache overrides to preserve InnerQ calibration.
     virtual void clear_data_only() { clear(true); }
 
-    virtual bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) = 0;
-    virtual void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;
-    virtual void seq_keep(llama_seq_id seq_id) = 0;
-    virtual void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) = 0;
-    virtual void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) = 0;
+    virtual bool seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)                              = 0;
+    virtual void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) = 0;
+    virtual void seq_keep(llama_seq_id seq_id)                                                        = 0;
+    virtual void seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift)            = 0;
+    virtual void seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d)                      = 0;
 
     virtual llama_pos seq_pos_min(llama_seq_id seq_id) const = 0;
     virtual llama_pos seq_pos_max(llama_seq_id seq_id) const = 0;

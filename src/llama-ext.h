@@ -125,6 +125,16 @@ LLAMA_API bool llama_model_supports_mtp_chain(const struct llama_model * model);
 // with the target (no separate -md model given).
 LLAMA_API bool llama_model_uses_shared_position_draft(const struct llama_model * model);
 
+// True only for architectures whose draft context literally aliases the target's
+// KV cache object (currently gemma4-assistant only - see llama_model::create_memory,
+// the `arch == LLM_ARCH_GEMMA4_ASSISTANT` branch that wires cparams.ctx_other's memory
+// into the draft's llama_kv_cache_iswa constructor). Every other architecture that
+// requires ctx_other (eagle3, dflash, qwen4exp, ...) uses it only to borrow the target's
+// weights (tok_embd/lm_head) or embeddings, and still allocates its own independent
+// KV cache - do not infer KV sharing from `ctx_other == ctx_tgt` alone, since ctx_other
+// is set unconditionally for every draft context regardless of architecture.
+LLAMA_API bool llama_model_shares_target_kv(const struct llama_model * model);
+
 // Run the DECODER_MTP graph in chained mode: the batch's first row carries the
 // real (token, h) inputs and each following row's inputs come from the previous
 // row's in-graph argmax and hidden state. One decode drafts n_tokens tokens.

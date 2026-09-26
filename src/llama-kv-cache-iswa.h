@@ -93,6 +93,7 @@ public:
     llama_kv_cache * get_swa () const;
 
 private:
+
     const bool unified;
 
     std::unique_ptr<llama_kv_cache> kv_base;

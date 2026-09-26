@@ -800,7 +800,7 @@ void main() {
     float rms_lo = sqrt(sum_sq_lo / 16.0);
     float rms_hi = sqrt(sum_sq_hi / 16.0);
 
-    // Step 4: Scale search (9 points) — matches CPU quantize_row_tq4_1s_ref
+    // Step 4: Scale search (9 points) - matches CPU quantize_row_tq4_1s_ref
     const float SCALES[9] = float[9](0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.35, 1.5);
     float best_d0 = rms_lo;
     float best_d1 = rms_hi;
@@ -851,7 +851,7 @@ void main() {
         : ((best_d1 > 1e-10) ? 1.0 / best_d1 : 0.0);
     uint cidx = tq4_choose_index(val * inv_final);
 
-    // Step 7: Nibble packing — two 4-bit indices per byte
+    // Step 7: Nibble packing - two 4-bit indices per byte
     // Even element j: low nibble; odd element j: high nibble
     // Thread t pairs with thread t^1
     uint partner_idx = subgroupShuffle(cidx, t ^ 1u);

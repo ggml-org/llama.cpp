@@ -16,6 +16,30 @@ struct llama_hparams;
 struct llama_model;
 struct llama_context;
 
+// Auto-asymmetric turbo-K upgrade decision (see llama-kv-cache.cpp for the
+// full rationale: high-GQA-ratio models amplify turbo K's quantization
+// error, so symmetric turbo K+V gets K upgraded to q8_0). Exposed so callers
+// that must validate or size against the type a layer will actually get -
+// llama-context.cpp's flash-attn/block-size validation in
+// llama_init_from_model(), for one - can resolve the same effective K type
+// the llama_kv_cache constructor will use, instead of the raw requested
+// type; the two must never diverge or the caller ends up validating (or
+// sizing) for a type the cache doesn't use.
+ggml_type llama_kv_cache_resolve_stream_type_k(
+        const llama_model & model, const llama_hparams & hparams,
+        ggml_type type_k, ggml_type type_v);
+
+// Layer-adaptive per-layer KV precision override (TURBO_LAYER_ADAPTIVE env
+// var - see llama-kv-cache.cpp for the mode legend). Exposed, like the
+// resolver above, so a caller can predict whether a model will actually get
+// non-uniform per-layer KV types before the llama_kv_cache constructor runs.
+int llama_kv_cache_turbo_layer_adaptive_mode(ggml_type type_v, uint32_t n_layer);
+
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_k(
+        int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_v(
+        int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer);
+
 //
 // llama_kv_cache
 //

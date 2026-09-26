@@ -1077,6 +1077,7 @@ static void trim_all_content(std::vector<common_chat_msg> & messages) {
 
 }
 
+
 static json common_chat_extra_context() {
     json ctx = json::object();
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();

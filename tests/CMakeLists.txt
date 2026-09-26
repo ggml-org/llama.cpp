@@ -348,6 +348,7 @@ if (TARGET cpp-httplib)
   llama_build_and_test(test-model-resolution.cpp)
   target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
 endif()
+
 llama_build_and_test(test-speculative-adaptive.cpp)
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)

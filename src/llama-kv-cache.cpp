@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -162,6 +163,75 @@ bool llama_kv_cache_auto_asymmetric_turbo_k(
 //
 // llama_kv_cache
 //
+
+ggml_type llama_kv_cache_resolve_stream_type_k(
+        const llama_model & model, const llama_hparams & hparams,
+        ggml_type type_k, ggml_type type_v) {
+    // Must track the constructor's own auto-asymmetric decision exactly (see
+    // llama_kv_cache_auto_asymmetric_turbo_k()), or the streaming pre-scan's
+    // bootstrap allocation ends up sized for a K type the cache doesn't use.
+    if (!ggml_type_is_turbo(type_k) || hparams.is_mla() || model.arch == LLM_ARCH_DEEPSEEK4) {
+        return type_k;
+    }
+    const uint32_t n_head    = hparams.n_head(0);
+    const uint32_t n_head_kv = hparams.n_head_kv(0);
+    const uint32_t gqa_ratio = (n_head_kv > 0) ? n_head / n_head_kv : 1;
+    const bool     is_qwen_family = llm_arch_is_qwen(model.arch);
+
+    const char * env = getenv("TURBO_AUTO_ASYMMETRIC");
+    const bool disabled = (env && env[0] == '0');
+
+    if (llama_kv_cache_auto_asymmetric_turbo_k(disabled, gqa_ratio, is_qwen_family, type_k, type_v)) {
+        return GGML_TYPE_Q8_0;
+    }
+    return type_k;
+}
+
+// Thin wrappers kept for llama-context.cpp's streaming pre-scan, so its
+// prediction never diverges from the constructor's own decision below
+// (which uses llama_kv_cache_adaptive_mode() directly).
+int llama_kv_cache_turbo_layer_adaptive_mode(ggml_type type_v, uint32_t n_layer) {
+    return llama_kv_cache_adaptive_mode(getenv("TURBO_LAYER_ADAPTIVE"), type_v, n_layer);
+}
+
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_k(
+        int mode, ggml_type type_k, ggml_type /* type_v */, uint32_t il, uint32_t n_layer) {
+    const bool is_turbo = ggml_type_is_turbo(type_k);
+    if (is_turbo && n_layer >= 8) {
+        if (mode == 1 && (il < 4 || il >= n_layer - 4)) {
+            return GGML_TYPE_Q8_0;
+        }
+        if (mode == 2 && il >= n_layer - 8) {
+            return GGML_TYPE_Q8_0;
+        }
+    }
+    return type_k;
+}
+
+ggml_type llama_kv_cache_turbo_layer_adaptive_type_v(
+        int mode, ggml_type type_k, ggml_type type_v, uint32_t il, uint32_t n_layer) {
+    if (n_layer < 8) {
+        return type_v;
+    }
+    const bool is_turbo   = ggml_type_is_turbo(type_k);
+    const bool v_is_turbo = ggml_type_is_turbo(type_v);
+    if (mode == 1 && is_turbo && (il < 4 || il >= n_layer - 4)) {
+        return GGML_TYPE_Q8_0;
+    }
+    if (mode == 2 && is_turbo && il >= n_layer - 8) {
+        return GGML_TYPE_Q8_0;
+    }
+    if (mode == 5 && v_is_turbo) {
+        return (il < 2 || il >= n_layer - 2) ? GGML_TYPE_TURBO4_0 : GGML_TYPE_TURBO2_0;
+    }
+    if (mode == 6 && v_is_turbo) {
+        return (il >= n_layer - 8) ? GGML_TYPE_TURBO4_0 : GGML_TYPE_TURBO2_0;
+    }
+    if (mode == 7 && v_is_turbo) {
+        return (il < 2 || il >= n_layer - 2) ? GGML_TYPE_Q8_0 : GGML_TYPE_TURBO2_0;
+    }
+    return type_v;
+}
 
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
@@ -337,6 +407,7 @@ llama_kv_cache::llama_kv_cache(
     //   5 = Boundary V: first2+last2 V=turbo4, rest V=turbo2 (K unchanged)
     //   6 = V-only: last 8 V=turbo4, rest V=turbo2 (K unchanged)
     //   7 = Boundary V (recommended): first2+last2 V=q8_0, rest V=turbo2 (K unchanged)
+    //
     // Selected once per cache construction -- deliberately NOT static: each
     // cache must decide from its own type_v/model shape/env.
     const char * const turbo_layer_adaptive_env = getenv("TURBO_LAYER_ADAPTIVE");
@@ -806,7 +877,6 @@ void llama_kv_cache::do_clear(bool data, bool reset_innerq) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
         }
-
     }
 
     if (turbo_rotation != nullptr && turbo_rotation->buffer != nullptr && (data || reset_innerq)) {
@@ -842,6 +912,14 @@ void llama_kv_cache::do_clear(bool data, bool reset_innerq) {
 }
 
 bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    // Safe while block KV streaming is active: this only edits cell bookkeeping (which
+    // positions and sequence ids a slot holds). No K/V bytes move, so the host cache stays
+    // authoritative and the resident GPU mirror stays valid - a freed slot is not attended
+    // again until some later ubatch writes it through set_rows, which marks the row dirty
+    // and refreshes the mirror exactly as it does for a slot that was never used.
+    // seq_cp and seq_add (K-shift) still refuse: the first aliases one slot into a second
+    // sequence, the second rewrites K in place on the GPU.
+
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
         return true;
@@ -2535,6 +2613,11 @@ void llm_graph_input_k_shift::set_input(const llama_ubatch * ubatch) {
         kv_self->set_input_k_shift(k_shift);
     }
 
+    // k_rot is null (not just unallocated) whenever attn_rot_k is false: build_input_k_rot
+    // only allocates a real tensor for quantized K-caches with rotation enabled, or for
+    // DeepSeek32/DeepSeek4's lightning-indexer cache (see attn_rot_k's setup). So a skip
+    // here is either "this cache doesn't rotate" (k_rot == nullptr) or "graph-reserve pass"
+    // (k_rot->buffer == nullptr) -- never a case that should silently drop a real input.
     if (k_rot && k_rot->buffer) {
         kv_self->set_input_k_rot(k_rot);
     }
@@ -3003,7 +3086,8 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             return false;
         }
 
-        // the cells go in from 0, so a mirrored cache lands on the same ones as long as it restores the same count. the layout itself carries no more information here
+        // the cells go in from 0, so a mirrored cache lands on the same ones as long as it
+        // restores the same count. the layout itself carries no more information here
         if (sinfo_in && (sinfo_in->empty() || sinfo_in->n_stream() != 1 || sinfo_in->idxs[0].size() != cell_count)) {
             LLAMA_LOG_ERROR("%s: mirrored slot layout holds %d cells, this cache restores %d\n", __func__,
                     sinfo_in->empty() ? 0 : (int) sinfo_in->idxs[0].size(), cell_count);
@@ -3494,8 +3578,6 @@ ggml_tensor * llama_kv_cache_context::get_turbo_rot_inverse() const {
 ggml_tensor * llama_kv_cache_context::get_turbo_innerq_scale_inv() const {
     return kv->get_turbo_innerq_scale_inv();
 }
-
-
 
 // P3.2.2a2a3b discriminator: non-mutating snapshot read so the
 // apply() gate at :2867 can log the gate inputs without clearing

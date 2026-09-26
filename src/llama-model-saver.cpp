@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_set>
+#include <unordered_set>
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {

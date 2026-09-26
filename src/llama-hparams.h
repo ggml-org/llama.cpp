@@ -341,7 +341,6 @@ struct llama_hparams {
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
-
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
@@ -449,7 +448,7 @@ struct llama_hparams {
     uint32_t n_embd_s() const;
 
     // dimension of one ggml_gated_delta_net emit_mode==1 ingredient slot (4 rows of head_dim,
-    // one each for k/v/g/beta) -- only meaningful for GDN/KDA-style layers.
+    // one each for k/v/g/beta) -- only meaningful for GDN/KDA-style layers (n_embd_head_kda != 0).
     uint32_t n_embd_s_ingredient() const;
 
     uint32_t n_pos_per_embd() const;
@@ -512,6 +511,7 @@ struct llama_hparams {
 
 
     bool use_mrope() const;
+
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

@@ -1,0 +1,32 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+// 128 elements per block (QK_TURBO4 = 128)
+// Each workgroup processes one block. 128 threads, 1 element per thread.
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_turbo4_0 data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    const float centroids[16] = float[16](
+        -0.241529, -0.182877, -0.143016, -0.111036,
+        -0.083292, -0.058050, -0.034299, -0.011349,
+         0.011349,  0.034299,  0.058050,  0.083292,
+         0.111036,  0.143016,  0.182877,  0.241529
+    );
+
+    // Each workgroup processes one 128-element block
+    const uint ib  = gl_WorkGroupID.x;
+    const uint j   = gl_LocalInvocationID.x;  // element index 0..127
+
+    if (ib >= p.nel / 128) return;
+
+    const float norm = float(data_a[ib].norm);
+
+    // Extract 4-bit centroid index, nibble-packed (2 per byte)
+    const uint idx = (uint(data_a[ib].qs[j / 2]) >> ((j % 2) * 4)) & 0xF;
+
+    data_b[ib * 128 + j] = D_TYPE(centroids[idx] * norm);
+}

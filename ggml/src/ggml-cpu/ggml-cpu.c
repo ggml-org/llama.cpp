@@ -2534,6 +2534,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1;
             } break;
+        case GGML_OP_LIGHTNING_INDEXER:
+            {
+                n_tasks = n_threads;
+            } break;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(node)) {
                 case GGML_UNARY_OP_ABS:
@@ -2666,7 +2670,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:
-        case GGML_OP_LIGHTNING_INDEXER:
             {
                 n_tasks = n_threads;
             } break;

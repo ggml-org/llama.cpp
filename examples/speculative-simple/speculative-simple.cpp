@@ -230,13 +230,21 @@ int main(int argc, char ** argv) {
 
             //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
 
-            llama_decode(ctx_tgt, batch_tgt);
+            const int32_t rc = llama_decode(ctx_tgt, batch_tgt);
+            if (rc != 0) {
+                LOG_ERR("%s: target decode failed, ret = %d\n", __func__, rc);
+                return 1;
+            }
         }
 
-        // feed the batch to the speculative implementation(s) - this drives the draft model, MTP, Eagle3, etc.
+        // Hand the target's batch to the speculative layer and let it advance the draft in
+        // whatever way its kind requires. A standalone draft model replays the tokens, which is
+        // what this example used to do by hand; an MTP head instead needs the target's hidden
+        // states, and this call is the only thing that captures them. Doing it by hand left the
+        // head drafting from an empty state, which reads as fluent text that ignores the target.
         if (!common_speculative_process(spec, batch_tgt)) {
-            LOG_ERR("%s", "failed to process speculative batch\n");
-            break;
+            LOG_ERR("%s: failed to advance the draft with the target's batch\n", __func__);
+            return 1;
         }
 
         // only save the sampler sampler state if we use checkpoints

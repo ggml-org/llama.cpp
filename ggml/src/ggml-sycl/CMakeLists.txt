@@ -218,6 +218,16 @@ if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
+option(GGML_SYCL_SCALAR_MMQ "Force scalar MMQ tile sizes (for B70 without XMX kernels)" OFF)
+if (GGML_SYCL_SCALAR_MMQ)
+    add_compile_definitions(GGML_SYCL_SCALAR_MMQ)
+endif()
+
+option(GGML_SYCL_TURBO_QUANT "Enable dispatch to TurboQuant KV cache FA kernels" ON)
+if (GGML_SYCL_TURBO_QUANT)
+    add_compile_definitions(GGML_SYCL_TURBO_QUANT)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     if (NOT GGML_SYCL_DEVICE_ARCH)

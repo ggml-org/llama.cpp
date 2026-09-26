@@ -7,8 +7,10 @@ description: Review llama.cpp changes against project conventions and common rev
 
 This skill reviews changes against llama.cpp's conventions and the pitfalls that reviewers flag most often, so the contributor can fix them before a maintainer has to. It has two modes:
 
-- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs `master`) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff master...HEAD` plus any uncommitted changes.
+- **Self-review (default):** review the contributor's own local changes (uncommitted work, or a branch vs its base) as a pre-PR pass. Ask which if it's ambiguous; default to `git diff feature/turboquant-kv-cache...HEAD` plus any uncommitted changes (use the upstream merge-base of the fork as the base when the diff against the feature branch is noisy).
 - **Read-only review of a PR/file:** if the user points at a PR number or specific files (including code they didn't write), review those and report findings.
+
+**Fork context:** this repo is the TurboQuant fork, not upstream llama.cpp. Most changes here are fork-internal and never go to ggml-org; the upstream-facing rules below (issue-first, quick-reject gates, maintainer approval expectations) still apply to the shared upstream code, but the fork-specific checklist at the end takes precedence for TurboQuant paths. The `AGENTS.md` overview is required context - read it first if not already in context; its "Known pitfalls" list is the first place to check on any turbo regression.
 
 In both modes the output is **private review notes for the user to read and act on** - it is never something to post. This is a hard rule from `AGENTS.md`: an agent must NEVER write, or help write, a PR comment, a review comment, or a reply to a reviewer, by any means including `gh`. Do not offer to. If the user asks you to post the notes, refuse and point them at that rule. Present findings in the conversation only.
 
@@ -20,6 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 
 - `conversion/`, `gguf-py/`, `src/models/`, `src/llama-arch.*` -> **New model / architecture**
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
+- `ggml-turbo-quant.c`, turbo/TQ weight or cache types, `GGML_OP_TURBO_WHT`, turbo kernels in any backend -> **TurboQuant / fork-specific** (in addition to ggml / backend)
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
 - anything else, plus all of the above -> **General** (always runs)
@@ -137,6 +140,19 @@ Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on ever
 - Every added line should be something the contributor can explain and defend to a reviewer without AI help - flag anything that looks copied-in without understanding.
 - `Co-authored-by:` must be reserved for human co-authors; AI contributions (claude, cursor, codex, etc.) must use `Assisted-by:`; if this point is violated, it's a blocking finding.
 - Any mentions of Minja must be treated as blocking; see `AGENTS.md` for why.
+
+## TurboQuant / fork-specific (takes precedence on fork paths)
+
+Run this in addition to the General checklist whenever the diff touches turbo code, and instead of the upstream-facing gates where they conflict. The AGENTS.md "Known pitfalls" list is the regression checklist - each entry there cost a real bug; verify the diff doesn't disturb those invariants.
+
+- **Type/enum stability:** `GGML_TYPE_TURBO2_0=43, TURBO3_0=44, TURBO4_0=45, TQ3_1S=46, TQ4_1S=47` and `GGML_OP_TURBO_WHT` are baked into GGUF files and cross-backend dispatch - never renumber, reorder, or repurpose. New fork types go after 47.
+- **Codec fidelity:** `ggml/src/ggml-turbo-quant.c` must stay byte-identical to fork tip conventions; any change needs `test-turbo-quant` passing (turbo3 MSE=0/Cosine=1.0, turbo4 Cosine=0.9956) plus `test-quantize-fns` (TQ3_1S/TQ4_1S cases).
+- **Backend coverage matrix:** this fork ships CPU, BLAS, SYCL, Vulkan, and OpenVINO only - CUDA, HIP, Metal, CANN, MUSA, WebGPU, RPC, and Hexagon are deleted from the tree; a change to turbo KV or TQ weight behavior must keep the retained backends in sync, and must never reintroduce a removed one. Vulkan SET_ROWS pipeline registration missing TURBO types or the `require_full_subgroups=true, subgroup_size=32` flags is the classic Vulkan regression (abort).
+- **KV cache types:** changes to cache-type handling must be exercised with turbo types (`-ctk/-ctv turbo3`), which require flash attention (auto-enabled). Respect the 128-element rotation block: zero-padding of head dims, and no V rotation/padding for MLA models. K/V types must stay identical for MLA/DeepSeek4.
+- **Env knobs:** `TURBO_LAYER_ADAPTIVE`, `TURBO_AUTO_ASYMMETRIC`, `TURBO_SPARSE_V`, `LLAMA_ATTN_ROT_*` semantics in `docs/KV-cache-quantization.md` are the contract - changing behavior without updating that doc is a finding.
+- **Rebase hygiene:** shared upstream files (`src/`, `ggml/`, `common/`) should stay structurally close to upstream so the next upstream rebase does not produce stacked duplicates - the `gguf-py/gguf/constants.py` duplicate-model-tensor crash is the canonical example. Fork-only logic in shared files needs a `fork:` tag in the comment so rebase conflict resolution can find it.
+- **Test gates:** run `test-backend-ops` sweeps that cover TQ3_1S/TQ4_1S in `all_types` and the turbo3/4 FA cases on SYCL and Vulkan, not just the default CPU matrix. `llama-bench` with `-ctk/-ctv turboN` is the perf gate for cache-type work.
+- **Upstream-facing sections below** still apply to changes in shared code, but do not block fork-internal work on upstream acceptance criteria (issue-first, two-maintainer approvals, upstream docs) that do not apply here.
 
 ## Reporting
 

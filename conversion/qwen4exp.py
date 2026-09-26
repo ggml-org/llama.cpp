@@ -21,6 +21,9 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     Shares the Qwen3.5 gated delta net and interleaved mrope, and adds three things:
     hyper-connections in place of every layer norm, QSA sparse attention on the full
     attention layers, and PLE n-gram hash embeddings on a single layer.
+
+    The checkpoint also carries a NextN/MTP draft head under `mtp.*`, exported as a
+    trailing block; pass --no-nextn to leave it out.
     """
 
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
@@ -111,7 +114,9 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_attention_compress_ratios(ratios)
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
-        # so emit no PLE keys rather than optional ones
+        # so emit no PLE keys rather than optional ones.
+        # a draft-only export carries no trunk tensors, so it carries no PLE table
+        # to describe either
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers or self.mtp_only:
             return
@@ -136,6 +141,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             self._read_hash_constants("ple_embedding.ngram_heads_vocab_sizes"))
 
     def _image_token_id(self) -> int | None:
+        # base.py merges text_config into the root of hparams, where image_token_id already is
         img = self.hparams.get("image_token_id")
         return None if img is None else int(img)
 

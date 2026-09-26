@@ -1178,7 +1178,6 @@ struct llama_model_deepseek32 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-
 struct llama_model_dots3note : public llama_model_base {
     llama_model_dots3note(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -1397,6 +1396,7 @@ struct llama_model_dflash : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
 
 
 struct llama_model_mistral4 : public llama_model_deepseek2 {

@@ -213,6 +213,8 @@ struct tensor_metadata {
 // dequantization
 //
 
+// dequantizes [first_elem, first_elem + nelements) of the tensor into output[0, nelements)
+// first_elem must be a multiple of the source block size, which holds for any whole-row range
 static void llama_tensor_dequantize_impl(
     ggml_type type, const void * data, float * f32_output, std::vector<std::thread> & workers,
     const size_t nelements, const int nthread
@@ -323,6 +325,17 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ssm_conv1d") == std::string::npos;
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // do not quantize Qwen4-Exp's state-space gains or its n-gram conv kernel. They are small and
+    // structural rather than arithmetic: the gains set the decay of the recurrence. A 3 to 4 bit
+    // copy of a tensor in this class leaves a model that loads, runs at full speed and answers
+    // every prompt with the same text, because its input never reaches the residual. ple_conv1d
+    // has a 4-element row, which no block-quantized type can represent, so there is no floor to
+    // set for it in any case. The hyper-connection injection matrices are the same class but do
+    // carry 8 bits, so they get a floor in llama_tensor_get_type instead of being excluded here.
+    quantize &= name.find("ssm_alpha.weight")  == std::string::npos;
+    quantize &= name.find("ssm_beta.weight")   == std::string::npos;
+    quantize &= name.find("ple_conv1d.weight") == std::string::npos;
 
     // do not quantize MiniMax's indexer projection weights, they are tiny
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
@@ -758,6 +771,24 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
         if (!manual && !params->pure) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
+        }
+
+        // Qwen4-Exp's hyper-connection injection matrices decide how the token embedding enters
+        // each layer. At 3 to 4 bits the model answers every prompt with the same text, because
+        // its input never reaches the residual. Eight bits measures clean: the published MTP head
+        // carries both at Q8_0 and drafts at 86% acceptance. So set a floor rather than refusing
+        // to quantize them at all. The shape fallback below still corrects the type if the row
+        // cannot hold it.
+        {
+            const std::string tname(tensor->name);
+            if (tname.find("hc_attn_inject.weight") != std::string::npos ||
+                tname.find("hc_ffn_inject.weight")  != std::string::npos) {
+                const int64_t blck = ggml_blck_size(new_type);
+                const float   bpw  = blck > 0 ? 8.0f * ggml_type_size(new_type) / blck : 32.0f;
+                if (bpw < 8.0f) {
+                    new_type = GGML_TYPE_Q8_0;
+                }
+            }
         }
 
         // incompatible tensor shapes are handled here - fallback to a compatible type

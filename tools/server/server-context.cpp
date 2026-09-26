@@ -471,13 +471,26 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // Set once a context reports that it cannot serialize its KV cache, so the failure is
+    // logged one time instead of on every request.
+    mutable bool state_save_unsupported = false;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        if (prompt.tokens.size() == 0 || state_save_unsupported) {
             return false;
         }
 
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         const size_t cur_size_dft = ctx_dft ? llama_state_seq_get_size_ext(ctx_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE) : 0;
+
+        // A context that cannot serialize its KV cache (block KV streaming, for one) reports
+        // size zero. Saving an empty entry would spend a cache slot on something prompt_load
+        // can never restore, and would repeat the failure on every request.
+        if (cur_size_tgt == 0) {
+            SRV_WRN("%s", "prompt cache disabled: this context cannot save KV cache state\n");
+            state_save_unsupported = true;
+            return false;
+        }
 
         const size_t cur_size = cur_size_tgt + cur_size_dft;
 

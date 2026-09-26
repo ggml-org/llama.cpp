@@ -1323,7 +1323,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     kv_csa = std::make_unique<llama_kv_cache>(
             model, hparams_csa, type_k, type_v,
             v_trans, offload, unified_compressed, GGML_PAD(dsv4_comp_size(kv_size, DSV4_CSA_RATIO), 256u), n_seq_max, n_pad,
-            0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr);
+            0, LLAMA_SWA_TYPE_NONE, nullptr, filter_csa, nullptr, nullptr, "");
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressed KV cache, size = %u cells\n",
             __func__, dsv4_comp_size(kv_size, DSV4_HCA_RATIO));

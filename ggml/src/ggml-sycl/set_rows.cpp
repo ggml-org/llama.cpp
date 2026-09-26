@@ -745,12 +745,6 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 nb1, nb2, nb3,
                 stream);
             break;
-        case GGML_TYPE_MXFP4:
-            set_rows_sycl_q<TIn, TIdx, block_mxfp4, QK_MXFP4, cpy_blck_f32_mxfp4>(src0_d, src1_d, (block_mxfp4 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
-            break;
-        case GGML_TYPE_NVFP4:
-            set_rows_sycl_q<TIn, TIdx, block_nvfp4, QK_NVFP4, cpy_blck_f32_nvfp4>(src0_d, src1_d, (block_nvfp4 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
-            break;
         case GGML_TYPE_TURBO2_0:
             set_rows_sycl_turbo<TIdx, block_turbo2_0, QK_TURBO2, quantize_turbo2_0<1>, turbo_nearest_centroid_2bit, TURBO_CENTROIDS_2BIT>(
                 (const float *)src0_d, src1_d, (block_turbo2_0 *)dst->data,

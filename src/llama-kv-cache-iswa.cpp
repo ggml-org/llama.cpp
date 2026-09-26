@@ -355,6 +355,7 @@ const llama_ubatch & llama_kv_cache_iswa_context::get_ubatch() const {
     return ubatches[i_next];
 }
 
+
 const llama_kv_cache_context * llama_kv_cache_iswa_context::get_base() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 

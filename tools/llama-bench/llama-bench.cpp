@@ -1461,6 +1461,7 @@ struct cmd_params_instance {
         mparams.lazy_mode     = lazy_mode;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
+        mparams.use_extra_bufts = repack;
         mparams.no_host       = no_host;
         mparams.use_extra_bufts = repack;
 

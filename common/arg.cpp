@@ -262,6 +262,13 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
         if (buft) {
             buft_list[ggml_backend_buft_name(buft)] = buft;
         }
+        // Also offer the device's pinned host buffer, so a tensor can deliberately be left in host
+        // memory and read in place. Worth it only for a large tensor that is gathered from rather
+        // than streamed; whether the backend will accept one as a kernel input is its own decision.
+        auto * host_buft = ggml_backend_dev_host_buffer_type(dev);
+        if (host_buft) {
+            buft_list[ggml_backend_buft_name(host_buft)] = host_buft;
+        }
     }
 
     for (const auto & override : string_split<std::string>(value, ',')) {
@@ -2652,6 +2659,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             string_format("number of parallel sequences to decode (default: %d)", params.n_parallel),
             [](common_params & params, int value) {
                 params.n_parallel = value;
+                params.n_parallel_explicit = true;
             }
         ).set_env("LLAMA_ARG_N_PARALLEL"));
     }

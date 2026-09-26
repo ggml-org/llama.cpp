@@ -947,6 +947,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     uint32_t        target_layer_ids_n = 0;
     int32_t         n_layer_tgt        = 0;       // extract id == n_layer_tgt -> pre-final-norm state (nextn)
 
+    // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
+    std::vector<float> features_buf;
+
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
         : common_speculative_impl(type, n_seq, params.draft.n_max)
@@ -1018,6 +1021,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
         batch_inject = llama_batch_init(llama_n_ubatch(ctx_dft), n_embd_enc, n_seq);
+
+        // embd batches on an M-RoPE draft need 4 position rows per token
+        is_mrope = llama_model_rope_type(model_dft) == LLAMA_ROPE_TYPE_MROPE;
+        if (is_mrope) {
+            free(batch_inject.pos);
+            batch_inject.pos = (llama_pos *) malloc(sizeof(llama_pos) * 4 * llama_n_batch(ctx_dft));
+        }
 
         // embd batches on an M-RoPE draft need 4 position rows per token
         is_mrope = llama_model_rope_type(model_dft) == LLAMA_ROPE_TYPE_MROPE;
@@ -1158,9 +1168,8 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
 
-                // gather target features per extract layer; the fused decode encodes and
-                // injects them into the K/V cache at the target positions
-                batch_inject.n_tokens = n_chunk;
+                // gather this chunk's target features, interleaved by extract layer
+                features_buf.resize((size_t) n_chunk * n_embd_enc);
                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
                     const float * layer = target_layer_ids[k] == n_layer_tgt
                         ? llama_get_embeddings_nextn(ctx_tgt)
@@ -1169,11 +1178,47 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                     }
                     for (int32_t i = 0; i < n_chunk; ++i) {
-                        float       * dst = batch_inject.embd + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
+                        float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
                         const float * src = layer + (size_t) (i_batch_beg[seq_id] + offset + i) * n_embd_tgt;
                         std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
                     }
                 }
+
+                // clamp overflow-prone feature values before fusing. backends that
+                // stage these f32 activations as f16 for the matmul (e.g. a
+                // simdgroup/subgroup multiply) hit Laguna's massive-activation rows
+                // (attention-sink tokens, |x| ~ 1e6 in the pre-final-norm residual):
+                // finite in f32, but overflowing f16's +-65504 range -> inf/nan.
+                // Clamp those finite-but-out-of-range values too, not just actual
+                // NaN/Inf, or one poisoned row still NaNs the whole drafter KV cache.
+                {
+                    size_t n_bad = 0;
+                    for (auto & v : features_buf) {
+                        if (!std::isfinite(v) || v > 65504.0f || v < -65504.0f) {
+                            v = v != v ? 0.0f : (v > 0.0f ? 65504.0f : -65504.0f);
+                            n_bad++;
+                        }
+                    }
+                    if (n_bad > 0) {
+                        static bool warned = false;
+                        if (!warned) {
+                            LOG_WRN("%s: sanitized %zu non-finite/f16-overflow target feature values (massive activations); "
+                                    "draft quality may degrade slightly on affected rows\n", __func__, n_bad);
+                            warned = true;
+                        }
+                    }
+                }
+
+                // inject the DFlash decoder K/V cache at the tokens' target positions.
+                // The injection graph (see the "KV cache injection" branches in
+                // src/models/dflash.cpp) applies build_dflash_features() itself, so
+                // batch_inject.embd must carry the same raw, n_embd_enc-sized target
+                // features as features_buf - not a separately fused n_embd_dec-sized
+                // encoder output, which would be fused a second time and also
+                // overrun/underrun the n_embd_enc-sized row allocation.
+                int32_t rc;
+                batch_inject.n_tokens = n_chunk;
+                std::memcpy(batch_inject.embd, features_buf.data(), (size_t) n_chunk * n_embd_enc * sizeof(float));
 
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     const llama_pos p = batch_in.pos[i_batch_beg[seq_id] + offset + i];
@@ -1187,7 +1232,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     batch_inject.seq_id[i][0] = seq_id;
                     batch_inject.logits[i]    = false;
                 }
-                const int32_t rc = llama_decode(ctx_dft, batch_inject);
+                rc = llama_decode(ctx_dft, batch_inject);
                 if (rc != 0) {
                     LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
                             __func__, rc, (int) n_chunk, (int) offset);
@@ -1467,7 +1512,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
 
-        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
+        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt && llama_model_shares_target_kv(llama_get_model(ctx_dft));
         same_position_draft = is_mem_shared && llama_model_uses_shared_position_draft(llama_get_model(ctx_dft));
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
         chain_graph   = !is_mem_shared && !chain_heads && chain_enabled && llama_model_supports_mtp_chain(llama_get_model(ctx_dft));
@@ -1509,6 +1554,21 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
         this->n_max = this->params.n_max;
+
+        if (adaptive) {
+            if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
+                GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
+                        __func__, this->params.n_min_adaptive, this->params.n_max);
+            }
+
+            adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
+            for (uint32_t s = 0; s < n_seq; ++s) {
+                // start at the floor max(1, n_min_adaptive), bounded by n_max;
+                // the controller climbs from there once acceptance feedback arrives
+                adaptive_ctrl[s].reset(this->params.n_max, this->params.n_min_adaptive);
+            }
+            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
+        }
 
         if (adaptive) {
             if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {

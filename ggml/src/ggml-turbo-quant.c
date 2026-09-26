@@ -26,6 +26,9 @@
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
 
 /* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
+/* Declared with GGML_API so the symbol carries dllexport/visibility, then
+ * defined plainly: `GGML_API` now expands with `extern` on every path, and
+ * `extern int x = 0;` is rejected under -Werror (-Wextern-initializer). */
 GGML_API int turbo3_cpu_wht_group_size;
 int turbo3_cpu_wht_group_size = 0;
 
@@ -74,7 +77,10 @@ static void turbo_init_rotation(void) {
 
     const int d = TURBO_D;
 
-    /* Generate random Gaussian matrix */
+    /* Generate random Gaussian matrix directly into turbo_rotation.
+     * Previous code used a 64KB stack-local G[] then memcpy'd - this
+     * caused stack overflow on llama.cpp worker threads with reduced
+     * stack sizes. */
     turbo_prng_seed(TURBO_SEED_ROTATION);
     for (int i = 0; i < d * d; i++) {
         turbo_rotation[i] = (float)turbo_prng_normal();

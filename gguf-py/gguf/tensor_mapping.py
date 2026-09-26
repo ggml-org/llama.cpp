@@ -1381,6 +1381,7 @@ class TensorNameMap:
             "encoder.fc", # dflash (transformers MuseGlimmerAssistant)
         ),
 
+
         MODEL_TENSOR.DSPARK_MARKOV_W1: (
             "model.markov_head.markov_w1", # dspark
         ),
@@ -1392,7 +1393,6 @@ class TensorNameMap:
         MODEL_TENSOR.DSPARK_CONF_PROJ: (
             "model.confidence_head.proj", # dspark
         ),
-
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
             "model.layers.{bid}.attention_conv.base_kernel",
         ),
