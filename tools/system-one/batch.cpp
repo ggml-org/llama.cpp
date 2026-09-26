@@ -263,7 +263,14 @@ static int run(int argc, char ** argv) {
     cp.n_ctx           = (uint32_t) std::max<size_t>(max_tok + 64, 512);
     cp.n_batch         = cp.n_ctx;
     cp.n_ubatch        = cp.n_ctx;
-    cp.n_seq_max       = (uint32_t) std::min<size_t>(max_seq, 32);
+    // Only rank_head puts several sequences in one decode. The other readouts run one at a
+    // time and clear the memory in between, and asking for more costs context rather than
+    // buying anything: with a non-unified cache each sequence gets `n_ctx / n_seq_max`
+    // (llama-context.cpp), so a nine-question request on a long state would give each of its
+    // nine sequences a ninth of the room and `llama_decode` would fail with no explanation.
+    // It has never shown before because every other one-at-a-time readout is memory-less.
+    cp.n_seq_max       = cfg.readout == SYSTEM_ONE_READOUT_RANK_HEAD
+                       ? (uint32_t) std::min<size_t>(max_seq, 32) : 1;
     cp.n_threads       = nthreads;
     cp.n_threads_batch = nthreads;
     cp.embeddings      = need.embeddings;
