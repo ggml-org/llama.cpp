@@ -2879,11 +2879,30 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         rm_stdq = 2;
         rm_stdq_int = 2;
     }
-    // RDNA3: above four columns, static 4 rows for all types bench faster than the default
-    const bool is_rdna3 = device->vendor_id == VK_VENDOR_ID_AMD && device->architecture == AMD_RDNA3;
-    auto const &rm_int_n = [&](uint32_t rows, uint32_t i) { return (is_rdna3 && i >= 4) ? 4u : rows; };
-    // RDNA3: Static 4 rows for all types bench faster than the default
-    auto const &rm_id = [&](uint32_t rows) { return is_rdna3 ? 4u : rows; };
+    // Device-tuned row geometry for regular MUL_MAT MMVQ.
+    auto const &rm_int_n = [&](uint32_t rows, uint32_t i) {
+        if (device->vendor_id == VK_VENDOR_ID_AMD &&
+            device->architecture == AMD_RDNA3) {
+            return i >= 4 ? 4u : rows;
+        }
+
+        return rows;
+    };
+
+    // Static 4-row MUL_MAT_ID geometry on Turing and later NVIDIA, plus RDNA3.
+    auto const &rm_id = [&](uint32_t rows) {
+        if (device->vendor_id == VK_VENDOR_ID_NVIDIA &&
+            device->architecture != vk_device_architecture::NVIDIA_PRE_TURING) {
+            return 4u;
+        }
+
+        if (device->vendor_id == VK_VENDOR_ID_AMD &&
+            device->architecture == AMD_RDNA3) {
+            return 4u;
+        }
+
+        return rows;
+    };
     uint32_t rm_iq = 2 * rm_kq;
 
     const bool use_subgroups = device->subgroup_arithmetic;
@@ -3071,7 +3090,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #if !defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
     GGML_UNUSED(rm_stdq_int);
     GGML_UNUSED(rm_kq_int);
-    GGML_UNUSED(is_rdna3);
     GGML_UNUSED(rm_int_n);
     GGML_UNUSED(rm_id);
     GGML_UNUSED(rm_iq_int);
