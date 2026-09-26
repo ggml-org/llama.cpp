@@ -604,6 +604,7 @@ struct common_params {
     float       video_fps                   = 4.0f;
     int64_t     video_timestamp_interval_ms = 5000;
     std::string video_ffmpeg_bin_dir        = "";
+    float       video_max_tokens            = 0.0f;
 
     // finetune
     struct lr_opt lr;
