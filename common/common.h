@@ -8,6 +8,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <array>
 #include <list>
 #include <set>
 #include <sstream>
@@ -877,7 +878,6 @@ void string_process_escapes(std::string & input);
 std::string string_from(bool value);
 std::string string_from(const std::vector<int> & values);
 std::string string_from(const struct llama_context * ctx, const std::vector<llama_token> & tokens);
-std::string string_from(const struct llama_context * ctx, const struct llama_batch & batch);
 
 bool glob_match(const std::string & pattern, const std::string & str);
 
@@ -1034,9 +1034,54 @@ void common_batch_add(
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits);
 
+// wrapper around llama_batch_ext that provide getter functions for downstream code
+struct common_batch {
+    struct token {
+        llama_token  id;
+        std::array<llama_pos, GGML_MROPE_SECTIONS> pos; // only pos[0] is used for text tokens
+        llama_seq_id seq_id;
+        bool         output;
+        llama_embd   embd; // non-owning view of the data passed to add_embd()/set_embd(), data == NULL if none
+    };
+
+    std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
+    llama_batch_ext_ptr batch;
+
+    int32_t n_pos = 1; // positions per embedding entry, GGML_MROPE_SECTIONS for MROPE/IMROPE
+
+    common_batch() = default;
+    common_batch(struct llama_context * ctx);
+
+    llama_batch_ext * get() const { return batch.get(); }
+
+    // content type of the batch, all entries carry the same combination
+    bool has_token() const { return !tokens.empty() && tokens[0].id != LLAMA_TOKEN_NULL; }
+    bool has_embd () const { return !tokens.empty() && tokens[0].embd.data != nullptr; }
+
+    void clear();
+
+    // returns the batch index (>= 0), aborts if the entry cannot be added (batch full, invalid token or seq id)
+    int32_t add(llama_token id, llama_pos pos, llama_seq_id seq_id, bool output);
+
+    bool set_output(int32_t idx, bool value);
+
+    // attach a token embedding to the entry at idx, can only be set once per entry
+    bool set_embd(int32_t idx, llama_embd embd);
+
+    // add an embedding-only entry (no token id), aborts like add() on failure
+    // pos points to n_pos positions
+    int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
+
+    int32_t size() const { return (int32_t) tokens.size(); }
+};
+
 // create a single-sequence batch from a list of tokens
 // last token always have output_logits set to true
-llama_batch_ext_ptr common_batch_ext_get_one(struct llama_context * ctx, const llama_tokens & tokens);
+common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens & tokens);
+
+// convert a legacy llama_batch, applying its defaults: seq 0, positions continue from memory, last token is output
+// the embd rows are read at the model input width
+common_batch common_batch_from_llama_batch(struct llama_context * ctx, const llama_batch & batch);
 
 // decodes a single batch of tokens for a prompt and manages session tokens
 //

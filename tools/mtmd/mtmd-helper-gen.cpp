@@ -222,14 +222,13 @@ public:
             return 0;
         }
         const int32_t n_tokens_batch = std::min(n_batch, n_prompt - prompt_pos);
-        llama_batch batch_view = prompt_batch->get_view(prompt_pos, n_tokens_batch);
 
         const bool is_last_batch = (prompt_pos + n_tokens_batch) == n_prompt;
         if (is_last_batch) {
-            batch_view.logits[n_tokens_batch - 1] = 1;
+            prompt_batch->logits[prompt_pos + n_tokens_batch - 1] = 1;
         }
 
-        if (llama_decode(lctx, batch_view) != 0) {
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, prompt_batch->render(lctx, prompt_pos, n_tokens_batch)) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
         }
@@ -286,10 +285,10 @@ public:
         decode_embd_batch batch_embd(fb.data(), 1, n_pos_per_embd, n_embd);
         if (mrope) batch_embd.set_position_mrope_1d(pos, seq_id);
         else       batch_embd.set_position_normal  (pos, seq_id);
-        batch_embd.batch.logits[0] = 1;
+        batch_embd.logits[0] = 1;
         pos++;
 
-        if (llama_decode(lctx, batch_embd.batch) != 0) {
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, 0, 1)) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return 1;
         }
@@ -586,13 +585,12 @@ public:
             return 0;
         }
         const int32_t n_tokens_batch = std::min(n_batch, n_prompt - prompt_pos);
-        llama_batch batch_view = prompt_batch->get_view(prompt_pos, n_tokens_batch);
 
         if ((prompt_pos + n_tokens_batch) == n_prompt) {
-            batch_view.logits[n_tokens_batch - 1] = 1;
+            prompt_batch->logits[prompt_pos + n_tokens_batch - 1] = 1;
         }
 
-        if (llama_decode(lctx, batch_view) != 0) {
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, prompt_batch->render(lctx, prompt_pos, n_tokens_batch)) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
         }
@@ -646,12 +644,12 @@ public:
             }
         }
 
-        decode_embd_batch batch_embd(const_cast<float *>(out.embd), 1, 1, n_embd);
+        decode_embd_batch batch_embd(out.embd, 1, 1, n_embd);
         batch_embd.set_position_normal(pos, seq_id);
-        batch_embd.batch.logits[0] = 1;
+        batch_embd.logits[0] = 1;
         pos++;
 
-        if (llama_decode(lctx, batch_embd.batch) != 0) {
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch_embd.render(lctx, 0, 1)) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return 1;
         }
@@ -842,8 +840,8 @@ private:
         GGML_ASSERT(n_rows > 0);
         decode_embd_batch batch(prompt_embd_buf.data(), n_rows, 1, n_e);
         batch.set_position_normal(pos, seq_id);
-        batch.batch.logits[n_rows - 1] = 1;
-        if (llama_decode(lctx, batch.batch) != 0) {
+        batch.logits[n_rows - 1] = 1;
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n_rows)) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: chunk prompt decode failed\n");
             return 1;
         }
