@@ -202,7 +202,7 @@ void common_peg_ast_arena::visit(const common_peg_parse_result & result, const c
     }
 }
 
-common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
+common_peg_tokens::common_peg_tokens(const llama_vocab * vocab) {
     const llama_token n_tokens = llama_vocab_n_tokens(vocab);
     for (llama_token id = 0; id < n_tokens; ++id) {
         const auto attr = llama_vocab_get_attr(vocab, id);
@@ -214,7 +214,7 @@ common_peg_token_table::common_peg_token_table(const llama_vocab * vocab) {
     }
 }
 
-llama_token common_peg_token_table::token_id(const std::string & text) const {
+llama_token common_peg_tokens::token_id(const std::string & text) const {
     auto it = ids.find(text);
     return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
 }
@@ -1193,8 +1193,8 @@ static std::string rule_name(const std::string & name) {
 
 common_peg_parser_builder::common_peg_parser_builder() {}
 
-common_peg_parser_builder::common_peg_parser_builder(common_peg_token_table token_table) {
-    arena_.token_table_ = std::move(token_table);
+common_peg_parser_builder::common_peg_parser_builder(common_peg_tokens tokens) {
+    arena_.tokens_ = std::move(tokens);
 }
 
 common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
@@ -1214,7 +1214,7 @@ common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_
 }
 
 common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
-    auto token = arena_.token_table_.token_id(piece);
+    auto token = arena_.tokens_.token_id(piece);
     if (token == LLAMA_TOKEN_NULL) {
         // Return a literal if the token is not registered with the builder
         return literal(piece);
@@ -2191,15 +2191,15 @@ common_json common_peg_arena::to_json() const {
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
-    auto token_table = common_json::array();
-    for (const auto & [id, token] : token_table_.tokens) {
-        token_table.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
+    auto tokens = common_json::array();
+    for (const auto & [id, token] : tokens_.tokens) {
+        tokens.push_back({{"id", id}, {"text", token.text}, {"attr", token.attr}});
     }
     return common_json{
         {"parsers", parsers},
         {"rules", rules_},
         {"root", root_},
-        {"token_table", token_table}
+        {"tokens", tokens}
     };
 }
 
@@ -2450,15 +2450,15 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
         throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
     }
 
-    if (j.contains("token_table")) {
-        for (const auto & token_json : j["token_table"]) {
+    if (j.contains("tokens")) {
+        for (const auto & token_json : j["tokens"]) {
             if (!token_json.contains("id") || !token_json.contains("text") || !token_json.contains("attr")) {
                 throw std::runtime_error("special token missing required fields");
             }
             auto id   = token_json["id"].get<llama_token>();
             auto text = token_json["text"].get<std::string>();
-            arena.token_table_.ids.emplace(text, id);
-            arena.token_table_.tokens.emplace(id, common_peg_token{
+            arena.tokens_.ids.emplace(text, id);
+            arena.tokens_.tokens.emplace(id, common_peg_token{
                 std::move(text),
                 static_cast<llama_token_attr>(token_json["attr"].get<int>()),
             });

@@ -188,12 +188,12 @@ struct common_peg_token {
     llama_token_attr attr;
 };
 
-struct common_peg_token_table {
+struct common_peg_tokens {
     std::unordered_map<llama_token, common_peg_token> tokens;
     std::unordered_map<std::string, llama_token>      ids;
 
-    common_peg_token_table() = default;
-    explicit common_peg_token_table(const llama_vocab * vocab);
+    common_peg_tokens() = default;
+    explicit common_peg_tokens(const llama_vocab * vocab);
 
     // LLAMA_TOKEN_NULL if text is not a special token
     llama_token token_id(const std::string & text) const;
@@ -370,7 +370,7 @@ class common_peg_arena {
     std::vector<common_peg_parser_variant> parsers_;
     std::unordered_map<std::string, common_peg_parser_id> rules_;
     common_peg_parser_id root_ = COMMON_PEG_INVALID_PARSER_ID;
-    common_peg_token_table token_table_;
+    common_peg_tokens tokens_;
 
   public:
     const common_peg_parser_variant & get(common_peg_parser_id id) const { return parsers_.at(id); }
@@ -385,7 +385,7 @@ class common_peg_arena {
     common_peg_parser_id root() const { return root_; }
     void set_root(common_peg_parser_id id) { root_ = id; }
 
-    const common_peg_token_table & token_table() const { return token_table_; }
+    const common_peg_tokens & tokens() const { return tokens_; }
 
     common_peg_parse_result parse(common_peg_parse_context & ctx, size_t start = 0) const;
     common_peg_parse_result parse(common_peg_parser_id id, common_peg_parse_context & ctx, size_t start) const;
@@ -421,7 +421,7 @@ class common_peg_parser_builder {
 
   public:
     common_peg_parser_builder();
-    explicit common_peg_parser_builder(common_peg_token_table token_table);
+    explicit common_peg_parser_builder(common_peg_tokens tokens);
 
     // Match nothing, always succeed.
     //   S -> ε
