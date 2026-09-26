@@ -387,6 +387,9 @@ common_models_handler common_models_handler_init(const common_params & params, l
             break;
         }
     }
+    if (curr_ex == LLAMA_EXAMPLE_DOWNLOAD) {
+        use_mmproj = true;
+    }
 
     opts.bearer_token    = params.hf_token;
     opts.offline         = params.offline;
