@@ -12,7 +12,7 @@
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { conversationsStore, deviceStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, serverStore, settingsStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -26,6 +26,7 @@
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
 		onNewChat?: () => void;
+		onDiscoverModelsClick?: () => void;
 		onSettingsClick?: () => void;
 	}
 
@@ -33,6 +34,7 @@
 		class: className,
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
+		onDiscoverModelsClick,
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
@@ -46,6 +48,14 @@
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 
+	// Discover models is opt-in (General settings) and needs the router's
+	// download endpoints; hide it when either gate is closed
+	const actionsItems = $derived(
+		serverStore.isRouterMode && settingsStore.config.enableDiscoverModels
+			? SIDEBAR_ACTIONS_ITEMS
+			: SIDEBAR_ACTIONS_ITEMS.filter((item) => item.action !== SidebarAction.DISCOVER_MODELS)
+	);
+
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
 			searchInputRef.focus();
@@ -57,7 +67,7 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * actionsItems.length);
 	});
 
 	function handleSearchModeDeactivate() {
@@ -107,7 +117,7 @@
 			? 'hidden pointer-events-none'
 			: ''}"
 	>
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each actionsItems as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
@@ -117,16 +127,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -164,7 +176,7 @@
 	</div>
 {:else}
 	<div class="{className} flex-col gap-1 hidden md:flex">
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each actionsItems as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemOnClick =
@@ -173,16 +185,18 @@
 							onNewChat?.();
 							void conversationsStore.openNewChat();
 						}
-					: item.action === SidebarAction.SETTINGS
-						? () => onSettingsClick?.()
-						: item.route
-							? () => {
-									onNewChat?.();
-									goto(item.route!);
-								}
-							: isSearchOnMobile
-								? undefined
-								: onSearchClick}
+					: item.action === SidebarAction.DISCOVER_MODELS
+						? () => onDiscoverModelsClick?.()
+						: item.action === SidebarAction.SETTINGS
+							? () => onSettingsClick?.()
+							: item.route
+								? () => {
+										onNewChat?.();
+										goto(item.route!);
+									}
+								: isSearchOnMobile
+									? undefined
+									: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
