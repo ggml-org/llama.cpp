@@ -275,9 +275,13 @@ export const RUNTIME_CACHING = {
 	HANDLER: 'NetworkFirst'
 } as const;
 
-// Workbox runtime caching patterns
+// Workbox runtime caching patterns.
+// Liveness/status endpoints (/health, /props) are intentionally NOT cached:
+// serving a stale "server is up" response from the service worker makes the
+// web UI look connected to a running server when llama.cpp is stopped
+// (issue #28444). Server availability must always come from a live request.
 export const API_CACHING_PATTERNS = {
-	STATIC_API: /^\/(health|props|models|tools|slots|cors-proxy).*/,
+	STATIC_API: /^\/(models|tools|slots|cors-proxy).*/,
 	V1_API: /^\/v1\/.*/
 } as const;
 
