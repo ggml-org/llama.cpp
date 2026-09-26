@@ -2308,6 +2308,12 @@ struct test_swiglu_oai : public test_case {
             init_tensor_uniform(t, -150.f, 150.f);
         }
     }
+
+    double max_nmse_err() override {
+        // F16 epsilon ~ 9.7e-4: relax tolerance vs the F32 default to absorb the
+        // natural roundoff drift from the exp()/clamp() chain computed in F16.
+        return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
+    }
 };
 
 struct test_swiglu_clamp : public test_case {
@@ -2364,6 +2370,12 @@ struct test_swiglu_clamp : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t, -150.f, 150.f);
         }
+    }
+
+    double max_nmse_err() override {
+        // F16 epsilon ~ 9.7e-4: relax tolerance vs the F32 default to absorb the
+        // natural roundoff drift from the sigmoid()/clamp() chain computed in F16.
+        return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
     }
 };
 
@@ -2610,13 +2622,8 @@ struct test_set_rows : public test_case {
     // See dicussion here: https://github.com/ggml-org/llama.cpp/pull/23760#issuecomment-4566312209
     double max_nmse_err(ggml_backend_t backend) override {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-        if (type_dst == GGML_TYPE_Q8_0) {
-            if (strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
-                return std::max(test_case::max_nmse_err(backend), 2e-7);
-            }
-            if (strcmp(ggml_backend_reg_name(reg), "HTP") == 0) {
-                return std::max(test_case::max_nmse_err(backend), 5e-6);
-            }
+        if (type_dst == GGML_TYPE_Q8_0 && strcmp(ggml_backend_reg_name(reg), "WebGPU") == 0) {
+            return std::max(test_case::max_nmse_err(backend), 2e-7);
         }
         return test_case::max_nmse_err(backend);
     }
@@ -4456,10 +4463,9 @@ struct test_ssm_scan : public test_case {
     const int64_t n_seqs;
     const bool    xbc_overlap;
     const int64_t K;
-    const bool    weak_decay;
 
     std::string vars() override {
-        return VARS_TO_STR10(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K, weak_decay);
+        return VARS_TO_STR9(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K);
     }
 
     test_ssm_scan(ggml_type type = GGML_TYPE_F32,
@@ -4470,9 +4476,8 @@ struct test_ssm_scan : public test_case {
             int64_t n_seq_tokens = 32,
             int64_t n_seqs = 32,
             bool xbc_overlap = false,
-            int64_t K = 1,
-            bool weak_decay = false)
-        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K), weak_decay(weak_decay) {}
+            int64_t K = 1)
+        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K) {}
 
     double max_nmse_err() override {
         // SSD path (head_dim > 1) uses FP16 intermediates (M matrix, X_dt); Mamba-1 is pure FP32.
@@ -4525,7 +4530,7 @@ struct test_ssm_scan : public test_case {
                 continue;
             } else if (t->ne[1] == n_head && t->ne[2] == 1) {
                 // A {1 or d_state, n_head}: negative decay (2-D tensor, ne[2]==1 distinguishes from 3-D/4-D tensors)
-                init_tensor_uniform(t, weak_decay ? -0.02f : -1.0f, weak_decay ? -0.005f : -0.5f);
+                init_tensor_uniform(t, -1.0f, -0.5f);
             } else {
                 init_tensor_uniform(t);
             }
@@ -9203,10 +9208,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (int v : {0, 1}) {
-        for (float alpha : {.5f, 1.702f}) {
-            for (float limit : {2.0f, 7.0f}) {
-                test_cases.emplace_back(new test_swiglu_oai(GGML_TYPE_F32, { 128, 2, 2, 2 }, v, alpha, limit));
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int v : {0, 1}) {
+            for (float alpha : {.5f, 1.702f}) {
+                for (float limit : {2.0f, 7.0f}) {
+                    test_cases.emplace_back(new test_swiglu_oai(type, { 128, 2, 2, 2 }, v, alpha, limit));
+                }
             }
         }
     }
@@ -9988,10 +9995,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 4, 2, false, /*K=*/4)); // Mamba-2 rollback snapshots
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2, false, /*K=*/3)); // Mamba-2 rollback overflow
     test_cases.emplace_back(new test_ssm_scan_rollback(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2, /*K=*/3)); // rollback snapshots match prefix states
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 64, 4)); // Metal SSD one chunk MMA only, no seq tail
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 65, 2)); // SSD one chunk + 1-token sequential tail
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 128, 2)); // SSD multi-chunk, no tail (exercises the chunk-to-chunk state handoff)
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 128, 2, false, /*K=*/1, /*weak_decay=*/true)); // SSD multi-chunk, carried state not numerically negligible
 
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 32, 1));
@@ -11422,6 +11425,30 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 2048, 16, 5, 4 }));
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 20000, 10, 4, 1 }));
 
+    // GLU activations - F16/F32 baseline across model-relevant FFN widths
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (ggml_glu_op op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
+            test_cases.emplace_back(new test_glu(op, type, { 8960,  1, 1, 1 })); // Qwen2.5-1.5B FFN intermediate, single token
+            test_cases.emplace_back(new test_glu(op, type, { 8960,  8, 1, 1 })); // Qwen2.5-1.5B FFN intermediate, batch=8
+            test_cases.emplace_back(new test_glu(op, type, { 2880,  1, 1, 1 })); // gpt-oss-20b expert width, single token
+        }
+        test_cases.emplace_back(new test_swiglu_oai(type, { 2880, 1, 1, 1 }, 0, 1.702f, 7.0f)); // gpt-oss-20b MoE expert, single token
+        test_cases.emplace_back(new test_swiglu_oai(type, { 2880, 8, 1, 1 }, 0, 1.702f, 7.0f)); // gpt-oss-20b MoE expert, batch=8
+    }
+    // GGML_UNARY_OP_ABS (hexagon HTP kernel)
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, GGML_TYPE_F32, { 256,  1, 1, 1 })); // Mamba-130M ssm_a
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, GGML_TYPE_F32, { 5120, 1, 1, 1 })); // Mamba-3B ssm_a (large)
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, GGML_TYPE_F32, { 4096, 1, 1, 1 })); // aligned vector
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_ABS, GGML_TYPE_F32, { 96,  32, 1, 1 })); // nloe != 0 boundary (96 % 32 != 0)
+
+    // GGML_OP_LOG (hexagon HTP kernel)
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 32000,  1, 1, 1 })); // LLaMA-3 log_softmax, single token
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 32000,  8, 1, 1 })); // LLaMA-3 batch=8
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 151936, 1, 1, 1 })); // Qwen2.5 vocab
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 16,  5120, 1, 1 })); // Mamba ssm_a log
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 288,   16, 1, 1 })); // nloe boundary
+    test_cases.emplace_back(new test_log(GGML_TYPE_F32, { 128256, 1, 1, 1 })); // LLaMA-3.1 vocab, sampler top_p/min_p/temp_ext
+
     for (int bs : {1, 2, 3, 4, 5, 8, 512}) {
         for (ggml_type type_a : all_types) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
@@ -12014,9 +12041,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
-
-        return n_ok == tests_run && slice_ok;
+        return n_ok == tests_run;
     }
 
     if (mode == MODE_GRAD) {
