@@ -18,6 +18,7 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -143,9 +144,12 @@ struct server_batch {
 
         const auto fail_slot = common_get_env("LLAMA_SERVER_DEBUG_FAIL_SLOT");
         const auto fail_after = common_get_env("LLAMA_SERVER_DEBUG_FAIL_AFTER");
-        if (!fail_slot.empty() && !fail_after.empty()) {
-            debug_fail_slot = std::stoi(fail_slot);
-            debug_fail_after = std::stoi(fail_after);
+        const auto slot = std::from_chars(fail_slot.data(), fail_slot.data() + fail_slot.size(), debug_fail_slot);
+        const auto after = std::from_chars(fail_after.data(), fail_after.data() + fail_after.size(), debug_fail_after);
+        if (slot.ec != std::errc{} || slot.ptr != fail_slot.data() + fail_slot.size() || debug_fail_slot < 0 ||
+            after.ec != std::errc{} || after.ptr != fail_after.data() + fail_after.size() || debug_fail_after <= 0) {
+            debug_fail_slot  = -1;
+            debug_fail_after = 0;
         }
     }
 
@@ -164,8 +168,8 @@ struct server_batch {
         tokens.reserve(n_tokens_alloc);
     }
 
-    void debug_check_allocation(int32_t id_slot) {
-        if (id_slot == debug_fail_slot && debug_fail_after > 0 && --debug_fail_after == 0) {
+    void debug_maybe_fail_allocation(int32_t id_slot) {
+        if (id_slot == debug_fail_slot && --debug_fail_after == 0) {
             const auto other_tokens = std::count_if(tokens.begin(), tokens.end(), [id_slot](const token & t) {
                 return t.id_slot != id_slot;
             });
@@ -181,7 +185,9 @@ struct server_batch {
             return false;
         }
         tokens.push_back({ id_slot, token, pos, output, is_prompt });
-        debug_check_allocation(id_slot);
+        if (debug_fail_after > 0) {
+            debug_maybe_fail_allocation(id_slot);
+        }
         return true;
     }
 
@@ -192,7 +198,9 @@ struct server_batch {
         }
         tokens.push_back({ id_slot, LLAMA_TOKEN_NULL, pos, output, is_prompt });
         has_embd = true;
-        debug_check_allocation(id_slot);
+        if (debug_fail_after > 0) {
+            debug_maybe_fail_allocation(id_slot);
+        }
         embd.insert(embd.end(), embd_in.begin(), embd_in.end());
         return true;
     }

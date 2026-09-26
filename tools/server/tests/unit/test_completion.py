@@ -373,6 +373,32 @@ def test_completion_parallel_slots(n_slots: int, n_requests: int):
         # assert match_regex(re_content, res.body["content"])
 
 
+@pytest.mark.parametrize("fail_slot,fail_after", [
+    ("abc", "1"),
+    ("0", "abc"),
+    ("2147483648", "1"),
+    ("0", "2147483648"),
+    ("0x", "1"),
+    ("0", "1x"),
+    ("-1", "1"),
+    ("0", "-1"),
+    ("", "1"),
+    ("0", ""),
+    ("0", "0"),
+])
+def test_completion_invalid_debug_failure_env(monkeypatch, fail_slot: str, fail_after: str):
+    global server
+    monkeypatch.setenv("LLAMA_SERVER_DEBUG_FAIL_SLOT", fail_slot)
+    monkeypatch.setenv("LLAMA_SERVER_DEBUG_FAIL_AFTER", fail_after)
+    server.start()
+    assert server.make_request("GET", "/health").status_code == 200
+    res = server.make_request("POST", "/completion", {
+        "id_slot": 0, "prompt": [1, 10, 20, 30], "n_predict": 1,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["predicted_n"] == 1
+
+
 @pytest.mark.parametrize("phase", ["prompt", "generation"])
 @pytest.mark.parametrize("n_slots,failed_slot", [(1, 0), (3, 0), (3, 1), (3, 2)])
 def test_completion_batch_exception(monkeypatch, tmp_path, phase: str, n_slots: int, failed_slot: int):
