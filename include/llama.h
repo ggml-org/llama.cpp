@@ -1519,10 +1519,12 @@ extern "C" {
     /// @param vocab The vocabulary that this grammar will be used with.
     /// @param grammar_str The production rules for the grammar, encoded as a string. Returns an empty grammar if empty. Returns NULL if parsing of grammar_str fails.
     /// @param grammar_root The name of the start symbol for the grammar.
+    /// @param grammar_max_repetition Cap on rules a repetition (`{m,n}`, `*`, `+`) may expand into; 0 uses the built-in default.
     LLAMA_API struct llama_sampler * llama_sampler_init_grammar(
             const struct llama_vocab * vocab,
                           const char * grammar_str,
-                          const char * grammar_root);
+                          const char * grammar_root,
+                               int32_t grammar_max_repetition);
 
     DEPRECATED(LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy(
             const struct llama_vocab * vocab,
@@ -1538,6 +1540,7 @@ extern "C" {
     /// @details Lazy grammar sampler, introduced in https://github.com/ggml-org/llama.cpp/pull/9639
     /// @param trigger_patterns A list of patterns that will trigger the grammar sampler. Pattern will be matched from the start of the generation output, and grammar sampler will be fed content starting from its first match group.
     /// @param trigger_tokens A list of tokens that will trigger the grammar sampler. Grammar sampler will be fed content starting from the trigger token included.
+    /// @param grammar_max_repetition Cap on rules a repetition (`{m,n}`, `*`, `+`) may expand into; 0 uses the built-in default.
     LLAMA_API struct llama_sampler * llama_sampler_init_grammar_lazy_patterns(
         const struct llama_vocab * vocab,
                       const char * grammar_str,
@@ -1545,7 +1548,8 @@ extern "C" {
                      const char ** trigger_patterns,
                             size_t num_trigger_patterns,
                const llama_token * trigger_tokens,
-                            size_t num_trigger_tokens);
+                            size_t num_trigger_tokens,
+                           int32_t grammar_max_repetition);
 
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
