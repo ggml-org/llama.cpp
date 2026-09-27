@@ -643,7 +643,9 @@ struct server_subproc {
         void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
 
     private:
+#ifndef _WIN32
         intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
     };
 
 private:

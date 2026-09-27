@@ -515,8 +515,28 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_sameas", [](const func_args & args) -> value {
             // Check if an object points to the same memory address as another object
-            (void)args;
-            throw not_implemented_exception("sameas test not implemented");
+            args.ensure_count(2);
+            auto a = args.get_pos(0);
+            auto b = args.get_pos(1);
+            bool res = false;
+            if (!is_val<value_undefined>(a) && !is_val<value_undefined>(b)) {
+                if (is_val<value_none>(a) && is_val<value_none>(b)) {
+                    res = true;
+                } else if (is_val<value_bool>(a) && is_val<value_bool>(b)) {
+                    if (a->as_bool() == b->as_bool()) {
+                        res = true;
+                    }
+                } else if (is_val<value_int>(a) && is_val<value_int>(b)) {
+                    const int64_t x = a->as_int();
+                    // Allow comparison within small-int cache range
+                    if (x >= -5 && x <= 256 && x == b->as_int()) {
+                        res = true;
+                    }
+                } else if (a == b) {
+                    res = true;
+                }
+            }
+            return mk_val<value_bool>(res);
         }},
         {"test_is_escaped", [](const func_args & args) -> value {
             (void)args;

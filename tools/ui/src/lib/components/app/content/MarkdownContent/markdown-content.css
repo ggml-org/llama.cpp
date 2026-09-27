@@ -1,3 +1,10 @@
+/* Long unbreakable content (inline code, paths, hashes) wraps inside the
+   column; break-word keeps the min-content width intact, so wide tables and
+   code blocks still scroll in their own containers. */
+.markdown-content {
+	overflow-wrap: break-word;
+}
+
 .markdown-block--unstable {
 	display: contents;
 }
@@ -429,15 +436,19 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Enhanced images */
 .markdown-content :global(img) {
-	transition: all 0.3s ease;
+	transition:
+		transform 200ms ease-out,
+		box-shadow 200ms ease-out;
 	cursor: pointer;
 }
 
-.markdown-content :global(img:hover) {
-	transform: scale(1.02);
-	box-shadow:
-		0 10px 15px -3px rgb(0 0 0 / 0.1),
-		0 4px 6px -4px rgb(0 0 0 / 0.1);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(img:hover) {
+		transform: scale(1.02);
+		box-shadow:
+			0 10px 15px -3px rgb(0 0 0 / 0.1),
+			0 4px 6px -4px rgb(0 0 0 / 0.1);
+	}
 }
 
 /* Image zoom overlay */
