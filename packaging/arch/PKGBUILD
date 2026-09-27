@@ -15,11 +15,28 @@ license=('MIT')
 # libmkl_tbb_thread.so.3, and libmkl_core.so.3 (confirmed via ldd on a real
 # build). curl is intentionally absent: -DLLAMA_CURL=OFF below, model
 # download goes through cpp-httplib/openssl (already listed) instead.
-depends=('intel-oneapi-compiler-shared-runtime' 'intel-oneapi-mkl' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'openssl')
-makedepends=('git' 'cmake' 'ninja' 'python' 'npm' 'intel-dpcpp-cpp-compiler')
+# The SYCL runtime is a runtime dependency too: libggml-sycl.so's RPATH
+# resolves libsycl.so.9, libur_loader.so.0 and libur_adapter_level_zero.so
+# (plus libimf/libintlc/libsvml/libirng/libiomp5) under /opt/intel/oneapi/
+# compiler/<ver>/lib, and intel-oneapi-compiler-shared-runtime does not ship
+# any of those. In the official repos they belong to
+# intel-oneapi-compiler-dpcpp-cpp-runtime-libs; a locally built
+# intel-dpcpp-cpp-compiler (the offline-installer repack used on the
+# reference A770 host) owns the same files but only provides
+# intel-oneapi-dpcpp-cpp, not the runtime-libs name. Depending on
+# intel-oneapi-dpcpp-cpp resolves on both (official: the compiler package,
+# which depends on the runtime libs; local: via provides) and keeps libsycl
+# installed after makedepends are removed. Switch to
+# intel-oneapi-compiler-dpcpp-cpp-runtime-libs once the local compiler
+# package declares that provides.
+depends=('intel-oneapi-dpcpp-cpp' 'intel-oneapi-compiler-shared-runtime' 'intel-oneapi-mkl' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'openssl')
+makedepends=('git' 'cmake' 'ninja' 'python' 'npm')
 provides=('llama-cpp')
 conflicts=('llama-cpp' 'llama-cpp-git' 'llama.cpp-sycl' 'llama.cpp-sycl-f16' 'llama.cpp-sycl-f16-git')
 install="${pkgname}.install"
+# Keep the admin's LLAMA_ARGS / env opt-ins across upgrades; a changed default
+# lands as /etc/conf.d/llama-server.pacnew instead of overwriting the file.
+backup=('etc/conf.d/llama-server')
 source=("${pkgname%-git}::git+${url}.git#branch=master")
 sha256sums=('SKIP')
 

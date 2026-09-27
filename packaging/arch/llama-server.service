@@ -6,7 +6,9 @@ After=syslog.target network.target local-fs.target remote-fs.target nss-lookup.t
 Type=simple
 EnvironmentFile=/etc/conf.d/llama-server
 ExecStart=/usr/bin/llama-server $LLAMA_ARGS
-ExecReload=/bin/kill -s HUP $MAINPID
+# No ExecReload: llama-server handles only SIGINT/SIGTERM (tools/server/server.cpp),
+# so SIGHUP would terminate it, and systemd counts a SIGHUP exit as clean, which
+# Restart=on-failure does not recover from. Use `systemctl restart` instead.
 Restart=on-failure
 RestartSec=5s
 
