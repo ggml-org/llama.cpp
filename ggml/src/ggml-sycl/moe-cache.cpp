@@ -31,6 +31,7 @@
 #include "ggml-sycl.h"
 
 #include "common.hpp"
+#include "mem.hpp"
 #include "mmvq.hpp"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
@@ -38,6 +39,7 @@
 #include "ggml.h"
 #include "../ggml-moe-cache-common.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -72,7 +74,10 @@ struct moe_cache_sycl_device : public moe_cache_device {
     // USM device slab per pool (parallel to pools).
     std::vector<void *> pool_slabs;
 
-    // USM device scratch, grown on demand.
+    // USM device scratch, grown on demand. scratch_reserved_bytes is the
+    // largest per-shape requirement begin() has seen; pool sizing holds it
+    // back from the budget so dispatch() can always allocate it.
+    size_t scratch_reserved_bytes = 0;
     void * d_ids = nullptr;
     size_t d_ids_cap = 0;
     void * d_act = nullptr;
@@ -223,13 +228,46 @@ static int sycl_moe_query_device(void * opaque, const ggml_moe_cache_config * co
         return 0;
     }
 
-    result->logical_device = 0;
-    result->physical_device = 0;
+    // Identify the device by its index in the SYCL registry:
+    // ggml_backend_sycl_reg() creates one ggml_backend_dev_t per SYCL device
+    // in id order (dev_ctx->device = i), so the registry position is the SYCL
+    // device id - the same value the session records as dev.physical. A
+    // constant 0 made common/fit.cpp merge distinct GPUs into one accounting
+    // entry (minimum free, summed used) whenever several SYCL devices were
+    // selected.
+    int device_index = -1;
+    const size_t n_devices = ggml_backend_reg_dev_count(reg);
+    for (size_t i = 0; i < n_devices; i++) {
+        if (ggml_backend_reg_dev_get(reg, i) == device) {
+            device_index = (int)i;
+            break;
+        }
+    }
+    if (device_index < 0) {
+        return 0;
+    }
+    result->logical_device = device_index;
+    result->physical_device = device_index;
     result->compute_capability = 800; // no CC concept on SYCL; matches Vulkan's Ampere-equivalent default
     result->min_expert_bytes = config->min_expert_explicit
         ? config->min_expert_bytes
         : moe_cache_default_min_expert_bytes(800);
     return 1;
+}
+
+// Device scratch a node of this shape can need in dispatch(): f32 output
+// rows plus q8_1-quantized activation rows for the largest node
+// (moe_cache_node_rows_max rows). Shared by query_shape() (host-side fit)
+// and begin() (pool sizing) so the two figures cannot drift. dispatch()
+// also uploads n_hits int32 slot ids (<= 256 B), well under the MiB
+// granularity of every budget figure.
+static size_t sycl_moe_scratch_bytes(int64_t n_in, int64_t n_out) {
+    const size_t out_bytes =
+        moe_cache_node_rows_max * (size_t)n_out * sizeof(float);
+    const size_t act_q8_bytes =
+        moe_cache_node_rows_max *
+        (size_t)((n_in + QK8_1 - 1) / QK8_1) * sizeof(block_q8_1);
+    return out_bytes + act_q8_bytes;
 }
 
 static int sycl_moe_query_shape(int wtype, int64_t n_in, int64_t n_out,
@@ -250,12 +288,7 @@ static int sycl_moe_query_shape(int wtype, int64_t n_in, int64_t n_out,
         return 0;
     }
 
-    const size_t out_bytes =
-        moe_cache_node_rows_max * (size_t)n_out * sizeof(float);
-    const size_t act_q8_bytes =
-        moe_cache_node_rows_max *
-        (size_t)((n_in + QK8_1 - 1) / QK8_1) * sizeof(block_q8_1);
-    const size_t scratch_bytes = out_bytes + act_q8_bytes;
+    const size_t scratch_bytes = sycl_moe_scratch_bytes(n_in, n_out);
     const size_t pool_bytes = expert_size * moe_cache_pool_slots_min;
     if (pool_bytes > SIZE_MAX - scratch_bytes) {
         return 0;
@@ -474,11 +507,26 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
         // least lets the session engage instead of staying permanently
         // dormant while fit believes a cache is available.
         if (supplied_config && config.budget_mb == 0) {
+            // sycl_get_mem_info() rather than ggml_backend_sycl_get_device_memory():
+            // the public wrapper GGML_ABORTs when the query fails and
+            // std::exit()s on a SYCL exception, neither of which the outer
+            // catch below can intercept. An optional cache must decline, not
+            // take model startup down with it.
             size_t free_bytes = 0, total_bytes = 0;
-            ggml_backend_sycl_get_device_memory(sctx->device, &free_bytes, &total_bytes);
+            bool mem_ok = false;
+            try {
+                mem_ok = sycl_get_mem_info(sctx->device, &free_bytes, &total_bytes);
+            } catch (...) {
+                mem_ok = false;
+            }
+            if (!mem_ok) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: device memory query failed; cannot derive "
+                              "a budget, not caching\n", sctx->device);
+                return nullptr;
+            }
             MOE_CACHE_LOG("[moe-cache] SYCL%d: device memory query: free=%zu MiB total=%zu MiB\n",
                           sctx->device, free_bytes >> 20, total_bytes >> 20);
-            // ggml_backend_sycl_get_device_memory() falls back to reporting
+            // get_memory_size() (ggml-sycl/mem.cpp) falls back to reporting
             // free == total when neither the Level Zero Sysman API (needs
             // ZES_ENABLE_SYSMAN=1, not set by default) nor the SYCL
             // ext_intel_free_memory aspect is available (ggml-sycl/mem.cpp).
@@ -504,6 +552,20 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
                               sctx->device, free_bytes >> 20, config.reserve_mb);
                 return nullptr;
             }
+        }
+
+        // Automatic mode carries the 1 GiB slab floor (minimum_slab_bytes,
+        // documented in docs/backend/MOE-CACHE.md); forced mode sets it to
+        // zero. common/fit.cpp and llama-context.cpp enforce the floor when
+        // they know the budget, but a budget that arrives through
+        // GGML_CUDA_MOE_CACHE_BUDGET_MB or the free-minus-reserve derivation
+        // above bypasses both, so a sub-floor automatic budget used to create
+        // pools anyway once 64 experts fit.
+        if (config.automatic && (config.budget_mb << 20) < config.minimum_slab_bytes) {
+            MOE_CACHE_LOG("[moe-cache] SYCL%d: budget %zu MiB is below the automatic-mode "
+                          "slab floor (%zu MiB); not caching\n",
+                          sctx->device, config.budget_mb, config.minimum_slab_bytes >> 20);
+            return nullptr;
         }
 
         std::unique_ptr<moe_cache_session> session(new (std::nothrow) moe_cache_session());
@@ -707,8 +769,18 @@ static void * sycl_moe_begin(const char * name, const void * host_base,
     // full figure again - a model with several (expert_size, wtype) shapes
     // (e.g. mixed q3_K/q4_K experts across layers) would otherwise let every
     // new pool independently claim the entire configured cap.
-    const size_t budget_bytes = total_budget_bytes > dev.allocated_bytes
-        ? total_budget_bytes - dev.allocated_bytes : 0;
+    // Device scratch (d_ids/d_act/d_out, grown on demand in dispatch()) is
+    // shared across pools and sized by the largest shape seen, so hold the
+    // running maximum back before sizing a slab. Same contract the host side
+    // applies (common/fit.cpp: minimum_device_bytes = scratch + pools;
+    // llama-context.cpp: slab <= budget - scratch). Without it a pool could
+    // claim the whole remaining cap and every dispatch() would then fail its
+    // scratch allocation or eat into the reserve.
+    dev.scratch_reserved_bytes = std::max(dev.scratch_reserved_bytes,
+                                          sycl_moe_scratch_bytes(n_in, n_out));
+    const size_t committed_bytes = dev.allocated_bytes + dev.scratch_reserved_bytes;
+    const size_t budget_bytes = total_budget_bytes > committed_bytes
+        ? total_budget_bytes - committed_bytes : 0;
     moe_cache_pool * pool = sycl_moe_find_or_create_pool(
             dev, *session, expert_size, wtype, n_expert, budget_bytes);
     if (!pool) {
@@ -794,9 +866,15 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
     void * slab = (node->pool_index >= 0 && node->pool_index < (int)dev.pool_slabs.size())
         ? dev.pool_slabs[node->pool_index] : nullptr;
 
+    // Every ids[] position lands in pending at most once and n_ids <=
+    // moe_cache_node_rows_max (checked on entry), so a fixed array covers the
+    // worst case with no heap allocation. A std::vector here could throw
+    // std::bad_alloc under host memory pressure straight through the C caller
+    // (ggml-cpu MUL_MAT_ID) with the pool lock held; the provider contract is
+    // to return 0 and let the CPU path run instead.
     struct pending_fill { int slot; int index; };
-    std::vector<pending_fill> pending;
-    pending.reserve(fill_budget > 0 ? fill_budget : 0);
+    pending_fill pending[moe_cache_node_rows_max];
+    int n_pending = 0;
 
     int fills_done = 0;
     for (int index = 0; index < n_ids; index++) {
@@ -829,7 +907,7 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
         // reachable from pool.map again).
         if (found != pool.map.end() &&
             pool.slots[found->second].state == moe_cache_slot_state::copying) {
-            pending.push_back({found->second, index});
+            pending[n_pending++] = {found->second, index};
             continue;
         }
 
@@ -884,13 +962,13 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
             dev.fill_failures++;
             continue;
         }
-        pending.push_back({slot_index, index});
+        pending[n_pending++] = {slot_index, index};
     }
 
     // One wait for every queued fill this plan(): SYCL's in-order queue
     // executes them in submission order, so a single wait confirms all of
     // them - no per-fill round trip needed.
-    if (!pending.empty()) {
+    if (n_pending > 0) {
         bool copy_ok = true;
         try {
             dev.stream->wait_and_throw();
@@ -898,7 +976,8 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
             copy_ok = false;
         }
         if (copy_ok) {
-            for (const pending_fill & fill : pending) {
+            for (int p = 0; p < n_pending; p++) {
+                const pending_fill & fill = pending[p];
                 moe_cache_slot & pslot = pool.slots[fill.slot];
                 // Coalesced duplicate experts (above) can list the same slot
                 // more than once here. Only transition state/LRU membership
@@ -925,7 +1004,8 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
             // slot in `pending` more than once - guard against resetting an
             // already-freed slot a second time, which would push it onto
             // free_slots twice and let two future fills claim the same slot.
-            for (const pending_fill & fill : pending) {
+            for (int p = 0; p < n_pending; p++) {
+                const pending_fill & fill = pending[p];
                 if (pool.slots[fill.slot].state != moe_cache_slot_state::free) {
                     moe_cache_slot_reset(pool, fill.slot, true);
                 }
@@ -933,8 +1013,8 @@ static int sycl_moe_plan(void * opaque, const int32_t * ids, int n_ids,
             }
             dev.dead.store(true);
             MOE_CACHE_LOG("[moe-cache] SYCL%d: staged fill transfer failed; "
-                          "rolled back %zu fills and disabled the device cache\n",
-                          dev.physical, pending.size());
+                          "rolled back %d fills and disabled the device cache\n",
+                          dev.physical, n_pending);
         }
     }
 
