@@ -12,10 +12,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, gguf, logger
 
 
-@ModelBase.register(
-    "K2HorizonForCausalLM",
-    "K2AuroraForCausalLM",  # TODO: DELETE
-)
+@ModelBase.register("K2HorizonForCausalLM")
 @ModelBase.example("IFM/K2-Horizon-0.9B", "IFM/K2-Horizon-36B")
 class K2HorizonModel(TextModel):
     model_arch = gguf.MODEL_ARCH.K2HORIZON
