@@ -213,9 +213,7 @@
 	const rowGrid = 'grid grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] items-center gap-4';
 
 	function stateOf(option: ModelOption): ServerModelStatus | null {
-		const model = modelsStore.routerModels.find((m) => m.id === option.model);
-
-		return (model?.status?.value as ServerModelStatus) ?? null;
+		return modelsStore.getModelStatus(option.model);
 	}
 
 	/** Drafts to show on a row: the configured one first, then this repo's own sidecars. */

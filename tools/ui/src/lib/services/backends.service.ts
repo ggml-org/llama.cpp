@@ -176,6 +176,13 @@ function normalizeBackendModel(entry: unknown): ModelOption[] {
 	if (ModelsService.isSidecarEntry(id)) return [];
 
 	return [
-		{ capabilities: [], contextLength: readModelContextLength(raw), id, model: id, name: id }
+		{
+			capabilities: [],
+			contextLength: readModelContextLength(raw),
+			id,
+			model: id,
+			name: id,
+			status: raw.status as ApiModelDataEntry['status']
+		}
 	];
 }

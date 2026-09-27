@@ -11,6 +11,7 @@ import { browser } from '$app/environment';
 import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	LOCAL_BACKEND_ID,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
@@ -444,10 +445,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return null;
 	}
 
+	/**
+	 * Load state a model's own backend reports. Only the local server has a status
+	 * feed, so an external backend answers from its own model listing.
+	 */
 	getModelStatus(modelId: string): ServerModelStatus | null {
+		const backendId = this.models.find((model) => model.model === modelId)?.backendId;
+
+		if (backendId && backendId !== LOCAL_BACKEND_ID) {
+			const option = backendsModelsStore.get(backendId).models.find((m) => m.model === modelId);
+
+			return (option?.status?.value as ServerModelStatus) ?? null;
+		}
+
 		const model = this.routerModels.find((m) => m.id === modelId);
 
-		return model?.status.value ?? null;
+		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
 
 	hasModel(modelName: string): boolean {
@@ -467,12 +480,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	isModelLoaded(modelId: string): boolean {
-		const model = this.routerModels.find((m) => m.id === modelId);
+		const status = this.getModelStatus(modelId);
 
-		return (
-			model?.status.value === ServerModelStatus.LOADED ||
-			model?.status.value === ServerModelStatus.SLEEPING
-		);
+		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
 	}
 
 	/**

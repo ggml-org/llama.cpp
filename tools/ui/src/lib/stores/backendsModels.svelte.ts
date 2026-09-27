@@ -10,6 +10,7 @@
 import { BackendsService } from '$lib/services/backends.service';
 import { ModelsService } from '$lib/services/models.service';
 import { backendsStore } from '$lib/stores/backends.svelte';
+import type { Backend } from '$lib/types';
 import type { ApiModelsListResponse } from '$lib/types';
 import type { ModelSidecarFile } from '$lib/types/models';
 import type { ModelOption } from '$lib/types/models';
@@ -52,17 +53,7 @@ class BackendsModelsStore {
 		if (state?.loaded || state?.loading) return;
 
 		this.states[backendId] = { error: null, loaded: false, loading: true, models: [] };
-
-		const result = await BackendsService.listModels(backend);
-
-		this.states[backendId] = {
-			drafts: result.raw ? ModelsService.draftSidecarsByRepo(result.raw) : undefined,
-			error: result.error ?? null,
-			loaded: result.ok,
-			loading: false,
-			models: result.models,
-			raw: result.raw
-		};
+		await this.fetch(backend);
 	}
 
 	get(backendId: string): BackendModelsState {
@@ -81,6 +72,31 @@ class BackendsModelsStore {
 		}
 
 		await Promise.all(enabled.map((backend) => this.ensureLoaded(backend.id)));
+	}
+
+	/**
+	 * Ask a backend for its list again, keeping what is already known. Used while
+	 * a remote load settles, since its status never reaches the local feed.
+	 */
+	async refresh(backendId: string): Promise<void> {
+		const backend = backendsStore.enabled.find((candidate) => candidate.id === backendId);
+
+		if (!backend) return;
+
+		await this.fetch(backend);
+	}
+
+	private async fetch(backend: Backend): Promise<void> {
+		const result = await BackendsService.listModels(backend);
+
+		this.states[backend.id] = {
+			drafts: result.raw ? ModelsService.draftSidecarsByRepo(result.raw) : undefined,
+			error: result.error ?? null,
+			loaded: result.ok,
+			loading: false,
+			models: result.models,
+			raw: result.raw
+		};
 	}
 }
 

@@ -36,11 +36,7 @@
 
 		return modelsStore.props.getModelProps(option.model);
 	});
-	let status = $derived.by(() => {
-		const model = modelsStore.routerModels.find((m) => m.id === option.model);
-
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	});
+	let status = $derived.by(() => modelsStore.getModelStatus(option.model));
 	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
 	let isLoaded = $derived(
 		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&

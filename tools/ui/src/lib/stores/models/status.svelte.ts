@@ -34,8 +34,14 @@ import { toast } from 'svelte-sonner';
  * cannot reach around the host's full surface; modelsStore implements this
  * structurally.
  */
+/** How long a remote operation is watched before its last answer is kept. */
+const REMOTE_STATUS_TIMEOUT_MS = 10 * 60 * 1000;
+const REMOTE_STATUS_POLL_MS = 2000;
+
 export interface ModelStatusHost {
 	error: string | null;
+	/** Load state a model's own backend reports, local or external. */
+	getModelStatus(modelId: string): ServerModelStatus | null;
 	readonly props: ModelPropsManager;
 	/** Router model rows the status feed updates. */
 	routerModels: ApiModelDataEntry[];
@@ -60,6 +66,10 @@ function downloadIdKey(repoWithTag: string): string {
 }
 
 export class ModelStatusManager {
+	/** How long a remote operation is watched before its last answer is kept. */
+	REMOTE_STATUS_POLL_MS = 2000;
+	/** How long a remote operation is watched before the last answer is kept. */
+	REMOTE_STATUS_TIMEOUT_MS = 10 * 60 * 1000;
 	/**
 	 * Sidecar files pulled by registered models, as `<repo>/<file>` keys.
 	 * Sidecars are not separate /v1/models entries - the router pulls them as
@@ -101,10 +111,12 @@ export class ModelStatusManager {
 	// /models/sse feed state, the single source of truth for status and load progress
 	private statusAbort: AbortController | null = null;
 	private statusReaderActive = false;
+
 	private statusWaiters = new SvelteMap<
 		string,
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
 	>();
+
 	/** Tags the user asked to stop (pause or cancel); the download_failed the stop triggers is intentional, not a failure. */
 	private stopRequests = new SvelteMap<string, ModelDownloadStopRequest>();
 
@@ -332,6 +344,7 @@ export class ModelStatusManager {
 
 	async load(modelId: string, extraArgs?: string[]): Promise<void> {
 		const backendId = this.backendIdFor(modelId);
+		const isLocal = backendId === LOCAL_BACKEND_ID;
 
 		if (this.host.isModelLoaded(modelId)) return;
 
@@ -343,13 +356,21 @@ export class ModelStatusManager {
 		// the feed drives completion, so it must be live before the request
 		this.subscribe();
 
-		const reachedLoaded = this.waitForStatus(modelId, ServerModelStatus.LOADED);
+		const reachedLoaded = isLocal
+			? this.waitForStatus(modelId, ServerModelStatus.LOADED)
+			: Promise.resolve();
 
 		reachedLoaded.catch(() => {});
 
 		try {
 			await ModelsService.load(modelId, extraArgs, backendId);
-			await reachedLoaded;
+
+			if (isLocal) {
+				await reachedLoaded;
+			} else {
+				await this.waitForRemoteStatus(backendId, modelId, ServerModelStatus.LOADED);
+			}
+
 			toast.success(`Model loaded: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.rejectStatus(modelId, error instanceof Error ? error : new Error('load failed'));
@@ -401,6 +422,7 @@ export class ModelStatusManager {
 
 	async unload(modelId: string): Promise<void> {
 		const backendId = this.backendIdFor(modelId);
+		const isLocal = backendId === LOCAL_BACKEND_ID;
 
 		if (!this.host.isModelLoaded(modelId)) return;
 
@@ -411,13 +433,21 @@ export class ModelStatusManager {
 
 		this.subscribe();
 
-		const reachedUnloaded = this.waitForStatus(modelId, ServerModelStatus.UNLOADED);
+		const reachedUnloaded = isLocal
+			? this.waitForStatus(modelId, ServerModelStatus.UNLOADED)
+			: Promise.resolve();
 
 		reachedUnloaded.catch(() => {});
 
 		try {
 			await ModelsService.unload(modelId, backendId);
-			await reachedUnloaded;
+
+			if (isLocal) {
+				await reachedUnloaded;
+			} else {
+				await this.waitForRemoteStatus(backendId, modelId, ServerModelStatus.UNLOADED);
+			}
+
 			toast.info(`Model unloaded: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {
 			this.rejectStatus(modelId, error instanceof Error ? error : new Error('unload failed'));
@@ -626,7 +656,6 @@ export class ModelStatusManager {
 
 		return true;
 	}
-
 	private async ensureLocalTarget(): Promise<void> {
 		if (backendsStore.active.id === LOCAL_BACKEND_ID) return;
 
@@ -716,6 +745,42 @@ export class ModelStatusManager {
 		if (waiter && waiter.target === status) {
 			this.statusWaiters.delete(modelId);
 			waiter.resolve();
+		}
+	}
+
+	/**
+	 * Wait for an external backend to report a status. Its changes never reach the
+	 * local feed, so its own listing is asked again until the status lands or the
+	 * deadline passes, which leaves the last answer in place.
+	 */
+	private async waitForRemoteStatus(
+		backendId: string,
+		modelId: string,
+		target: ServerModelStatus
+	): Promise<void> {
+		const deadline = Date.now() + REMOTE_STATUS_TIMEOUT_MS;
+
+		while (Date.now() < deadline) {
+			await backendsModelsStore.refresh(backendId);
+
+			const status = this.host.getModelStatus(modelId);
+
+			if (status === ServerModelStatus.FAILED) {
+				throw new Error(
+					target === ServerModelStatus.LOADED
+						? 'the server failed to load it'
+						: 'the server failed to unload it'
+				);
+			}
+
+			const reached =
+				target === ServerModelStatus.LOADED
+					? status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING
+					: status === ServerModelStatus.UNLOADED || status === null;
+
+			if (reached) return;
+
+			await new Promise((resolve) => setTimeout(resolve, REMOTE_STATUS_POLL_MS));
 		}
 	}
 

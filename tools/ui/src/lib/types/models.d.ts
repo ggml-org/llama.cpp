@@ -25,6 +25,8 @@ export interface ModelOption {
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
+	/** Load state the provider's own listing reports, when it reports one. */
+	status?: ApiModelDataEntry['status'];
 	parsedId?: ParsedModelId;
 	aliases?: string[];
 	tags?: string[];
