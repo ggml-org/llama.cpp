@@ -136,7 +136,7 @@
 							class="gap-1.5"
 							onclick={() => (view = 'discover')}
 							size="sm"
-							variant="secondary"
+							variant="tertiary"
 						>
 							<Compass class="h-3.5 w-3.5" />
 
@@ -147,7 +147,7 @@
 							class="gap-1.5"
 							onclick={() => (view = 'providers')}
 							size="sm"
-							variant="secondary"
+							variant="tertiary"
 						>
 							<Server class="h-3.5 w-3.5" />
 
