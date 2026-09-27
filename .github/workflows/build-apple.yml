@@ -33,6 +33,7 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -98,7 +99,8 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L main -E "test-llama-archs" --verbose --timeout 900
+          # ref: https://github.com/ggml-org/llama.cpp/pull/19802#issuecomment-4013704023
+          ctest -L main -E "test-llama-archs|test-save-load-state" --verbose --timeout 900
 
   macos-latest-x64:
     runs-on: macos-15-intel
