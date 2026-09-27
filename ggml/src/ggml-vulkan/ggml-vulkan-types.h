@@ -386,10 +386,12 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
+    QUALCOMM_ADRENO,
 };
 
 enum vk_conv_shapes {
@@ -996,6 +998,7 @@ struct vk_device_struct {
     bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
