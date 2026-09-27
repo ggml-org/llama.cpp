@@ -722,7 +722,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_TOKEN_EMBD,                 {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_POS_EMBD,                   {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
     {LLM_TENSOR_TOKEN_TYPES,                {LLM_TENSOR_LAYER_INPUT,     GGML_OP_GET_ROWS}},
-    {LLM_TENSOR_HRM_Z_L_INIT,               {LLM_TENSOR_LAYER_INPUT,     GGML_OP_ADD}},
+    {LLM_TENSOR_HRM_Z_L_INIT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
     {LLM_TENSOR_TOKEN_EMBD_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},  // do the norms on the first layer (not the input layer)
     {LLM_TENSOR_OUTPUT,                     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CLS,                        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
