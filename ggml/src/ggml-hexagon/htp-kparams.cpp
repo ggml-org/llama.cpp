@@ -345,6 +345,11 @@ static bool htp_kparams_solve_flash_attn(
         return false;
     }
 
+    // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+    if (op->src[5] != nullptr) {
+        return false;
+    }
+
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * q     = op->src[0];
