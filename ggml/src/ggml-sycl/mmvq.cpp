@@ -1268,7 +1268,7 @@ static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy,
 
     if (g_ggml_sycl_mmvq_wide) {
         stream->submit([&](sycl::handler & cgh) {
-            cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            cgh.parallel_for(sycl::nd_range<3>(global_size, workgroup_size),
                              [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                  mul_mat_vec_q_reorder<reorder_vec_dot_q8_0_wide>(vx, vy, dst, ncols, nrows, nd_item);
                              });
