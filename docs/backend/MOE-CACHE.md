@@ -153,6 +153,15 @@ Explicit `--moe-cache` or `LLAMA_ARG_MOE_CACHE` overrides provider mode/budget
 settings. Other shared controls may apply only to providers in TheTom's tree;
 this document does not promise asynchronous, fused, or multi-device behavior.
 
+`GGML_CUDA_MOE_CACHE_BUDGET_MB` alone, with no `--moe-cache` flag at all,
+still engages a session: `ggml_backend_sched_new()` probes every registered
+provider on every scheduler it creates, independent of the CLI default
+(confirmed: `--cpu-moe` with no `--moe-cache` and this env var set produced a
+"SYCL session ready" log line and normal cache activity). This is
+pre-existing, shared behavior, not specific to the SYCL provider or to the
+default change above - clear it from the environment if you need `off` to be
+the actual last word.
+
 ## Validation
 
 ```sh
