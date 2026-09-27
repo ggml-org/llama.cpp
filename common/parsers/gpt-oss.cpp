@@ -69,7 +69,6 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
-        // auto start           = p.rule("start", p.literal("<|start|>assistant"));
         auto start           = p.rule("start", p.token("<|start|>") + p.literal("assistant"));
         auto end             = p.rule("end", p.token("<|end|>"));
         auto content         = p.rule("message-content", p.until(p.token("<|end|>")));
