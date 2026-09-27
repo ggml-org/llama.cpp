@@ -437,8 +437,7 @@ struct server_slot {
 
     bool can_split() const {
         GGML_ASSERT(task);
-        
-        // (MTP supports splitting — uses task->need_embd() not need_embd())
+        // MTP supports splitting - uses task->need_embd() not need_embd()
         if (!task->need_embd()) {
             return true;
         }

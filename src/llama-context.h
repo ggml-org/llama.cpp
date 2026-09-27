@@ -102,6 +102,8 @@ struct llama_context {
     const llama_token * get_sampled_candidates_ith(int32_t idx);
     size_t get_sampled_candidates_count(int32_t idx);
 
+    bool get_causal_attn() const;
+
     void attach_threadpool(
             ggml_threadpool_t threadpool,
             ggml_threadpool_t threadpool_batch);
@@ -117,7 +119,6 @@ struct llama_context {
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
-    bool get_causal_attn() const;
     void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
