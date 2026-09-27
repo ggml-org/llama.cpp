@@ -40,8 +40,9 @@ void test_json_serialization(testing &t) {
 
     t.test("trigger rules rebuild the same scanning grammar", [](testing &t) {
         auto original = build_peg_parser([](common_peg_parser_builder & p) {
-            std::vector<common_peg_trigger> triggers = { { p.literal("<tag>"), p.literal("x") } };
-            return p.until(triggers) + p.trigger_rule("tool", triggers);
+            auto start = p.literal("<tag>");
+            std::vector<common_peg_trigger> triggers = { { start, p.literal("x") } };
+            return p.until(start) + p.trigger_rule("tool", triggers);
         });
         auto deserialized = common_peg_arena::from_json(common_json::parse(original.to_json().dump()));
 

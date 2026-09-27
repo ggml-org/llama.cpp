@@ -225,12 +225,13 @@ struct until_delimiter {
     std::string                     text;
 };
 
-// Flatten a delimiter parser, a sequence of literals and tokens, into the symbols it matches
-static until_delimiter flatten_delimiter(const common_peg_arena & arena, common_peg_parser_id id) {
-    return std::visit([&](const auto & p) -> until_delimiter {
+// Expand a delimiter parser into every delimiter it matches. A choice adds the delimiters of each branch and
+// a sequence joins every combination of its children.
+static std::vector<until_delimiter> expand_delimiter(const common_peg_arena & arena, common_peg_parser_id id) {
+    return std::visit([&](const auto & p) -> std::vector<until_delimiter> {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, common_peg_tag_parser> || std::is_same_v<T, common_peg_atomic_parser>) {
-            return flatten_delimiter(arena, p.child);
+            return expand_delimiter(arena, p.child);
         } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             until_delimiter d;
             size_t pos = 0;
@@ -243,29 +244,44 @@ static until_delimiter flatten_delimiter(const common_peg_arena & arena, common_
                 pos += result.bytes_consumed;
             }
             d.text = p.literal;
-            return d;
+            return { d };
         } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
-            return { { common_trie::symbol::token(p.token) }, p.piece };
-        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
-            until_delimiter d;
+            return { until_delimiter{ { common_trie::symbol::token(p.token) }, p.piece } };
+        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
+            std::vector<until_delimiter> result;
             for (auto child : p.children) {
-                auto part = flatten_delimiter(arena, child);
-                d.symbols.insert(d.symbols.end(), part.symbols.begin(), part.symbols.end());
-                d.text += part.text;
+                for (auto & d : expand_delimiter(arena, child)) {
+                    result.push_back(std::move(d));
+                }
             }
-            return d;
+            return result;
+        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
+            std::vector<until_delimiter> result = { until_delimiter{} };
+            for (auto child : p.children) {
+                auto tails = expand_delimiter(arena, child);
+                std::vector<until_delimiter> joined;
+                for (const auto & head : result) {
+                    for (const auto & tail : tails) {
+                        until_delimiter d = head;
+                        d.symbols.insert(d.symbols.end(), tail.symbols.begin(), tail.symbols.end());
+                        d.text += tail.text;
+                        joined.push_back(std::move(d));
+                    }
+                }
+                result = std::move(joined);
+            }
+            return result;
         } else {
-            throw std::invalid_argument("a delimiter may only be a sequence of literals and tokens, possibly wrapped in tags and atomics");
+            throw std::invalid_argument("a delimiter may only be a sequence of literals, tokens, and choices of them, possibly wrapped in tags and atomics");
         }
     }, arena.get(id));
 }
 
-// Build the matcher and delimiter text of an until parser from its delimiter parsers
+// Build the matcher and delimiter text of an until parser from its delimiter parser
 static void build_delimiter_matcher(const common_peg_arena & arena, common_peg_until_parser & parser) {
     parser.delimiters.clear();
     parser.matcher = common_trie();
-    for (auto id : parser.delimiter_parsers) {
-        auto d = flatten_delimiter(arena, id);
+    for (auto & d : expand_delimiter(arena, parser.delimiter_parser)) {
         if (d.symbols.empty()) {
             throw std::invalid_argument("delimiter must not match the empty string");
         }
@@ -274,19 +290,22 @@ static void build_delimiter_matcher(const common_peg_arena & arena, common_peg_u
     }
 }
 
-// Build the matcher and delimiter text of an ac parser, pattern i is the delimiter of branch i
+// Build the matcher and delimiter text of an ac parser, and record the branch of every pattern
 static void build_branch_matcher(const common_peg_arena & arena, common_peg_ac_parser & parser) {
     parser.delimiters.clear();
     parser.matcher = common_trie();
+    parser.pattern_branch.clear();
     for (size_t b = 0; b < parser.branches.size(); b++) {
-        auto d = flatten_delimiter(arena, parser.branches[b].delimiter);
-        if (d.symbols.empty()) {
-            throw std::invalid_argument("delimiter must not match the empty string");
+        for (auto & d : expand_delimiter(arena, parser.branches[b].delimiter)) {
+            if (d.symbols.empty()) {
+                throw std::invalid_argument("delimiter must not match the empty string");
+            }
+            if ((size_t) parser.matcher.insert(d.symbols) != parser.pattern_branch.size()) {
+                throw std::invalid_argument("ac branches must not share a delimiter: " + d.text);
+            }
+            parser.pattern_branch.push_back(b);
+            parser.delimiters.push_back(std::move(d.text));
         }
-        if ((size_t) parser.matcher.insert(d.symbols) != b) {
-            throw std::invalid_argument("ac branches must not share a delimiter: " + d.text);
-        }
-        parser.delimiters.push_back(std::move(d.text));
     }
 }
 
@@ -1210,20 +1229,9 @@ common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std:
     return add(std::move(p));
 }
 
-common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_parser> & delimiters) {
+common_peg_parser common_peg_parser_builder::until(const common_peg_parser & delimiter) {
     common_peg_until_parser p;
-    for (const auto & d : delimiters) {
-        p.delimiter_parsers.push_back(d.id());
-    }
-    build_delimiter_matcher(arena_, p);
-    return add(std::move(p));
-}
-
-common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_trigger> & triggers) {
-    common_peg_until_parser p;
-    for (const auto & t : triggers) {
-        p.delimiter_parsers.push_back(t.start);
-    }
+    p.delimiter_parser = delimiter.id();
     build_delimiter_matcher(arena_, p);
     return add(std::move(p));
 }
@@ -1349,8 +1357,10 @@ common_peg_parser common_peg_parser_builder::trigger_rule(const std::string & na
     }
     auto alternatives = choice();
     for (const auto & t : triggers) {
-        if (flatten_delimiter(arena_, t.start).symbols.empty()) {
-            throw std::invalid_argument("trigger start must not match the empty string");
+        for (const auto & d : expand_delimiter(arena_, t.start)) {
+            if (d.symbols.empty()) {
+                throw std::invalid_argument("trigger start must not match the empty string");
+            }
         }
         alternatives |= sequence(std::vector<common_peg_parser_id>{ t.start, t.rest });
     }
@@ -1809,7 +1819,7 @@ static std::string gbnf_including_grammar(const common_grammar_builder &   build
             }
             if (rests[pattern].empty()) {
                 terminal = true;
-            } else {
+            } else if (std::find(alts.begin(), alts.end(), rests[pattern]) == alts.end()) {
                 alts.push_back(rests[pattern]);
             }
         }
@@ -1882,9 +1892,9 @@ static void collect_reachable(
             } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
                 reachable.tokens.insert(p.token);
             } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-                // The delimiters name their tokens in the grammar
-                for (auto delimiter : p.delimiter_parsers) {
-                    visit(delimiter);
+                // The delimiter names its tokens in the grammar
+                if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
+                    visit(p.delimiter_parser);
                 }
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 for (auto child : p.children) {
@@ -2087,10 +2097,14 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return p.grammar;
             } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
                 auto prefix = "ac-" + std::to_string(id);
-                std::vector<std::string> rests;
+                std::vector<std::string> branch_rests;
                 for (size_t b = 0; b < p.branches.size(); b++) {
                     auto rest = p.branches[b].rest;
-                    rests.push_back(rest == COMMON_PEG_INVALID_PARSER_ID ? "" : builder.add_rule(prefix + "-rest-" + std::to_string(b), to_gbnf(rest)));
+                    branch_rests.push_back(rest == COMMON_PEG_INVALID_PARSER_ID ? "" : builder.add_rule(prefix + "-rest-" + std::to_string(b), to_gbnf(rest)));
+                }
+                std::vector<std::string> rests;
+                for (auto b : p.pattern_branch) {
+                    rests.push_back(branch_rests[b]);
                 }
                 return gbnf_including_grammar(builder, prefix, p.matcher, reachable.tokens, rests, p.optional);
             } else {
@@ -2160,11 +2174,13 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         for (const auto * rule : trigger_rules) {
             for (size_t i = 0; i < rule->triggers.size(); i++) {
                 const auto & t = rule->triggers[i];
-                auto d = flatten_delimiter(*this, t.start);
-                if ((size_t) starts.insert(d.symbols) != rests.size()) {
-                    throw std::runtime_error("trigger rules must not share a start: " + d.text);
+                auto rest = builder.add_rule(rule->name + "-rest-" + std::to_string(i), to_gbnf(t.rest));
+                for (const auto & d : expand_delimiter(*this, t.start)) {
+                    if ((size_t) starts.insert(d.symbols) != rests.size()) {
+                        throw std::runtime_error("trigger rules must not share a start: " + d.text);
+                    }
+                    rests.push_back(rest);
                 }
-                rests.push_back(builder.add_rule(rule->name + "-rest-" + std::to_string(i), to_gbnf(t.rest)));
             }
         }
         builder.add_rule("root", gbnf_including_grammar(builder, "trigger", starts, reachable.tokens, rests, /* optional = */ true));
@@ -2232,8 +2248,8 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
             return json{{"type", "string"}, {"delimiter", std::string(1, p.delimiter)}};
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
             json j{{"type", "until"}, {"delimiters", p.delimiters}};
-            if (!p.delimiter_parsers.empty()) {
-                j["delimiter_parsers"] = p.delimiter_parsers;
+            if (p.delimiter_parser != COMMON_PEG_INVALID_PARSER_ID) {
+                j["delimiter_parser"] = p.delimiter_parser;
             }
             return j;
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
@@ -2409,8 +2425,8 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
         }
         common_peg_until_parser parser;
         parser.delimiters = j["delimiters"].get<std::vector<std::string>>();
-        if (j.contains("delimiter_parsers")) {
-            parser.delimiter_parsers = j["delimiter_parsers"].get<std::vector<common_peg_parser_id>>();
+        if (j.contains("delimiter_parser")) {
+            parser.delimiter_parser = j["delimiter_parser"].get<common_peg_parser_id>();
         }
         return parser;
     }
@@ -2524,12 +2540,10 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
     };
     for (auto & parser : arena.parsers_) {
         if (auto * until = std::get_if<common_peg_until_parser>(&parser)) {
-            if (until->delimiter_parsers.empty()) {
+            if (until->delimiter_parser == COMMON_PEG_INVALID_PARSER_ID) {
                 until->matcher = common_trie(until->delimiters);
             } else {
-                for (auto id : until->delimiter_parsers) {
-                    check_delimiter(id);
-                }
+                check_delimiter(until->delimiter_parser);
                 build_delimiter_matcher(arena, *until);
             }
         } else if (auto * ac = std::get_if<common_peg_ac_parser>(&parser)) {

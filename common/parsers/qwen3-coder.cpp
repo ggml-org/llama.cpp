@@ -65,7 +65,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         auto reasoning = p.eps();
         if (supports_reasoning && extract_reasoning) {
             reasoning = p.optional(p.token("<think>") + p.space() +
-                                   p.reasoning(p.until({ p.token("</think>"), p.token("<tool_call>") })) +
+                                   p.reasoning(p.until(p.token("</think>") | p.token("<tool_call>"))) +
                                    (p.token("</think>") | p.peek(p.token("<tool_call>"))));
         }
 
@@ -154,7 +154,8 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
             auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
-            std::vector<common_peg_trigger> triggers = { { p.token("<tool_call>"), p.literal("\n") + tool_call_body + more } };
+            auto starts = p.token("<tool_call>");
+            std::vector<common_peg_trigger> triggers = { { starts, p.literal("\n") + tool_call_body + more } };
 
             if (is_qwen3_coder) {
                 // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
@@ -162,12 +163,13 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 // constraining on <function which may occur in valid content generation, e.g. #include <functional>
                 for (const auto & f : functions) {
                     triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
+                    starts |= f.opener;
                 }
             }
 
             auto tool_calls = p.trigger_rule("tool-calls", triggers);
 
-            return generation_prompt + (reasoning << p.content(p.until(triggers)) << p.repeat(tool_calls, min_calls, 1));
+            return generation_prompt + (reasoning << p.content(p.until(starts)) << p.repeat(tool_calls, min_calls, 1));
         }
 
         // Content only parser

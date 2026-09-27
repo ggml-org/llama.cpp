@@ -148,9 +148,9 @@ the lazy grammar scans for the triggers instead: the root lets anything through
 until the start of a trigger completes and from there only the rest of that
 trigger may follow, or it may end before any start completes. The sampler runs such a
 grammar from the first token, so `grammar_lazy` is false and no trigger
-patterns are needed. A start may only be a sequence of literals and tokens,
-possibly wrapped in tags and atomics, and `until(triggers)` matches content up
-to any of them.
+patterns are needed. A start may only be a sequence of literals, tokens, and
+choices of them, possibly wrapped in tags and atomics, so `until()` over a
+choice of the starts matches content up to any of them.
 
 ### JSON Schema
 
