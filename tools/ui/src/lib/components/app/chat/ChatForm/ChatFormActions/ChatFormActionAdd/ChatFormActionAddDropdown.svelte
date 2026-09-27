@@ -65,8 +65,10 @@
 					<DropdownMenu.Trigger
 						{...props}
 						class={cn(
-							buttonVariants({ variant: 'secondary' }),
-							'file-upload-button h-8 w-8 cursor-pointer rounded-full p-0'
+							// the composer sits on a muted surface, so this keeps a lighter one:
+							// ghost brings no fill of its own for the variant to fight over
+							buttonVariants({ variant: 'ghost' }),
+							'file-upload-button h-8 w-8 cursor-pointer rounded-full bg-background p-0 shadow-sm dark:bg-muted-foreground/15'
 						)}
 						disabled={chatFormActions.disabled}
 					>
