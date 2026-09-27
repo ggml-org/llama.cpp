@@ -1186,7 +1186,7 @@ struct ggml_backend_opencl_context {
             return nullptr;
         }
 
-        size_t sz;
+        size_t sz = 0;
         const void * kernel_bin = get_adreno_bin_kernel_func(
             kernel_name.c_str(), device_name.c_str(), driver_version.c_str(), &sz);
         if (bin_size) {
@@ -3881,7 +3881,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q4_0_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
+    {
         {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
@@ -4381,8 +4381,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q4_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
@@ -4430,8 +4430,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q6_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
@@ -4479,8 +4479,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q5_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q5_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
