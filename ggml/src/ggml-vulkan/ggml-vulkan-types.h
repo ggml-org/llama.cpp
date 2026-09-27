@@ -1,8 +1,10 @@
 #pragma once
 
-#include "ggml-vulkan.h"
-
+// the Vulkan header must come first: ggml-vulkan.h declares the moe-cache handle accessors
+// (ggml_backend_vk_get_*) only once VK_VERSION_1_0 is defined, and ggml-vulkan.cpp defines them
 #include <vulkan/vulkan_core.h>
+
+#include "ggml-vulkan.h"
 
 #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 #include <chrono>
