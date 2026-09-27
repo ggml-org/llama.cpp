@@ -1212,7 +1212,9 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
     // Qwen3-Coder XML tool calls, also used by Nemotron Nano 3, Qwen3.5 and StepFun-3.5-Flash
     if (src.find("<tool_call>") != std::string::npos &&
         src.find("<function=") != std::string::npos &&
-        src.find("<parameter=") != std::string::npos) {
+        src.find("<parameter=") != std::string::npos &&
+        // Exclude models that don't use \n between tags
+        src.find("'<tool_call><function=' ~ tool_call.name ~ '>'") == std::string::npos) {
         LOG_DBG("Using specialized template: Qwen3-Coder\n");
         return common_chat_params_init_qwen3_coder(tmpl, params);
     }

@@ -88,8 +88,8 @@ int op_fill(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
+    if (htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
     }
 
     uint32_t row_start = 0;

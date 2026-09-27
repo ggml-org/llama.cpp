@@ -130,7 +130,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         });
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-              "<\\|start\\|>assistant( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
+              "(?:^|<\\|start\\|>assistant)( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
         };
     }
 
