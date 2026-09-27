@@ -10,8 +10,13 @@ pkgdesc="llama.cpp fork with TurboQuant+ KV/weight codecs, SYCL backend for Inte
 arch=('x86_64')
 url="https://github.com/Raudbjorn/ggml-llama.cpp"
 license=('MIT')
-depends=('intel-oneapi-compiler-shared-runtime' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'curl' 'openssl')
-makedepends=('git' 'cmake' 'ninja' 'python' 'npm' 'intel-dpcpp-cpp-compiler' 'intel-oneapi-mkl')
+# intel-oneapi-mkl is a *runtime* dependency, not just a build one: the SYCL
+# backend dynamically links libmkl_sycl_blas.so.6, libmkl_intel_ilp64.so.3,
+# libmkl_tbb_thread.so.3, and libmkl_core.so.3 (confirmed via ldd on a real
+# build). curl is intentionally absent: -DLLAMA_CURL=OFF below, model
+# download goes through cpp-httplib/openssl (already listed) instead.
+depends=('intel-oneapi-compiler-shared-runtime' 'intel-oneapi-mkl' 'intel-compute-runtime' 'level-zero-loader' 'onetbb' 'openssl')
+makedepends=('git' 'cmake' 'ninja' 'python' 'npm' 'intel-dpcpp-cpp-compiler')
 provides=('llama-cpp')
 conflicts=('llama-cpp' 'llama-cpp-git' 'llama.cpp-sycl' 'llama.cpp-sycl-f16' 'llama.cpp-sycl-f16-git')
 install="${pkgname}.install"
@@ -27,8 +32,15 @@ options=('!buildflags' '!lto')
 
 pkgver() {
     cd "${pkgname%-git}"
-    git describe --long --tags 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' \
-        || printf "0.5.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    # git describe's own exit status must gate the fallback, not the
+    # pipeline's (sed exits 0 on empty input from a failed git describe,
+    # silently emitting an empty pkgver that makepkg rejects).
+    local described
+    if described="$(git describe --long --tags 2>/dev/null)"; then
+        printf '%s' "$described" | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+    else
+        printf "0.5.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+    fi
 }
 
 build() {
@@ -43,6 +55,14 @@ build() {
     export PATH="$OA/compiler/latest/bin:$PATH"
     export LD_LIBRARY_PATH="$OA/compiler/latest/lib:$OA/compiler/latest/opt/compiler/lib:$OA/mkl/latest/lib:$OA/tbb/latest/lib/intel64/gcc4.8:${LD_LIBRARY_PATH:-}"
 
+    # RPATH bakes the oneAPI runtime library locations into the installed
+    # binaries: libggml-sycl.so links libsycl.so and libmkl_*.so.* from these
+    # exact paths (confirmed via ldd on a real build), but LD_LIBRARY_PATH
+    # set here only exists for this build() subshell - without an RPATH the
+    # installed llama-server can't find libsycl.so at all once this function
+    # returns.
+    local RPATH="$CMPLR_ROOT/lib:$CMPLR_ROOT/opt/compiler/lib:$MKLROOT/lib:$TBBROOT/lib/intel64/gcc4.8"
+
     cmake -S "${pkgname%-git}" -B build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
@@ -54,14 +74,23 @@ build() {
         -DGGML_SYCL_GRAPH=ON \
         -DCMAKE_C_COMPILER=icx \
         -DCMAKE_CXX_COMPILER=icpx \
+        -DCMAKE_C_COMPILER_LAUNCHER= \
+        -DCMAKE_CXX_COMPILER_LAUNCHER= \
         -DMKL_DIR="$MKLROOT/lib/cmake/mkl" \
         -DTBB_DIR="$TBBROOT/lib/cmake/tbb" \
         -DIntelSYCL_DIR="$CMPLR_ROOT/lib/cmake/IntelSYCL" \
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+        -DCMAKE_INSTALL_RPATH="$RPATH" \
         -DLLAMA_CURL=OFF \
         -DLLAMA_BUILD_TESTS=OFF \
         -DLLAMA_BUILD_EXAMPLES=OFF \
         -DGGML_BUILD_TESTS=OFF
-    cmake --build build --target llama-server llama-completion llama-bench -j "$(nproc)"
+    # Build everything CMake registers install rules for (the default "all"
+    # target), not just the three binaries this package cares about: several
+    # tools' install() calls are unconditional or gated separately from what
+    # a hand-picked --target list would build, so `cmake --install` below
+    # would otherwise abort on the first tool it expected but never built.
+    cmake --build build
 }
 
 package() {
