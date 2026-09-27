@@ -88,6 +88,7 @@ For a more complete example, see `test_example_native()` in
 - **`space()`** - Matches zero or more whitespace characters (space, tab, newline)
 - **`until(delimiter)`** - Matches characters until delimiter is found (delimiter not consumed)
 - **`until_one_of(delimiters)`** - Matches characters until any delimiter in the list is found
+- **`until(content, branches, optional)`** - Matches content, then the first delimiter found and the rest of its branch (delimiter consumed). The grammar scans for the delimiters instead of following content
 - **`rest()`** - Matches everything remaining (`.*`)
 
 ### JSON Parsers

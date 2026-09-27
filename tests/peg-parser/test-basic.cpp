@@ -367,6 +367,49 @@ void test_basic(testing & t) {
     });
 
 
+    t.test("until with content", [](testing & t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.until(p.tag("body", p.until_one_of({ "</a>", "</b>" })), { { p.literal("</a>"), p.literal("x") }, { p.literal("</b>") } }, true);
+        });
+
+        t.test("consumes the delimiter and its rest", [&](testing & t) {
+            auto ctx    = common_peg_parse_context("hello</a>x");
+            auto result = parser.parse(ctx);
+            t.assert_equal("success", true, result.success());
+            t.assert_equal("end", (size_t) 10, result.end);
+            t.assert_equal("body", std::string("hello"), std::string(ctx.ast.get(result.nodes[0]).text));
+        });
+
+        t.test("picks the branch of the delimiter found", [&](testing & t) {
+            auto ctx    = common_peg_parse_context("hello</b>x");
+            auto result = parser.parse(ctx);
+            t.assert_equal("success", true, result.success());
+            t.assert_equal("end", (size_t) 9, result.end);
+        });
+
+        t.test("waits for the rest of a partial delimiter", [&](testing & t) {
+            auto ctx    = common_peg_parse_context("hello</", COMMON_PEG_PARSE_FLAG_LENIENT);
+            auto result = parser.parse(ctx);
+            t.assert_equal("need_more_input", true, result.need_more_input());
+        });
+
+        t.test("optional may end before a delimiter", [&](testing & t) {
+            auto ctx    = common_peg_parse_context("hello");
+            auto result = parser.parse(ctx);
+            t.assert_equal("success", true, result.success());
+            t.assert_equal("end", (size_t) 5, result.end);
+        });
+
+        t.test("fails when content stops off a delimiter", [&](testing & t) {
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.until(p.literal("he"), "</a>");
+            });
+            auto ctx    = common_peg_parse_context("hello</a>");
+            auto result = parser.parse(ctx);
+            t.assert_equal("fail", true, result.fail());
+        });
+    });
+
     t.test("recursive rules", [](testing &t) {
         // Test simple number
         t.test("simple_number", [](testing &t) {

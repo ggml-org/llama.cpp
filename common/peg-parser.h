@@ -284,10 +284,19 @@ struct common_peg_string_parser {
     char delimiter;
 };
 
+// A delimiter an until parser stops at, and the parser that follows it when the delimiter is consumed
+struct common_peg_until_branch {
+    common_peg_parser_id delimiter;
+    common_peg_parser_id rest = COMMON_PEG_INVALID_PARSER_ID;
+};
+
 struct common_peg_until_parser {
-    std::vector<std::string>          delimiters;
-    common_peg_parser_id              delimiter_parser = COMMON_PEG_INVALID_PARSER_ID; // set when the delimiter was given as a parser
-    common_trie                       matcher;
+    std::vector<common_peg_until_branch> branches;
+    bool                                 include  = false; // consume the first delimiter and parse the rest of its branch
+    bool                                 optional = false; // include only: may end before any delimiter completes
+    common_peg_parser_id                 content  = COMMON_PEG_INVALID_PARSER_ID; // include only: parsed up to the delimiter
+    common_trie                          matcher;
+    std::vector<size_t>                  pattern_branch;   // branch of each matcher pattern
 };
 
 struct common_peg_schema_parser {
@@ -331,21 +340,6 @@ struct common_peg_gbnf_parser {
     std::string grammar;
 };
 
-// A delimiter the ac grammar scans for and the parser that follows once it completes, if any
-struct common_peg_ac_branch {
-    common_peg_parser_id delimiter;
-    common_peg_parser_id rest = COMMON_PEG_INVALID_PARSER_ID;
-};
-
-struct common_peg_ac_parser {
-    common_peg_parser_id                child;
-    std::vector<common_peg_ac_branch>   branches;
-    bool                                optional = false; // the grammar may end before any delimiter completes
-    std::vector<std::string>            delimiters;       // expanded delimiter text, for dumps
-    common_trie                         matcher;
-    std::vector<size_t>                 pattern_branch;   // branch of each matcher pattern
-};
-
 // Variant holding all parser types
 using common_peg_parser_variant = std::variant<
     common_peg_epsilon_parser,
@@ -368,8 +362,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_ref_parser,
     common_peg_atomic_parser,
     common_peg_tag_parser,
-    common_peg_gbnf_parser,
-    common_peg_ac_parser
+    common_peg_gbnf_parser
 >;
 
 class common_peg_arena {
@@ -520,6 +513,18 @@ class common_peg_parser_builder {
     //   S -> .*
     common_peg_parser rest() { return until_one_of({}); }
 
+    // Matches content, then the first delimiter that starts where content stopped, then the rest of that
+    // branch (delimiter consumed). content must stop at a delimiter, e.g. until(D), or the parse fails.
+    // The grammar is built from the Aho-Corasick automaton of the delimiters: anything may go through until
+    // the first delimiter completes, and from there only the rest of its branch may follow, or nothing when
+    // the branch has no rest. With optional the parse and the grammar may also end before any delimiter completes.
+    // No two branches may share a delimiter.
+    //   S -> C (D1 R1 | D2 R2 | ...)
+    common_peg_parser until(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
+    common_peg_parser until(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return until(content, std::vector<common_peg_until_branch>(branches), optional); }
+    common_peg_parser until(const common_peg_parser & content, const common_peg_parser & delimiter) { return until(content, { { delimiter } }); }
+    common_peg_parser until(const common_peg_parser & content, const std::string & delimiter) { return until(content, literal(delimiter)); }
+
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}
     // Use -1 for max to represent unbounded repetition (equivalent to {m,})
@@ -607,19 +612,6 @@ class common_peg_parser_builder {
     // Wraps a child parser but emits a custom GBNF grammar string instead of
     // the child's grammar. Parsing delegates entirely to the child.
     common_peg_parser gbnf(const common_peg_parser & p, const std::string & grammar) { return add(common_peg_gbnf_parser{p, grammar}); }
-
-    // Wraps a child parser but emits a GBNF grammar built from the Aho-Corasick automaton of the
-    // branch delimiters. The grammar lets anything through until the first delimiter completes, and
-    // from there only the rest of its branch may follow, or nothing when the branch has no rest. With
-    // optional the grammar may also end before any delimiter completes. Parsing delegates entirely to
-    // the child, which is responsible for consuming the delimiter and rest (e.g. until(D) + literal(D) + R).
-    // A delimiter may only be a sequence of literals, tokens, and choices of them, possibly wrapped in tags and
-    // atomics, and no two branches may share one.
-    common_peg_parser ac(const common_peg_parser & p, const std::vector<common_peg_ac_branch> & branches, bool optional = false);
-    common_peg_parser ac(const common_peg_parser & p, std::initializer_list<common_peg_ac_branch> branches, bool optional = false) { return ac(p, std::vector<common_peg_ac_branch>(branches), optional); }
-    common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);
-    common_peg_parser ac(const common_peg_parser & p, const std::string & delimiter) { return ac(p, std::vector<std::string>{delimiter}); }
-    common_peg_parser ac(const common_peg_parser & p, const common_peg_parser & delimiter) { return ac(p, { { delimiter } }); }
 
     void set_root(const common_peg_parser & p);
 
