@@ -2684,7 +2684,7 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
     if (k % 32 != 0 || n % 32 != 0) { return -1; }
     if (!hex_is_aligned(dst, VLEN) || (act_dma_addr & (VLEN - 1)) != 0) { return -1; }
 
-    if (HMXI_ENABLE && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path (SoCs whose HMX has no FP16)
+    if (HMXI_ENABLE && !ctx->hmx_fp16 && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path (SoCs whose HMX has no FP16)
         return hmxint_mm_q4_0(ctx, dst, src2_addr, src2_bytes, act_dma_addr, weight, m, k, n, act_stride, dst_stride, src2_stride, dst_cols, n_threads);
     }
 
@@ -3032,7 +3032,7 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
         return HTP_STATUS_OK;
     }
 
-    if (HMXI_ENABLE && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path, one call per weight
+    if (HMXI_ENABLE && !ctx->hmx_fp16 && weight_type == HTP_TYPE_Q4_0) {  // integer HMX path, one call per weight
         for (uint32_t p = 0; p < n_weights; p++) {
             const struct htp_tensor * restrict src_w = octx->src[p];
             const struct htp_tensor * restrict dst   = octx->dsts[p];
