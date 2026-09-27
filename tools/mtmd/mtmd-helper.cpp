@@ -96,7 +96,7 @@ class scope_non_causal {
 public:
     scope_non_causal(llama_context * context, bool enabled) : context_(context), enabled_(enabled) {
         if (enabled_) {
-            // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
+            // TODO @ngxson : need to make sure only one image is processed at a time
             llama_set_causal_attn(context_, false);
         }
     }
@@ -164,6 +164,15 @@ int32_t mtmd_helper_decode_image_chunk(
     }
 
     const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
+    if (use_non_causal) {
+        // non-causal attention needs the whole chunk in one ubatch
+        const int32_t n_ubatch = llama_n_ubatch(lctx);
+        if (n_tokens > n_batch || n_tokens > n_ubatch) {
+            LOG_ERR("failed to decode %s: %d tokens do not fit in one batch (n_batch = %d, n_ubatch = %d), increase -b and -ub to at least %d\n",
+                    name, n_tokens, n_batch, n_ubatch, n_tokens);
+            return 1;
+        }
+    }
     const scope_non_causal non_causal(lctx, use_non_causal);
 
     while (i_batch < n_img_batches) { // split into batches
