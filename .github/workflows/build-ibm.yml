@@ -100,27 +100,28 @@ jobs:
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
-  ubuntu-24-zdnn-s390x:
-    name: ubuntu-24-zdnn-s390x
+  ubuntu-26-zdnn-s390x:
+    name: ubuntu-26-zdnn-s390x (z17, build only)
     runs-on: ubuntu-24.04-s390x
+    # z17 (-march=arch15) needs GCC >= 15.1 and binutils >= 2.44, which Ubuntu 24.04 does not provide
+    container: ubuntu:26.04
 
     steps:
+      - name: Build Dependencies
+        id: build_depends
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake git ca-certificates \
+            libssl-dev libzdnn-dev
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Build Dependencies
-        id: build_depends
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            python3 python3-pip python3-dev python3-wheel \
-            libjpeg-dev build-essential libssl-dev \
-            git-lfs
-
       - name: Toolchain workaround (GCC 15)
         run: |
-          sudo apt-get install -y gcc-15 g++-15
+          apt-get install -y gcc-15 g++-15
           echo "CC=gcc-15" >> "$GITHUB_ENV"
           echo "CXX=g++-15" >> "$GITHUB_ENV"
 
