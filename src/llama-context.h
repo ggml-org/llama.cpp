@@ -114,6 +114,10 @@ struct llama_context {
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
+    void set_mtp_kv_only(bool value);
+    void set_embeddings_nextn_buffered(bool value);
+    void reset_after_external_decode();
+    float * get_embeddings_nextn_previous();
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
@@ -368,6 +372,24 @@ private:
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
+    // MTP prefill needs to consume decode N's hidden rows while decode N+1 is already in
+    // flight. Two pinned host views stop N+1's async D2H copy from overwriting N. Each view
+    // carries a backend event recorded right after its last copy, so waiting for the previous
+    // view does not synchronize the current target graph -- which would destroy the layer
+    // pipeline overlap that makes multi-GPU prefill fast in the first place.
+    bool embd_nextn_buffered = false;
+    ggml_backend_buffer_ptr embd_nextn_buffers[2];
+    size_t embd_nextn_buffer_size = 0;
+    buffer_view<float> embd_nextn_slots[2] = {{nullptr, 0}, {nullptr, 0}};
+    ggml_backend_event_ptr embd_nextn_events[2];
+    ggml_backend_dev_t embd_nextn_event_devs[2] = {nullptr, nullptr};
+    bool embd_nextn_event_recorded[2] = {false, false};
+    int32_t embd_nextn_active_slot = -1;
+    int32_t embd_nextn_previous_slot = -1;
+
+    void advance_embeddings_nextn_buffer();
+    void record_embeddings_nextn_event(ggml_backend_t backend);
+
     ggml_backend_buffer_ptr buf_output;
 
     // keep copies of the per-sequence memory on the device

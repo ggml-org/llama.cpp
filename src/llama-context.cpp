@@ -117,6 +117,14 @@ llama_context::llama_context(
     cparams.embeddings              = params.embeddings;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
+    // An MTP context consumes prompt batches only to populate its K/V state.
+    // Reserving the generic full-output graph here sizes the scheduler for a
+    // 512-token MTP logits pass that never occurs; the first real prompt then
+    // replaces it with the much smaller KV-only graph. Start with the graph
+    // shape the context actually uses for its largest batches, then restore
+    // normal MTP mode for the small speculative-generation batches.
+    cparams.mtp_kv_only             = params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
+                                      model.arch == LLM_ARCH_QWEN35;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -425,12 +433,17 @@ llama_context::llama_context(
 
         // TODO: move these checks to ggml_backend_sched
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
+        // Not for the MTP context: its single block gains nothing from it, and the scheduler hands
+        // each newly allocated graph the next of its input copies. MTP alternates the catch-up and
+        // draft graphs every step, so every draft graph saw a new input address and re-recorded its
+        // CUDA graph instead of replaying it.
         bool pipeline_parallel =
             model.n_devices() > 1 &&
             model.n_gpu_layers() > model.hparams.n_layer_all &&
             model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
             cparams.offload_kqv &&
-            !model.has_tensor_overrides();
+            !model.has_tensor_overrides() &&
+            cparams.ctx_type != LLAMA_CONTEXT_TYPE_MTP;
 
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
@@ -459,6 +472,11 @@ llama_context::llama_context(
         }
 
         sched_reserve();
+
+        if (cparams.mtp_kv_only) {
+            LLAMA_LOG_INFO("%s: MTP scheduler initially reserved in KV-only mode\n", __func__);
+            cparams.mtp_kv_only = false;
+        }
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
@@ -1177,6 +1195,110 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
     cparams.embeddings_nextn_masked = masked;
 }
 
+void llama_context::set_mtp_kv_only(bool value) {
+    cparams.mtp_kv_only = value && model.arch == LLM_ARCH_QWEN35;
+}
+
+float * llama_context::get_embeddings_nextn_previous() {
+    if (!embd_nextn_buffered || embd_nextn_previous_slot < 0) {
+        return nullptr;
+    }
+
+    const int32_t slot = embd_nextn_previous_slot;
+    if (embd_nextn_event_recorded[slot]) {
+        if (embd_nextn_events[slot]) {
+            ggml_backend_event_synchronize(embd_nextn_events[slot].get());
+        } else {
+            // Correct fallback for a backend without events. CUDA has them, so the MTP fast
+            // path never takes this context-wide synchronization on the supported setup.
+            synchronize();
+        }
+        embd_nextn_event_recorded[slot] = false;
+    }
+
+    return embd_nextn_slots[slot].data;
+}
+
+void llama_context::set_embeddings_nextn_buffered(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    if (embd_nextn_buffered == value) {
+        return;
+    }
+
+    synchronize();
+
+    embd_nextn_buffered = value;
+    embd_nextn_active_slot = -1;
+    embd_nextn_previous_slot = -1;
+    embd_nextn_event_recorded[0] = false;
+    embd_nextn_event_recorded[1] = false;
+}
+
+void llama_context::reset_after_external_decode() {
+    if (!embd_nextn_buffered) {
+        return;
+    }
+
+    // External embedding decodes change both the output-ring phase and the scheduler
+    // topology. Re-reserving before the next text decode restores the worst-case
+    // pipeline-parallel layout; resetting the ring alone otherwise leaves every later
+    // text batch on the serial slow path.
+    synchronize();
+
+    embd_nextn_active_slot = -1;
+    embd_nextn_previous_slot = -1;
+    embd_nextn_event_recorded[0] = false;
+    embd_nextn_event_recorded[1] = false;
+    sched_need_reserve = true;
+}
+
+void llama_context::advance_embeddings_nextn_buffer() {
+    if (!embd_nextn_buffered) {
+        return;
+    }
+
+    GGML_ASSERT(cparams.embeddings_nextn && !cparams.embeddings_nextn_masked);
+
+    const int32_t next = embd_nextn_active_slot < 0 ? 0 : 1 - embd_nextn_active_slot;
+
+    // A skipped consumer must never let a third decode overwrite a slot whose D2H copy is still
+    // in flight. Normally get_embeddings_nextn_previous() has already drained this event.
+    if (embd_nextn_event_recorded[next]) {
+        if (embd_nextn_events[next]) {
+            ggml_backend_event_synchronize(embd_nextn_events[next].get());
+        } else {
+            synchronize();
+        }
+        embd_nextn_event_recorded[next] = false;
+    }
+
+    embd_nextn_previous_slot = embd_nextn_active_slot;
+    embd_nextn_active_slot = next;
+    embd_nextn = embd_nextn_slots[next];
+}
+
+void llama_context::record_embeddings_nextn_event(ggml_backend_t backend) {
+    if (!embd_nextn_buffered || embd_nextn_active_slot < 0) {
+        return;
+    }
+
+    const int32_t slot = embd_nextn_active_slot;
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+
+    if (embd_nextn_event_devs[slot] != dev) {
+        embd_nextn_events[slot].reset();
+        embd_nextn_event_devs[slot] = dev;
+    }
+    if (!embd_nextn_events[slot] && dev != nullptr) {
+        embd_nextn_events[slot].reset(ggml_backend_event_new(dev));
+    }
+    if (embd_nextn_events[slot]) {
+        ggml_backend_event_record(embd_nextn_events[slot].get(), backend);
+    }
+    embd_nextn_event_recorded[slot] = true;
+}
+
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
 
@@ -1486,7 +1608,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     auto * t_logits  = res->get_logits();
     auto * t_embd    = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
-    auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn() : nullptr;
+    auto * t_h_nextn = cparams.embeddings_nextn && !cparams.mtp_kv_only ? res->get_h_nextn() : nullptr;
 
     // extract logits
     if (logits.data && t_logits) {
@@ -1560,6 +1682,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
         const uint32_t n_embd = hparams.n_embd_out();
         GGML_ASSERT(n_tokens*n_embd <= (int64_t) embd_nextn.size);
         ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn.data, 0, n_tokens*n_embd*sizeof(float));
+        record_embeddings_nextn_event(backend_h);
     }
 
     // TODO: hacky solution
@@ -1797,6 +1920,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -2;
     };
 
+    // Select the D2H destination for this logical decode before any ubatch is submitted. The
+    // previous slot stays stable until the MTP consumer drains its per-slot backend event.
+    advance_embeddings_nextn_buffer();
+
     // start a new sampling transaction for this logical batch
     for (const auto & entry : sampling.samplers) {
         llama_sampler_backend_begin(entry.second);
@@ -1866,7 +1993,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         auto * t_logits  = res->get_logits();
         auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;
-        auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn()  : nullptr;
+        auto * t_h_nextn = cparams.embeddings_nextn && !cparams.mtp_kv_only ? res->get_h_nextn()  : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
@@ -1965,6 +2092,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
                 ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+                record_embeddings_nextn_event(backend_h);
             }
         }
 
@@ -2055,7 +2183,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     bool has_logits     = true;
     bool has_embd       = cparams.embeddings;
-    bool has_embd_nextn = cparams.embeddings_nextn;
+    bool has_embd_nextn = cparams.embeddings_nextn && !cparams.mtp_kv_only;
 
     // TODO: hacky enc-dec support
     if (model.arch == LLM_ARCH_T5) {
@@ -2077,6 +2205,12 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         embd_nextn.size = (size_t) n_embd_out * n_batch;
     }
 
+    // Keep the lag ring independent from buf_output. Logits/sampling can grow between a
+    // prompt batch and a speculative verification batch; embedding the ring in that variable
+    // layout would move or reallocate the previous slot while MTP still owns it.
+    const size_t embd_nextn_size        = embd_nextn.size;
+    const size_t embd_nextn_inline_size = embd_nextn_buffered ? 0 : embd_nextn_size;
+
     for (bool enabled : cparams.embeddings_layer_inp) {
         if (enabled) {
             embd_layer_inp_float_count += (size_t) n_embd * n_batch;
@@ -2095,9 +2229,43 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         output_ids.resize(n_batch);
     }
 
+    if (has_embd_nextn && embd_nextn_buffered) {
+        auto * ring_buft = ggml_backend_cpu_buffer_type();
+        auto * ring_dev  = model.dev_output();
+        auto * ring_host = ring_dev ? ggml_backend_dev_host_buffer_type(ring_dev) : nullptr;
+        if (ring_host) {
+            ring_buft = ring_host;
+        }
+
+        const size_t required = embd_nextn_size * sizeof(float);
+        if (!embd_nextn_buffers[0] || !embd_nextn_buffers[1] || embd_nextn_buffer_size < required) {
+            synchronize();
+            embd_nextn_buffers[0].reset(ggml_backend_buft_alloc_buffer(ring_buft, required));
+            embd_nextn_buffers[1].reset(ggml_backend_buft_alloc_buffer(ring_buft, required));
+            if (!embd_nextn_buffers[0] || !embd_nextn_buffers[1]) {
+                embd_nextn_buffers[0].reset();
+                embd_nextn_buffers[1].reset();
+                embd_nextn_buffer_size = 0;
+                LLAMA_LOG_ERROR("%s: failed to allocate two buffered nextn outputs of size %.2f MiB each\n",
+                        __func__, required / (1024.0 * 1024.0));
+                return 0;
+            }
+            ggml_backend_buffer_clear(embd_nextn_buffers[0].get(), 0);
+            ggml_backend_buffer_clear(embd_nextn_buffers[1].get(), 0);
+            embd_nextn_buffer_size = required;
+            embd_nextn_active_slot = -1;
+            embd_nextn_previous_slot = -1;
+            embd_nextn_event_recorded[0] = false;
+            embd_nextn_event_recorded[1] = false;
+        }
+
+        embd_nextn_slots[0] = {(float *) ggml_backend_buffer_get_base(embd_nextn_buffers[0].get()), embd_nextn_size};
+        embd_nextn_slots[1] = {(float *) ggml_backend_buffer_get_base(embd_nextn_buffers[1].get()), embd_nextn_size};
+    }
+
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
-        (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
+        (logits.size + embd.size + embd_nextn_inline_size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
         (                                                                         backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
@@ -2146,8 +2314,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     embd = has_embd ? buffer_view<float>{(float *) (base + offset), embd.size} : buffer_view<float>{nullptr, 0};
     offset += embd.size * sizeof(float);
 
-    embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn.size} : buffer_view<float>{nullptr, 0};
-    offset += embd_nextn.size * sizeof(float);
+    if (has_embd_nextn && embd_nextn_buffered) {
+        embd_nextn = embd_nextn_active_slot >= 0
+            ? embd_nextn_slots[embd_nextn_active_slot]
+            : embd_nextn_slots[0];
+    } else {
+        embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn_size} : buffer_view<float>{nullptr, 0};
+    }
+    offset += embd_nextn_inline_size * sizeof(float);
 
     for (uint32_t il = 0; il < embd_layer_inp.size(); ++il) {
         if (cparams.embeddings_layer_inp[il]) {
@@ -3892,6 +4066,22 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
+}
+
+void llama_set_mtp_kv_only(llama_context * ctx, bool value) {
+    ctx->set_mtp_kv_only(value);
+}
+
+void llama_set_embeddings_nextn_buffered(llama_context * ctx, bool value) {
+    ctx->set_embeddings_nextn_buffered(value);
+}
+
+void llama_reset_after_external_decode(llama_context * ctx) {
+    ctx->reset_after_external_decode();
+}
+
+float * llama_get_embeddings_nextn_previous(llama_context * ctx) {
+    return ctx->get_embeddings_nextn_previous();
 }
 
 void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {

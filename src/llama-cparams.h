@@ -35,6 +35,7 @@ struct llama_cparams {
     bool embeddings;
     bool embeddings_nextn;        // also extract the hidden state before the final output norm
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
+    bool mtp_kv_only;             // update only MTP K/V during prompt catch-up
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;

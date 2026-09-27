@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-kv-cache.h"
 #include "llama-memory-recurrent.h"
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
@@ -533,7 +534,7 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     res->add_input(std::move(inp));
 
     ggml_tensor * inp_pos     = build_inp_pos();
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    ggml_tensor * inp_out_ids = cparams.mtp_kv_only ? nullptr : build_inp_out_ids();
 
     auto * inp_attn = build_attn_inp_kv();
 
@@ -590,6 +591,16 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr,
             n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
+
+    // Future drafts only need the historical K/V from prompt catch-up.
+    if (cparams.mtp_kv_only) {
+        ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
+        ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
+
+        res->t_embd = cur;
+        ggml_build_forward_expand(gf, cur);
+        return;
+    }
 
     const float kq_scale = hparams.f_attention_scale == 0.0f
             ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
