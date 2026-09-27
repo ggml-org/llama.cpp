@@ -5263,11 +5263,11 @@ static void ggml_hexagon_precompute_get_rows_params(
     kparams->chunk_size = chunk_size;
     kparams->total_tasks = total_tasks;
 
-    kparams->div_ne10 = ne10 > 0 ? init_fastdiv_values(ne10) : (struct fastdiv_values) {0, 0};
-    kparams->div_ne10_ne11 = (ne10 * ne11) > 0 ? init_fastdiv_values(ne10 * ne11) : (struct fastdiv_values) {0, 0};
-    kparams->div_chunks_per_row = chunks_per_row > 0 ? init_fastdiv_values(chunks_per_row) : (struct fastdiv_values) {0, 0};
-    kparams->div_ne02 = ne02 > 0 ? init_fastdiv_values(ne02) : (struct fastdiv_values) {0, 0};
-    kparams->div_ne03 = ne03 > 0 ? init_fastdiv_values(ne03) : (struct fastdiv_values) {0, 0};
+    kparams->div_ne10 = ne10 > 0 ? init_fastdiv_values(ne10) : fastdiv_values{0, 0};
+    kparams->div_ne10_ne11 = (ne10 * ne11) > 0 ? init_fastdiv_values(ne10 * ne11) : fastdiv_values{0, 0};
+    kparams->div_chunks_per_row = chunks_per_row > 0 ? init_fastdiv_values(chunks_per_row) : fastdiv_values{0, 0};
+    kparams->div_ne02 = ne02 > 0 ? init_fastdiv_values(ne02) : fastdiv_values{0, 0};
+    kparams->div_ne03 = ne03 > 0 ? init_fastdiv_values(ne03) : fastdiv_values{0, 0};
 }
 
 static void ggml_hexagon_precompute_set_rows_params(

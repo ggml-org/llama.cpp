@@ -20,6 +20,7 @@
 #include "htp/gated-delta-net-ops.h"
 #include "htp/softmax-ops.h"
 #include "htp/argsort-ops.h"
+#include "htp/get-rows-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node   { nullptr };
@@ -360,9 +361,7 @@ struct htp_opformat {
         } else if (node.opcode == HTP_OP_GATED_DELTA_NET) {
             const auto * kparams = (const struct htp_gdn_kernel_params *) node.kernel_params;
             const char * path = (kparams->kernel_type == HTP_GDN_KERNEL_HMX_CHUNKED) ? "hmx-chunked" : "hvx-recurrent";
-            snprintf(str, max_size, "%s-%s vtcm %u",
-                     path,
-                     kparams->kda ? "kda" : "scalar",
+            snprintf(str, max_size, "%s-%s vtcm %u", path, kparams->kda ? "kda" : "scalar",
                      (unsigned int) (kparams->vtcm_size ? kparams->vtcm_size : kparams->vtcm_per_thread * kparams->n_threads));
         } else if (node.opcode == HTP_OP_MUL || node.opcode == HTP_OP_ADD || node.opcode == HTP_OP_ADD_ID ||
                    node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
@@ -374,9 +373,16 @@ struct htp_opformat {
                      node.opcode == HTP_OP_TOP_K ? "top_k" : "argsort",
                      (int) kparams->n_threads, (int) kparams->n_chunks,
                      (int) kparams->chunk_elems, (int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_GET_ROWS) {
+            const auto * kparams = (const struct htp_get_rows_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "%s%s vtcm %u",
+                     kparams->tiled ? "tiled" : (kparams->use_dma ? "dma" : "dt"),
+                     kparams->n_threads > 1 ? "-multi" : "",
+                     (unsigned int) kparams->vtcm_size);
         } else {
             snprintf(str, max_size, "----");
         }
+
     }
 
     void format(const htp_opnode & node) {

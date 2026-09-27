@@ -51,11 +51,14 @@ static inline void htp_get_rows_vtcm_layout_build(
     }
 
     if (tiled) {
-        const size_t tile_size = type == HTP_TYPE_Q4_0 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
-        vtcm_layout->src0_spad_half_size = (tile_size + 255) & ~255;
+        const size_t tile_size   = type == HTP_TYPE_Q4_0 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+        const size_t tile_stride = (tile_size + 127) & ~127;
+        const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;
+        const size_t row_tiles_size = n_k_tiles > 0 ? (n_k_tiles * tile_stride) : tile_stride;
+        vtcm_layout->src0_spad_half_size = (row_tiles_size + 255) & ~255;
         vtcm_layout->dst_spad_half_size  = (ne00 * sizeof(float) + 255) & ~255;
         vtcm_layout->src0_bytes_per_thread = 2 * vtcm_layout->src0_spad_half_size;
-        vtcm_layout->dst_bytes_per_thread  = vtcm_layout->dst_spad_half_size;
+        vtcm_layout->dst_bytes_per_thread  = 2 * vtcm_layout->dst_spad_half_size;
         vtcm_layout->off_src0 = 0;
         vtcm_layout->off_dst  = vtcm_layout->src0_bytes_per_thread * n_threads;
         vtcm_layout->total_bytes = vtcm_layout->off_dst + vtcm_layout->dst_bytes_per_thread * n_threads;
