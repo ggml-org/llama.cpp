@@ -12,6 +12,8 @@ The OpenVINO backend is implemented in `ggml/src/ggml-openvino` and provides a t
 - Compiles and caches the model for the target device.
 - Binds GGML tensor memory to OpenVINO inference tensors and runs inference.
 
+For guidance on contributing to the OpenVINO backend, see the [OpenVINO Backend Contributing Guide](https://github.com/ravi9/llamacpp-ov-dev-guide/blob/main/contributing-llamacpp-ov.md).
+
 ## Contents
 
 - [Supported Devices](#supported-devices)
@@ -96,7 +98,7 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
   - **SL** = Stateless (`GGML_OPENVINO_STATEFUL_EXECUTION=0`)
   - **SF** = Stateful (`GGML_OPENVINO_STATEFUL_EXECUTION=1`)
   - Note: The NPU operates in stateless mode only.
-- **Validation system:** Intel® Core™ Ultra 5 238V (Lunar Lake) | 32 GB RAM | Ubuntu 24.04 | Intel OpenCL GPU Driver 26.31.39395.13-0 | Intel NPU Driver 1.35.0.
+- **Validation system:** Intel® Core™ Ultra 5 238V (Lunar Lake) | 32 GB RAM | Ubuntu 24.04 | Intel Graphics Compiler 2.41.5 | Intel OpenCL GPU Driver 26.31.39395.13-0 | Intel NPU Driver 1.38.0.
 - See [Known Limitations](#known-limitations) for context on observed failures.
 
 | Model | CPU (SL / SF) | GPU (SL / SF) | NPU (SL) |
@@ -117,9 +119,9 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ / ✗ | ✓ / ✗ | ✗ |
 |  |  |  |  |
 | [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✗ | ✓ / ✗ | ✗ |
-| [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ / ✗ | ✓ / ✗ | ✓ |
-| [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ / ✗ | ✓ / ✗ | ✓ |
+| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
+| [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
+| [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
 |  |  |  |  |
 | [bartowski/Phi-3-mini-4k-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3-mini-4k-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [bartowski/Phi-3.5-mini-instruct-Q4_K_M](https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
@@ -132,9 +134,9 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/DeepSeek-R1-Distill-Llama-8B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [bartowski/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 |  |  |  |  |
-| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ / ✓ | ✗ / ✗ | ✓ |
+| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 | [ibm-granite/granite-4.0-micro-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-micro-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
-| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ / ✓ | ✗ / ✗ | ✗ |
+| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ / ✓ | ✓ / ✓ | ✗ |
 | [ibm-research/granite-3.2-8b-instruct-Q4_K_M](https://huggingface.co/ibm-research/granite-3.2-8b-instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
 |  |  |  |  |
 | [HuggingFaceTB/smollm2-1.7b-instruct-q4_k_m](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF) | ✓ / ✓ | ✓ / ✓ | ✓ |
@@ -242,8 +244,8 @@ chmod +x build-llamacpp-ov.sh
 # ============================================
 set -euo pipefail
 
-OPENVINO_VERSION_MAJOR="2026.3.1"
-OPENVINO_VERSION_FULL="2026.3.1.22476.56d9685302d"
+OPENVINO_VERSION_MAJOR="2026.4"
+OPENVINO_VERSION_FULL="2026.4.0.22959.99c81491cc3"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENVINO_INSTALL_DIR="/opt/intel/openvino_${OPENVINO_VERSION_MAJOR}"
@@ -340,7 +342,7 @@ echo "  ./build/ReleaseOV/bin/llama-cli -m model.gguf"
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.3.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
+> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
 
 </details>
 
@@ -370,8 +372,8 @@ REM ============================================
 REM llama.cpp OpenVINO Build Script (Ninja)
 REM ============================================
 
-set "OPENVINO_VERSION_MAJOR=2026.3.1"
-set "OPENVINO_VERSION_FULL=2026.3.1.22476.56d9685302d"
+set "OPENVINO_VERSION_MAJOR=2026.4"
+set "OPENVINO_VERSION_FULL=2026.4.0.22959.99c81491cc3"
 
 set "SCRIPT_DIR=%~dp0"
 set "VCPKG_DIR=C:\vcpkg"
@@ -550,7 +552,7 @@ endlocal
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.3.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
+> The script pins OpenVINO `2026.4` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
 
 </details>
 
@@ -719,10 +721,13 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |
 | `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
 | `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default on CPU/GPU). Set to `1` to disable. |
+| `GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT` | Boolean | `0`     | Disable the stateful KV-state sequence-axis relayout (relayout is on by default). It moves the KV state sequence axis from dim 1 to dim 2, so the GPU plugin can append new tokens in place instead of copying the whole state every token, and the reader side no longer transposes the whole accumulated state. Set to `1` to disable. |
 | `GGML_OPENVINO_MANUAL_GQA_ATTN`   | Boolean   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. |
 | `GGML_OPENVINO_MEMORY_OPTIMIZE`   | Boolean   | `0`        | Umbrella switch for compile-time memory reductions. Enables `GGML_OPENVINO_REDUCE_COMPILE_MEM` and, on GPU, `GGML_OPENVINO_RELEASE_WEIGHTS` unless those fine-grained variables are explicitly set. |
 | `GGML_OPENVINO_REDUCE_COMPILE_MEM`| Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` | Reduce compile-time host memory use by streaming weight requantization and avoiding extra weight-node materialization where possible. Set explicitly to override the umbrella switch. |
 | `GGML_OPENVINO_RELEASE_WEIGHTS`   | Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` on GPU | GPU-only. Release host weight buffers after the compiled model cache can reuse the device/plugin copy. Requires stable graph shapes; dynamic workloads that need recompilation should leave this disabled. |
+| `GGML_OPENVINO_SPILL_DIR`         | String    | `not set`  | Directory for a disk-backed weight buffer. When set, the repacked weight buffer is mapped from an unlinked file on this path instead of anonymous memory, so its pages are reclaimable under memory pressure instead of staying pinned, cutting the load-time host memory peak. Must point at real storage; a tmpfs mount (e.g. `/tmp` on many systems) backs it with RAM and makes the peak worse. |
+| `GGML_OPENVINO_REQUANT_KQUANT`    | String    | `not set`  | Requantize Q6_K/Q5_K weights (and matching MoE expert weights) to a 4-bit target instead of the default Q8_0_C, trading accuracy for less memory traffic. One of `q4_sym128` (Q6_K/Q5_K only), `q4_sym128_all` (Q4_K too, drops its per-group zero point), `q4_asym64_all` (Q6_K/Q5_K/Q4_K, keeps a real zero point at group 64), or `native` (no requantization). |
 | `GGML_OPENVINO_PROFILING`         | Boolean   | `0`        | Enable execution-time profiling.                                                                            |
 | `GGML_OPENVINO_DUMP_CGRAPH`       | Boolean   | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
 | `GGML_OPENVINO_DUMP_IR`           | Boolean   | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |

@@ -51,7 +51,7 @@ static void ensure_key_type_allowed(const value & val) {
 }
 
 // execute with error handling
-value statement::execute(context & ctx) {
+value statement::execute(context & ctx) const {
     try {
         return execute_impl(ctx);
     } catch (const continue_statement::signal & /* ex */) {
@@ -80,7 +80,7 @@ value statement::execute(context & ctx) {
     }
 }
 
-value identifier::execute_impl(context & ctx) {
+value identifier::execute_impl(context & ctx) const {
     auto it = ctx.get_val(val);
     auto builtins = global_builtins();
     if (!it->is_undefined()) {
@@ -98,7 +98,7 @@ value identifier::execute_impl(context & ctx) {
     }
 }
 
-value object_literal::execute_impl(context & ctx) {
+value object_literal::execute_impl(context & ctx) const {
     auto obj = mk_val<value_object>();
     for (const auto & pair : val) {
         value key = pair.first->execute(ctx);
@@ -109,7 +109,7 @@ value object_literal::execute_impl(context & ctx) {
     return obj;
 }
 
-value binary_expression::execute_impl(context & ctx) {
+value binary_expression::execute_impl(context & ctx) const {
     value left_val = left->execute(ctx);
 
     // Logical operators
@@ -317,9 +317,7 @@ static value try_builtin_func(context & ctx, const std::string & name, value & i
     throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
-value filter_expression::execute_impl(context & ctx) {
-    value input = operand ? operand->execute(ctx) : val;
-
+static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
     auto set_filter_alias = [](auto & filter_id) {
@@ -375,22 +373,21 @@ value filter_expression::execute_impl(context & ctx) {
     }
 }
 
-value filter_statement::execute_impl(context & ctx) {
+value filter_expression::execute_impl(context & ctx) const {
+    return apply_filter(ctx, filter, operand->execute(ctx));
+}
+
+value filter_statement::execute_impl(context & ctx) const {
     // eval body as string, then apply filter
     auto body_val = exec_statements(body, ctx);
     value_string parts = mk_val<value_string>();
     gather_string_parts_recursive(body_val, parts);
 
     JJ_DEBUG("FilterStatement: applying filter to body string of length %zu", parts->val_str.length());
-    filter_expression filter_expr(std::move(parts), std::move(filter));
-    value out = filter_expr.execute(ctx);
-
-    // this node can be reused later, make sure filter is preserved
-    this->filter = std::move(filter_expr.filter);
-    return out;
+    return apply_filter(ctx, filter, parts);
 }
 
-value test_expression::execute_impl(context & ctx) {
+value test_expression::execute_impl(context & ctx) const {
     // NOTE: "value is something" translates to function call "test_is_something(value)"
     const auto & builtins = global_builtins();
 
@@ -439,7 +436,7 @@ value test_expression::execute_impl(context & ctx) {
     }
 }
 
-value unary_expression::execute_impl(context & ctx) {
+value unary_expression::execute_impl(context & ctx) const {
     value operand_val = argument->execute(ctx);
     JJ_DEBUG("Executing unary expression with operator '%s'", op.value.c_str());
 
@@ -453,12 +450,17 @@ value unary_expression::execute_impl(context & ctx) {
         } else {
             throw std::runtime_error("Unary - operator requires numeric operand");
         }
+    } else if (op.value == "+") {
+        if (is_val<value_int>(operand_val) || is_val<value_float>(operand_val)) {
+            return operand_val;
+        }
+        throw std::runtime_error("Unary + operator requires numeric operand");
     }
 
     throw std::runtime_error("Unknown unary operator '" + op.value + "'");
 }
 
-value if_statement::execute_impl(context & ctx) {
+value if_statement::execute_impl(context & ctx) const {
     value test_val = test->execute(ctx);
 
     auto out = mk_val<value_array>();
@@ -479,20 +481,14 @@ value if_statement::execute_impl(context & ctx) {
     return str;
 }
 
-value for_statement::execute_impl(context & ctx) {
+value for_statement::execute_impl(context & ctx) const {
     context scope(ctx); // new scope for loop variables
 
-    jinja::select_expression * select_expr = cast_stmt<select_expression>(iterable);
+    const jinja::select_expression * select_expr = cast_stmt<select_expression>(iterable);
     statement_ptr test_expr_nullptr;
 
-    statement_ptr & iter_expr = [&]() -> statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->lhs : iterable;
-    }();
-    statement_ptr & test_expr = [&]() -> statement_ptr & {
-        auto tmp = cast_stmt<select_expression>(iterable);
-        return tmp ? tmp->test : test_expr_nullptr;
-    }();
+    const statement_ptr & iter_expr = select_expr ? select_expr->lhs : iterable;
+    const statement_ptr & test_expr = select_expr ? select_expr->test : test_expr_nullptr;
 
     JJ_DEBUG("Executing for statement, iterable type: %s", iter_expr->type().c_str());
 
@@ -645,7 +641,7 @@ value for_statement::execute_impl(context & ctx) {
     return str;
 }
 
-value set_statement::execute_impl(context & ctx) {
+value set_statement::execute_impl(context & ctx) const {
     auto rhs = val ? val->execute(ctx) : exec_statements(body, ctx);
 
     if (is_stmt<identifier>(assignee)) {
@@ -744,7 +740,7 @@ static inline void bind_parameters(const std::string & name, const statements & 
     }
 }
 
-value macro_statement::execute_impl(context & ctx) {
+value macro_statement::execute_impl(context & ctx) const {
     if (!is_stmt<identifier>(this->name)) {
         throw std::runtime_error("Macro name must be an identifier");
     }
@@ -767,7 +763,7 @@ value macro_statement::execute_impl(context & ctx) {
     return mk_val<value_undefined>();
 }
 
-value call_statement::execute_impl(context & ctx) {
+value call_statement::execute_impl(context & ctx) const {
     auto call_expr = cast_stmt<call_expression>(this->call);
     if (!call_expr) {
         throw std::runtime_error("Call statement requires a valid call expression");
@@ -807,7 +803,7 @@ value call_statement::execute_impl(context & ctx) {
     return callee_func->invoke(args);
 }
 
-value member_expression::execute_impl(context & ctx) {
+value member_expression::execute_impl(context & ctx) const {
     value object = this->object->execute(ctx);
 
     value property;
@@ -841,6 +837,12 @@ value member_expression::execute_impl(context & ctx) {
             return slice_func->invoke(args);
         } else {
             property = this->property->execute(ctx);
+        }
+    } else if (is_stmt<integer_literal>(this->property)) {
+        // syntax: obj.index
+        property = mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val);
+        if (property->as_int() < 0) {
+            throw std::runtime_error("Static member property cannot be negative");
         }
     } else {
         // syntax: obj.prop
@@ -934,7 +936,7 @@ value member_expression::execute_impl(context & ctx) {
     return val;
 }
 
-value call_expression::execute_impl(context & ctx) {
+value call_expression::execute_impl(context & ctx) const {
     // gather arguments
     func_args args(ctx);
     for (auto & arg_stmt : this->args) {
@@ -952,7 +954,7 @@ value call_expression::execute_impl(context & ctx) {
     return callee_func->invoke(args);
 }
 
-value keyword_argument_expression::execute_impl(context & ctx) {
+value keyword_argument_expression::execute_impl(context & ctx) const {
     if (!is_stmt<identifier>(key)) {
         throw std::runtime_error("Keyword argument key must be identifiers");
     }
@@ -976,7 +978,7 @@ std::string runtime::debug_dump_program(const program & prog, const std::string 
         return std::string(lvl * 2, ' ');
     };
 
-    ctx.visitor = [&](bool is_leaf, statement * node, std::vector<visitor_pair> children) {
+    ctx.visitor = [&](bool is_leaf, const statement * node, std::vector<visitor_pair> children) {
         oss << indent(lvl) << node->type() << ":\n";
         lvl++;
         if (is_leaf) {
