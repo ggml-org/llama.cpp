@@ -103,6 +103,7 @@ static size_t opt_nhvx    = 0; // use all
 static int    opt_nhmx    = 1; // when set, enable HMX; when 0, use HVX only
 static size_t opt_vmem    = HTP_OP_MAX_VMEM_DEFAULT;  // max available va space for buffer mappings
 static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
+static size_t opt_sbuf    = 256ul * 1024 * 1024;      // isolated buffer threshold
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
@@ -2848,11 +2849,13 @@ static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buf
         ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
     ggml_backend_hexagon_alloc_buffer_n_plan_t plan;
 
-    const size_t alignment = ggml_backend_buft_get_alignment(buft);
-    const size_t max_size  = ggml_backend_buft_get_max_size(buft);
+    const size_t alignment       = ggml_backend_buft_get_alignment(buft);
+    const size_t max_size        = ggml_backend_buft_get_max_size(buft);
+    const size_t split_threshold = opt_sbuf > 0 ? opt_sbuf : SIZE_MAX;
 
-    size_t cur_buf_size = 0;
-    int    first        = 0;
+    size_t cur_buf_size        = 0;
+    int    first               = 0;
+    bool   cur_buf_is_isolated = false;
 
     for (int i = 0; i < n_tensors; i++) {
         size_t this_size = 0;
@@ -2861,12 +2864,20 @@ static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buf
             this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
         }
 
-        if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
-            plan.push_back({ cur_buf_size, first, i });
-            cur_buf_size = this_size;
-            first        = i;
-        } else {
+        if (this_size > 0) {
+            const bool is_giant = this_size >= split_threshold;
+
+            if (cur_buf_size > 0 && (cur_buf_is_isolated || is_giant || (cur_buf_size + this_size) > max_size)) {
+                plan.push_back({ cur_buf_size, first, i });
+                cur_buf_size        = 0;
+                first               = i;
+                cur_buf_is_isolated = false;
+            }
+
             cur_buf_size += this_size;
+            if (is_giant) {
+                cur_buf_is_isolated = true;
+            }
         }
     }
 
@@ -9381,6 +9392,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_arch     = getenv("GGML_HEXAGON_ARCH");
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
     const char * str_mbuf     = getenv("GGML_HEXAGON_MBUF");
+    const char * str_sbuf     = getenv("GGML_HEXAGON_SBUF");
     const char * str_optrace  = getenv("GGML_HEXAGON_OPTRACE");
     const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
     const char * str_dma64    = getenv("GGML_HEXAGON_DMA64");
@@ -9433,6 +9445,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_ar_select = str_ar_select ? atoi(str_ar_select)                   : opt_ar_select;
     opt_ar_scatter = str_ar_scatter ? atoi(str_ar_scatter)                : opt_ar_scatter;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
+    opt_sbuf      = str_sbuf     ? strtoul(str_sbuf, NULL, 0) * MiB       : opt_sbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
     opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf) != 0                 : opt_hostbuf;
 
