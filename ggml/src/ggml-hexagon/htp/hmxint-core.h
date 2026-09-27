@@ -1,7 +1,8 @@
-// hmxint-core.h - integer-HMX Q4_0 matmul building blocks (HVX + HMX), shared by the libnative tests (x86) and the DSP build.
+// hmxint-core.h - integer-HMX building blocks (HVX + HMX) for SoCs whose HMX has no FP16 mode.
 //
 // y[m][n] = sum_k a[m][k] * w[n][k],  w = q4_0 (q in [-8,7], one fp16 scale d per 32 k).
-// Weights: per group of HMXI_G blocks, per column c: dmax = max|d|, w8 = round(q * 16 * d / dmax)  (int8, |w8| <= 128)
+// Weights: per group of k-tiles (matmul: the whole k-chunk; attention: HMXI_G), per column c:
+//          dmax = max|d|, w8 = round(q * 16 * d / dmax)  (int8, |w8| <= 128)
 //          HMX output scale for the group s = (dmax / 16) * 2^j_c   (fp16, j_c per column keeps |out| < 2^15)
 // Activations: per token, a_u = trunc(a * 32767/amax + 32768.5) in [0, 65535] (offset binary, a16 via 2x1 row pairs)
 // HMX .uh 2x1 output per (row tile, col tile, group): out = floor(v * s / 512), v = sum a_u * w8
@@ -20,10 +21,7 @@
 #include <string.h>
 #include <math.h>
 
-#ifndef HMXI_ENABLE
-#define HMXI_ENABLE 1        // 0: route everything to the stock (FP16 HMX / HVX) kernels, for A/B on FP16-capable SoCs
-#endif
-#define HMXI_G         16    // q4_0 blocks (k-tiles) per group
+#define HMXI_G         16    // k-tiles per scale group in attention
 #define HMXI_Q40_TILE  576   // tiled q4_0: 512 B nibbles + 32 fp16 scales
 
 static inline HVX_Vector hmxi_ldu(const void * p) { HVX_Vector v; memcpy(&v, p, sizeof(v)); return v; }
@@ -37,21 +35,6 @@ static inline float      hmxi_h2f(uint16_t h) {   // IEEE fp16 -> fp32 (portable
 }
 
 // fp16-like HMX scale encoding (sign, e = bits 14..10, m = bits 9..0, value 2^(e-15)(1+m/1024), no subnormals)
-static inline uint16_t hmxi_enc(float s) {
-    uint16_t sign = s < 0.0f ? 0x8000 : 0; s = fabsf(s);
-    if (!(s > 0.0f)) return 0;
-    int ex; float f = frexpf(s, &ex);
-    int e = ex - 1 + 15, m = (int) ((2.0f * f - 1.0f) * 1024.0f + 0.5f);
-    if (m == 1024) { m = 0; e++; }
-    if (e < 0) return 0;
-    if (e > 30) { e = 30; m = 1023; }
-    return (uint16_t) (sign | (e << 10) | m);
-}
-static inline float hmxi_dec(uint16_t v) {
-    if ((v & 0x7fff) == 0) return 0.0f;
-    int e = (v >> 10) & 31, m = v & 1023; float r = ldexpf((float) (1024 + m), e - 25);
-    return (v & 0x8000) ? -r : r;
-}
 
 // max |x| over n floats (n % 32 == 0)
 static inline float hmxi_absmax(const float * x, int n) {
@@ -105,84 +88,12 @@ static inline HVX_Vector hmxi_cvt_wtile(const uint8_t * q, uint8_t * dst, HVX_Ve
     return S;
 }
 
-// Per column of one column tile: exponent j_c such that (max|d| / 16) * 2^j_c <= 2^-7 over all ntiles (tiles contiguous).
-// Returns the column max |d| as fp16 bits in dmax_bits[32]; j[32] receives j_c.
-static inline void hmxi_col_scan(const uint8_t * qtiles, int ntiles, int * j, uint16_t * dmax_bits) {
-    const HVX_Vector m7 = Q6_Vh_vsplat_R(0x7fff);
-    HVX_Vector M = Q6_V_vzero();
-    uint16_t sc[64] __attribute__((aligned(128)));
-    memset(sc + 32, 0, 64);
-    for (int t = 0; t < ntiles; t++) {
-        memcpy(sc, qtiles + (size_t) t * HMXI_Q40_TILE + 512, 64);
-        M = Q6_Vuh_vmax_VuhVuh(M, Q6_V_vand_VV(*(HVX_Vector *) sc, m7));
-    }
-    uint16_t mb[64] __attribute__((aligned(128)));
-    *(HVX_Vector *) mb = M;
-    for (int c = 0; c < 32; c++) {
-        int e = (mb[c] >> 10) & 31, m = mb[c] & 1023;
-        j[c] = mb[c] == 0 ? 0 : (m == 0 ? 12 - e : 11 - e);
-        dmax_bits[c] = mb[c];
-    }
-}
 
-// Convert one group (nb <= HMXI_G tiles along k) of one column tile (vectorized).
-//   qtiles: first tiled q4_0 tile of the group (tiles contiguous along k, HMXI_Q40_TILE apart)
-//   dst:    first int8 tile (1024 apart);  bias: 128 words = coarse block (64) + fine block (64)
-//   j:      per-column exponent j_c (32 ints);  C: per-column correction accumulator (32 floats)
-static inline void hmxi_cvt_group(const uint8_t * qtiles, int nb, uint8_t * dst, uint32_t * bias, const int * j, float * C) {
-    uint16_t sc[64] __attribute__((aligned(128)));        // one block's scales (upper half zero); any nb works
-    memset(sc + 32, 0, 64);
-    const HVX_Vector m7 = Q6_Vh_vsplat_R(0x7fff);
-    HVX_Vector M = Q6_V_vzero();
-    for (int b = 0; b < nb; b++) {
-        memcpy(sc, qtiles + (size_t) b * HMXI_Q40_TILE + 512, 64);
-        M = Q6_Vuh_vmax_VuhVuh(M, Q6_V_vand_VV(*(HVX_Vector *) sc, m7));
-    }
-    uint16_t mb[64] __attribute__((aligned(128)));
-    float invE[32] __attribute__((aligned(128))), invO[32] __attribute__((aligned(128)));
-    *(HVX_Vector *) mb = M;
-    for (int c = 0; c < 32; c++) {
-        float dm = hmxi_h2f(mb[c]);
-        float inv = dm > 0.0f ? 32768.0f / dm : 0.0f;
-        if (c & 1) invO[c / 2] = inv; else invE[c / 2] = inv;
-    }
-    for (int i = 16; i < 32; i++) { invE[i] = 0.0f; invO[i] = 0.0f; }
-    const HVX_Vector vIE = *(HVX_Vector *) invE, vIO = *(HVX_Vector *) invO;
-    const HVX_Vector k7fff = Q6_V_vsplat_R(0x7fff), k112 = Q6_V_vsplat_R(112 << 23), sgn = Q6_V_vsplat_R(0x8000);
-    const HVX_Vector zero = Q6_V_vzero(), vmaxF = Q6_V_vsplat_R(32767), vminF = Q6_V_vsplat_R(-32768);
-    HVX_Vector S = Q6_V_vzero();
-    for (int b = 0; b < nb; b++) {
-        memcpy(sc, qtiles + (size_t) b * HMXI_Q40_TILE + 512, 64);
-        HVX_VectorPair X = Q6_Wuw_vzxt_Vuh(*(HVX_Vector *) sc);      // lo = even columns, hi = odd columns (fp16 bits)
-        HVX_Vector F[2];
-        for (int h = 0; h < 2; h++) {
-            HVX_Vector x   = h ? Q6_V_hi_W(X) : Q6_V_lo_W(X);
-            HVX_Vector mag = Q6_V_vand_VV(x, k7fff);
-            HVX_Vector f32 = Q6_V_vor_VV(Q6_Vw_vasl_VwR(Q6_V_vand_VV(x, sgn), 16), Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(mag, 13), k112));
-            f32 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VwVw(Q6_Vw_vasr_VwR(mag, 10), zero), f32, zero);   // exponent 0 (zero/subnormal) -> 0
-            HVX_Vector r = Q6_Vw_equals_Vsf(Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(f32, h ? vIO : vIE)));
-            F[h] = Q6_Vw_vmax_VwVw(Q6_Vw_vmin_VwVw(r, vmaxF), vminF);
-        }
-        HVX_Vector Fh = Q6_Vh_vshuffe_VhVh(F[1], F[0]);                       // column order c0..c31
-        HVX_Vector V1 = Q6_V_lo_W(Q6_W_vshuff_VVR(Fh, Fh, -2));
-        HVX_VectorPair P4 = Q6_W_vshuff_VVR(V1, V1, -4);                       // lo = c0..c15 x4, hi = c16..c31 x4
-        S = hmxi_cvt_wtile(qtiles + (size_t) b * HMXI_Q40_TILE, dst + (size_t) b * 1024, Q6_V_lo_W(P4), Q6_V_hi_W(P4), S);
-    }
-    int32_t Sv[32] __attribute__((aligned(128)));
-    *(HVX_Vector *) Sv = S;
-    for (int c = 0; c < 32; c++) {
-        int e = ((mb[c] >> 10) & 31) + j[c] - 4;                              // exponent of (dmax/16) * 2^j (<= 8)
-        uint16_t co = (mb[c] == 0 || e < 0) ? 0 : (uint16_t) ((e << 10) | (mb[c] & 1023));
-        uint16_t fi = co ? (uint16_t) (co + (8 << 10)) : 0;                   // fine = coarse * 256 (exponent <= 16)
-        uint32_t b2 = (uint32_t) (-128 * Sv[c]);                              // bias2 adds x256 to v: cancels 32768*S
-        bias[c] = co; bias[32 + c] = b2; bias[64 + c] = fi; bias[96 + c] = b2;
-        C[c] += -0.5f;
-    }
-}
-
-// Same, but the group is the whole k-chunk: the per-column exponent comes from this group's own max (no column pass).
+// Convert nb tiled q4_0 tiles (one k-chunk of one column tile) to int8 HMX weight tiles, one scale group per column:
+//   w8 = round(q * 16 * d / dmax) with dmax = the column's max block scale in this k-chunk; the exponent j comes
+//   from dmax, and the group scale goes into the coarse/fine bias words (128 words at bias).
 //   shift: extra exponent reduction so the coarse store cannot overflow for nb > 16 tiles (16 << shift >= nb)
-//   k512:  out, per column 512 * 2^-j / 256 for the reduce step
+//   k512:  out, per column 512 * 2^-j / 256 for the reduce step;  C: per-column correction accumulator
 static inline void hmxi_cvt_group_whole(const uint8_t * qtiles, int nb, uint8_t * dst, uint32_t * bias, int shift, float * k512, float * C) {
     uint16_t sc[64] __attribute__((aligned(128)));        // one block's scales (upper half zero); any nb works
     memset(sc + 32, 0, 64);
@@ -279,12 +190,7 @@ static inline void hmxi_reduce_tile(const uint8_t * stage, int n_g, float * cons
 }
 
 
-// ---------------------------------------------------------------------------------------------------------------
-// Generic f32/f16 weights (used by attention): W[c][k] given through a getter-free layout:
-//   w(c, k) = src[c * cstride + k * kstride]  (float), c < n_valid_cols (others 0), k < kdim (multiple of 32)
-// Per column: s0 = fp16_round_up(max|w| / 127), w8 = round(w / s0); HMX scale = s0 * 2^j (j per column, bound for the group).
-// Emits int8 tiles for one column tile (tiles along k, 1024 B apart) and bias blocks per group of HMXI_G tiles
-// (128 words each: coarse + fine), accumulates C (-0.5 per group) and returns per column k512 = 2^(1-j) and s0.
+// Smallest normal fp16 >= x > 0 (attention: per-column scales s0 = fp16_round_up(max|w| / 127)).
 static inline uint16_t hmxi_f16_round_up_bits(float x) {        // smallest fp16 (normal) >= x > 0
     int ex; float f = frexpf(x, &ex); int e = ex - 1 + 15;
     int m = (int) ceilf((2.0f * f - 1.0f) * 1024.0f);
@@ -292,92 +198,6 @@ static inline uint16_t hmxi_f16_round_up_bits(float x) {        // smallest fp16
     if (e < 1) { e = 1; m = 0; }
     if (e > 30) { e = 30; m = 1023; }
     return (uint16_t) ((e << 10) | m);
-}
-static inline void hmxi_cvt_fw_coltile(const float * src, size_t cstride, size_t kstride, int n_valid_cols, int kdim,
-                                        uint8_t * dst_tiles, uint32_t * bias, float * k512, float * C) {
-    const int nkt = kdim / 32, ng = (nkt + HMXI_G - 1) / HMXI_G;
-    float s0[32]; uint16_t s0b[32]; int jc[32];
-    for (int c = 0; c < 32; c++) {
-        float am = 0.0f;
-        if (c < n_valid_cols) for (int k = 0; k < kdim; k++) { float v = fabsf(src[c * cstride + k * kstride]); am = v > am ? v : am; }
-        if (am > 0.0f) { s0b[c] = hmxi_f16_round_up_bits(am / 127.0f); s0[c] = hmxi_h2f(s0b[c]); } else { s0b[c] = 0; s0[c] = 0.0f; }
-        // coarse bound: Kg*65535*127 * s/512 < 2^15 with Kg = 32*HMXI_G  ->  s0 * 2^j <= 2^15*512 / (32*HMXI_G*65535*127)
-        float lim = 16777216.0f / (32.0f * HMXI_G * 65535.0f * 127.0f);
-        int j = 0; if (s0[c] > 0.0f) { int ex; frexpf(lim / s0[c], &ex); j = ex - 1; }
-        jc[c] = j; k512[c] = ldexpf(2.0f, -j); C[c] = 0.0f;
-    }
-    for (int g = 0; g < ng; g++) {
-        int kt0 = g * HMXI_G, nb = nkt - kt0 < HMXI_G ? nkt - kt0 : HMXI_G;
-        int32_t S[32] = {0};
-        for (int kt = kt0; kt < kt0 + nb; kt++) {
-            int8_t * t = (int8_t *) (dst_tiles + (size_t) kt * 1024);
-            for (int k = 0; k < 32; k++) for (int c = 0; c < 32; c++) {
-                int w = 0;
-                if (c < n_valid_cols && s0[c] > 0.0f) {
-                    w = (int) lrintf(src[c * cstride + (size_t) (kt * 32 + k) * kstride] / s0[c]);
-                    w = w > 127 ? 127 : (w < -127 ? -127 : w);
-                }
-                t[(k / 4) * 128 + c * 4 + (k % 4)] = (int8_t) w; S[c] += w;
-            }
-        }
-        uint32_t * b = bias + (size_t) g * 128;
-        for (int c = 0; c < 32; c++) {
-            int e = ((s0b[c] >> 10) & 31) + jc[c];
-            uint16_t co = (s0b[c] == 0 || e < 0) ? 0 : (uint16_t) ((e << 10) | (s0b[c] & 1023));
-            if (e > 8) co = 0x2000 | (s0b[c] & 1023);                  // guard (should not happen)
-            uint16_t fi = co ? (uint16_t) (co + (8 << 10)) : 0;
-            uint32_t b2 = (uint32_t) (-128 * S[c]);
-            b[c] = co; b[32 + c] = b2; b[64 + c] = fi; b[96 + c] = b2;
-            C[c] += -0.5f;
-        }
-    }
-    (void) s0b;
-}
-
-// Same as hmxi_cvt_fw_coltile, but the source is fp16 (IEEE half bits) with an optional per-k multiplier kmul[k]
-// and a valid-k bound (k >= kvalid reads as 0). Used for attention K (kmul = 1/channel scale) and V^T.
-static inline void hmxi_cvt_hw_coltile(const uint16_t * src, size_t cstride, size_t kstride, int n_valid_cols, int kdim, int kvalid,
-                                        const float * kmul, uint8_t * dst_tiles, uint32_t * bias, float * k512, float * C) {
-    const int nkt = kdim / 32, ng = (nkt + HMXI_G - 1) / HMXI_G;
-    float s0[32], inv[32]; uint16_t s0b[32]; int jc[32];
-    for (int c = 0; c < 32; c++) {
-        float am = 0.0f;
-        if (c < n_valid_cols) for (int k = 0; k < kvalid; k++) {
-            float v = fabsf(hmxi_h2f(src[c * cstride + (size_t) k * kstride]) * (kmul ? kmul[k] : 1.0f)); am = v > am ? v : am;
-        }
-        if (am > 0.0f) { s0b[c] = hmxi_f16_round_up_bits(am / 127.0f); s0[c] = hmxi_h2f(s0b[c]); inv[c] = 1.0f / s0[c]; }
-        else { s0b[c] = 0; s0[c] = 0.0f; inv[c] = 0.0f; }
-        float lim = 16777216.0f / (32.0f * HMXI_G * 65535.0f * 127.0f);
-        int j = 0; if (s0[c] > 0.0f) { int ex; frexpf(lim / s0[c], &ex); j = ex - 1; }
-        jc[c] = j; k512[c] = ldexpf(2.0f, -j); C[c] = 0.0f;
-    }
-    for (int g = 0; g < ng; g++) {
-        int kt0 = g * HMXI_G, nb = nkt - kt0 < HMXI_G ? nkt - kt0 : HMXI_G;
-        int32_t S[32] = {0};
-        for (int kt = kt0; kt < kt0 + nb; kt++) {
-            int8_t * t = (int8_t *) (dst_tiles + (size_t) kt * 1024);
-            for (int k = 0; k < 32; k++) {
-                int kk = kt * 32 + k; float km = (kmul && kk < kvalid) ? kmul[kk] : 1.0f;
-                for (int c = 0; c < 32; c++) {
-                    int w = 0;
-                    if (c < n_valid_cols && kk < kvalid && s0[c] > 0.0f) {
-                        w = (int) lrintf(hmxi_h2f(src[c * cstride + (size_t) kk * kstride]) * km * inv[c]);
-                        w = w > 127 ? 127 : (w < -127 ? -127 : w);
-                    }
-                    t[(k / 4) * 128 + c * 4 + (k % 4)] = (int8_t) w; S[c] += w;
-                }
-            }
-        }
-        uint32_t * b = bias + (size_t) g * 128;
-        for (int c = 0; c < 32; c++) {
-            int e = ((s0b[c] >> 10) & 31) + jc[c];
-            uint16_t co = (s0b[c] == 0 || e < 0) ? 0 : (uint16_t) ((e << 10) | (s0b[c] & 1023));
-            uint16_t fi = co ? (uint16_t) (co + (8 << 10)) : 0;
-            uint32_t b2 = (uint32_t) (-128 * S[c]);
-            b[c] = co; b[32 + c] = b2; b[64 + c] = fi; b[96 + c] = b2;
-            C[c] += -0.5f;
-        }
-    }
 }
 
 #endif // HMXINT_CORE_H

@@ -39,7 +39,6 @@ struct hmxfa_state {
     float *   vf;        // [n_kv_pad][dv] V rows as f32 (DDR)
     float     vmax_part[8][HMXFA_MAX_D];
     float     sV[HMXFA_MAX_D], iV[HMXFA_MAX_D]; uint16_t sVb[HMXFA_MAX_D];
-    uint64_t t[12];
 };
 
 static float hmxfa_k512_1[HMXFA_MAX_KV], hmxfa_C_1[HMXFA_MAX_KV], hmxfa_k512_2[HMXFA_MAX_D], hmxfa_C_2[HMXFA_MAX_D];
@@ -322,13 +321,13 @@ static void hmxfa_sm_fn(unsigned int n, unsigned int i, void * data) {
     }
 }
 
-#define HMXFA_T(i, stmt) do { uint64_t _t = HAP_perf_get_time_us(); stmt; st->t[i] += HAP_perf_get_time_us() - _t; } while (0)
 static void hmxfa_matmul(struct hmxfa_state * st, const float * act, int act_stride, int K, struct hmxfa_w * W, int out_is_S) {
     struct htp_context * ctx = st->ctx;
     st->act = act; st->act_stride = act_stride; st->K = K; st->W = W; st->out_is_S = out_is_S;
-    HMXFA_T(5, worker_pool_run_func(ctx->worker_pool, hmxfa_act_fn, st, st->n_threads));
-    HMXFA_T(6, (hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmxfa_hmx_fn, st)), hmx_queue_pop(ctx->hmx_queue)));
-    HMXFA_T(7, worker_pool_run_func(ctx->worker_pool, hmxfa_red_fn, st, st->n_threads));
+    worker_pool_run_func(ctx->worker_pool, hmxfa_act_fn, st, st->n_threads);
+    hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmxfa_hmx_fn, st));
+    hmx_queue_pop(ctx->hmx_queue);
+    worker_pool_run_func(ctx->worker_pool, hmxfa_red_fn, st, st->n_threads);
 }
 
 static int hmxint_flash_attn(struct htp_ops_context * octx, float scale) {
@@ -390,40 +389,31 @@ static int hmxint_flash_attn(struct htp_ops_context * octx, float scale) {
         st.seq = seq;
         for (int hk = 0; hk < n_head_kv; hk++) {
             st.hk = hk;
-            { struct hmxfa_state * stp = &st; struct hmxfa_state * st = stp; HMXFA_T(0, worker_pool_run_func(ctx->worker_pool, hmxfa_sd_fn, st, st->n_threads)); }
+            worker_pool_run_func(ctx->worker_pool, hmxfa_sd_fn, &st, st.n_threads);
             for (int c = 0; c < d; c++) {
                 float m = 0.0f; for (int t = 0; t < st.n_threads; t++) m = st.spart[t][c] > m ? st.spart[t][c] : m;
                 st.sd[c] = m > 0.0f ? m : 1.0f; st.isd[c] = 1.0f / st.sd[c];
             }
-            { struct hmxfa_state * stp = &st; struct hmxfa_state * st = stp; HMXFA_T(1, worker_pool_run_func(ctx->worker_pool, hmxfa_rows_fn, st, st->n_threads)); }
+            worker_pool_run_func(ctx->worker_pool, hmxfa_rows_fn, &st, st.n_threads);
             for (int c = 0; c < dv; c++) {
                 float m = 0.0f; for (int t = 0; t < st.n_threads; t++) m = st.vmax_part[t][c] > m ? st.vmax_part[t][c] : m;
                 st.sVb[c] = m > 0.0f ? hmxi_f16_round_up_bits(m / 127.0f) : 0;
                 st.sV[c] = st.sVb[c] ? hmxi_h2f(st.sVb[c]) : 0.0f; st.iV[c] = st.sV[c] > 0.0f ? 1.0f / st.sV[c] : 0.0f;
             }
-            { struct hmxfa_state * stp = &st; struct hmxfa_state * st = stp;
-              HMXFA_T(2, worker_pool_run_func(ctx->worker_pool, hmxfa_w1_fn, st, st->n_threads));
-              HMXFA_T(8, worker_pool_run_func(ctx->worker_pool, hmxfa_w2_fn, st, st->n_threads)); }
+            worker_pool_run_func(ctx->worker_pool, hmxfa_w1_fn, &st, st.n_threads);
+            worker_pool_run_func(ctx->worker_pool, hmxfa_w2_fn, &st, st.n_threads);
             for (int g = 0; g < st.G; g++) {
                 st.h = hk * st.G + g;
                 for (int i0 = 0; i0 < n_q; i0 += rows_max) {
                     st.i0 = i0; st.nr = n_q - i0 < rows_max ? n_q - i0 : rows_max; st.nrt = (st.nr + 15) / 16;
                     for (int r = st.nr; r < st.nrt * 16; r++) { st.sa[r] = 0.0f; st.ia[r] = 0.0f; }
-                    { struct hmxfa_state * stp = &st; struct hmxfa_state * st = stp; HMXFA_T(3, worker_pool_run_func(ctx->worker_pool, hmxfa_q_fn, st, st->n_threads)); }
+                    worker_pool_run_func(ctx->worker_pool, hmxfa_q_fn, &st, st.n_threads);
                     hmxfa_matmul(&st, st.qs, d, d, W1, 1);
-                    { struct hmxfa_state * stp = &st; struct hmxfa_state * st = stp; HMXFA_T(4, worker_pool_run_func(ctx->worker_pool, hmxfa_sm_fn, st, st->n_threads)); }
+                    worker_pool_run_func(ctx->worker_pool, hmxfa_sm_fn, &st, st.n_threads);
                     hmxfa_matmul(&st, st.S, st.n_kv_pad, st.n_kv_pad, W2, 0);
                 }
             }
         }
-    }
-    static int nlog = 0;
-    if (nlog++ < 0) {
-        FARF(ALWAYS, "hmxfa: d %d nq %d nkv %d", d, n_q, n_kv);
-        FARF(ALWAYS, "hmxfa:   heads %d kvh %d rc %d", n_head, n_head_kv, rc);
-        FARF(ALWAYS, "hmxfa:   sd %u rows %u w1 %u w2 %u", (unsigned) st.t[0], (unsigned) st.t[1], (unsigned) st.t[2], (unsigned) st.t[8]);
-        FARF(ALWAYS, "hmxfa:   q %u sm %u act %u", (unsigned) st.t[3], (unsigned) st.t[4], (unsigned) st.t[5]);
-        FARF(ALWAYS, "hmxfa:   hmx %u red %u", (unsigned) st.t[6], (unsigned) st.t[7]);
     }
     return HTP_STATUS_OK;
 }

@@ -2462,7 +2462,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         return hmx_flash_attn_ext(octx);
     }
 
-    if (HMXI_ENABLE && !octx->ctx->hmx_fp16 && kparams->kernel_type == HTP_FA_KERNEL_HVX && kparams->max_bias == 0.0f && kparams->logit_softcap == 0.0f) {
+    if (!octx->ctx->hmx_fp16 && kparams->kernel_type == HTP_FA_KERNEL_HVX && kparams->max_bias == 0.0f && kparams->logit_softcap == 0.0f) {
         const int r = hmxint_flash_attn(octx, kparams->scale);   // integer-HMX attention (SoCs whose HMX has no FP16)
         if (r != HTP_STATUS_NO_SUPPORT) return r;
     }
