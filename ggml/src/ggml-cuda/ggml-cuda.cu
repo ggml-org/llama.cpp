@@ -932,9 +932,17 @@ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_ty
 static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
 
-    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
-        ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
-        : ggml_nbytes(tensor);
+    size_t size = ggml_nbytes(tensor);
+    if (tensor->op == GGML_OP_FLASH_ATTN_EXT) {
+        ggml_backend_buffer_t owner = nullptr;
+        // Managed TG1-TG4 attention uses bounded, caller-owned scratch. Larger
+        // prefill calls still enter stock CUDA attention and need its K/V extras.
+        if (!tensor->src[0] || tensor->src[0]->ne[1] > 4 ||
+                !ggml_backend_execution_owner(tensor, owner) || !owner ||
+                !ggml_backend_execution_supports(owner, ggml_backend_buft_get_device(buft), tensor)) {
+            size = ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor);
+        }
+    }
     int64_t ne0 = tensor->ne[0];
 
     // [TAG_ALLOC_SIZE_EXPAND]
@@ -4819,14 +4827,25 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     bool managed = false;
     for (int i = 0; ggml_backend_execution_buffers_present() && i < cgraph->n_nodes; ++i) {
         ggml_backend_buffer_t owner;
-        if (!ggml_backend_execution_owner(cgraph->nodes[i],owner)) return GGML_STATUS_FAILED;
+        if (!ggml_backend_execution_owner(cgraph->nodes[i],owner)) {
+            GGML_LOG_ERROR("%s: conflicting execution owners at node %d %s (%s)\n",
+                __func__, i, cgraph->nodes[i]->name, ggml_op_name(cgraph->nodes[i]->op));
+            return GGML_STATUS_FAILED;
+        }
         managed |= owner != nullptr;
-        if (owner && !ggml_backend_execution_supports(owner,ggml_backend_get_device(backend),cgraph->nodes[i])) return GGML_STATUS_FAILED;
+        if (owner && !ggml_backend_execution_supports(owner,ggml_backend_get_device(backend),cgraph->nodes[i])) {
+            GGML_LOG_ERROR("%s: unsupported managed node %d %s (%s)\n",
+                __func__, i, cgraph->nodes[i]->name, ggml_op_name(cgraph->nodes[i]->op));
+            return GGML_STATUS_FAILED;
+        }
     }
     if (managed) {
         cudaStreamCaptureStatus status;
         CUDA_CHECK(cudaStreamIsCapturing(cuda_ctx->stream(),&status));
-        if (status != cudaStreamCaptureStatusNone) return GGML_STATUS_FAILED;
+        if (status != cudaStreamCaptureStatusNone) {
+            GGML_LOG_ERROR("%s: managed nodes encountered during CUDA capture\n", __func__);
+            return GGML_STATUS_FAILED;
+        }
         int first = 0;
         for (int i = 0; i <= cgraph->n_nodes; ++i) {
             ggml_backend_buffer_t owner = nullptr;
@@ -4835,11 +4854,17 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
             if (i > first) {
                 auto ordinary = ggml_graph_view(cgraph,first,i);
                 const auto result = ggml_backend_cuda_graph_compute(backend,&ordinary);
-                if (result != GGML_STATUS_SUCCESS) return result;
+                if (result != GGML_STATUS_SUCCESS) {
+                    GGML_LOG_ERROR("%s: ordinary graph split [%d,%d) failed with status %d\n", __func__, first, i, result);
+                    return result;
+                }
             }
             if (owner) {
                 const auto result = ggml_backend_execution_compute(owner,backend,cgraph->nodes[i]);
-                if (result != GGML_STATUS_SUCCESS) return result;
+                if (result != GGML_STATUS_SUCCESS) {
+                    GGML_LOG_ERROR("%s: managed node %d %s failed with status %d\n", __func__, i, cgraph->nodes[i]->name, result);
+                    return result;
+                }
             }
             first = i+1;
         }

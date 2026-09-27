@@ -1,6 +1,9 @@
 #include "kv-stream-block-test.h"
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-kv-stream-logical-cache.h"
+#include "../src/llama-kv-stream-layer-lease.h"
+#include "../src/llama-kv-stream-mtp-proxy.h"
+#include "../ggml/src/ggml-backend-execution.h"
 #include "../src/llama-context-memory.h"
 
 // Quantization error is not adapter error: compare the exact bytes from an ordinary CUDA producer graph.
@@ -50,12 +53,57 @@ struct parent_view_fault {
         return active->original(parent,offset,size);
     }
 };
+struct index_read_fault {
+    ggml_backend_buffer_t buffer;
+    decltype(ggml_backend_buffer_i::get_tensor) original;
+    inline static index_read_fault * active = nullptr;
+    explicit index_read_fault(ggml_backend_buffer_t buffer) :
+        buffer(buffer), original(buffer->iface.get_tensor) {
+        GGML_ASSERT(!active);
+        active = this;
+        buffer->iface.get_tensor = [](ggml_backend_buffer_t, const ggml_tensor *,
+                void *, size_t, size_t) {
+            throw std::runtime_error("injected index read failure");
+        };
+    }
+    ~index_read_fault() {
+        buffer->iface.get_tensor = original;
+        active = nullptr;
+    }
+};
+struct proxy_d2d_fault {
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::cpy_tensor_async) original;
+    inline static proxy_d2d_fault * active = nullptr;
+    size_t calls = 0;
+    explicit proxy_d2d_fault(ggml_backend_t backend) :
+        backend(backend), original(backend->iface.cpy_tensor_async) {
+        GGML_ASSERT(!active);
+        active = this;
+        backend->iface.cpy_tensor_async = [](ggml_backend_t, ggml_backend_t,
+                const ggml_tensor *, ggml_tensor *) {
+            ++active->calls;
+            throw std::runtime_error("injected MTP D2D failure");
+            return false;
+        };
+    }
+    ~proxy_d2d_fault() {
+        backend->iface.cpy_tensor_async = original;
+        active = nullptr;
+    }
+};
 
 int main(int argc,char ** argv) {
     const bool auxiliary_only = argc > 1 && std::strcmp(argv[1], "--cuda-auxiliary-cache") == 0;
+    const bool cancel_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-cancel") == 0;
+    const bool lease_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-lease") == 0;
+    const bool admission_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-admission") == 0;
     testing t;
+    if (admission_only) t.set_filter("mtp_prefill_admission_demotes_resident_pages_before_population");
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
-    if (argc < 2 || (!auxiliary_only && std::strcmp(argv[1],"--cuda"))) {
+    if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
+    if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
+    if (argc < 2 || (!auxiliary_only && !lease_only && !cancel_only && !admission_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
@@ -505,6 +553,16 @@ int main(int argc,char ** argv) {
         llama_kv_stream_policy_layout layout;
         t.assert_true(llama_kv_stream_policy_layout_make(view.config, state, 0, layout).status ==
             llama_kv_stream_policy_status::success);
+        auto guard_owner = llama_kv_stream_layer_lease_owner::create(view.lease,
+            {view.config, state, 1, view.revision, mtp->identity().generation});
+        if (!t.assert_true(bool(guard_owner))) return;
+        auto guard = guard_owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_true(model->set_ring_guard(guard));
+        t.assert_true(!guard_owner->can_repartition());
+        t.assert_true(model->set_ring_guard({}));
+        guard.reset();
+        t.assert_true(guard_owner->can_repartition());
         t.assert_true(model->begin(1, 1, false));
         model->abort();
         const auto retained_host = mtp->host();
@@ -516,6 +574,362 @@ int main(int argc,char ** argv) {
         config.auxiliary_cache_layers = 1;
         config.pool_bytes = 3*page.bytes;
         t.assert_true(!llama_kv_stream_model::create(config));
+    });
+    t.test("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape, 256, page).status ==
+                ggml_kv_stream_status::success)) return;
+        llama_kv_stream_model_config config;
+        config.backend = backend.get();
+        config.host = f.host->config();
+        config.pool_bytes = 7*page.bytes;
+        config.max_batch_rows = 4;
+        config.query_heads = 4;
+        config.auxiliary_cache_layers = 1;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto mtp = model->auxiliary_cache();
+        if (!t.assert_true(bool(mtp))) return;
+        const auto & layout = mtp->host()->layout();
+        llama_kv_stream_host_layer seed;
+        if (!t.assert_true(f.host->layer(0, seed))) return;
+        std::vector<uint8_t> keys(static_cast<const uint8_t *>(seed.k),
+            static_cast<const uint8_t *>(seed.k) + 257*layout.k_token_bytes);
+        std::vector<uint8_t> values(static_cast<const uint8_t *>(seed.v),
+            static_cast<const uint8_t *>(seed.v) + 257*layout.v_token_bytes);
+        llama_kv_stream_write write;
+        if (!t.assert_true(mtp->begin(257) && mtp->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 0, keys.data(), keys.size()},
+                {0, ggml_kv_stream_operand::v, 0, values.data(), values.size()}}, write) &&
+                mtp->publish_host(write) && mtp->finish())) return;
+        ggml_backend_buffer_clear(model->buffer(), 0);
+        if (!t.assert_true(model->restore(258))) return;
+        t.assert_true(model->acquire_mtp_layer(4));
+        t.assert_equal(size_t(262), model->mtp_reserved_tokens());
+        t.assert_true(model->has_mtp_layer());
+        t.assert_true(!model->truncate(256));
+        t.assert_true(!model->prepare_shared_memory());
+        const auto copied = model->mtp_layer_population();
+        t.assert_true(copied.bytes > 0 && copied.calls > 0);
+        for (uint32_t width = 1; width <= 4; ++width) {
+            t.assert_true(model->mtp_layer_plan(width) != nullptr);
+            t.assert_equal(copied.bytes, model->mtp_layer_population().bytes);
+        }
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!t.assert_true(ops && ops->version >= 7 && ops->spans && ops->spans_workspace)) return;
+        for (uint32_t width = 1; width <= 4; ++width) {
+            block_inputs input(f, 257, width);
+            const auto expected = stock_attention(f, input, 0);
+            ggml_context_ptr ctx(ggml_init({65536, nullptr, true}));
+            auto * key_storage = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q8_0, 512, input.padded);
+            auto * value_storage = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_0, 512, input.padded);
+            auto * key = ggml_view_3d(ctx.get(), key_storage, 256, input.padded, 2,
+                ggml_row_size(GGML_TYPE_Q8_0, 512), ggml_row_size(GGML_TYPE_Q8_0, 256), 0);
+            auto * value = ggml_view_3d(ctx.get(), value_storage, 256, input.padded, 2,
+                ggml_row_size(GGML_TYPE_Q4_0, 512), ggml_row_size(GGML_TYPE_Q4_0, 256), 0);
+            auto * node = ggml_flash_attn_ext(ctx.get(), input.q, key, value,
+                input.mask, 1.0f/16, 0, 0);
+            if (!t.assert_true(node != nullptr)) return;
+            ggml_flash_attn_ext_set_prec(node, GGML_PREC_F32);
+            ggml_tensor op = *node;
+            op.buffer = input.output->buffer;
+            op.data = input.output->data;
+            auto * plan = model->mtp_layer_plan(width);
+            ggml_kv_stream_span_plan_view view;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(plan, view))) return;
+            t.assert_equal(size_t(257), view.active_tokens);
+            t.assert_equal(size_t(width), view.query_tokens);
+            size_t workspace_bytes = 0;
+            if (!t.assert_true(ops->spans_workspace(backend.get(), &op, plan, workspace_bytes))) return;
+            ggml_backend_buffer_ptr workspace(ggml_backend_buft_alloc_buffer(
+                llama_kv_stream_device_buffer_type(dev), workspace_bytes));
+            if (!t.assert_true(bool(workspace) &&
+                    ops->spans(backend.get(), &op, plan, workspace.get()))) return;
+            ggml_backend_synchronize(backend.get());
+            t.out << "MTP retained span TG" << width << ": ";
+            close_values(t, expected, input.read(), 1e-5f);
+        }
+        std::vector<uint8_t> tail_k(static_cast<const uint8_t *>(seed.k) + 257*layout.k_token_bytes,
+            static_cast<const uint8_t *>(seed.k) + 258*layout.k_token_bytes);
+        std::vector<uint8_t> tail_v(static_cast<const uint8_t *>(seed.v) + 257*layout.v_token_bytes,
+            static_cast<const uint8_t *>(seed.v) + 258*layout.v_token_bytes);
+        llama_kv_stream_write tail;
+        if (!t.assert_true(mtp->begin(1) && mtp->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 257*layout.k_token_bytes, tail_k.data(), tail_k.size()},
+                {0, ggml_kv_stream_operand::v, 257*layout.v_token_bytes, tail_v.data(), tail_v.size()}}, tail) &&
+                mtp->publish_host(tail) && mtp->finish())) return;
+        if (!t.assert_true(model->advance_mtp_layer_tail())) return;
+        const auto extended = model->mtp_layer_population();
+        t.assert_equal(copied.bytes + layout.k_token_bytes + layout.v_token_bytes, extended.bytes);
+        for (uint32_t width = 1; width <= 4; ++width) {
+            ggml_kv_stream_span_plan_view renewed;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                    model->mtp_layer_plan(width), renewed))) return;
+            t.assert_equal(size_t(258), renewed.active_tokens);
+        }
+        for (size_t token = 258; token < 262; ++token) {
+            std::vector<uint8_t> next_k(static_cast<const uint8_t *>(seed.k) +
+                    token*layout.k_token_bytes,
+                static_cast<const uint8_t *>(seed.k) + (token + 1)*layout.k_token_bytes);
+            std::vector<uint8_t> next_v(static_cast<const uint8_t *>(seed.v) +
+                    token*layout.v_token_bytes,
+                static_cast<const uint8_t *>(seed.v) + (token + 1)*layout.v_token_bytes);
+            llama_kv_stream_write next;
+            if (!t.assert_true(mtp->begin(1) && mtp->content()->prepare({
+                    {0, ggml_kv_stream_operand::k, token*layout.k_token_bytes,
+                        next_k.data(), next_k.size()},
+                    {0, ggml_kv_stream_operand::v, token*layout.v_token_bytes,
+                        next_v.data(), next_v.size()}}, next) &&
+                    mtp->publish_host(next) && mtp->finish() &&
+                    model->advance_mtp_layer_tail())) return;
+            t.assert_equal(token + 1, mtp->tokens());
+            t.assert_equal(copied.bytes + (token + 1 - 257)*
+                (layout.k_token_bytes + layout.v_token_bytes),
+                model->mtp_layer_population().bytes);
+            ggml_kv_stream_span_plan_view draft_plan;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                    model->mtp_layer_plan(1), draft_plan))) return;
+            t.assert_equal(token + 1, draft_plan.active_tokens);
+        }
+        const auto before_reject = model->mtp_layer_population();
+        if (!t.assert_true(model->truncate_mtp_layer(260))) return;
+        t.assert_equal(size_t(260), mtp->tokens());
+        t.assert_true(model->has_mtp_layer());
+        t.assert_equal(size_t(262), model->mtp_reserved_tokens());
+        t.assert_equal(before_reject.bytes, model->mtp_layer_population().bytes);
+        ggml_kv_stream_span_plan_view accepted_plan;
+        if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                model->mtp_layer_plan(4), accepted_plan))) return;
+        t.assert_equal(size_t(260), accepted_plan.active_tokens);
+        std::vector<uint8_t> accepted_k(static_cast<const uint8_t *>(seed.k) +
+                260*layout.k_token_bytes,
+            static_cast<const uint8_t *>(seed.k) + 261*layout.k_token_bytes);
+        std::vector<uint8_t> accepted_v(static_cast<const uint8_t *>(seed.v) +
+                260*layout.v_token_bytes,
+            static_cast<const uint8_t *>(seed.v) + 261*layout.v_token_bytes);
+        llama_kv_stream_write accepted;
+        if (!t.assert_true(mtp->begin(1) && mtp->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 260*layout.k_token_bytes,
+                    accepted_k.data(), accepted_k.size()},
+                {0, ggml_kv_stream_operand::v, 260*layout.v_token_bytes,
+                    accepted_v.data(), accepted_v.size()}}, accepted) &&
+                mtp->publish_host(accepted) && mtp->finish() &&
+                model->advance_mtp_layer_tail())) return;
+        t.assert_equal(before_reject.bytes + layout.k_token_bytes + layout.v_token_bytes,
+            model->mtp_layer_population().bytes);
+        t.assert_true(!model->acquire_mtp_layer());
+        t.assert_true(model->release_mtp_layer());
+        t.assert_true(model->mtp_layer_plan(1) == nullptr);
+        t.assert_true(mtp->truncate(256));
+        t.assert_true(model->acquire_mtp_layer());
+        t.assert_true(model->mtp_layer_population().bytes <= copied.bytes);
+        model->abort();
+        t.assert_true(model->release_mtp_layer());
+        t.assert_true(!model->has_mtp_layer());
+        t.assert_true(model->reset(false));
+    });
+    t.test("mtp_prefill_admission_demotes_resident_pages_before_population", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 6145, false, 2, 2, 29);
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape, 256, page).status ==
+                ggml_kv_stream_status::success)) return;
+        llama_kv_stream_model_config config;
+        config.backend = backend.get();
+        config.host = f.host->config();
+        config.pool_bytes = 29 * page.bytes;
+        config.max_batch_rows = 4;
+        config.query_heads = 4;
+        config.auxiliary_cache_layers = 1;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto mtp = model->auxiliary_cache();
+        llama_kv_stream_host_layer source;
+        if (!t.assert_true(mtp && f.host->layer(0, source))) return;
+        const auto & layout = mtp->host()->layout();
+        llama_kv_stream_write write;
+        if (!t.assert_true(mtp->begin(5120) && mtp->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 0, source.k, 5120 * layout.k_token_bytes},
+                {0, ggml_kv_stream_operand::v, 0, source.v, 5120 * layout.v_token_bytes}}, write) &&
+                mtp->publish_host(write) && mtp->finish())) return;
+        ggml_backend_buffer_clear(model->buffer(), 0);
+        if (!t.assert_true(model->restore(5121))) return;
+        llama_kv_stream_runtime_diagnostics before, after;
+        if (!t.assert_true(model->runtime_diagnostics(before))) return;
+        t.assert_true(before.ring_slots < 21 - before.resident_pages_per_layer);
+        const auto parent = model->binding_view().buffer;
+        if (!t.assert_true(model->acquire_mtp_layer(4))) return;
+        if (!t.assert_true(model->runtime_diagnostics(after))) return;
+        t.assert_true(after.ring_slots > before.ring_slots);
+        t.assert_true(after.resident_pages_per_layer < before.resident_pages_per_layer);
+        t.assert_true(after.layout_revision > before.layout_revision);
+        t.assert_equal(before.pool_bytes, after.pool_bytes);
+        t.assert_true(parent == model->binding_view().buffer);
+        t.assert_equal(size_t(5125), model->mtp_reserved_tokens());
+        for (uint32_t width = 1; width <= 4; ++width) {
+            ggml_kv_stream_span_plan_view plan;
+            if (!t.assert_true(ggml_kv_stream_span_plan_get_view(model->mtp_layer_plan(width), plan))) return;
+            t.assert_equal(size_t(5120), plan.active_tokens);
+            t.assert_equal(size_t(2), plan.count);
+            block_inputs input(f, 5120, width);
+            const auto expected = stock_attention(f, input, 0);
+            ggml_context_ptr ctx(ggml_init({65536, nullptr, true}));
+            auto * ks = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q8_0, 512, input.padded);
+            auto * vs = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_Q4_0, 512, input.padded);
+            auto * k = ggml_view_3d(ctx.get(), ks, 256, input.padded, 2,
+                ggml_row_size(GGML_TYPE_Q8_0, 512), ggml_row_size(GGML_TYPE_Q8_0, 256), 0);
+            auto * v = ggml_view_3d(ctx.get(), vs, 256, input.padded, 2,
+                ggml_row_size(GGML_TYPE_Q4_0, 512), ggml_row_size(GGML_TYPE_Q4_0, 256), 0);
+            auto * node = ggml_flash_attn_ext(ctx.get(), input.q, k, v, input.mask, 1.0f/16, 0, 0);
+            ggml_flash_attn_ext_set_prec(node, GGML_PREC_F32);
+            ggml_tensor op = *node;
+            op.buffer = input.output->buffer;
+            op.data = input.output->data;
+            auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev),
+                    "ggml_backend_kv_stream_partial_ops"));
+            const auto * ops = get ? get() : nullptr;
+            size_t bytes = 0;
+            if (!t.assert_true(ops && ops->spans_workspace(backend.get(), &op,
+                    model->mtp_layer_plan(width), bytes))) return;
+            ggml_backend_buffer_ptr scratch(ggml_backend_buft_alloc_buffer(
+                llama_kv_stream_device_buffer_type(dev), bytes));
+            if (!t.assert_true(scratch && ops->spans(backend.get(), &op,
+                    model->mtp_layer_plan(width), scratch.get()))) return;
+            ggml_backend_synchronize(backend.get());
+            close_values(t, expected, input.read(), 1e-5f);
+        }
+        t.assert_true(model->release_mtp_layer());
+        t.assert_equal(size_t(5121), model->tokens());
+        t.assert_equal(size_t(5120), mtp->tokens());
+        t.assert_true(model->acquire_mtp_layer(4));
+        llama_kv_stream_runtime_diagnostics repeated;
+        if (!t.assert_true(model->runtime_diagnostics(repeated))) return;
+        t.assert_equal(after.layout_revision, repeated.layout_revision);
+        t.assert_true(model->release_mtp_layer());
+
+        config.pool_bytes = 7 * page.bytes;
+        auto insufficient = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(insufficient))) return;
+        auto pending = insufficient->auxiliary_cache();
+        if (!t.assert_true(pending->begin(5120) && pending->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 0, source.k, 5120 * layout.k_token_bytes},
+                {0, ggml_kv_stream_operand::v, 0, source.v, 5120 * layout.v_token_bytes}}, write) &&
+                pending->publish_host(write) && pending->finish())) return;
+        ggml_backend_buffer_clear(insufficient->buffer(), 0);
+        if (!t.assert_true(insufficient->restore(5121) &&
+                insufficient->runtime_diagnostics(before))) return;
+        t.assert_true(!insufficient->acquire_mtp_layer(4));
+        t.assert_true(!insufficient->has_mtp_layer());
+        t.assert_true(insufficient->complete());
+        if (!t.assert_true(insufficient->runtime_diagnostics(after))) return;
+        t.assert_equal(before.layout_revision, after.layout_revision);
+        t.assert_equal(before.ring_slots, after.ring_slots);
+        t.assert_equal(size_t(5121), insufficient->tokens());
+        t.assert_equal(size_t(5120), pending->tokens());
+    });
+
+    t.test("mtp_proxy_cancellation_drains_pending_writes", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape, 256, page).status ==
+                ggml_kv_stream_status::success)) return;
+        llama_kv_stream_model_config config;
+        config.backend = backend.get();
+        config.host = f.host->config();
+        config.pool_bytes = 7*page.bytes;
+        config.max_batch_rows = 4;
+        config.query_heads = 4;
+        config.auxiliary_cache_layers = 1;
+        auto model = llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto cache = model->auxiliary_cache();
+        llama_kv_stream_host_layer seed;
+        if (!t.assert_true(bool(cache) && f.host->layer(0, seed))) return;
+        const auto & layout = cache->host()->layout();
+        std::vector<uint8_t> keys(static_cast<const uint8_t *>(seed.k),
+            static_cast<const uint8_t *>(seed.k) + 256*layout.k_token_bytes);
+        std::vector<uint8_t> values(static_cast<const uint8_t *>(seed.v),
+            static_cast<const uint8_t *>(seed.v) + 256*layout.v_token_bytes);
+        llama_kv_stream_write write;
+        ggml_backend_buffer_clear(model->buffer(), 0);
+        if (!t.assert_true(cache->begin(256) && cache->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 0, keys.data(), keys.size()},
+                {0, ggml_kv_stream_operand::v, 0, values.data(), values.size()}}, write) &&
+                cache->publish_host(write) && cache->finish() &&
+                model->restore(257) && model->acquire_mtp_layer(1))) return;
+        auto proxy = llama_kv_stream_mtp_proxy::create(dev, cache, model.get());
+        if (!t.assert_true(bool(proxy))) return;
+        ggml_context_ptr source_context(ggml_init({8192, nullptr, true}));
+        if (!t.assert_true(bool(source_context))) return;
+        auto * k = ggml_new_tensor_2d(source_context.get(), GGML_TYPE_F32, 512, 1);
+        auto * v = ggml_new_tensor_2d(source_context.get(), GGML_TYPE_F32, 512, 1);
+        auto * indices = ggml_new_tensor_1d(source_context.get(), GGML_TYPE_I64, 1);
+        ggml_backend_buffer_ptr source(ggml_backend_alloc_ctx_tensors(source_context.get(), backend.get()));
+        if (!t.assert_true(k && v && indices && bool(source))) return;
+        std::vector<float> row(512, 0.25f);
+        const int64_t index = 256;
+        ggml_backend_tensor_set(k, row.data(), 0, row.size()*sizeof(float));
+        ggml_backend_tensor_set(v, row.data(), 0, row.size()*sizeof(float));
+        ggml_backend_tensor_set(indices, &index, 0, sizeof(index));
+        ggml_tensor k_op{}, v_op{};
+        k_op.op = v_op.op = GGML_OP_SET_ROWS;
+        k_op.src[0] = k; k_op.src[1] = indices; k_op.src[2] = proxy->key();
+        v_op.src[0] = v; v_op.src[1] = indices; v_op.src[2] = proxy->value(); v_op.src[3] = k;
+        auto * owner = proxy->key()->buffer;
+        if (!t.assert_true(proxy->arm(256, 1) &&
+                ggml_backend_execution_compute(owner, backend.get(), &k_op) == GGML_STATUS_SUCCESS)) return;
+        if (!t.assert_true(proxy->remove_suffix(256, SIZE_MAX))) return;
+        t.assert_equal(size_t(256), cache->tokens());
+        if (!t.assert_true(proxy->arm(256, 1) &&
+                ggml_backend_execution_compute(owner, backend.get(), &k_op) == GGML_STATUS_SUCCESS &&
+                ggml_backend_execution_compute(owner, backend.get(), &v_op) == GGML_STATUS_SUCCESS)) return;
+        t.assert_equal(size_t(256), cache->tokens());
+        t.assert_equal(size_t(256), cache->frontiers().host);
+        if (!t.assert_true(proxy->remove_suffix(256, SIZE_MAX))) return;
+        t.assert_equal(size_t(256), cache->frontiers().reserved);
+        t.assert_equal(size_t(256), cache->frontiers().host);
+        t.assert_equal(size_t(256), cache->tokens());
+        t.assert_true(!model->has_mtp_layer());
+        t.assert_true(model->acquire_mtp_layer(1));
+        proxy.reset();
+        t.assert_true(!model->has_mtp_layer());
+        if (!t.assert_true(model->acquire_mtp_layer(1))) return;
+        proxy = llama_kv_stream_mtp_proxy::create(dev, cache, model.get());
+        if (!t.assert_true(bool(proxy) && proxy->arm(256, 1))) return;
+        owner = proxy->key()->buffer;
+        {
+            index_read_fault fault(source.get());
+            t.assert_equal(GGML_STATUS_FAILED,
+                ggml_backend_execution_compute(owner, backend.get(), &k_op));
+        }
+        if (!t.assert_true(!proxy->arm(256, 1))) return;
+        t.assert_true(proxy->remove_suffix(0, SIZE_MAX));
+        t.assert_equal(size_t(0), cache->tokens());
+        t.assert_true(!model->has_mtp_layer());
+        llama_kv_stream_write retry;
+        if (!t.assert_true(cache->begin(256) && cache->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 0, keys.data(), keys.size()},
+                {0, ggml_kv_stream_operand::v, 0, values.data(), values.size()}}, retry) &&
+                cache->publish_host(retry) && cache->finish() &&
+                model->acquire_mtp_layer(1) && proxy->arm(256, 1))) return;
+        if (!t.assert_equal(GGML_STATUS_SUCCESS,
+                ggml_backend_execution_compute(owner, backend.get(), &k_op))) return;
+        {
+            proxy_d2d_fault fault(backend.get());
+            t.assert_equal(GGML_STATUS_FAILED,
+                ggml_backend_execution_compute(owner, backend.get(), &v_op));
+            t.assert_true(fault.calls > 0);
+        }
+        t.assert_equal(size_t(256), cache->tokens());
+        t.assert_true(!proxy->arm(256, 1));
+        if (!t.assert_true(proxy->remove_suffix(0, SIZE_MAX))) return;
+        t.assert_equal(size_t(0), cache->frontiers().reserved);
+        t.assert_equal(size_t(0), cache->tokens());
+        t.assert_true(!model->has_mtp_layer());
     });
     return t.summary();
 }

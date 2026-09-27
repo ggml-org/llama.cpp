@@ -132,3 +132,8 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
 llama_kv_stream_policy_result llama_kv_stream_policy_layout_make(
         const llama_kv_stream_policy_config & config, const llama_kv_stream_policy_state & state,
         size_t active_tokens, llama_kv_stream_policy_layout & output);
+// Admit one complete layer and its future tail inside the existing pool. Failure leaves output unchanged.
+llama_kv_stream_policy_result llama_kv_stream_policy_reserve_layer(
+        const llama_kv_stream_policy_config & config, const llama_kv_stream_policy_state & previous,
+        size_t placement_tokens, size_t reserved_tokens, uint32_t layer,
+        llama_kv_stream_policy_decision & output);

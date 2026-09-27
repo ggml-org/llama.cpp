@@ -133,10 +133,36 @@ struct upload_fault {
         active = nullptr;
     }
 };
+struct async_copy_fault {
+    ggml_backend_t backend;
+    decltype(ggml_backend_i::cpy_tensor_async) original;
+    int calls = 0;
+    int fail_on;
+    inline static async_copy_fault * active = nullptr;
+
+    async_copy_fault(ggml_backend_t backend, int fail_on) :
+        backend(backend), original(backend->iface.cpy_tensor_async), fail_on(fail_on) {
+        GGML_ASSERT(!active);
+        active = this;
+        backend->iface.cpy_tensor_async = [](ggml_backend_t src, ggml_backend_t dst,
+                const ggml_tensor * from, ggml_tensor * to) {
+            ++active->calls;
+            if (active->calls == active->fail_on) throw std::runtime_error("injected D2D failure");
+            return active->original ? active->original(src, dst, from, to) : false;
+        };
+    }
+    ~async_copy_fault() {
+        backend->iface.cpy_tensor_async = original;
+        active = nullptr;
+    }
+};
 
 int main(int argc, char ** argv) {
-    const bool cuda = argc > 1 && std::strcmp(argv[1], "--cuda") == 0;
+    const bool tail_only = argc > 1 && std::strcmp(argv[1], "--cuda-tail") == 0;
+    const bool cuda = tail_only || (argc > 1 && std::strcmp(argv[1], "--cuda") == 0);
     testing t;
+    if (tail_only) t.set_filter("retained_mtp_tail_publishes_only_new_rows_and_invalidates_old_plans");
+
     t.test("mtp_layer_populates_once_and_retains_both_spans_across_query_widths", [&](testing & t) {
         mtp_fixture f(cuda);
         auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
@@ -299,6 +325,223 @@ int main(int argc, char ** argv) {
             v_sentinel.data(), v_bytes));
         llama_kv_stream_complete_layer_lease_free(lease);
         t.assert_equal(size_t(0), owner->ring_slots_used());
+    });
+    t.test("retained_mtp_tail_publishes_only_new_rows_and_invalidates_old_plans", [&](testing & t) {
+        mtp_fixture f(cuda, 513, 512);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto request = f.request(1);
+        request.active_tokens = 512;
+        auto * old = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(old != nullptr)) return;
+        const auto before = llama_kv_stream_complete_layer_lease_population(old);
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        const uint64_t previous_generation = owner->content_generation();
+        const auto & layout = f.cache->host()->layout();
+        std::vector<uint8_t> key(layout.k_token_bytes, 0x73);
+        std::vector<uint8_t> value(layout.v_token_bytes, 0x57);
+        llama_kv_stream_write write;
+        if (!t.assert_true(f.cache->begin(1) && f.cache->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 512*layout.k_token_bytes, key.data(), key.size()},
+                {0, ggml_kv_stream_operand::v, 512*layout.v_token_bytes, value.data(), value.size()}}, write) &&
+                f.cache->publish_host(write) && f.cache->finish())) return;
+        if (!cuda) {
+            upload_fault fault(ggml_backend_memory_lease_buffer(f.pool));
+            llama_kv_stream_population_stats failed;
+            t.assert_true(!owner->publish_tail(f.backend.get(), old, *f.cache, failed));
+            t.assert_equal(previous_generation, owner->content_generation());
+            t.assert_true(llama_kv_stream_complete_layer_lease_plan(old) != nullptr);
+        }
+        llama_kv_stream_population_stats delta;
+        if (!t.assert_true(owner->publish_tail(f.backend.get(), old, *f.cache, delta))) return;
+        t.assert_equal(layout.k_token_bytes + layout.v_token_bytes, delta.bytes);
+        t.assert_equal(size_t(2), delta.calls);
+        t.assert_equal(f.cache->identity().generation, owner->content_generation());
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(old) == nullptr);
+        request.active_tokens = 513;
+        request.content_generation = f.cache->identity().generation;
+        request.query_tokens = 4;
+        auto * renewed = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(renewed != nullptr)) return;
+        const auto total = llama_kv_stream_complete_layer_lease_population(renewed);
+        t.assert_equal(before.bytes + delta.bytes, total.bytes);
+        t.assert_equal(before.calls + delta.calls, total.calls);
+        ggml_kv_stream_span_plan_view view;
+        if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                llama_kv_stream_complete_layer_lease_plan(renewed), view))) return;
+        llama_kv_stream_host_layer source;
+        if (!t.assert_true(f.cache->host()->layer(0, source))) return;
+        for (size_t i = 0; i < view.count; ++i) {
+            const auto & span = view.spans[i];
+            t.assert_true(matches(span.k_buffer, span.k_offset,
+                static_cast<const uint8_t *>(source.k) + span.token_begin*layout.k_token_bytes,
+                span.tokens*layout.k_token_bytes));
+            t.assert_true(matches(span.v_buffer, span.v_offset,
+                static_cast<const uint8_t *>(source.v) + span.token_begin*layout.v_token_bytes,
+                span.tokens*layout.v_token_bytes));
+        }
+        guard.reset();
+        llama_kv_stream_complete_layer_lease_free(old);
+        llama_kv_stream_complete_layer_lease_free(renewed);
+        t.assert_true(owner->can_repartition());
+    });
+    t.test("staged_mtp_copy_failure_does_not_publish_a_frontier", [](testing & t) {
+        mtp_fixture f(false, 513, 512);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto request = f.request(1);
+        request.active_tokens = 512;
+        auto * old = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(old != nullptr)) return;
+        ggml_context_ptr context(ggml_init({8192, nullptr, true}));
+        if (!t.assert_true(bool(context))) return;
+        auto * k = ggml_new_tensor_2d(context.get(), GGML_TYPE_Q8_0, 64, 1);
+        auto * v = ggml_new_tensor_2d(context.get(), GGML_TYPE_Q4_0, 64, 1);
+        ggml_backend_buffer_ptr source(ggml_backend_alloc_ctx_tensors(context.get(), f.backend.get()));
+        if (!t.assert_true(k && v && bool(source))) return;
+        std::vector<uint8_t> key(f.cache->host()->layout().k_token_bytes, 0x73);
+        std::vector<uint8_t> value(f.cache->host()->layout().v_token_bytes, 0x57);
+        ggml_backend_tensor_set(k, key.data(), 0, key.size());
+        ggml_backend_tensor_set(v, value.data(), 0, value.size());
+        llama_kv_stream_population_stats staged;
+        {
+            async_copy_fault fault(f.backend.get(), 1);
+            t.assert_true(!owner->stage_tail_async(f.backend.get(), old, 512, false, k, 0, 1, staged));
+            t.assert_equal(1, fault.calls);
+        }
+        t.assert_equal(size_t(0), staged.bytes);
+        {
+            async_copy_fault fault(f.backend.get(), 2);
+            t.assert_true(owner->stage_tail_async(f.backend.get(), old, 512, false, k, 0, 1, staged));
+            t.assert_true(!owner->stage_tail_async(f.backend.get(), old, 512, true, v, 0, 1, staged));
+            t.assert_equal(2, fault.calls);
+        }
+        t.assert_equal(key.size(), staged.bytes);
+        t.assert_equal(size_t(1), staged.calls);
+        t.assert_equal(size_t(512), f.cache->tokens());
+        t.assert_equal(size_t(512), f.cache->frontiers().host);
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(old) != nullptr);
+        llama_kv_stream_complete_layer_lease_free(old);
+    });
+    t.test("staged_mtp_tail_requires_completed_host_publication", [&](testing & t) {
+        mtp_fixture f(false, 514, 512);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto request = f.request(1);
+        request.active_tokens = 512;
+        auto * old = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(old != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        const auto & layout = f.cache->host()->layout();
+        ggml_context_ptr source_context(ggml_init({8192, nullptr, true}));
+        if (!t.assert_true(bool(source_context))) return;
+        auto * k = ggml_new_tensor_2d(source_context.get(), GGML_TYPE_Q8_0, 64, 1);
+        auto * v = ggml_new_tensor_2d(source_context.get(), GGML_TYPE_Q4_0, 64, 1);
+        ggml_backend_buffer_ptr source(ggml_backend_alloc_ctx_tensors(source_context.get(), f.backend.get()));
+        if (!t.assert_true(k && v && bool(source))) return;
+        std::vector<uint8_t> key(layout.k_token_bytes, 0x73), value(layout.v_token_bytes, 0x57);
+        ggml_backend_tensor_set(k, key.data(), 0, key.size());
+        ggml_backend_tensor_set(v, value.data(), 0, value.size());
+        llama_kv_stream_population_stats staged;
+        t.assert_true(!owner->stage_tail_async(f.backend.get(), old, 511, false, k, 0, 1, staged));
+        t.assert_true(!owner->stage_tail_async(f.backend.get(), old, 512, false, k, 2, 1, staged));
+        if (!t.assert_true(owner->stage_tail_async(f.backend.get(), old, 512, false, k, 0, 1, staged) &&
+                owner->stage_tail_async(f.backend.get(), old, 512, true, v, 0, 1, staged))) return;
+        t.assert_equal(key.size() + value.size(), staged.bytes);
+        t.assert_equal(size_t(2), staged.calls);
+        t.assert_equal(size_t(512), f.cache->tokens());
+        t.assert_equal(size_t(512), f.cache->frontiers().host);
+        t.assert_true(!owner->adopt_staged_tail(old, *f.cache, staged));
+        request.active_tokens = 513;
+        auto * provisional = owner->acquire(request);
+        if (!t.assert_true(provisional != nullptr)) return;
+        ggml_backend_synchronize(f.backend.get());
+        ggml_kv_stream_span_plan_view view;
+        if (!t.assert_true(ggml_kv_stream_span_plan_get_view(
+                llama_kv_stream_complete_layer_lease_plan(provisional), view))) return;
+        const auto & tail = view.spans[view.count - 1];
+        if (!t.assert_true(tail.token_begin <= 512 && 512 < tail.token_begin + tail.tokens)) return;
+        t.assert_true(matches(tail.k_buffer,
+            tail.k_offset + (512 - tail.token_begin)*layout.k_token_bytes, key.data(), key.size()));
+        t.assert_true(matches(tail.v_buffer,
+            tail.v_offset + (512 - tail.token_begin)*layout.v_token_bytes, value.data(), value.size()));
+        llama_kv_stream_write write;
+        if (!t.assert_true(f.cache->begin(1) && f.cache->content()->prepare({
+                {0, ggml_kv_stream_operand::k, 512*layout.k_token_bytes, key.data(), key.size()},
+                {0, ggml_kv_stream_operand::v, 512*layout.v_token_bytes, value.data(), value.size()}}, write) &&
+                f.cache->publish_host(write) && f.cache->finish())) return;
+        if (!t.assert_true(owner->adopt_staged_tail(old, *f.cache, staged))) return;
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(old) == nullptr);
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(provisional) == nullptr);
+        request.content_generation = f.cache->identity().generation;
+        auto * renewed = owner->acquire(request);
+        if (!t.assert_true(renewed != nullptr)) return;
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(renewed) != nullptr);
+        staged = {};
+        if (!t.assert_true(owner->stage_tail_async(f.backend.get(), renewed, 513, false, k, 0, 1, staged) &&
+                owner->stage_tail_async(f.backend.get(), renewed, 513, true, v, 0, 1, staged))) return;
+        ggml_backend_synchronize(f.backend.get());
+        if (!t.assert_true(f.cache->begin(1) && f.cache->cancel())) return;
+        t.assert_equal(size_t(513), f.cache->tokens());
+        t.assert_true(!owner->adopt_staged_tail(renewed, *f.cache, staged));
+        request.active_tokens = 514;
+        request.content_generation = f.cache->identity().generation;
+        t.assert_true(owner->acquire(request) == nullptr);
+        llama_kv_stream_complete_layer_lease_free(renewed);
+        llama_kv_stream_complete_layer_lease_free(provisional);
+        llama_kv_stream_complete_layer_lease_free(old);
+    });
+    t.test("truncated_mtp_prefix_keeps_physical_reservation_without_reupload", [&](testing & t) {
+        mtp_fixture f(cuda, 513, 513);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool, f.layout());
+        if (!t.assert_true(bool(owner))) return;
+        auto request = f.request(4);
+        auto * original = owner->acquire_populated(f.backend.get(), request, *f.cache);
+        if (!t.assert_true(original != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        const auto before = llama_kv_stream_complete_layer_lease_population(original);
+        const size_t used = owner->ring_slots_used();
+        if (!t.assert_true(f.cache->truncate(510))) return;
+        t.assert_true(owner->adopt_truncated_prefix(original, *f.cache));
+        t.assert_true(llama_kv_stream_complete_layer_lease_plan(original) == nullptr);
+        request.active_tokens = 510;
+        request.content_generation = f.cache->identity().generation;
+        auto * retained = owner->acquire(request);
+        if (!t.assert_true(retained != nullptr)) return;
+        t.assert_equal(used, owner->ring_slots_used());
+        const auto after = llama_kv_stream_complete_layer_lease_population(retained);
+        t.assert_equal(before.bytes, after.bytes);
+        t.assert_equal(before.calls, after.calls);
+        ggml_kv_stream_span_plan_view view;
+        if (t.assert_true(ggml_kv_stream_span_plan_get_view(
+                llama_kv_stream_complete_layer_lease_plan(retained), view)))
+            t.assert_equal(size_t(510), view.active_tokens);
+        guard.reset();
+        llama_kv_stream_complete_layer_lease_free(original);
+        llama_kv_stream_complete_layer_lease_free(retained);
+        t.assert_true(owner->can_repartition());
+    });
+    t.test("future_mtp_page_uses_current_physical_layout", [&](testing & t) {
+        mtp_fixture f(cuda, 3074, 3069);
+        f.state.decode_active_pages = 12;
+        llama_kv_stream_policy_layout current;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, f.state, 3071, current).status == llama_kv_stream_policy_status::success)) return;
+        llama_kv_stream_policy_layout future;
+        t.assert_true(llama_kv_stream_policy_layout_make(
+            f.policy, f.state, 3074, future).status ==
+            llama_kv_stream_policy_status::invalid_observation);
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.pool,
+            {f.policy, f.state, 3074, 11, f.cache->identity().generation, 3071});
+        if (!t.assert_true(bool(owner))) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_equal(current.ring.bytes, guard->ring_layout().bytes);
+        t.assert_equal(size_t(f.state.ring_slots), guard->blocked_slots().size());
+        guard.reset();
     });
     return t.summary();
 }

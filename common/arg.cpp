@@ -899,6 +899,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --kv-stream-pool-mib and --shared-device-memory-mib are mutually exclusive\n");
     }
 
+    if (params.kv_stream_auxiliary_layers > 1 ||
+            (params.kv_stream_auxiliary_layers &&
+             !params.kv_stream_pool_bytes && !params.shared_device_memory_bytes)) {
+        throw std::invalid_argument("error: --kv-stream-auxiliary-layers 1 requires a KV stream pool or shared arena\n");
+    }
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
@@ -2441,6 +2446,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.shared_device_memory_bytes = size_t(value)*1048576;
         }
     ).set_env("LLAMA_ARG_SHARED_DEVICE_MEMORY_MIB"));
+    add_opt(common_arg(
+        {"--kv-stream-auxiliary-layers"}, "N",
+        "experimental: attach one MTP host cache to a serial adaptive-KV target (requires an explicit KV stream pool or arena)",
+        [](common_params & params, int value) {
+            if (value < 0 || value > 1) throw std::invalid_argument("invalid auxiliary KV layer count");
+            params.kv_stream_auxiliary_layers = uint32_t(value);
+        }
+    ));
     add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},

@@ -14,6 +14,7 @@ struct llama_model;
 struct llama_context;
 class llama_kv_stream_model;
 class llama_kv_stream_logical_cache;
+class llama_kv_stream_mtp_proxy;
 
 //
 // llama_kv_cache
@@ -121,9 +122,13 @@ public:
 
     ~llama_kv_cache();
     llama_kv_stream_model * get_kv_stream() const noexcept { return kv_stream.get(); }
-    // Metadata-only attachment until the MTP producer and attention paths use this cache.
+    // The stock device cache remains available for prefill and unsupported MTP phases.
     // The caller must keep the target context (which owns the physical pool) alive.
-    bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache);
+    bool attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache,
+        llama_kv_stream_model * target);
+    bool set_mtp_span_mode(bool enable, size_t first = 0, uint32_t rows = 0);
+    bool complete_mtp_publication();
+    size_t mtp_span_attention_calls() const noexcept;
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_auxiliary_cache() const noexcept {
         return attached_mtp_cache;
     }
@@ -278,6 +283,7 @@ private:
         std::vector<ggml_tensor *> v_stream;
     };
 
+    std::unique_ptr<llama_kv_stream_mtp_proxy> mtp_proxy;
     std::shared_ptr<llama_kv_stream_logical_cache> attached_mtp_cache;
     std::unique_ptr<llama_kv_stream_model> kv_stream;
     bool v_trans = true;  // the value tensor is transposed
@@ -414,6 +420,7 @@ public:
 
     uint32_t get_n_kv() const;
     bool kv_stream_begin(const llama_ubatch & ubatch, bool decode) const;
+    bool mtp_span_append(const llama_ubatch & ubatch) const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;

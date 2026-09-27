@@ -1,5 +1,6 @@
 #include "kv-stream-block-test.h"
 #include "../src/llama-kv-stream-session.h"
+#include "../src/llama-kv-stream-layer-lease.h"
 
 struct session_inputs {
     ggml_context_ptr ctx;
@@ -19,11 +20,13 @@ struct session_inputs {
 
 int main(int argc, char ** argv) {
     const bool physical_map_only = argc > 1 && !std::strcmp(argv[1],"--cuda-physical-map");
-    const bool cuda = physical_map_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
+    const bool cuda = physical_map_only || guard_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     testing t;
+    if (guard_only) t.set_filter("guarded_target_session_preserves_mtp_ring_and_releases_for_replan");
     if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
     t.test("unsupported_and_missing_session_dependencies_are_rejected", [&](testing & t) {
         fixture f(backend.get(),cuda);
@@ -374,12 +377,20 @@ int main(int argc, char ** argv) {
         session_inputs input(backend.get(),1); block_inputs attn(f,514,1);
         if (!t.assert_true(session->begin(514,1,true))) return;
         t.assert_true(f.content->mirror_epoch()>mirror_epoch);
+        std::vector<std::vector<float>> outputs;
         for (uint32_t layer=0;layer<4;++layer) {
             if (!t.assert_true(session->produce(layer,input.k,input.v)) ||
                     !t.assert_true(session->attention(layer,attn.q,attn.mask,attn.output,1.0f/16))) return;
-            close_values(t,oracle(f,layer,514,1,attn.qdata),attn.read(),1e-3f);
+            ggml_backend_synchronize(backend.get());
+            outputs.push_back(attn.read());
         }
         t.assert_equal(size_t(514),session->tokens());
+        // Host KV becomes authoritative after the complete asynchronous append commits.
+        for (uint32_t layer=0;layer<4;++layer) {
+            t.out << "grown-pool stock comparison layer " << layer << ": ";
+            close_values(t,stock_attention(f,attn,layer),outputs[layer],1e-5f);
+            close_values(t,oracle(f,layer,514,1,attn.qdata),outputs[layer],1e-3f);
+        }
         grown.lease.reset();
         session.reset();
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(grown.arena.get()));
@@ -480,6 +491,99 @@ int main(int argc, char ** argv) {
             ggml_backend_tensor_get(marker, bytes.data(), 0, bytes.size());
             t.assert_true(std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0xa5; }));
         }
+    });
+    if (cuda) t.test("guarded_target_session_preserves_mtp_ring_and_releases_for_replan", [&](testing & t) {
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        f.policy.layers = 3;
+        f.policy.caches = {{999, 1}, {f.host->cache_id(), 2}};
+        f.policy.initial_ring_slots = 3;
+        f.policy.fixed_ring = true;
+        ggml_kv_stream_block_layout work;
+        if (!t.assert_true(ggml_kv_stream_block_layout_make(256*4, 256, work).status ==
+                ggml_kv_stream_partial_status::success)) return;
+        block_workspace writer(f, 32768, 19), attention(f, work.bytes, 29);
+        auto session = llama_kv_stream_session::create(backend.get(), f.content,
+            {f.policy, 256, 4, false}, f.lease.get(), writer.lease.get(), attention.lease.get());
+        if (!t.assert_true(bool(session))) return;
+        const auto append = [&](size_t active, uint32_t rows, bool decode) {
+            session_inputs kv(backend.get(), rows);
+            block_inputs input(f, active, rows);
+            if (!t.assert_true(session->begin(active, rows, decode))) return false;
+            for (uint32_t layer = 0; layer < 2; ++layer) {
+                if (!t.assert_true(session->produce(layer, kv.k, kv.v) &&
+                        session->attention(layer, input.q, input.mask, input.output, 1.0f/16))) return false;
+            }
+            return t.assert_equal(active, session->tokens());
+        };
+        if (!append(256, 256, false)) return;
+        const auto before_repartition = session->layout_revision();
+        auto initial_owner = llama_kv_stream_layer_lease_owner::create(f.lease.get(),
+            {f.policy, session->policy(), 256, before_repartition, f.content->generation()});
+        if (!t.assert_true(bool(initial_owner))) return;
+        auto * initial_mtp = initial_owner->acquire(
+            {0, 1, before_repartition, f.content->generation(), 999, 256});
+        if (!t.assert_true(initial_mtp != nullptr)) return;
+        auto initial_guard = initial_owner->hold_ring();
+        if (!t.assert_true(session->set_ring_guard(initial_guard))) return;
+        t.assert_true(!session->begin(257, 1, true));
+        t.assert_true(!session->failed());
+        t.assert_equal(before_repartition, session->layout_revision());
+        t.assert_true(session->set_ring_guard({}));
+        initial_guard.reset();
+        llama_kv_stream_complete_layer_lease_free(initial_mtp);
+        t.assert_true(initial_owner->can_repartition());
+        if (!append(257, 1, true)) return;
+        t.assert_true(session->layout_revision() > before_repartition);
+        const auto revision = session->layout_revision();
+        auto owner = llama_kv_stream_layer_lease_owner::create(f.lease.get(),
+            {f.policy, session->policy(), 257, revision, f.content->generation()});
+        if (!t.assert_true(bool(owner))) return;
+        auto * mtp = owner->acquire({0, 1, revision, f.content->generation(), 999, 257});
+        if (!t.assert_true(mtp != nullptr)) return;
+        auto guard = owner->hold_ring();
+        if (!t.assert_true(bool(guard))) return;
+        t.assert_true(owner->ring_slots_used() > 0);
+        fixture foreign(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
+        auto foreign_owner = llama_kv_stream_layer_lease_owner::create(foreign.lease.get(),
+            {f.policy, session->policy(), 257, revision, f.content->generation()});
+        if (t.assert_true(bool(foreign_owner))) {
+            t.assert_true(!session->set_ring_guard(foreign_owner->hold_ring()));
+        }
+        if (!t.assert_true(session->set_ring_guard(guard))) return;
+        llama_kv_stream_policy_layout physical;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                f.policy, session->policy(), 257, physical).status == llama_kv_stream_policy_status::success)) return;
+        auto * pool = ggml_backend_memory_lease_buffer(f.lease.get());
+        const size_t first = llama_kv_stream_complete_layer_lease_ring_first(mtp);
+        const size_t page = size_t(f.policy.shape.page_tokens);
+        const size_t k_offset = first*page*physical.ring.k_token_bytes;
+        const size_t v_offset = physical.ring.v_offset + first*page*physical.ring.v_token_bytes;
+        ggml_context_ptr marker_ctx(ggml_init({8192, nullptr, true}));
+        std::array<ggml_tensor *, 2> markers{};
+        const std::vector<uint8_t> sentinel(128, 0xa5);
+        for (size_t i = 0; i < markers.size(); ++i) {
+            markers[i] = ggml_new_tensor_1d(marker_ctx.get(), GGML_TYPE_I8, sentinel.size());
+            const size_t offset = i ? v_offset : k_offset;
+            if (!t.assert_true(ggml_backend_tensor_alloc(pool, markers[i],
+                    static_cast<char *>(ggml_backend_buffer_get_base(pool)) + offset) == GGML_STATUS_SUCCESS)) return;
+            ggml_backend_tensor_set(markers[i], sentinel.data(), 0, sentinel.size());
+        }
+        if (!append(258, 1, true)) return;
+        t.assert_equal(revision, session->layout_revision());
+        const auto prefetch = session->sequence_stats();
+        t.assert_true(prefetch.copy_bytes > 0);
+        t.assert_true(prefetch.peak_pages <=
+            session->policy().ring_slots - owner->ring_slots_used());
+        for (auto * marker : markers) {
+            std::vector<uint8_t> actual(sentinel.size());
+            ggml_backend_tensor_get(marker, actual.data(), 0, actual.size());
+            t.assert_true(actual == sentinel);
+        }
+        t.assert_true(session->set_ring_guard({}));
+        guard.reset();
+        llama_kv_stream_complete_layer_lease_free(mtp);
+        t.assert_true(owner->can_repartition());
+        t.assert_true(!session->failed());
     });
     return t.summary();
 }

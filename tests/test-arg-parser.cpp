@@ -100,6 +100,23 @@ static void test(void) {
         assert(draft.n_outputs_max == 4);
         assert(draft.n_outputs_max_per_seq == 1);
     }
+    {
+        common_params target;
+        target.shared_device_memory_bytes = 4096*1024*1024ULL;
+        target.kv_stream_auxiliary_layers = 1;
+        target.cache_type_k = GGML_TYPE_Q8_0;
+        target.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        target.speculative.draft.n_max = 3;
+        assert(common_context_params_to_llama(target).n_rs_seq == 0);
+        target.cache_type_v = GGML_TYPE_Q4_0;
+        const auto draft = common_base_params_to_speculative(target);
+        assert(draft.kv_stream_auxiliary_layers == 0);
+        assert(draft.kv_stream_pool_bytes == 0);
+        assert(draft.shared_device_memory_bytes == 0);
+        assert(draft.cache_type_k == GGML_TYPE_Q8_0);
+        assert(draft.cache_type_v == GGML_TYPE_Q4_0);
+    }
+
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
@@ -184,6 +201,20 @@ static void test(void) {
         assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),alias,LLAMA_EXAMPLE_SERVER));
         assert(alias.shared_device_memory_bytes == size_t(3072)*1024*1024);
         assert(alias.kv_stream_pool_bytes == 0);
+        common_params mtp;
+        argv = {"binary_name","--shared-device-memory-mib","4096",
+            "--kv-stream-auxiliary-layers","1"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),mtp,LLAMA_EXAMPLE_SERVER));
+        assert(mtp.kv_stream_auxiliary_layers == 1);
+        for (const std::vector<std::string> & invalid_aux : {
+                std::vector<std::string>{"binary_name","--kv-stream-auxiliary-layers","1"},
+                std::vector<std::string>{"binary_name","--shared-device-memory-mib","4096",
+                    "--kv-stream-auxiliary-layers","2"}}) {
+            common_params rejected;
+            argv = invalid_aux;
+            assert(!common_params_parse(argv.size(),list_str_to_char(argv).data(),rejected,LLAMA_EXAMPLE_SERVER));
+        }
+
 
         common_params legacy;
         argv = {"binary_name","--kv-stream-pool-mib","64"};

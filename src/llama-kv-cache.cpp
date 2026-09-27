@@ -6,6 +6,7 @@
 #include "llama-context.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
+#include "llama-kv-stream-mtp-proxy.h"
 #include "../ggml/src/ggml-kv-stream-device.h"
 
 #include <algorithm>
@@ -85,7 +86,7 @@ llama_kv_cache::llama_kv_cache(
              const char *   name_tag,
     const llama_memory_params * stream) :
     model(model), hparams(hparams), v_trans(v_trans),
-    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(stream ? 256 : n_pad), n_swa(n_swa), swa_type(swa_type),
+    n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(stream && !stream->mtp_host_cache ? 256 : n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
     v_cells(*v_cells_impl) {
@@ -102,12 +103,20 @@ llama_kv_cache::llama_kv_cache(
     }
 
     const uint32_t requested_kv_size = kv_size;
-    if (stream) {
+    auto * mtp_host = stream ? stream->mtp_host_cache : nullptr;
+    if (stream && !mtp_host) {
         if (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload || n_seq_max != 1 ||
                 n_swa || other || reuse || share || !stream->kv_stream_backend || kv_size > UINT32_MAX-255) {
             throw std::runtime_error("KV streaming requires an allocated serial Qwen35 CUDA target context with Flash Attention and no shared/SWA cache");
         }
         kv_size = GGML_PAD(kv_size,256);
+    }
+    if (mtp_host && (model.arch != LLM_ARCH_QWEN35 || hparams.no_alloc || v_trans || !offload ||
+            n_seq_max != 1 || n_stream != 1 || other || reuse || share ||
+            mtp_host->host()->config().layers != 1 || mtp_host->host()->config().context_tokens != kv_size ||
+            mtp_host->host()->config().shape.type_k != type_k ||
+            mtp_host->host()->config().shape.type_v != type_v)) {
+        throw std::runtime_error("invalid attached MTP host KV cache");
     }
     GGML_ASSERT(kv_size % this->n_pad == 0);
 
@@ -174,7 +183,7 @@ llama_kv_cache::llama_kv_cache(
 
     const bool is_mla = hparams.is_mla();
 
-    if (stream) {
+    if (stream && !mtp_host) {
         auto * dev = ggml_backend_get_device(stream->kv_stream_backend);
         std::vector<uint32_t> ids;
         for (uint32_t il = 0; il < n_layer; ++il) if (hparams.has_kv(il) && (!filter || filter(il))) ids.push_back(il);
@@ -274,6 +283,11 @@ llama_kv_cache::llama_kv_cache(
             dev_name = ggml_backend_dev_name(dev);
         }
         if (kv_stream) buft = ggml_backend_buffer_get_type(kv_stream->buffer());
+        if (mtp_host) {
+            if (il != hparams.n_layer() || !layers.empty()) throw std::runtime_error("invalid attached MTP layer");
+            buft = ggml_backend_buffer_get_type(mtp_host->host()->buffer());
+            dev_name = ggml_backend_buffer_name(mtp_host->host()->buffer());
+        }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
 
@@ -287,11 +301,13 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream) : nullptr;
-        if (kv_stream) {
+        if (kv_stream || mtp_host) {
             llama_kv_stream_host_layer planes;
-            if (!kv_stream->host()->layer(uint32_t(layers.size()),planes) ||
-                    ggml_backend_tensor_alloc(kv_stream->buffer(),k,planes.k) != GGML_STATUS_SUCCESS ||
-                    ggml_backend_tensor_alloc(kv_stream->buffer(),v,planes.v) != GGML_STATUS_SUCCESS) {
+            auto * host = mtp_host ? mtp_host->host().get() : kv_stream->host().get();
+            auto * buffer = mtp_host ? mtp_host->host()->buffer() : kv_stream->buffer();
+            if (!host->layer(uint32_t(layers.size()),planes) ||
+                    ggml_backend_tensor_alloc(buffer,k,planes.k) != GGML_STATUS_SUCCESS ||
+                    ggml_backend_tensor_alloc(buffer,v,planes.v) != GGML_STATUS_SUCCESS) {
                 throw std::runtime_error("failed to bind authoritative host KV tensors");
             }
         }
@@ -339,8 +355,8 @@ llama_kv_cache::llama_kv_cache(
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
         ggml_backend_buffer_t buf;
-        if (kv_stream) {
-            buf = ggml_backend_buffer_retain(kv_stream->buffer());
+        if (kv_stream || mtp_host) {
+            buf = ggml_backend_buffer_retain(mtp_host ? mtp_host->host()->buffer() : kv_stream->buffer());
             for (auto * tensor = ggml_get_first_tensor(ctx.get()); tensor; tensor = ggml_get_next_tensor(ctx.get(),tensor)) {
                 if (tensor->view_src && ggml_backend_view_init(tensor) != GGML_STATUS_SUCCESS) {
                     ggml_backend_buffer_free(buf); throw std::runtime_error("failed to bind host KV views");
@@ -360,7 +376,7 @@ llama_kv_cache::llama_kv_cache(
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
 
-        if (!kv_stream) ggml_backend_buffer_clear(buf, 0);
+        if (!kv_stream && !mtp_host) ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
@@ -457,6 +473,8 @@ llama_kv_cache::llama_kv_cache(
 llama_kv_cache::~llama_kv_cache() = default;
 
 void llama_kv_cache::clear(bool data) {
+    if (mtp_proxy && !mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max()))
+        throw std::runtime_error("failed to reset attached MTP host cache");
     for (uint32_t s = 0; s < n_stream; ++s) {
         v_cells[s].reset();
         v_heads[s] = 0;
@@ -497,6 +515,10 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
+    }
+    if (mtp_proxy && p1 > p0) {
+        if (seq_id != 0 && seq_id != -1) return false;
+        if (!mtp_proxy->remove_suffix(size_t(p0), size_t(p1))) return false;
     }
 
     if (kv_stream) {
@@ -1320,8 +1342,9 @@ bool llama_kv_cache::get_can_shift() const {
     return true;
 }
 
-bool llama_kv_cache::attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache) {
-    if (!cache || attached_mtp_cache || kv_stream || layers.size() != 1 ||
+bool llama_kv_cache::attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_logical_cache> cache,
+        llama_kv_stream_model * target) {
+    if (!cache || !target || attached_mtp_cache || kv_stream || layers.size() != 1 ||
             hparams.n_layer_nextn != 1 || layers.front().il != hparams.n_layer() ||
             cache->tokens() != 0 || cache->frontiers().device != 0) return false;
     const auto & host = cache->host()->config();
@@ -1332,9 +1355,27 @@ bool llama_kv_cache::attach_mtp_auxiliary_cache(std::shared_ptr<llama_kv_stream_
             shape.head_dim_k != hparams.n_embd_head_k(il) ||
             shape.head_dim_v != hparams.n_embd_head_v(il) ||
             shape.heads != hparams.n_head_kv(il)) return false;
+    auto proxy = llama_kv_stream_mtp_proxy::create(model.dev_layer(il), cache, target);
+    if (!proxy) return false;
     attached_mtp_cache = std::move(cache);
+    mtp_proxy = std::move(proxy);
     return true;
 }
+
+bool llama_kv_cache::set_mtp_span_mode(bool enable, size_t first, uint32_t rows) {
+    if (!mtp_proxy) return !enable;
+    if (!enable) { mtp_proxy->disarm(); return true; }
+    return mtp_proxy->arm(first, rows);
+}
+
+bool llama_kv_cache::complete_mtp_publication() {
+    return mtp_proxy && mtp_proxy->complete_publication();
+}
+
+size_t llama_kv_cache::mtp_span_attention_calls() const noexcept {
+    return mtp_proxy ? mtp_proxy->attention_calls() : 0;
+}
+
 
 uint32_t llama_kv_cache::get_size() const {
     const auto & cells = v_cells[seq_to_stream[0]];
@@ -1422,7 +1463,7 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
 ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * k = layers[ikv].k;
+    auto * k = mtp_proxy ? mtp_proxy->key() : layers[ikv].k;
 
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_k_gqa = k->ne[0];
@@ -1442,7 +1483,7 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
 ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * v = layers[ikv].v;
+    auto * v = mtp_proxy ? mtp_proxy->value() : layers[ikv].v;
 
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_v_gqa = v->ne[0];
@@ -1476,7 +1517,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
 
     const int32_t ikv = map_layer_ids.at(il);
 
-    ggml_tensor * k = layers[ikv].k;
+    ggml_tensor * k = mtp_proxy ? mtp_proxy->key() : layers[ikv].k;
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
@@ -1511,7 +1552,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
 
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * v = layers[ikv].v;
+    auto * v = mtp_proxy ? mtp_proxy->value() : layers[ikv].v;
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
@@ -2314,6 +2355,8 @@ const slot_info_vec_t *   sinfos_in) {
                 throw std::runtime_error("failed to restore kv cache: mirrored cache holds cells this one does not");
             }
             if (kv_stream && !seq_rm(seq_id,-1,-1)) throw std::runtime_error("failed to clear streamed kv cache");
+            if (mtp_proxy && !mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max()))
+                throw std::runtime_error("failed to clear attached MTP cache");
             continue;
         }
 
@@ -2334,6 +2377,65 @@ const slot_info_vec_t *   sinfos_in) {
                     res = cells.pos_get(sinfo.idxs[0][i]) == llama_pos(i) && cells.seq_has(sinfo.idxs[0][i],0);
                 }
                 res = res && kv_stream->restore(cell_count);
+            }
+            if (res && mtp_proxy) {
+                io.flush_tensor_reads();
+                auto cache = attached_mtp_cache;
+                if (!cache || strm != 0 || layers.size() != 1 || v_trans)
+                    throw std::runtime_error("incompatible attached MTP checkpoint layout");
+                const auto & cells = v_cells[strm];
+                const auto & layout = cache->host()->layout();
+                auto * key = layers[0].k_stream[strm];
+                auto * value = layers[0].v_stream[strm];
+                res =
+                    sinfo.idxs.size() == 1 && sinfo.idxs[0].size() == cell_count &&
+                    cell_count <= cache->host()->config().context_tokens &&
+                    key && value && !v_trans &&
+                    key->nb[1] == layout.k_token_bytes &&
+                    value->nb[1] == layout.v_token_bytes;
+                for (uint32_t i = 0; res && i < cell_count; ++i)
+                    res = cells.pos_get(sinfo.idxs[0][i]) == llama_pos(i) &&
+                        cells.seq_has(sinfo.idxs[0][i], 0);
+                if (res) res = mtp_proxy->remove_suffix(0, std::numeric_limits<size_t>::max());
+                const auto gather = [&](ggml_tensor * source, size_t stride,
+                        size_t first, size_t count, uint8_t * destination) {
+                    for (size_t i = 0; i < count;) {
+                        const size_t slot = sinfo.idxs[0][first + i];
+                        size_t run = 1;
+                        while (i + run < count &&
+                                sinfo.idxs[0][first + i + run] == slot + run) ++run;
+                        const size_t bytes = run*stride;
+                        if (bytes > ggml_nbytes(source) ||
+                                slot > (ggml_nbytes(source) - bytes)/stride) return false;
+                        ggml_backend_tensor_get(source, destination + i*stride,
+                            slot*stride, bytes);
+                        i += run;
+                    }
+                    return true;
+                };
+                for (size_t first = 0; res && first < cell_count;) {
+                    const size_t count = std::min<size_t>(256, cell_count - first);
+                    std::vector<uint8_t> keys(count*layout.k_token_bytes);
+                    std::vector<uint8_t> values(count*layout.v_token_bytes);
+                    res = gather(key, layout.k_token_bytes, first, count, keys.data()) &&
+                        gather(value, layout.v_token_bytes, first, count, values.data());
+                    if (!res) break;
+                    llama_kv_stream_write write;
+                    if (!cache->begin(count)) { res = false; break; }
+                    if (!cache->content()->prepare({
+                            {0, ggml_kv_stream_operand::k, first*layout.k_token_bytes,
+                                keys.data(), keys.size()},
+                            {0, ggml_kv_stream_operand::v, first*layout.v_token_bytes,
+                                values.data(), values.size()}}, write)) {
+                        cache->cancel();
+                        res = false;
+                        break;
+                    }
+                    res = cache->publish_host(write) && cache->finish();
+                    first += count;
+                }
+                if (res) LLAMA_LOG_INFO("%s: restored %u authoritative MTP KV tokens from stock checkpoint\n",
+                    __func__, cell_count);
             }
         } catch (...) {
             res = false;
@@ -3022,13 +3124,45 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
 bool llama_kv_cache_context::kv_stream_begin(const llama_ubatch & ubatch, bool decode) const {
     auto * stream = kv->get_kv_stream();
     if (!stream || i_cur >= sinfos.size() || !ubatch.n_tokens || ubatch.n_seqs_unq != 1 ||
-            !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 || !ubatch.pos || ubatch.embd) return false;
+            !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 || !ubatch.pos || ubatch.embd) {
+        LLAMA_LOG_WARN("%s: invalid batch: stream=%d slot=%zu/%zu tokens=%u seqs=%u embd=%d\n",
+            __func__, int(stream != nullptr), i_cur, sinfos.size(), ubatch.n_tokens,
+            ubatch.n_seqs_unq, int(ubatch.embd != nullptr));
+        return false;
+    }
     const auto & info = sinfos[i_cur];
-    if (info.empty() || !info.is_contiguous() || info.s0 != 0 || info.s1 != 0 || info.strm.size() != 1 || info.strm[0] != 0 ||
-            info.head() != stream->tokens() || info.size() != ubatch.n_tokens) return false;
-    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) if (ubatch.pos[i] != int64_t(stream->tokens()+i)) return false;
-    return stream->begin(stream->tokens()+ubatch.n_tokens,ubatch.n_tokens,decode);
+    if (info.empty() || !info.is_contiguous() || info.s0 != 0 || info.s1 != 0 ||
+            info.strm.size() != 1 || info.strm[0] != 0 ||
+            info.head() != stream->tokens() || info.size() != ubatch.n_tokens) {
+        LLAMA_LOG_WARN("%s: slot mismatch: head=%zu expected=%zu size=%zu rows=%u contiguous=%d s=%u:%u streams=%zu\n",
+            __func__, info.empty() ? SIZE_MAX : size_t(info.head()), stream->tokens(),
+            info.size(), ubatch.n_tokens, int(info.is_contiguous()), info.s0, info.s1, info.strm.size());
+        return false;
+    }
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) if (ubatch.pos[i] != int64_t(stream->tokens()+i)) {
+        LLAMA_LOG_WARN("%s: position mismatch: row=%u pos=%lld expected=%zu\n",
+            __func__, i, (long long) ubatch.pos[i], stream->tokens()+i);
+        return false;
+    }
+    const bool accepted = stream->begin(stream->tokens()+ubatch.n_tokens,ubatch.n_tokens,decode);
+    if (!accepted) LLAMA_LOG_WARN("%s: session begin rejected: tokens=%zu rows=%u decode=%d revision=%llu\n",
+        __func__, stream->tokens(), ubatch.n_tokens, int(decode), (unsigned long long) stream->binding_view().revision);
+    return accepted;
 }
+bool llama_kv_cache_context::mtp_span_append(const llama_ubatch & ubatch) const {
+    const auto cache = kv->mtp_auxiliary_cache();
+    if (!cache || i_cur >= sinfos.size() || !ubatch.n_tokens || ubatch.n_tokens > 4 ||
+            ubatch.n_seqs_unq != 1 || !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 ||
+            !ubatch.pos) return false;
+    const auto & info = sinfos[i_cur];
+    if (info.empty() || !info.is_contiguous() || info.s0 != 0 || info.s1 != 0 ||
+            info.strm.size() != 1 || info.strm[0] != 0 ||
+            info.head() != cache->tokens() || info.size() != ubatch.n_tokens) return false;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i)
+        if (ubatch.pos[i] != llama_pos(cache->tokens() + i)) return false;
+    return true;
+}
+
 
 ggml_type llama_kv_cache_context::type_k() const {
     return kv->type_k();

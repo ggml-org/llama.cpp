@@ -546,7 +546,8 @@ static bool mma_span_launch_make(
             dst->type != GGML_TYPE_F32 || q->ne[0] != 256 || v->ne[0] != 256 ||
             k->ne[0] != 256 || (q->ne[1] != 3 && q->ne[1] != 4) ||
             k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 ||
-            q->ne[2]%k->ne[2] || (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 8) ||
+            q->ne[2]%k->ne[2] ||
+            (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 6 && q->ne[2]/k->ne[2] != 8) ||
             q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 ||
             k->ne[1] != v->ne[1] || k->ne[1] <= 0 || k->ne[1] > INT_MAX ||
             mask->type != GGML_TYPE_F16 || mask->ne[0] < k->ne[1] ||
@@ -556,7 +557,9 @@ static bool mma_span_launch_make(
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
 
     constexpr int DKQ = 256, DV = 256, ncols1 = 4;
-    const int ncols2 = int(q->ne[2]/k->ne[2]), ncols = ncols1*ncols2;
+    const int gqa_ratio = int(q->ne[2]/k->ne[2]);
+    // Stock Blackwell uses eight columns for ratio six and masks the two padded heads.
+    const int ncols2 = gqa_ratio > 4 ? 8 : 2, ncols = ncols1*ncols2;
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!turing_mma_available(cc)) return false;
     const int nthreads = ggml_cuda_fattn_mma_get_nthreads(DKQ,DV,ncols,cc);

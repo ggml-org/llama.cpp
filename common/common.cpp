@@ -1697,7 +1697,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.n_ctx             = params.n_ctx;
     cparams.n_seq_max         = params.n_parallel;
-    cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
+    // Streamed targets use full checkpoint rollback until the host-spilled
+    // recurrent snapshots are hooked into the live speculative context.
+    cparams.n_rs_seq          = params.kv_stream_auxiliary_layers ? 0 : params.speculative.need_n_rs_seq();
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
     cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
@@ -1722,6 +1724,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
+    cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;

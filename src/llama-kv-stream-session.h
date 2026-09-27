@@ -17,6 +17,8 @@ struct llama_kv_stream_session_config {
     llama_memory_resource_id attention_resource = 0;
     llama_memory_stage_id prefill_stage = 0;
     llama_memory_stage_id decode_stage = 0;
+    // Measured before CUDA graph capture; zero retains the direct-session query.
+    size_t mma_workspace_bytes = 0;
 };
 
 // Serial append-only device consumer. The backend outlives the session; recurrent state belongs to the text model.
@@ -42,6 +44,12 @@ public:
     size_t granted_bytes() const noexcept;
     uint64_t layout_revision() const noexcept;
     bool prefetch_primed() const noexcept;
+    // Idle-only handoff from the retained MTP layer owner. A guarded layout cannot
+    // repartition; the caller releases/replans the lease and retries that append.
+    bool set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard);
+    // Repartition while idle so a retained layer and its reserved tail fit in the ring.
+    bool reserve_complete_layer(uint32_t layer, size_t reserved_tokens);
+
 
     // Resize into a disjoint caller-owned pool while idle. Host contents and token frontier remain authoritative.
     bool grow_pool(ggml_backend_memory_lease_t pool, size_t pool_bytes, bool decode);
@@ -59,6 +67,9 @@ public:
     size_t captured_layers() const;
     size_t writer_workspace_bytes() const noexcept;
     size_t attention_workspace_bytes() const noexcept;
+    ggml_backend_buffer_t writer_workspace_buffer() const noexcept;
+    // Borrowed phase-exclusive attention grant; caller must finish work before a phase transition.
+    ggml_backend_buffer_t attention_workspace_buffer() const noexcept;
 
     // Prepare a release-before-commit pool resize for the common memory-transition coordinator.
     bool prepare(const llama_memory_transition_target & target, const llama_memory_layout & layout,

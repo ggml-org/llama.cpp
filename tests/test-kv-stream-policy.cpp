@@ -717,5 +717,84 @@ int main() {
         t.assert_equal(unchanged.config.pool_bytes,shrink.config.pool_bytes);
         t.assert_equal(unchanged.state.ring_slots,shrink.state.ring_slots);
     });
+    t.test("complete_layer_admission_grows_uniform_prefill_ring", [&](testing & t) {
+        const auto c = config(4262, 17);
+        llama_kv_stream_policy_state state;
+        if (!start(t, c, state)) return;
+        t.assert_equal(uint32_t(250), state.resident_pages_per_layer);
+        t.assert_equal(uint32_t(12), state.ring_slots);
+        llama_kv_stream_policy_decision decision;
+        const size_t frontier = 98044, reserved = frontier + 4;
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, state, frontier, reserved, 16, decision).status == status::success);
+        t.assert_true(decision.layout_changed);
+        t.assert_true(decision.next.ring_slots > state.ring_slots);
+        t.assert_equal(c.pool_bytes, decision.next.budget.pool_bytes);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                c, decision.next, frontier, layout).status == status::success)) return;
+        const uint32_t pages = uint32_t((reserved - 1)/256 + 1);
+        t.assert_true(double(decision.next.ring_slots) >=
+            c.overlap_ratio * double(pages - layout.layers[16].capacity_pages));
+        const auto admitted = decision.next;
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, admitted, frontier, reserved, 16, decision).status == status::success);
+        t.assert_true(!decision.layout_changed);
+        t.assert_equal(admitted.ring_slots, decision.next.ring_slots);
+
+        auto fixed = c;
+        fixed.fixed_ring = true;
+        const auto unchanged = decision.next;
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            fixed, state, frontier, reserved, 16, decision).status == status::invalid_budget);
+        t.assert_equal(unchanged.ring_slots, decision.next.ring_slots);
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, state, frontier, reserved, 17, decision).status == status::invalid_observation);
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, state, frontier, frontier - 1, 16, decision).status == status::invalid_observation);
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, state, frontier, size_t(4263)*256, 16, decision).status == status::invalid_budget);
+        t.assert_equal(unchanged.ring_slots, decision.next.ring_slots);
+    });
+    t.test("complete_layer_admission_covers_tail_pages_and_concentrated_placement", [&](testing & t) {
+        auto c = config(4262, 17);
+        c.overlap_ratio = 1.0;
+        llama_kv_stream_policy_state state;
+        if (!start(t, c, state)) return;
+        llama_kv_stream_policy_decision decision;
+        const size_t frontier = size_t(262)*256;
+        if (!t.assert_true(llama_kv_stream_policy_reserve_layer(
+                c, state, frontier, frontier, 16, decision).status == status::success)) return;
+        t.assert_true(!decision.layout_changed);
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, state, frontier, frontier + 1, 16, decision).status == status::success);
+        t.assert_true(decision.layout_changed);
+        t.assert_true(decision.next.ring_slots >= 263 - decision.next.resident_pages_per_layer);
+
+        if (!t.assert_true(llama_kv_stream_policy_step(c, state,
+                observe(383), decision).status == status::success)) return;
+        const auto concentrated = decision.next;
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c, concentrated, 383*256, 383*256 + 4, 16, decision).status == status::success);
+        llama_kv_stream_policy_layout layout;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                c, decision.next, 383*256, layout).status == status::success)) return;
+        t.assert_true(decision.next.ring_slots >= 384 - layout.layers[16].capacity_pages);
+
+        for (uint32_t pages = 17; pages <= 97; pages += 4) {
+            const auto small = config(pages, 16);
+            llama_kv_stream_policy_state initial;
+            if (!start(t, small, initial)) return;
+            for (uint32_t active = 1; active <= pages; ++active) {
+                const size_t tokens = size_t(active)*256;
+                if (!t.assert_true(llama_kv_stream_policy_reserve_layer(
+                        small, initial, tokens - 1, tokens, 15, decision).status == status::success)) return;
+                if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                        small, decision.next, tokens - 1, layout).status == status::success)) return;
+                t.assert_equal(pages, decision.next.resident_pages_per_layer*16 + decision.next.ring_slots);
+                t.assert_true(decision.next.ring_slots >= active - std::min(active, layout.layers[15].capacity_pages));
+            }
+        }
+    });
     return t.summary();
 }

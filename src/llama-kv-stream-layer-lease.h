@@ -3,6 +3,7 @@
 #include "llama-kv-stream-policy.h"
 
 class llama_kv_stream_logical_cache;
+struct ggml_tensor;
 
 #include <memory>
 #include <vector>
@@ -13,6 +14,9 @@ struct llama_kv_stream_layer_lease_layout {
     size_t active_tokens = 0;
     uint64_t layout_revision = 0;
     uint64_t content_generation = 0;
+    // Zero uses active_tokens. Otherwise materialize the current physical
+    // placement here while reserving future logical tokens up to active_tokens.
+    size_t placement_tokens = 0;
 };
 
 struct llama_kv_stream_complete_layer_request {
@@ -66,6 +70,22 @@ public:
     // Synchronize one upload before returning; query widths share the ready reservation.
     llama_kv_stream_complete_layer_lease_t acquire_populated(ggml_backend_t backend,
         const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache);
+    // Rebase a populated prefix after logical suffix rejection without moving its
+    // unchanged device bytes or releasing occupied ring slots.
+    bool adopt_truncated_prefix(llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache);
+    // Extend an already populated reservation only over newly committed host rows.
+    // Existing plans become stale on success; reacquire widths under the new generation.
+    bool publish_tail(ggml_backend_t backend, llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache, llama_kv_stream_population_stats & delta);
+    // Queue encoded rows into reserved device spans without advancing the host frontier.
+    // The caller retains source, reservation, and backend until the copy fence completes.
+    bool stage_tail_async(ggml_backend_t backend, llama_kv_stream_complete_layer_lease_t previous,
+        size_t first, bool value, const ggml_tensor * encoded, size_t row, size_t count,
+        llama_kv_stream_population_stats & staged);
+    // After the writer's host/device completion, claim already-staged bytes without H2D.
+    bool adopt_staged_tail(llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache, const llama_kv_stream_population_stats & staged);
 
     // Freeze occupied slots while a target prefetch sequence may submit copies.
     std::shared_ptr<llama_kv_stream_ring_guard> hold_ring();

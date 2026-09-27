@@ -36,7 +36,8 @@ public:
             const llama_compute_workspace_plan & plan);
     static std::unique_ptr<llama_context_memory> create(ggml_backend_sched_t sched,
             const std::vector<ggml_backend_t> & backends,
-            const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream);
+            const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
+            llama_context_memory * serial_parent = nullptr);
     ~llama_context_memory();
     llama_context_memory(const llama_context_memory &) = delete;
     llama_context_memory & operator=(const llama_context_memory &) = delete;
@@ -45,6 +46,9 @@ public:
     ggml_status compute_async(ggml_cgraph * graph);
     // Observe completion without rebuilding the immutable lease-validation state on the next token.
     void synchronize();
+    // Drain the other serial scheduler before either context rewrites shared scratch.
+    bool prepare_serial_target() noexcept;
+    bool prepare_serial_draft(llama_memory_text_phase phase) noexcept;
 
     // Record text intent and activate the matching shared-parent layout only when the phase changes.
     llama_memory_text_phase_result signal_text_phase(const llama_memory_text_phase_signal & signal) noexcept;
@@ -53,6 +57,7 @@ public:
     // Borrowed handles; consumers retain them before capturing addresses from this workspace.
     const std::vector<ggml_backend_memory_lease_t> & workspace_leases() const noexcept;
     bool shares_kv_memory() const noexcept;
+    bool borrows_serial_parent() const noexcept;
     ggml_backend_buffer_t shared_parent() const noexcept;
     size_t shared_parent_capacity() const noexcept;
     uint64_t shared_arena_generation() const noexcept;

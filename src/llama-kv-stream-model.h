@@ -1,5 +1,6 @@
 #pragma once
 #include "llama-kv-stream-session.h"
+#include "llama-kv-stream-layer-lease.h"
 class llama_kv_stream_logical_cache;
 
 
@@ -52,6 +53,30 @@ public:
     std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache() const noexcept;
     // Metadata snapshot only; it does not retain the binding lease.
     llama_kv_stream_binding_view binding_view() const noexcept;
+    // Borrow the retained MTP owner's occupied-ring snapshot for target appends.
+    // Clear it while idle before releasing/replanning the physical MTP lease.
+    bool set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard);
+    // Populate the MTP layer once and retain one physical reservation for TG1-TG4.
+    // Borrowed plans remain valid only until release_mtp_layer().
+    bool acquire_mtp_layer(size_t future_tokens = 0);
+    size_t mtp_reserved_tokens() const noexcept;
+    // Copy only newly published MTP host rows into the retained physical lease.
+    bool advance_mtp_layer_tail();
+    // Queue encoded tail rows directly into protected spans while host publication
+    // is pending; the caller keeps the returned provisional lease through use.
+    bool stage_mtp_tail_async(ggml_backend_t backend, size_t first, bool value,
+        const ggml_tensor * encoded, size_t row, size_t count,
+        llama_kv_stream_population_stats & staged);
+    llama_kv_stream_complete_layer_lease_t provisional_mtp_layer(
+        uint32_t query_tokens, size_t active_tokens);
+    // After writer completion, adopt staged bytes and refresh committed plans.
+    bool advance_mtp_layer_tail_staged(const llama_kv_stream_population_stats & staged);
+    // Retire a rejected MTP suffix while retaining its unchanged physical prefix.
+    bool truncate_mtp_layer(size_t tokens);
+    bool release_mtp_layer();
+    ggml_kv_stream_span_plan_t mtp_layer_plan(uint32_t query_tokens) const noexcept;
+    bool has_mtp_layer() const noexcept;
+    llama_kv_stream_population_stats mtp_layer_population() const noexcept;
     bool begin(size_t active_tokens, uint32_t query_tokens, bool decode);
     bool complete() const noexcept;
     void abort();
@@ -70,6 +95,9 @@ public:
     bool attach_shared_memory(const llama_kv_stream_memory_binding & binding);
     // The shared owner calls detach only after destroying its coordinator and workspace consumer.
     bool detach_shared_memory() noexcept;
+    // Borrow only during the serial MTP phase.
+    ggml_backend_buffer_t mtp_attention_workspace() const noexcept;
+    ggml_backend_buffer_t mtp_writer_workspace() const noexcept;
     llama_memory_consumer * memory_consumer() noexcept;
     bool uses_shared_memory() const noexcept;
     ggml_backend_buffer_t shared_parent() const noexcept;

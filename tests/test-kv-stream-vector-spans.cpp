@@ -14,7 +14,7 @@ struct span_storage {
 
     static std::unique_ptr<span_storage> create(
             fixture & f, uint32_t layer, size_t active, uint32_t queries,
-            const std::vector<size_t> & cuts) {
+            const std::vector<size_t> & cuts, bool wrapped = false) {
         if (cuts.size() < 2 || cuts.front() != 0 || cuts.back() != active) return {};
         auto result = std::make_unique<span_storage>();
         std::vector<ggml_kv_stream_layout> layouts;
@@ -32,6 +32,15 @@ struct span_storage {
             if (layout.bytes > SIZE_MAX - bytes) return {};
             bytes += layout.bytes;
         }
+        if (wrapped) {
+            bytes = 0;
+            for (size_t i = 0; i < layouts.size(); ++i) {
+                const size_t logical = i == 0 ? 0 : layouts.size()-i;
+                bytes = (bytes+127)/128*128;
+                offsets[logical] = bytes;
+                bytes += layouts[logical].bytes;
+            }
+        }
         result->storage = std::make_unique<block_workspace>(f, bytes, 71);
         auto * buffer = ggml_backend_memory_lease_buffer(result->storage->lease.get());
         auto * base = static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer));
@@ -47,7 +56,7 @@ struct span_storage {
             for (auto * tensor : {&k, &v}) {
                 tensor->ne[0] = 256;
                 tensor->ne[1] = int64_t(tokens);
-                tensor->ne[2] = 2;
+                tensor->ne[2] = f.policy.shape.heads;
                 tensor->ne[3] = 1;
                 tensor->buffer = buffer;
             }
@@ -251,6 +260,7 @@ static int benchmark_spans() {
 int main(int argc, char ** argv) {
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    if (argc > 1 && !std::strcmp(argv[1], "--cuda-gqa6")) t.set_filter("qwen_ratio_six_tg3_tg4_matches_stock|qwen_24_4_tg2_aligned_and_wrapped_spans_are_exact");
     t.test("resume_layout_accounts_for_tg1_and_tg2", [](testing & t) {
         ggml_kv_stream_resume_plan one, two;
         if (!t.assert_true(ggml_kv_stream_resume_layout_make(24, 1, 3, 8, one))) return;
@@ -617,5 +627,80 @@ int main(int argc, char ** argv) {
         t.assert_true(std::all_of(actual.begin(), actual.end(), [](float value) { return value == -77; }));
     });
 
+    if (argc > 1 && (!std::strcmp(argv[1], "--cuda") ||
+            !std::strcmp(argv[1], "--cuda-gqa6"))) t.test(
+            "qwen_ratio_six_tg3_tg4_matches_stock", [](testing & t) {
+        ggml_backend_load_all();
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(
+                ggml_backend_dev_backend_reg(dev), "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!t.assert_true(ops && ops->version >= 9 && ops->spans &&
+                ops->spans_workspace && ops->mma_workspace)) return;
+        fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0,
+            768, false, 2, 2, 16);
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        if (!t.assert_true(bool(pin))) return;
+        size_t maximum = 0;
+        if (!t.assert_true(ops->mma_workspace(backend.get(), GGML_TYPE_Q8_0,
+                GGML_TYPE_Q4_0, 12, 2, 768, 2, maximum))) return;
+        for (size_t active : {size_t(257), size_t(513)}) {
+            for (uint32_t queries : {3u, 4u}) {
+                block_inputs input(f, active, queries, false, 12);
+                const auto expected = ordinary(f, input, 0);
+                auto storage = span_storage::create(f, 0, active, queries,
+                    {0, 256, active});
+                if (!t.assert_true(bool(storage) && storage->plan)) return;
+                bool accepted = false;
+                size_t workspace = 0;
+                const auto actual = evaluate(f, ops, *storage, input, 0,
+                    accepted, &workspace);
+                if (!t.assert_true(accepted)) return;
+                t.assert_true(workspace <= maximum && maximum < 2*1048576);
+                close_values(t, expected, actual, 2e-5f);
+            }
+        }
+    });
+    if (argc > 1 && (!std::strcmp(argv[1], "--cuda") ||
+            !std::strcmp(argv[1], "--cuda-gqa6"))) t.test(
+            "qwen_24_4_tg2_aligned_and_wrapped_spans_are_exact", [](testing & t) {
+        ggml_backend_load_all();
+        auto * dev = ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(
+            ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(dev),
+                "ggml_backend_kv_stream_partial_ops"));
+        const auto * ops = get ? get() : nullptr;
+        if (!t.assert_true(ops && ops->spans && ops->spans_workspace)) return;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,8192,false,2,4,80);
+        if (!t.assert_true(f.attach())) return;
+        auto pin = f.binding->acquire();
+        if (!t.assert_true(bool(pin))) return;
+        for (size_t active : {size_t(8192),size_t(8191)}) {
+            block_inputs input(f,active,2,false,24);
+            const auto expected = stock_attention(f,input,0);
+            const std::vector<std::vector<size_t>> cuts{
+                {0,active},{0,1024,active},{0,1024,4096,active},
+                {0,127,257,active}};
+            for (size_t index = 0; index < cuts.size(); ++index) {
+                for (bool wrapped : {false,true}) {
+                    if (wrapped && cuts[index].size() != 4) continue;
+                    auto storage = span_storage::create(f,0,active,2,cuts[index],wrapped);
+                    if (!t.assert_true(storage && storage->plan)) return;
+                    bool accepted = false;
+                    const auto actual = evaluate(f,ops,*storage,input,0,accepted);
+                    if (!t.assert_true(accepted)) return;
+                    if (active == 8192 && index < 3)
+                        t.assert_true(same_float_bits(expected,actual));
+                    else close_values(t,expected,actual,1e-5f);
+                }
+            }
+        }
+    });
     return t.summary();
 }

@@ -673,6 +673,16 @@ static bool spans(
     span scratch;
     if (!resume_common(backend,op,workspace,plan,kernel,base,scratch,true)) return false;
 
+    // Match the aligned native arithmetic; retain guards for every partial region.
+    bool aligned = view.active_tokens%256 == 0;
+    for (size_t i = 0; i < view.count; ++i) {
+        aligned &= view.spans[i].token_begin%256 == 0 && view.spans[i].tokens%256 == 0;
+    }
+    if (aligned) {
+        kernel = ggml_cuda_kv_stream_resume_aligned_kernel(op->src[1]->type,op->src[2]->type,plan.queries);
+        if (!kernel) return false;
+    }
+
     try {
         std::vector<std::pair<ggml_tensor,ggml_tensor>> physical;
         std::vector<ggml_cuda_kv_span> descriptors;

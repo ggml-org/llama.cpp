@@ -50,6 +50,12 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     std::unique_ptr<llama_memory_transition> transition;
     llama_memory_text_phase_tracker text_phase;
     llama_kv_stream_model * shared_stream = nullptr;
+    llama_context_memory * serial_parent = nullptr;
+    llama_context_memory * serial_child = nullptr;
+    llama_context_memory * self = nullptr;
+    llama_context_memory * serial_active = nullptr;
+    bool serial_borrowed = false;
+    llama_memory_resource_id kv_pool_resource = 0;
     ggml_backend_buffer_t kv_parent = nullptr;
     size_t kv_parent_capacity = 0;
     size_t kv_arena = std::numeric_limits<size_t>::max();
@@ -61,12 +67,43 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
     uint64_t transition_count = 0, executor_revision = 0;
     uint64_t last_transition_us = 0;
 
+    // Borrowed scratch may alias discardable graph/attention bytes, never persistent KV.
+    size_t pool_offset(llama_memory_stage_id stage) const {
+        if (!shared_stream || !kv_pool_resource || !stage) return 0;
+        llama_memory_layout layout;
+        if (llama_memory_layout_elastic(phase_target.plan, stage,
+                phase_target.budgets, phase_target.fixed, layout).status !=
+                llama_memory_layout_status::success || kv_arena >= layout.arenas.size()) return 0;
+        for (const auto & region : layout.arenas[kv_arena].regions) {
+            if (region.id == kv_pool_resource) return region.offset;
+        }
+        return 0;
+    }
+
     // Constructor failures and normal teardown use the same ordering while the scheduler remains alive.
     ~implementation() {
+        // The owner may outlive its draft or be freed first; neither leaves a dangling handoff pointer.
+        if (serial_child) {
+            GGML_ASSERT(serial_child->impl->drain());
+            serial_child->impl->serial_parent = nullptr;
+            serial_child = nullptr;
+            serial_active = nullptr;
+        }
+        if (serial_parent && serial_parent->impl->serial_child == self) {
+            serial_parent->impl->serial_child = nullptr;
+            serial_parent->impl->serial_active = nullptr;
+        }
         transition.reset();
         GGML_ASSERT(invalidate());
         if (workspace) GGML_ASSERT(workspace->close());
         workspace.reset();
+        // A draft context may still retain a populated MTP layer when the target
+        // shuts down. Retire its ring guard before detaching the shared KV arena.
+        if (shared_stream && shared_stream->has_mtp_layer() &&
+                !shared_stream->release_mtp_layer()) {
+            shared_stream->abort();
+            GGML_ASSERT(shared_stream->release_mtp_layer());
+        }
         if (shared_stream) GGML_ASSERT(shared_stream->detach_shared_memory());
     }
 
@@ -87,6 +124,10 @@ struct llama_context_memory::implementation : llama_memory_executor_backend {
         if (!workspace || !workspace->ready() ||
                 executor_revision == UINT64_MAX) return false;
         bindings = workspace->leases();
+        // A stage label may change while the exact scheduler lease and native
+        // capture remain valid. Do not replace an executable that was not retired.
+        if (executor.ready() && executor.matches(bindings,executor_revision)) return true;
+
         std::unique_ptr<llama_memory_executable> native =
             std::make_unique<context_executable>(caches);
         const uint64_t next = executor_revision+1;
@@ -163,8 +204,13 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 
 std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_sched_t sched,
         const std::vector<ggml_backend_t> & backends,
-        const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream) {
+        const llama_compute_workspace_plan & plan, llama_kv_stream_model * stream,
+        llama_context_memory * serial_parent) {
     const auto & groups = plan.groups;
+    if (stream && serial_parent) return {};
+    auto * borrowed_parent = serial_parent ? serial_parent->shared_parent() : nullptr;
+    if (serial_parent && (!serial_parent->shares_kv_memory() || !borrowed_parent)) return {};
+    if (serial_parent && (serial_parent->impl->serial_child || plan.phase_sizes.size() != 2)) return {};
     if (!sched || !supported(backends) || plan.phase_sizes.empty() ||
             backends.size() != static_cast<size_t>(ggml_backend_sched_get_n_backends(sched))) return {};
     for (size_t i = 0; i < backends.size(); ++i) {
@@ -233,9 +279,13 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 
         std::vector<llama_memory_workspace_group> selected;
         std::vector<llama_memory_transition_arena> supplied;
+        bool borrowed_group_seen = false;
         for (size_t i = 0; i < groups.size(); ++i) {
             const auto & group = groups[i];
             const bool carries_kv = stream && group.buft == kv.buffer_type;
+            const bool borrowed_group = borrowed_parent &&
+                group.buft == ggml_backend_buffer_get_type(borrowed_parent);
+            if (borrowed_group_seen && borrowed_group) return {};
             if (carries_kv && kv_group != std::numeric_limits<size_t>::max()) return {};
             size_t capacity = group.size;
             if (carries_kv) {
@@ -250,7 +300,18 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                     }
                 }
             }
-            ggml_backend_buffer_ptr parent(ggml_backend_buft_alloc_buffer(group.buft,capacity));
+            if (borrowed_group) {
+                capacity = serial_parent->shared_parent_capacity();
+                if (capacity < group.size) return {};
+                borrowed_group_seen = true;
+                if (plan.phase_sizes[0][i] > serial_parent->impl->pool_offset(
+                            serial_parent->impl->prefill_stage) ||
+                        plan.phase_sizes[1][i] > serial_parent->impl->pool_offset(
+                            serial_parent->impl->decode_stage)) return {};
+            }
+            ggml_backend_buffer_ptr parent(borrowed_group ?
+                ggml_backend_buffer_retain(borrowed_parent) :
+                ggml_backend_buft_alloc_buffer(group.buft,capacity));
             if (!parent) return {};
             if (!ggml_backend_buffer_supports_views(parent.get())) {
                 if (carries_kv) return {};
@@ -294,6 +355,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 state->kv_workspace_max = group.size;
             }
         }
+        if (serial_parent && !borrowed_group_seen) return {};
         if (stream && kv_group == std::numeric_limits<size_t>::max()) return {};
 
         auto * owner = state.get();
@@ -308,6 +370,7 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             if (groups.size() > size_t(UINT64_MAX-3)) return {};
             pool_id = uint64_t(groups.size()+1);
             writer_id = pool_id+1;
+            state->kv_pool_resource = pool_id;
             attention_id = writer_id+1;
             target.plan.resources.push_back({
                 pool_id,kv_domain,LLAMA_MEMORY_ALLOCATION_DEVICE_LOCAL,
@@ -324,17 +387,20 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
                 auto & requirements = target.plan.stages[i].requirements;
                 const size_t pool_preferred = (kv.shared_device_memory_bytes || i == 2) ?
                     target.budgets[kv_arena].capacity : kv.pool_bytes;
+                // The serial MTP prefill workspace may extend slightly beyond
+                // target compute into discardable attention scratch. Keep the
+                // reconstructible KV pool after both, outside that alias.
                 requirements.push_back({
-                    pool_id,kv.pool_bytes,pool_preferred,
-                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
+                    attention_id,attention,attention,
+                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
                     writer_id,kv.writer_bytes,kv.writer_bytes,
                     groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
                 requirements.push_back({
-                    attention_id,attention,attention,
-                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_WRITE,
+                    pool_id,kv.pool_bytes,pool_preferred,
+                    groups[kv_group].alignment,LLAMA_MEMORY_ACCESS_READ_WRITE,
                     LLAMA_MEMORY_CAPABILITY_BUFFER_VIEWS});
             }
             target.plan.inputs.push_back(pool_id);
@@ -405,9 +471,20 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
             state->decode_stage = stages[2];
             state->kv_arena = kv_arena;
         }
+        if (serial_parent) {
+            state->phase_target = target;
+            state->supplied = supplied;
+            state->active_stage = stages.front();
+            state->prefill_stage = stages[1];
+            state->decode_stage = stages[2];
+            state->serial_borrowed = true;
+        }
         if (!state->capture_execution()) return {};
+        state->serial_parent = serial_parent;
         std::unique_ptr<llama_context_memory> result(
             new llama_context_memory(std::move(state)));
+        result->impl->self = result.get();
+        if (serial_parent) serial_parent->impl->serial_child = result.get();
         handoff.complete = true;
         return result;
     } catch (const std::bad_alloc &) {
@@ -418,10 +495,50 @@ std::unique_ptr<llama_context_memory> llama_context_memory::create(ggml_backend_
 // Keep ownership in one object declared after the scheduler in llama_context.
 llama_context_memory::llama_context_memory(std::unique_ptr<implementation> impl) : impl(std::move(impl)) {}
 llama_context_memory::~llama_context_memory() = default;
+// Serial target/draft schedulers may alias scratch, but never execute or publish into it concurrently.
+bool llama_context_memory::prepare_serial_target() noexcept {
+    if (!impl->serial_child) return true;
+    auto * child = impl->serial_child->impl.get();
+    if (!child || child->serial_parent != this || child->serial_borrowed == false) return false;
+    if (impl->serial_active == impl->serial_child && !child->drain()) return false;
+    impl->serial_active = this;
+    return true;
+}
+
+bool llama_context_memory::prepare_serial_draft(llama_memory_text_phase phase) noexcept {
+    if (!impl->serial_borrowed || !impl->serial_parent ||
+            (phase != llama_memory_text_phase::prefill && phase != llama_memory_text_phase::decode)) return false;
+    auto * parent = impl->serial_parent->impl.get();
+    if (!parent || parent->serial_child != this || !parent->shared_stream) return false;
+    if (parent->serial_active != this && !parent->drain()) return false;
+    if (phase == llama_memory_text_phase::prefill && parent->active_stage == parent->decode_stage) {
+        if (parent->shared_stream->has_mtp_layer() && !parent->shared_stream->release_mtp_layer()) return false;
+        if (!parent->activate_stage(parent->prefill_stage)) return false;
+    }
+    const auto stage = phase == llama_memory_text_phase::decode ? impl->decode_stage : impl->prefill_stage;
+    if (!impl->activate_stage(stage)) return false;
+    const size_t protected_begin = parent->pool_offset(parent->active_stage);
+    bool found = false;
+    for (auto * lease : impl->workspace->leases()) {
+        auto * buffer = lease ? ggml_backend_memory_lease_buffer(lease) : nullptr;
+        if (!buffer || ggml_backend_buffer_get_type(buffer) != ggml_backend_buffer_get_type(parent->kv_parent)) continue;
+        ggml_backend_memory_region region{};
+        if (found || !ggml_backend_memory_lease_get_region(lease, &region) ||
+                !protected_begin || region.offset != 0 || region.size > protected_begin) return false;
+        found = true;
+    }
+    if (!found) return false;
+    parent->serial_active = this;
+    return true;
+}
+
 
 // A bounded host gate plus one queue pin protects unchanged workspaces without replanning per token.
 ggml_status llama_context_memory::compute_async(ggml_cgraph * graph) {
     if (!graph || !impl->executor.ready()) return GGML_STATUS_FAILED;
+    if (impl->serial_borrowed && (!impl->serial_parent ||
+            impl->serial_parent->impl->serial_active != this)) return GGML_STATUS_FAILED;
+    if (impl->serial_child && impl->serial_active != this) return GGML_STATUS_FAILED;
     const auto admission = impl->transition->admit();
     if (!admission) return GGML_STATUS_FAILED;
     if (!impl->pending) {
@@ -453,6 +570,8 @@ bool llama_context_memory::uses_arenas() const noexcept { return !impl->arenas.e
 const std::vector<ggml_backend_memory_lease_t> & llama_context_memory::workspace_leases() const noexcept {
     return impl->workspace->leases();
 }
+bool llama_context_memory::borrows_serial_parent() const noexcept { return impl->serial_borrowed; }
+
 
 bool llama_context_memory::shares_kv_memory() const noexcept { return impl->shared_stream != nullptr; }
 ggml_backend_buffer_t llama_context_memory::shared_parent() const noexcept { return impl->kv_parent; }
@@ -503,17 +622,22 @@ llama_memory_text_phase_result llama_context_memory::signal_text_phase(
         const llama_memory_text_phase_signal & signal) noexcept {
     const auto previous = impl->text_phase;
     auto result = impl->text_phase.notify(signal);
-    if (result.status != llama_memory_text_phase_status::changed ||
+    if ((result.status != llama_memory_text_phase_status::changed &&
+            result.status != llama_memory_text_phase_status::unchanged) ||
             !impl->shared_stream) return result;
-    llama_memory_stage_id stage = 0;
-    if (signal.phase == llama_memory_text_phase::decode) {
-        stage = impl->decode_stage;
-    } else if (impl->active_stage == impl->decode_stage) {
-        stage = impl->prefill_stage;
-    } else {
-        return result;
+    const auto stage = signal.phase == llama_memory_text_phase::decode ?
+        impl->decode_stage : impl->prefill_stage;
+    if (signal.phase == llama_memory_text_phase::prefill &&
+            impl->active_stage != impl->decode_stage) return result;
+    // The draft may have moved the physical parent back to prefill while the
+    // target tracker still said decode, so reconcile the stage even on unchanged.
+    bool ready = true;
+    if (stage == impl->decode_stage && impl->serial_child) {
+        auto * child = impl->serial_child->impl.get();
+        ready = child && child->serial_parent == this && child->drain() &&
+            child->activate_stage(child->decode_stage);
     }
-    if (impl->activate_stage(stage)) return result;
+    if (ready && impl->activate_stage(stage)) return result;
     impl->text_phase = previous;
     result.status = llama_memory_text_phase_status::transition_failed;
     result.after = result.before;

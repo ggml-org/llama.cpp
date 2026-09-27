@@ -4,6 +4,8 @@
 #include "llama-kv-stream-writer.h"
 #include "llama-kv-stream-publication.h"
 
+#include <functional>
+
 struct llama_kv_stream_logical_identity {
     uint64_t id = 0;
     uint64_t generation = 0;
@@ -31,7 +33,9 @@ public:
     // One append is active at a time. Host publication does not claim a device mirror.
     bool begin(size_t count);
     bool publish_host(llama_kv_stream_write & write);
-    bool begin_generated(std::shared_ptr<llama_kv_stream_writer> writer, const ggml_tensor * k, const ggml_tensor * v);
+    using generated_stage = std::function<bool(bool value, const ggml_tensor * encoded, size_t row, size_t count)>;
+    bool begin_generated(std::shared_ptr<llama_kv_stream_writer> writer, const ggml_tensor * k, const ggml_tensor * v,
+            const generated_stage & stage = {});
     bool complete_generated();
     bool finish();
     // Cancel only before host publication and after queued backend work is drained.

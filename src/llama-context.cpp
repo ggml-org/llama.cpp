@@ -8,7 +8,6 @@
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-memory-hybrid.h"
-#include "llama-kv-stream-writer.h"
 #include "llama-kv-stream-logical-cache.h"
 #include "llama-kv-stream-model.h"
 #include "llama-mmap.h"
@@ -20,6 +19,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -287,9 +287,10 @@ llama_context::llama_context(
             throw std::runtime_error("initial KV streaming integration requires all model layers on the single CUDA device");
         }
     }
-    // The target owns the physical pool. Attaching a draft here retains only the separate
-    // logical host cache; stock draft KV remains the execution source until publication lands.
+    // The target owns the physical pool. The attached draft writes directly to its
+    // separate authoritative host cache and borrows target-owned execution workspace.
     std::shared_ptr<llama_kv_stream_logical_cache> mtp_attached;
+    llama_kv_stream_model * mtp_target_stream = nullptr;
     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && params.ctx_other &&
             params.ctx_other->get_cparams().kv_stream_auxiliary_layers) {
         const auto & target_ctx = *params.ctx_other;
@@ -307,11 +308,13 @@ llama_context::llama_context(
         auto * target_hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(params.ctx_other));
         auto * target_stream = target_hybrid ? target_hybrid->get_mem_attn()->get_kv_stream() : nullptr;
         mtp_attached = target_stream ? target_stream->auxiliary_cache() : nullptr;
+        mtp_target_stream = target_stream;
         if (!mtp_attached || mtp_attached->tokens() != 0 ||
                 mtp_attached->host()->config().shape.type_k != params.type_k ||
                 mtp_attached->host()->config().shape.type_v != params.type_v) {
             throw std::runtime_error("missing or incompatible target MTP logical cache");
         }
+        mtp_target_ctx = params.ctx_other;
     }
     cparams.mtp_publish_host = bool(mtp_attached);
 
@@ -463,6 +466,7 @@ llama_context::llama_context(
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
+        params_mem.mtp_host_cache = mtp_attached.get();
         if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
             params_mem.shared_device_memory_bytes = params.shared_device_memory_bytes;
@@ -477,7 +481,7 @@ llama_context::llama_context(
         memory.reset(model.create_memory(params_mem, cparams));
         if (mtp_attached) {
             auto * draft_kv = dynamic_cast<llama_kv_cache *>(memory.get());
-            if (!draft_kv || !draft_kv->attach_mtp_auxiliary_cache(mtp_attached)) {
+            if (!draft_kv || !draft_kv->attach_mtp_auxiliary_cache(mtp_attached, mtp_target_stream)) {
                 throw std::runtime_error("failed to attach the MTP logical KV cache");
             }
         }
@@ -504,7 +508,7 @@ llama_context::llama_context(
                 }
             }
 
-            if (cparams.kv_streaming() &&
+            if ((cparams.kv_streaming() || cparams.mtp_publish_host) &&
                     ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 buft = llama_kv_stream_device_buffer_type(model.devices.front().dev);
                 if (!buft) throw std::runtime_error("missing device-local KV/compute buffer type");
@@ -729,7 +733,19 @@ bool llama_context::prepare_compute_arenas(
     }
     if (!cparams.pipeline_parallel && cparams.n_seq_max == 1 &&
             llama_context_memory::supported(backend_ptrs)) {
-        compute_memory = llama_context_memory::create(sched.get(),backend_ptrs,plan,stream);
+        auto * serial_parent = cparams.mtp_publish_host && mtp_target_ctx ?
+            mtp_target_ctx->compute_memory.get() : nullptr;
+        if (cparams.mtp_publish_host && !serial_parent) return false;
+        compute_memory = llama_context_memory::create(
+            sched.get(),backend_ptrs,plan,stream,serial_parent);
+        if (!compute_memory && serial_parent) {
+            // A short-context parent may have too little discardable scratch
+            // before persistent KV to hold the draft graph. Keep the ordinary
+            // separate workspace rather than aliasing live KV.
+            LLAMA_LOG_INFO("%s: MTP graph does not fit target scratch; using a separate workspace\n", __func__);
+            compute_memory = llama_context_memory::create(
+                sched.get(),backend_ptrs,plan,stream,nullptr);
+        }
         return compute_memory != nullptr;
     }
     if (stream) return false;
@@ -830,6 +846,22 @@ void llama_context::sched_reserve() {
                     measurements[i]=std::max(measurements[i],required);
                     measurements[backend_ptrs.size()+i]=std::max(measurements[backend_ptrs.size()+i],required);
                 }
+            }
+        }
+        // Target verification and attached MTP catch-up both execute TG1-TG4.
+        // Include these graphs in their respective decode-phase grants.
+        if ((cparams.kv_stream_auxiliary_layers || cparams.mtp_publish_host) && n_seqs == 1) {
+            const uint32_t width = std::min(n_tokens, 4u);
+            if (width > 1) {
+                std::vector<size_t> verify_one(backend_ptrs.size());
+                std::vector<size_t> verify_all(backend_ptrs.size());
+                if (!graph_reserve(width, 1, 1, mctx.get(), true, verify_one.data()) ||
+                        !graph_reserve(width, 1, std::min(width, cparams.n_outputs_max),
+                            mctx.get(), true, verify_all.data())) return false;
+                for (size_t i = 0; i < backend_ptrs.size(); ++i)
+                    measurements[backend_ptrs.size() + i] = std::max(
+                        measurements[backend_ptrs.size() + i],
+                        std::max(verify_one[i], verify_all[i]));
             }
         }
         return prepare_compute_arenas(measurements, 2);
@@ -999,6 +1031,10 @@ ggml_backend_sched_t llama_context::get_sched() const {
 bool llama_context::uses_memory_coordinator() const {
     return compute_memory != nullptr;
 }
+const llama_context_memory * llama_context::get_compute_memory() const noexcept {
+    return compute_memory.get();
+}
+
 
 bool llama_context::uses_compute_arenas() const {
     return !compute_arenas.empty() || (compute_memory && compute_memory->uses_arenas());
@@ -1592,10 +1628,10 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-// Publish only completed, serial MTP appends. Stock MTP KV remains the execution source
-// until retained-span attention and acceptance rollback use this authoritative host cache.
+// Complete the managed K/V publication before inspecting its host frontier.
 bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_result & graph) {
     auto * draft = dynamic_cast<llama_kv_cache *>(memory.get());
+    if (!draft || !draft->complete_mtp_publication()) return false;
     auto cache = draft ? draft->mtp_auxiliary_cache() : nullptr;
     if (!cache || !graph.t_mtp_k || !graph.t_mtp_v || !sched || !ubatch.n_tokens ||
             ubatch.n_seqs_unq != 1 || !ubatch.seq_id_unq || ubatch.seq_id_unq[0] != 0 ||
@@ -1606,39 +1642,23 @@ bool llama_context::publish_mtp_kv(const llama_ubatch & ubatch, const llm_graph_
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         if (ubatch.pos[i] != llama_pos(first + i)) return false;
     }
+    auto * target_hybrid = mtp_target_ctx ?
+        dynamic_cast<llama_memory_hybrid *>(llama_get_memory(mtp_target_ctx)) : nullptr;
+    auto * target_stream = target_hybrid ? target_hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+    if (!target_stream || target_stream->auxiliary_cache() != cache) return false;
 
-    // The writer may use a distinct backend execution stream. Drain producer work
-    // before it reads these scheduler-owned tensors; the writer completion then
-    // establishes host visibility before the logical frontier advances.
-    synchronize();
-    if (first < cache->tokens() && !cache->truncate(first)) return false;
-    auto * k_backend = ggml_backend_sched_get_tensor_backend(sched.get(), graph.t_mtp_k);
-    auto * v_backend = ggml_backend_sched_get_tensor_backend(sched.get(), graph.t_mtp_v);
-    if (!k_backend || k_backend != v_backend) return false;
-    if (!mtp_writer || mtp_writer_backend != k_backend) {
-        mtp_writer.reset();
-        mtp_writer_scratch.reset();
-        mtp_writer_backend = nullptr;
-        ggml_kv_stream_layout row;
-        const auto & shape = cache->host()->config().shape;
-        if (ggml_kv_stream_layout_make(shape, 1, row).status != ggml_kv_stream_status::success) return false;
-        const size_t rows = std::min<size_t>(cparams.n_ubatch, size_t(shape.page_tokens));
-        const size_t max_row = std::max(row.k_token_bytes, row.v_token_bytes);
-        if (max_row > SIZE_MAX - sizeof(int64_t)) return false;
-        const size_t stride = max_row + sizeof(int64_t);
-        if (!rows || stride > (SIZE_MAX - 255)/rows) return false;
-        const size_t bytes = (rows*stride + 255)/256*256;
-        auto * buft = ggml_backend_get_default_buffer_type(k_backend);
-        mtp_writer_scratch.reset(buft ? ggml_backend_buft_alloc_buffer(buft, bytes) : nullptr);
-        if (!mtp_writer_scratch) return false;
-        auto writer = llama_kv_stream_writer::create(k_backend, mtp_writer_scratch.get(),
-                bytes, shape, cparams.n_ubatch);
-        if (!writer) return false;
-        mtp_writer = std::shared_ptr<llama_kv_stream_writer>(std::move(writer));
-        mtp_writer_backend = k_backend;
-    }
-    if (!cache->begin_generated(mtp_writer, graph.t_mtp_k, graph.t_mtp_v)) return false;
-    return cache->complete_generated();
+    // The proxy completed host publication and retained-span adoption here.
+    // Decode attention may have consumed provisional device spans while D2H
+    // was pending; the serial phase owner drains later downstream graph work.
+    const auto frontiers = cache->frontiers();
+    if (cache->tokens() != first + ubatch.n_tokens ||
+            frontiers.host != cache->tokens() || frontiers.committed != cache->tokens() ||
+            frontiers.device != 0) return false;
+    if (!cparams.mtp_span_attention) return !target_stream->has_mtp_layer();
+    ggml_kv_stream_span_plan_view view;
+    auto * plan = target_stream->mtp_layer_plan(ubatch.n_tokens);
+    return plan && ggml_kv_stream_span_plan_get_view(plan, view) &&
+        view.active_tokens == cache->tokens();
 }
 
 llm_graph_result * llama_context::process_ubatch(
@@ -1677,6 +1697,19 @@ llm_graph_result * llama_context::process_ubatch(
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
+    }
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.mtp_publish_host) {
+        auto * draft = dynamic_cast<llama_kv_cache *>(memory.get());
+        auto * target_hybrid = mtp_target_ctx ?
+            dynamic_cast<llama_memory_hybrid *>(llama_get_memory(mtp_target_ctx)) : nullptr;
+        auto * target = target_hybrid ? target_hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+        if (!draft || !target || !mctx) { ret = GGML_STATUS_FAILED; return nullptr; }
+        const bool eligible = target->has_mtp_layer() &&
+            static_cast<llama_kv_cache_context *>(mctx)->mtp_span_append(ubatch) &&
+            target->mtp_layer_plan(1) != nullptr;
+        cparams.mtp_span_attention = eligible &&
+            draft->set_mtp_span_mode(true, size_t(ubatch.pos[0]), ubatch.n_tokens);
+        if (!cparams.mtp_span_attention) draft->set_mtp_span_mode(false);
     }
 
     auto * res = get_gf_res_prev();
@@ -2111,7 +2144,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     const auto text_phase = cparams.kv_streaming() ?
         (cparams.kv_stream_decode ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
-        llama_memory_text_phase::unspecified;
+        (cparams.mtp_publish_host ?
+            (n_tokens_all <= 4 ? llama_memory_text_phase::decode : llama_memory_text_phase::prefill) :
+            llama_memory_text_phase::unspecified);
 
     if (output_all) {
         // require that all tokens are output
@@ -2140,10 +2175,60 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     output_swaps.clear();
     embd_batch_idxs.clear();
+    const bool reservation_was_pending = sched_reserve_state.begin();
+    const uint64_t serial_transitions = compute_memory ? compute_memory->phase_transition_count() : 0;
+    // Drain the other scheduler before reservation can discard or rewrite shared scratch.
+    if (compute_memory && cparams.kv_stream_auxiliary_layers &&
+            !compute_memory->prepare_serial_target()) {
+        LLAMA_LOG_ERROR("%s: failed to hand off shared graph scratch to target\n", __func__);
+        return -2;
+    }
+    if (compute_memory && cparams.mtp_publish_host && compute_memory->borrows_serial_parent() &&
+            !compute_memory->prepare_serial_draft(text_phase)) {
+        LLAMA_LOG_ERROR("%s: failed to hand off shared graph scratch to MTP\n", __func__);
+        return -2;
+    }
 
     sched_reserve();
+    bool draft_graph_rebuild = !reservation_was_pending && cparams.mtp_publish_host && compute_memory &&
+        compute_memory->phase_transition_count() != serial_transitions;
+    if (compute_memory && reservation_was_pending) {
+        // A dirty scheduler reservation replaced the coordinator. The new
+        // owner must receive the handoff as well, before graph inputs are set.
+        const auto after_reserve = compute_memory->phase_transition_count();
+        if (cparams.kv_stream_auxiliary_layers && !compute_memory->prepare_serial_target()) return -2;
+        if (cparams.mtp_publish_host && compute_memory->borrows_serial_parent() &&
+                !compute_memory->prepare_serial_draft(text_phase)) return -2;
+        draft_graph_rebuild = cparams.mtp_publish_host &&
+            compute_memory->phase_transition_count() != after_reserve;
+    }
+    if (draft_graph_rebuild) {
+        auto reserve_context = memory->init_full();
+        const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
+            std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) :
+            std::min(cparams.n_ctx, cparams.n_ubatch);
+        const uint32_t reserve_outputs = std::min(reserve_tokens, cparams.n_outputs_max);
+        if (!reserve_context || !graph_reserve(reserve_tokens, 1, reserve_outputs,
+                reserve_context.get())) {
+            LLAMA_LOG_ERROR("%s: failed to rebuild MTP graph after shared scratch handoff\n", __func__);
+            return -2;
+        }
+    }
+
 
     if (cparams.kv_streaming() && compute_memory) {
+        if (cparams.kv_stream_auxiliary_layers &&
+                compute_memory->text_phase().phase != text_phase) {
+            auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
+            auto * target = hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+            if (!target || (target->has_mtp_layer() && !target->release_mtp_layer())) {
+                LLAMA_LOG_ERROR("%s: failed to retire MTP ring lease before text phase transition\n", __func__);
+                return -2;
+            }
+        }
+        const bool supported_verify = cparams.kv_stream_auxiliary_layers == 1 &&
+            text_phase == llama_memory_text_phase::decode &&
+            n_tokens_all >= 2 && n_tokens_all <= 4;
         const auto transitions = compute_memory->phase_transition_count();
         const auto phase_result = compute_memory->signal_text_phase({
             text_phase,
@@ -2151,7 +2236,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             cparams.n_seq_max == 1,
             cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !batch_inp.embd,
             cparams.ctx_other != nullptr || cparams.n_rs_seq != 0 ||
-                (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1),
+                (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1 && !supported_verify),
         });
         if (phase_result.status != llama_memory_text_phase_status::changed &&
                 phase_result.status != llama_memory_text_phase_status::unchanged) {
@@ -2160,10 +2245,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
         if (compute_memory->phase_transition_count() != transitions) {
             auto reserve_context = memory->init_full();
+            const uint32_t decode_width = cparams.kv_stream_auxiliary_layers ?
+                std::min(4u, std::min(cparams.n_ctx, cparams.n_ubatch)) : cparams.n_seq_max;
             const uint32_t reserve_tokens = text_phase == llama_memory_text_phase::decode ?
-                cparams.n_seq_max : std::min(cparams.n_ctx,cparams.n_ubatch);
+                decode_width : std::min(cparams.n_ctx,cparams.n_ubatch);
             const uint32_t reserve_outputs = text_phase == llama_memory_text_phase::decode ?
-                cparams.n_seq_max : std::min(reserve_tokens,cparams.n_outputs_max);
+                std::min(decode_width, cparams.n_outputs_max) : std::min(reserve_tokens,cparams.n_outputs_max);
             if (!reserve_context || !graph_reserve(
                     reserve_tokens,cparams.n_seq_max,reserve_outputs,
                     reserve_context.get())) {
@@ -4472,6 +4559,42 @@ bool llama_get_causal_attn(const llama_context * ctx) {
 void llama_set_kv_stream_decode(llama_context * ctx, bool decode) {
     if (ctx) ctx->set_kv_stream_decode(decode);
 }
+static llama_kv_stream_model * llama_mtp_target_stream(llama_context * ctx) {
+    if (!ctx) return nullptr;
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx));
+    return hybrid ? hybrid->get_mem_attn()->get_kv_stream() : nullptr;
+}
+
+bool llama_kv_stream_mtp_prepare(llama_context * ctx, uint32_t future_tokens) {
+    if (!ctx || future_tokens > 4) return false;
+    if (!ctx->get_cparams().kv_stream_auxiliary_layers) return true;
+    auto * stream = llama_mtp_target_stream(ctx);
+    const auto cache = stream ? stream->auxiliary_cache() : nullptr;
+    if (!cache) return false;
+    LLAMA_LOG_DEBUG("%s: target=%zu mtp=%zu future=%u active=%d reserved=%zu\n",
+        __func__, stream->tokens(), cache->tokens(), future_tokens,
+        int(stream->has_mtp_layer()), stream->mtp_reserved_tokens());
+    if (cache->tokens() < 4) return true; // ordinary short-prefix MTP path
+    const size_t frontier = stream->tokens();
+    if (frontier > ctx->n_ctx()) return false;
+    const size_t reserve = std::min<size_t>(future_tokens, ctx->n_ctx() - frontier);
+    if (stream->has_mtp_layer()) {
+        if (stream->mtp_reserved_tokens() >= frontier + reserve) return true;
+        if (!stream->release_mtp_layer()) return false;
+    }
+    if (stream->acquire_mtp_layer(reserve)) return true;
+    LLAMA_LOG_WARN("%s: complete MTP span admission failed at target=%zu reserved=%zu\n",
+        __func__, frontier, frontier + reserve);
+    return false;
+}
+
+bool llama_kv_stream_mtp_release(llama_context * ctx) {
+    if (!ctx) return false;
+    if (!ctx->get_cparams().kv_stream_auxiliary_layers) return true;
+    auto * stream = llama_mtp_target_stream(ctx);
+    return stream && stream->release_mtp_layer();
+}
+
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);

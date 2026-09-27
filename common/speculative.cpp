@@ -1595,6 +1595,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             auto * mem_dft = llama_get_memory(ctx_dft);
 
             bool ok = true;
+            if (n_tokens <= 4 && !llama_kv_stream_mtp_prepare(ctx_tgt,
+                    uint32_t(std::clamp(params.n_max, 0, 4)))) {
+                SPC_ERR("%s", "failed to acquire the adaptive MTP KV lease for catch-up\n");
+                return false;
+            }
+
             for (int head = 0; head < n_mtp_layers; ++head) {
                 if (chain_heads) {
                     // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
@@ -1620,6 +1626,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
             }
             if (!ok) {
+                llama_kv_stream_mtp_release(ctx_tgt);
                 return false;
             }
         }
@@ -1687,6 +1694,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 chain_h[seq_id].assign(pending_h[seq_id].begin(), pending_h[seq_id].end());
             }
         }
+        if (n_drafting > 0 && !llama_kv_stream_mtp_prepare(params.ctx_tgt,
+                uint32_t(std::clamp(params.n_max, 0, 4)))) {
+            SPC_ERR("%s", "failed to acquire the adaptive MTP KV lease for drafting\n");
+            return;
+        }
+
 
         int i = 0;
 
@@ -1824,6 +1837,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
         std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+        if (n_accepted + 1 < n_rows &&
+                !llama_kv_stream_mtp_release(params.ctx_tgt)) {
+            SPC_ERR("%s", "failed to release the rejected adaptive MTP KV lease\n");
+        }
     }
 };
 
@@ -2558,6 +2575,14 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
     result.cache_type_k  = params_spec.cache_type_k;
     result.cache_type_v  = params_spec.cache_type_v;
+    if (params.kv_stream_auxiliary_layers) {
+        result.cache_type_k = params.cache_type_k;
+        result.cache_type_v = params.cache_type_v;
+    }
+    // The draft attaches to the target's auxiliary logical cache; it must not
+    // construct another streaming pool or reserve a second phase arena.
+    result.kv_stream_auxiliary_layers = 0;
+    result.kv_stream_pool_bytes = result.shared_device_memory_bytes = 0;
     result.n_outputs_max = params.n_parallel;
     result.n_outputs_max_per_seq = 1;
 

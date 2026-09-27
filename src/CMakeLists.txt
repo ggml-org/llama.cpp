@@ -66,6 +66,8 @@ add_library(llama
             llama-kv-stream-logical-cache.cpp
             llama-kv-stream-logical-cache.h
             llama-kv-stream-resident.cpp
+            llama-kv-stream-mtp-proxy.cpp
+            llama-kv-stream-mtp-proxy.h
             llama-kv-stream-publication.cpp
             llama-kv-stream-publication.h
             llama-kv-stream-resident.h

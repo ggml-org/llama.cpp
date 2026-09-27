@@ -93,6 +93,7 @@ struct llama_kv_stream_complete_layer_lease {
     std::shared_ptr<layer_reservation> reservation;
     ggml_kv_stream_span_plan_t plan = nullptr;
     size_t active_tokens = 0;
+    uint64_t content_generation = 0;
 
     ~llama_kv_stream_complete_layer_lease() {
         ggml_kv_stream_span_plan_free(plan);
@@ -116,6 +117,8 @@ static bool materialize(
         llama_kv_stream_policy_layout & output) {
     if (!pool || !identity.active_tokens || !identity.layout_revision || !identity.content_generation)
         return false;
+    const size_t placement = identity.placement_tokens ? identity.placement_tokens : identity.active_tokens;
+    if (placement > identity.active_tokens) return false;
     auto * buffer = ggml_backend_memory_lease_buffer(pool);
     ggml_backend_memory_region region;
     if (!buffer || !ggml_backend_memory_lease_get_region(pool, &region) ||
@@ -123,7 +126,7 @@ static bool materialize(
             identity.policy.pool_bytes > region.size) return false;
     llama_kv_stream_policy_layout next;
     if (llama_kv_stream_policy_layout_make(
-            identity.policy, identity.state, identity.active_tokens, next).status !=
+            identity.policy, identity.state, placement, next).status !=
             llama_kv_stream_policy_status::success) return false;
     output = std::move(next);
     return true;
@@ -250,7 +253,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         const auto & layer = state->layout.layers[request.layer];
         const size_t page_tokens = size_t(state->identity.policy.shape.page_tokens);
         size_t capacity;
-        if (!multiply(size_t(layer.resident_live_pages), page_tokens, capacity)) return nullptr;
+        if (!multiply(size_t(layer.capacity_pages), page_tokens, capacity)) return nullptr;
         const size_t resident_tokens = std::min(state->identity.active_tokens, capacity);
         const size_t ring_slots = ceil_div(state->identity.active_tokens - resident_tokens, page_tokens);
         size_t ring_first;
@@ -278,6 +281,7 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
         ggml_kv_stream_span_plan_free(plan);
         return nullptr;
     }
+    lease->content_generation = request.content_generation;
     lease->reservation = reservation;
     lease->plan = plan;
     lease->active_tokens = active;
@@ -440,6 +444,288 @@ llama_kv_stream_complete_layer_lease_t llama_kv_stream_layer_lease_owner::acquir
     return lease;
 }
 
+// Publish only a newly committed suffix into the already protected resident/ring
+// placement. The old plan remains valid until the generation is advanced atomically.
+bool llama_kv_stream_layer_lease_owner::publish_tail(
+        ggml_backend_t backend, llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache, llama_kv_stream_population_stats & delta) {
+    if (!impl || !impl->state || !backend || !previous || !previous->reservation) return false;
+    auto state = impl->state;
+    auto reservation = previous->reservation;
+    if (reservation->owner != state) return false;
+    const auto host = cache.host();
+    if (!host || !same_population_shape(host->config().shape, state->identity.policy.shape) ||
+            reservation->layer >= state->layout.layers.size() ||
+            state->layout.layers[reservation->layer].cache_id != cache.identity().id ||
+            state->layout.layers[reservation->layer].cache_layer >= host->config().layers)
+        return false;
+    const auto frontiers = cache.frontiers();
+    const size_t next_tokens = cache.tokens();
+    const uint64_t next_generation = cache.identity().generation;
+    if (next_tokens <= previous->active_tokens ||
+            next_tokens > reservation->active_tokens ||
+            next_generation <= previous->content_generation ||
+            cache.content()->generation() != next_generation ||
+            frontiers.reserved != next_tokens || frontiers.host != next_tokens ||
+            frontiers.committed != next_tokens || frontiers.device != 0) return false;
+    auto * pool = ggml_backend_memory_lease_buffer(state->pool.get());
+    auto * type = pool ? ggml_backend_buffer_get_type(pool) : nullptr;
+    auto * device = type ? ggml_backend_buft_get_device(type) : nullptr;
+    if (!pool || !ggml_backend_supports_buft(backend, type) ||
+            (device && device != ggml_backend_get_device(backend))) return false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->closed || !reservation->populated || reservation->populating ||
+                reservation->populated_tokens != previous->active_tokens ||
+                reservation->content_generation != previous->content_generation ||
+                state->identity.content_generation != previous->content_generation)
+            return false;
+        reservation->populating = true;
+    }
+    struct population_gate {
+        std::shared_ptr<layer_reservation> reservation;
+        bool active = true;
+        ~population_gate() {
+            if (!active) return;
+            std::lock_guard<std::mutex> lock(reservation->owner->mutex);
+            reservation->populating = false;
+        }
+    } gate{reservation};
+    using plan_ptr = std::unique_ptr<ggml_kv_stream_span_plan, decltype(&ggml_kv_stream_span_plan_free)>;
+    plan_ptr plan(build_plan(*state, *reservation, 1, next_tokens), ggml_kv_stream_span_plan_free);
+    ggml_kv_stream_span_plan_view view;
+    if (!plan || !ggml_kv_stream_span_plan_get_view(plan.get(), view) ||
+            !view.count || view.count > 2 || view.active_tokens != next_tokens) return false;
+    llama_kv_stream_host_layer source;
+    if (!host->layer(state->layout.layers[reservation->layer].cache_layer, source)) return false;
+    ggml_context_ptr context(ggml_init({16384, nullptr, true}));
+    if (!context) return false;
+    struct upload { ggml_tensor * tensor = nullptr; const void * source = nullptr; size_t bytes = 0; };
+    std::array<upload, 4> uploads{};
+    size_t count = 0;
+    llama_kv_stream_population_stats next;
+    const auto add = [&](ggml_backend_buffer_t buffer, size_t offset, const void * data, size_t bytes) {
+        if (!buffer || !data || !bytes || count >= uploads.size() || bytes > INT64_MAX ||
+                bytes > SIZE_MAX - next.bytes) return false;
+        const size_t capacity = ggml_backend_buffer_get_size(buffer);
+        if (offset > capacity || bytes > capacity - offset) return false;
+        auto * tensor = ggml_new_tensor_1d(context.get(), GGML_TYPE_I8, int64_t(bytes));
+        if (!tensor || ggml_backend_buffer_get_alloc_size(buffer, tensor) > capacity - offset) return false;
+        auto * base = static_cast<char *>(ggml_backend_buffer_get_base(buffer));
+        if (!base || ggml_backend_tensor_alloc(buffer, tensor, base + offset) != GGML_STATUS_SUCCESS)
+            return false;
+        uploads[count++] = {tensor, data, bytes};
+        next.bytes += bytes;
+        ++next.calls;
+        return true;
+    };
+    const auto & host_layout = host->layout();
+    for (size_t i = 0; i < view.count; ++i) {
+        const auto & span = view.spans[i];
+        const size_t first = std::max(previous->active_tokens, span.token_begin);
+        const size_t end = std::min(next_tokens, span.token_begin + span.tokens);
+        if (first >= end) continue;
+        const size_t offset_tokens = first - span.token_begin;
+        size_t k_delta, v_delta, k_first, v_first, k_bytes, v_bytes;
+        if (!multiply(offset_tokens, host_layout.k_token_bytes, k_delta) ||
+                !multiply(offset_tokens, host_layout.v_token_bytes, v_delta) ||
+                !multiply(first, host_layout.k_token_bytes, k_first) ||
+                !multiply(first, host_layout.v_token_bytes, v_first) ||
+                !multiply(end - first, host_layout.k_token_bytes, k_bytes) ||
+                !multiply(end - first, host_layout.v_token_bytes, v_bytes) ||
+                k_delta > SIZE_MAX - span.k_offset ||
+                v_delta > SIZE_MAX - span.v_offset ||
+                k_first > host_layout.k_bytes || k_bytes > host_layout.k_bytes - k_first ||
+                v_first > host_layout.v_bytes || v_bytes > host_layout.v_bytes - v_first ||
+                !add(span.k_buffer, span.k_offset + k_delta,
+                    static_cast<const char *>(source.k) + k_first, k_bytes) ||
+                !add(span.v_buffer, span.v_offset + v_delta,
+                    static_cast<const char *>(source.v) + v_first, v_bytes))
+            return false;
+    }
+    if (!count) return false;
+    try {
+        ggml_backend_synchronize(backend);
+        for (size_t i = 0; i < count; ++i)
+            ggml_backend_tensor_set_async(backend, uploads[i].tensor, uploads[i].source, 0, uploads[i].bytes);
+        ggml_backend_synchronize(backend);
+    } catch (...) {
+        try { ggml_backend_synchronize(backend); } catch (...) {}
+        return false;
+    }
+    const auto current = cache.frontiers();
+    if (cache.tokens() != next_tokens || cache.identity().generation != next_generation ||
+            cache.content()->generation() != next_generation ||
+            current.reserved != next_tokens || current.host != next_tokens ||
+            current.committed != next_tokens || current.device != 0) return false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->closed || reservation->content_generation != previous->content_generation ||
+                state->identity.content_generation != previous->content_generation ||
+                reservation->population.bytes > SIZE_MAX - next.bytes ||
+                reservation->population.calls > SIZE_MAX - next.calls) return false;
+        reservation->content_generation = next_generation;
+        reservation->populated_tokens = next_tokens;
+        reservation->population.bytes += next.bytes;
+        reservation->population.calls += next.calls;
+        state->identity.content_generation = next_generation;
+        reservation->populating = false;
+    }
+    gate.active = false;
+    delta = next;
+    return true;
+}
+
+// Queue only newly encoded rows into the protected resident/ring placement.
+// The writer's completion event fences these D2D copies as well as its host copy.
+bool llama_kv_stream_layer_lease_owner::stage_tail_async(
+        ggml_backend_t backend, llama_kv_stream_complete_layer_lease_t previous,
+        size_t first, bool value, const ggml_tensor * encoded, size_t row, size_t count,
+        llama_kv_stream_population_stats & staged) {
+    if (!impl || !impl->state || !backend || !previous || !previous->reservation ||
+            !encoded || !encoded->buffer || !encoded->data || !count ||
+            previous->reservation->owner != impl->state) return false;
+    auto state = impl->state;
+    auto reservation = previous->reservation;
+    const auto & shape = state->identity.policy.shape;
+    const size_t stride = ggml_row_size(ggml_type(value ? shape.type_v : shape.type_k),
+        int64_t(size_t(value ? shape.head_dim_v : shape.head_dim_k)*shape.heads));
+    if (!stride || encoded->type != (value ? shape.type_v : shape.type_k) ||
+            first != previous->active_tokens || row > SIZE_MAX - first ||
+            count > SIZE_MAX - first - row || count > SIZE_MAX/stride ||
+            count*stride > ggml_nbytes(encoded) ||
+            staged.bytes > SIZE_MAX - count*stride || staged.calls == SIZE_MAX) return false;
+    const size_t begin = first + row, end = begin + count;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (state->closed || !reservation->populated || reservation->populating ||
+                reservation->populated_tokens != first || end > reservation->active_tokens ||
+                reservation->content_generation != previous->content_generation ||
+                state->identity.content_generation != previous->content_generation)
+            return false;
+    }
+    using plan_ptr = std::unique_ptr<ggml_kv_stream_span_plan, decltype(&ggml_kv_stream_span_plan_free)>;
+    plan_ptr plan(build_plan(*state, *reservation, 1, end), ggml_kv_stream_span_plan_free);
+    ggml_kv_stream_span_plan_view view;
+    if (!plan || !ggml_kv_stream_span_plan_get_view(plan.get(), view) ||
+            !view.count || view.count > 2 || view.active_tokens != end) return false;
+    size_t copied = 0, calls = 0;
+    try {
+        for (size_t i = 0; i < view.count; ++i) {
+            const auto & span = view.spans[i];
+            const size_t part_first = std::max(begin, span.token_begin);
+            const size_t part_end = std::min(end, span.token_begin + span.tokens);
+            if (part_first >= part_end) continue;
+            const size_t bytes = (part_end - part_first)*stride;
+            auto * destination = value ? span.v_buffer : span.k_buffer;
+            const size_t offset = (value ? span.v_offset : span.k_offset) +
+                (part_first - span.token_begin)*stride;
+            if (!destination || offset > ggml_backend_buffer_get_size(destination) ||
+                    bytes > ggml_backend_buffer_get_size(destination) - offset)
+                return false;
+            ggml_tensor src{}, dst{};
+            src.type = dst.type = GGML_TYPE_I8;
+            src.buffer = encoded->buffer;
+            dst.buffer = destination;
+            src.data = static_cast<char *>(encoded->data) + (part_first - begin)*stride;
+            dst.data = static_cast<char *>(ggml_backend_buffer_get_base(destination)) + offset;
+            src.ne[0] = dst.ne[0] = int64_t(bytes);
+            src.nb[0] = dst.nb[0] = 1;
+            for (int axis = 1; axis < 4; ++axis) {
+                src.ne[axis] = dst.ne[axis] = 1;
+                src.nb[axis] = dst.nb[axis] = bytes;
+            }
+            ggml_backend_tensor_copy_async(backend, backend, &src, &dst);
+            copied += bytes;
+            ++calls;
+        }
+    } catch (...) {
+        try { ggml_backend_synchronize(backend); } catch (...) {}
+        return false;
+    }
+    if (copied != count*stride || !calls || staged.calls > SIZE_MAX - calls) return false;
+    staged.bytes += copied;
+    staged.calls += calls;
+    return true;
+}
+
+// A completed writer made host and directly staged device bytes identical.
+// Update only metadata here; no host-to-device copy is necessary.
+bool llama_kv_stream_layer_lease_owner::adopt_staged_tail(
+        llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache,
+        const llama_kv_stream_population_stats & staged) {
+    if (!impl || !impl->state || !previous || !previous->reservation ||
+            previous->reservation->owner != impl->state) return false;
+    auto state = impl->state;
+    auto reservation = previous->reservation;
+    const auto host = cache.host();
+    const auto frontier = cache.frontiers();
+    const size_t next = cache.tokens();
+    const uint64_t generation = cache.identity().generation;
+    const size_t appended = next >= previous->active_tokens ? next - previous->active_tokens : 0;
+    const size_t k_stride = host ? host->layout().k_token_bytes : 0;
+    const size_t v_stride = host ? host->layout().v_token_bytes : 0;
+    if (k_stride > SIZE_MAX - v_stride ||
+            (k_stride + v_stride && appended > SIZE_MAX/(k_stride + v_stride))) return false;
+    if (!host || !same_population_shape(host->config().shape, state->identity.policy.shape) ||
+            reservation->layer >= state->layout.layers.size() ||
+            state->layout.layers[reservation->layer].cache_id != cache.identity().id ||
+            next <= previous->active_tokens || next > reservation->active_tokens ||
+            generation <= previous->content_generation ||
+            cache.content()->generation() != generation ||
+            frontier.reserved != next || frontier.host != next ||
+            frontier.committed != next || frontier.device != 0 ||
+            staged.bytes != appended*(k_stride + v_stride) ||
+            staged.calls < 2) return false;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->closed || !reservation->populated || reservation->populating ||
+            reservation->populated_tokens != previous->active_tokens ||
+            reservation->content_generation != previous->content_generation ||
+            state->identity.content_generation != previous->content_generation ||
+            reservation->population.bytes > SIZE_MAX - staged.bytes ||
+            reservation->population.calls > SIZE_MAX - staged.calls) return false;
+    reservation->content_generation = generation;
+    reservation->populated_tokens = next;
+    reservation->population.bytes += staged.bytes;
+    reservation->population.calls += staged.calls;
+    state->identity.content_generation = generation;
+    return true;
+}
+
+
+bool llama_kv_stream_layer_lease_owner::adopt_truncated_prefix(
+        llama_kv_stream_complete_layer_lease_t previous,
+        const llama_kv_stream_logical_cache & cache) {
+    if (!impl || !impl->state || !previous || !previous->reservation) return false;
+    const auto state = impl->state;
+    const auto reservation = previous->reservation;
+    const auto host = cache.host();
+    const auto frontier = cache.frontiers();
+    const size_t tokens = cache.tokens();
+    const uint64_t generation = cache.identity().generation;
+    if (reservation->owner != state || !host ||
+            !same_population_shape(host->config().shape, state->identity.policy.shape) ||
+            reservation->layer >= state->layout.layers.size() ||
+            state->layout.layers[reservation->layer].cache_id != cache.identity().id ||
+            state->layout.layers[reservation->layer].cache_layer >= host->config().layers ||
+            tokens < 4 || tokens >= previous->active_tokens ||
+            generation <= previous->content_generation ||
+            cache.content()->generation() != generation ||
+            frontier.reserved != tokens || frontier.host != tokens ||
+            frontier.committed != tokens || frontier.device != 0) return false;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->closed || !reservation->populated || reservation->populating ||
+            reservation->populated_tokens != previous->active_tokens ||
+            reservation->content_generation != previous->content_generation ||
+            state->identity.content_generation != previous->content_generation) return false;
+    // No device copy occurs: the immutable accepted prefix retains its exact
+    // resident/ring placement. The generation change invalidates every old plan.
+    reservation->populated_tokens = tokens;
+    reservation->content_generation = generation;
+    state->identity.content_generation = generation;
+    return true;
+}
 bool llama_kv_stream_layer_lease_owner::rebind(
         const llama_kv_stream_layer_lease_layout & identity) {
     if (!impl || !impl->state) return false;
@@ -531,7 +817,8 @@ void llama_kv_stream_complete_layer_lease_free(
 
 ggml_kv_stream_span_plan_t llama_kv_stream_complete_layer_lease_plan(
         llama_kv_stream_complete_layer_lease_t lease) {
-    return lease ? lease->plan : nullptr;
+    return lease && lease->reservation &&
+        lease->content_generation == lease->reservation->content_generation ? lease->plan : nullptr;
 }
 
 uint32_t llama_kv_stream_complete_layer_lease_layer(
@@ -561,7 +848,7 @@ uint64_t llama_kv_stream_complete_layer_lease_layout_revision(
 
 uint64_t llama_kv_stream_complete_layer_lease_content_generation(
         llama_kv_stream_complete_layer_lease_t lease) {
-    return lease && lease->reservation ? lease->reservation->content_generation : 0;
+    return lease ? lease->content_generation : 0;
 }
 
 llama_kv_stream_population_stats llama_kv_stream_complete_layer_lease_population(

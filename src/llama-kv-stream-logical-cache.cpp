@@ -48,7 +48,8 @@ bool llama_kv_stream_logical_cache::begin(size_t count) {
 }
 
 bool llama_kv_stream_logical_cache::begin_generated(
-        std::shared_ptr<llama_kv_stream_writer> writer, const ggml_tensor * k, const ggml_tensor * v) {
+        std::shared_ptr<llama_kv_stream_writer> writer, const ggml_tensor * k, const ggml_tensor * v,
+        const generated_stage & stage) {
     if (!writer || active_writer || backing->config().layers != 1 ||
             !writer->matches_shape(backing->config().shape) || !writer->accepts(k, false) ||
             !writer->accepts(v, true) || k->ne[1] != v->ne[1]) return false;
@@ -74,7 +75,11 @@ bool llama_kv_stream_logical_cache::begin_generated(
         };
         if (!authoritative->prepare_direct_generated(spans, [&](const auto & span, void * destination) {
                 const bool value = span.operand == ggml_kv_stream_operand::v;
-                return writer->generate_async(value ? v : k, value, destination, {}, completions[value]);
+                const std::function<bool(const ggml_tensor *, size_t, size_t)> publish = stage ?
+                    [&](const ggml_tensor * encoded, size_t row, size_t count) {
+                        return stage(value, encoded, row, count);
+                    } : std::function<bool(const ggml_tensor *, size_t, size_t)>{};
+                return writer->generate_async(value ? v : k, value, destination, publish, completions[value]);
             }, write)) return fail();
     } catch (...) {
         return fail();

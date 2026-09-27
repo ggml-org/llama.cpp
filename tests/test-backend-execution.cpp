@@ -144,5 +144,42 @@ int main(int argc, char ** argv) {
         }
         t.assert_equal(4,probe.computes);
     });
+    if (argc > 1 && !std::strcmp(argv[1],"--cuda")) t.test("cuda_managed_attention_does_not_reserve_stock_kv_conversion", [&](testing & t) {
+        ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0");
+        if (!t.assert_true(dev != nullptr)) return;
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        execution_probe probe;
+        auto managed_ops = ops;
+        managed_ops.supports = [](void *, const ggml_tensor * op) { return op->op == GGML_OP_FLASH_ATTN_EXT; };
+        ggml_backend_buffer_ptr backing(ggml_backend_alloc_buffer(backend.get(), 1 << 20));
+        ggml_backend_buffer_ptr managed(ggml_backend_execution_buffer_new(dev, backing.get(), managed_ops, &probe));
+        if (!t.assert_true(bool(managed))) return;
+        ggml_context_ptr ctx(ggml_init({16384, nullptr, true}));
+        auto * q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 256, 4, 24, 1);
+        auto * k = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_Q8_0, 256, 512, 4, 1);
+        auto * v = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_Q4_0, 256, 512, 4, 1);
+        auto * mask = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 512, 4, 1, 1);
+        auto * attention = ggml_flash_attn_ext(ctx.get(), q, k, v, mask, 1.0f/16, 0, 0);
+        auto * prefill_q = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 256, 256, 24, 1);
+        auto * prefill_mask = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F16, 512, 256, 1, 1);
+        auto * prefill_attention = ggml_flash_attn_ext(ctx.get(), prefill_q, k, v, prefill_mask, 1.0f/16, 0, 0);
+        const size_t stock = ggml_backend_buft_get_alloc_size(buft, attention);
+        const size_t stock_prefill = ggml_backend_buft_get_alloc_size(buft, prefill_attention);
+        t.assert_true(stock > ggml_nbytes(attention));
+        t.assert_true(stock_prefill > ggml_nbytes(prefill_attention));
+        auto * base = static_cast<char *>(ggml_backend_buffer_get_base(managed.get()));
+        if (!t.assert_true(ggml_backend_tensor_alloc(managed.get(), k, base) == GGML_STATUS_SUCCESS &&
+                ggml_backend_tensor_alloc(managed.get(), v, base + ggml_nbytes(k)) == GGML_STATUS_SUCCESS)) return;
+        t.assert_equal(ggml_nbytes(attention), ggml_backend_buft_get_alloc_size(buft, attention));
+        t.assert_equal(stock_prefill, ggml_backend_buft_get_alloc_size(buft, prefill_attention));
+        managed_ops.supports = [](void *, const ggml_tensor *) { return false; };
+        ggml_backend_buffer_ptr unsupported(ggml_backend_execution_buffer_new(dev, backing.get(), managed_ops, &probe));
+        if (!t.assert_true(bool(unsupported))) return;
+        k->buffer = v->buffer = unsupported.get();
+        t.assert_equal(stock, ggml_backend_buft_get_alloc_size(buft, attention));
+        k->buffer = v->buffer = nullptr;
+        unsupported.reset(); managed.reset();
+        t.assert_equal(2, probe.frees);
+    });
     return t.summary();
 }

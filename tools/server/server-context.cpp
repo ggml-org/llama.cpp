@@ -1122,10 +1122,20 @@ private:
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         const bool has_spec = has_draft || spec_mtp;
-        if ((params.kv_stream_pool_bytes || params.shared_device_memory_bytes) && (has_mmproj || params.fit_params ||
-                std::any_of(params.speculative.types.begin(),params.speculative.types.end(),
-                    [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE; }))) {
-            SRV_ERR("%s", "KV streaming shared memory currently requires text-only non-speculative execution and --fit off\n");
+        const bool streaming = params.kv_stream_pool_bytes || params.shared_device_memory_bytes;
+        const bool streamed_mtp = params.kv_stream_auxiliary_layers == 1;
+        if (streaming && (has_mmproj || params.fit_params ||
+                (has_spec && !streamed_mtp))) {
+            SRV_ERR("%s", "KV streaming shared memory requires text-only execution, --fit off, and explicit MTP opt-in for speculation\n");
+            return false;
+        }
+        if (streamed_mtp && (!streaming || !spec_mtp || has_draft ||
+                std::any_of(params.speculative.types.begin(), params.speculative.types.end(),
+                    [](auto type) { return type != COMMON_SPECULATIVE_TYPE_NONE &&
+                        type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP; }) || params.n_parallel != 1 ||
+                params.speculative.draft.n_max < 1 || params.speculative.draft.n_max > 4 ||
+                params.cache_type_k != GGML_TYPE_Q8_0 || params.cache_type_v != GGML_TYPE_Q4_0)) {
+            SRV_ERR("%s", "adaptive MTP currently requires serial embedded Qwen MTP, 1-4 draft tokens, Q8_0 K/Q4_0 V, and an explicit KV stream pool or arena\n");
             return false;
         }
 
@@ -4458,6 +4468,8 @@ private:
                         const auto & ckpt = slot.spec_ckpt;
 
                         SLT_DBG(slot, "restoring speculative checkpoint (pos_min = %d, pos_max = %d, size = %zu)\n", ckpt.pos_min, ckpt.pos_max, ckpt.size());
+
+                        GGML_ASSERT(llama_kv_stream_mtp_release(slot.ctx_tgt));
 
                         GGML_ASSERT(ckpt.load_tgt(slot.ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY));
 

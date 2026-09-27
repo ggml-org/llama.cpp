@@ -671,6 +671,9 @@ int main(int argc, char ** argv) {
         if (!t.assert_true(f.resident->begin_sequence({1, 2, 3}, 257, 1, SIZE_MAX, {1, true}, guard))) return;
         guard.reset();
         t.assert_equal(size_t(2), f.resident->sequence_stats().pending_pages);
+        t.assert_true(f.resident->sequence_stats().max_layer_distance >= 1);
+        t.assert_true(f.resident->sequence_stats().peak_pages <=
+            placement.ring_slots - owner->ring_slots_used());
         for (uint32_t layer : {1u, 2u, 3u}) {
             if (!t.assert_true(f.resident->compute_streamed(layer, input.q, input.mask, input.output,
                     257, 1.0f/16, workspace.lease.get(), true, 1))) return;

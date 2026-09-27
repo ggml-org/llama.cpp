@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-kv-stream-model.h"
 #include <stdexcept>
 
 //
@@ -146,6 +147,13 @@ void llama_memory_hybrid::clear(bool data) {
 
 bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     if (!mem_attn->kv_stream_can_remove(seq_id,p0,p1)) return false;
+    // A full serial-request reset invalidates the retained MTP layer as well.
+    // Retire its ring guard before recurrent state is mutated, so a failed
+    // release leaves both target memories unchanged.
+    if (auto * stream = mem_attn->get_kv_stream()) {
+        if (p0 <= 0 && (p1 < 0 || p1 >= int64_t(stream->tokens())) &&
+                stream->has_mtp_layer() && !stream->release_mtp_layer()) return false;
+    }
     // Try removing from the recurrent cache first since it may fail. If it does
     // fail, the cache will not have been mutated.
     if (!mem_recr->seq_rm(seq_id, p0, p1)) {

@@ -297,6 +297,49 @@ llama_kv_stream_policy_result llama_kv_stream_policy_step(
     return {};
 }
 
+llama_kv_stream_policy_result llama_kv_stream_policy_reserve_layer(
+        const llama_kv_stream_policy_config & c, const llama_kv_stream_policy_state & previous,
+        size_t placement_tokens, size_t reserved_tokens, uint32_t layer,
+        llama_kv_stream_policy_decision & output) {
+    if (!placement_tokens || reserved_tokens < placement_tokens || layer >= c.layers)
+        return {status::invalid_observation, {}};
+    llama_kv_stream_policy_layout layout;
+    auto result = llama_kv_stream_policy_layout_make(c, previous, placement_tokens, layout);
+    if (result.status != status::success) return result;
+    const auto & b = previous.budget;
+    const uint64_t active = ceil_div(reserved_tokens, uint64_t(c.shape.page_tokens));
+    const uint64_t capacity = layout.layers[layer].capacity_pages;
+    const uint64_t streamed = active > capacity ? active - capacity : 0;
+    if (active > b.pages) return {status::invalid_budget, {}};
+    llama_kv_stream_policy_decision next;
+    try {
+        next.next = previous;
+    } catch (const std::bad_alloc &) {
+        return {status::allocation_failed, {}};
+    }
+    if (double(previous.ring_slots) >= c.overlap_ratio * double(streamed) ||
+            (c.fixed_ring && previous.ring_slots >= streamed)) {
+        output = std::move(next);
+        return {};
+    }
+    if (c.fixed_ring) return {status::invalid_budget, {}};
+    auto & state = next.next;
+    next.target_resident_pages = overlap_target(b, uint32_t(active), c.overlap_ratio);
+    state.resident_pages_per_layer = std::min(previous.resident_pages_per_layer, next.target_resident_pages);
+    state.ring_slots = b.pages - state.resident_pages_per_layer * b.layers;
+    // Concentrated placement can leave this layer with no resident capacity.
+    state.decode_active_pages = 0;
+    state.spread_streaming = false;
+    const uint64_t suffix = active > state.resident_pages_per_layer ?
+        active - state.resident_pages_per_layer : 0;
+    if (state.ring_slots < suffix) return {status::invalid_budget, {}};
+    next.partition_changed = state.ring_slots != previous.ring_slots;
+    next.layout_changed = next.partition_changed || !same_capacity(profile(previous), profile(state));
+    if (next.layout_changed) state.starved = state.overprovisioned = state.evaluations_since_repartition = 0;
+    output = std::move(next);
+    return {};
+}
+
 static llama_kv_stream_policy_result resize_plan(
         const llama_kv_stream_policy_config & current, size_t active_tokens,
         bool decode, size_t pool_bytes, bool growing, llama_kv_stream_policy_rebind & output) {

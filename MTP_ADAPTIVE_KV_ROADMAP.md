@@ -2,7 +2,7 @@
 
 ## Background
 
-This branch already provides a backend-neutral device-memory infrastructure, adaptive KV streaming for a single serial target context, phase-aware sharing between prefill compute workspace and decode KV storage, asynchronous K/V publication, cross-token prefetch, and sparse deadline feedback.
+This branch already provides a backend-neutral device-memory infrastructure, adaptive KV streaming for a single serial target context, phase-aware sharing between prefill compute workspace and decode KV storage, asynchronous target and attached-MTP K/V publication, cross-token prefetch, and sparse deadline feedback.
 
 The next objective is to reintroduce Qwen3.8 Multi-Token Prediction (MTP) without giving up those properties. The target use case is a 16 GiB GPU running a Qwen3.8-27B target model with a 262144-token context. The target KV cache uses Q8_0 keys and Q4_0 values. The initial supported configuration remains one serial request, one accelerator, Flash Attention, and no parallel slots.
 
@@ -169,25 +169,121 @@ Qwen3.8 MTP context on the same loaded model instance, with compatible device,
 context length, K/V types, and attention geometry, retains the target's separate
 logical cache identity. Unsupported pairs fail before graph execution. The real
 Unsloth UD-IQ4_XS GGUF, loaded once with its embedded MTP head, passes target/draft
-attachment and mismatch/legacy controls. This attachment is metadata-only: MTP still
-allocates and executes against stock KV, while the shared authoritative MTP cache
-remains at frontier zero.
+attachment and mismatch/legacy controls. At that checkpoint, attachment was
+metadata-only: MTP still allocated and executed against stock KV, while the
+shared authoritative MTP cache remained at frontier zero. The host-backed
+checkpoint below supersedes that allocation path.
 
 Stage 10.5 host-publication checkpoint: the attached MTP graph exposes the final
 post-transform K/V rows and publishes them through the common bounded writer to
 the separate authoritative host cache. A real UD-IQ4_XS test covers a 256-token
 prefill, one-token page-crossing append, byte-exact K/V parity with stock MTP storage, and
 suffix removal/republication with generation change and prefix preservation.
-The device frontier remains zero. This first live bridge synchronizes the producer
-and uses a separate bounded writer scratch; neither stock MTP device KV nor its
-compute workspace is reclaimed yet.
+The device frontier remains zero. At that checkpoint, the first live bridge
+synchronized the producer and used separate bounded writer scratch; stock MTP
+device KV and compute workspace had not yet been reclaimed.
 
-Still required for live catch-up: pass the retained-layer guard from the phase
-owner into target sessions, use resident/ring spans for MTP TG1-TG4 attention,
-coordinate immediate acceptance/cancellation invalidation, eliminate duplicate
-stock MTP KV, and share/overlap publication workspaces safely. Standalone sidecars
-loaded as a different model instance need an explicit semantic-compatibility proof
-before the attachment gate can be relaxed.
+Stage 10.5 live catch-up checkpoint: a populated complete-MTP-layer lease
+retains the target pool and guards occupied ring slots. Target prefetch honors
+that guard; a conflicting adaptive repartition declines admission and succeeds
+after release/replan. New MTP K/V rows use tail-only H2D, while TG1-TG4 plans
+reuse one reservation. The MTP flash-attention graph consumes those spans through
+a buffer-local backend hook and borrows the target's phase-exclusive attention
+workspace. CUDA's ratio-six GQA path now uses the same padded eight-column MMA
+tile as stock. On the real UD-IQ4_XS model at 257-266 tokens, independent stock
+MTP logits match the attached path exactly for TG1, TG2, TG3, and TG4.
+
+Stage 10.6–10.7 live checkpoint: a bounded four-token future reservation
+allows sequential MTP drafts beyond the target frontier. A rejected suffix
+increments the logical generation, rebases the unchanged resident/ring prefix
+without H2D, invalidates old span plans, and transfers only newly rewritten
+tail rows. Real UD-IQ4_XS tests cover TG1–TG4 catch-up, two sequential draft
+steps, all 0–4 accepted-prefix lengths, interior-hole rejection, and stock
+MTP logit parity. Draft-context clear releases the guard; sequence checkpoint
+restore reconstructs authoritative host KV from stock K/V in bounded
+256-token gathers and checks every restored byte.
+
+Stage 10.8 guarded-prefetch checkpoint: the existing backend-neutral FIFO
+prefetch planner skips MTP-held ring slots and starts stable target-layer copies
+ahead in genuinely spare slots. CPU planner and CUDA resident/session tests
+check lookahead distance, ring bounds, protected sentinel bytes, complete-ring
+failure before submission, and safe release/replan. Phase transitions retire
+the guard; ordinary target verification retains it until a new KV page or
+nonpoisoning adaptive-policy rejection requires release.
+
+Stage 11 early integration checkpoint: `--kv-stream-auxiliary-layers 1` is a
+strict, default-off serial/embedded-MTP Q8_0-K/Q4_0-V path. The draft inherits
+the target quantization but not a second KV pool/arena. Until live host-spilled
+recurrent rollback is attached, it uses the existing full-checkpoint path.
+Real server tests passed two serial prompt-cache requests and 96 generated
+tokens across a streamed page boundary and a target checkpoint rollback
+(65/75 draft tokens accepted in that one synthetic 3K run). A matched
+3005-token stock-vs-streamed TG4 control had zero maximum logit error.
+
+The remaining Milestone 10/11 sign-off work is tracked in the four-step
+completion table below. The observed 3K server rate is not a native-context
+performance claim. Standalone sidecars loaded as a different model instance
+still need explicit semantic-compatibility proof.
+
+Native-context fit audit (CUDA, UVM disabled): at `--ctx-size 262144` and a
+2,000 MiB physical target arena, draft construction failed allocating its
+416 MiB stock MTP KV. At 1,800 MiB, that KV allocated but the separate MTP
+prefill compute buffer then requested 1,196.27 MiB and OOMed. The target
+prefill arena itself is approximately 1,192.27 MiB graph, 416 MiB attention,
+and 191.70 MiB KV. Thus selectively parking MTP KV alone cannot solve startup.
+The subsequent live hookup must alias the two serial compute grants within one
+phase owner: target/MTP prefill need the maximum of their approximately
+1.2 GiB graph workspaces, while target/MTP decode need only their much
+smaller decode maxima. In this historical audit, the 416 MiB stock MTP KV
+was still a separate persistent cost. This was a design requirement, not a
+qualified native-context configuration.
+
+Native-context serial-lifecycle checkpoint (CUDA, UVM disabled): the target
+and draft now borrow one 1,800 MiB phase parent at 262,144 context tokens.
+The native regression covers target prefill, draft prefill, target decode
+growth, draft catch-up, and full sequence removal with a retained MTP ring
+guard. An isolated server then completed two different serial requests with
+`cache_prompt:true` and 64/96 generated tokens; the second request safely
+returned through prefill and decode after the first request's reset. This is
+not yet a long-context throughput or sustained-lifecycle qualification.
+
+Host-backed MTP KV checkpoint (CUDA, UVM disabled): attached draft K/V now
+bind to the target-owned authoritative host cache, rather than allocating a
+separate 416 MiB device KV at 262,144 tokens. Buffer-local write and attention
+execution uses bounded target-owned writer/attention workspaces. The 262K
+target/draft context test passes, and the real UD-IQ4_XS TG1-TG4, draft,
+truncation, and stock-logit comparisons pass. The later nonblocking-publication
+checkpoint removes a host-side whole-backend wait but keeps D2H, device staging,
+and attention ordered on one backend stream; sustained lifecycle and long-context
+throughput qualification remain separate work.
+
+## Milestone 10/11 completion track (2026-09-24)
+
+The four-step completion track is ordered by dependency. Step 1 removes the *separate persistent* MTP device KV allocation; it does not claim that total VRAM falls by exactly 416 MiB, because retained MTP spans and bounded execution scratch still use the shared physical budget.
+
+| Step | Status | Implementation boundary | Required evidence |
+| --- | --- | --- | --- |
+| 1. Remove stock MTP device KV | **Complete; ready for review** | Bind attached draft K/V to its authoritative host cache and use buffer-local execution hooks with target-owned writer/attention workspace. Preserve the ordinary unattached draft path. | At 262K, attached K/V are host-backed and no second 416 MiB device KV is allocated. Real UD-IQ4_XS prefill, TG1–TG4 catch-up/drafting, truncation, and stock-logit comparisons pass; focused writer, lease, session, model, span, publication, and execution tests pass. |
+| 2. Nonblocking MTP host publication | **Implemented; ready for review** | Submit K/V publication without synchronizing the whole producer backend on every write. Retain source tensors, scratch, and cache generation until an explicit backend-neutral completion fence; advance the host frontier only after completion. | Delayed and back-to-back writes, exact host bytes, ordering, cancellation, stale-generation rejection, copy failure, and stock-logit parity. Trace confirms no per-token device-wide producer synchronization. |
+| 3. Cancellation and sustained-lifecycle qualification | **Implemented; focused qualification passed** | Make partially submitted writes, attention, lease guards, phase handoffs, rollback, checkpoint restore, and teardown recover or fail closed without stale reuse. | Pending K and K/V cancellation, injected index-read and staged-copy failures, retained-lease teardown, guarded phase-transition tests, checkpoint parity, 24 varied serial requests with prompt-cache resets, CPU ASan/LSan, CUDA memcheck, and bounded post-warmup VRAM use pass. |
+| 4. Numerical, memory, and throughput qualification | **Pending** | Sweep the supported configuration from 8K through native context with the maximum safe pool for each context, then compare MTP against target-only adaptive streaming and stock controls. | At least 256 decoded tokens per point; report prefill/decode throughput, MTP acceptance, pool/residency, H2D traffic, peak VRAM, numerical drift, and long-context failure/timeout behavior. |
+
+Step 3's focused target/MTP lifecycle qualification passes. The 24-request UD-IQ4_XS test keeps free VRAM at 1579 MiB after warmup and reports zero maximum stock-logit error. The complete CUDA model, MTP lease, publication, session, and prefetch suites pass; six CPU ASan/LSan suites and focused CUDA memcheck also pass. A stale lease test was updated because full reset now releases a retained MTP lease. Fault injection for every attention-kernel and live server-disconnect boundary is still required by Stage 11.4; these focused tests do not establish production-wide cancellation safety.
+Step 4 remains pending. Broader models, quantizations, backends, and separately loaded MTP sidecars remain outside the initial production gate.
+MTP host publication now queues K/V conversion and D2H copies on the producer stream,
+retains source/scratch ownership until backend-neutral completion events retire, and
+advances the host frontier only after those events complete. For streamed decode,
+encoded tiles are also staged into protected device spans before attention; the
+retained lease adopts the new generation only after host publication. These
+operations still share one ordered backend stream, so the trace does not show
+copy/attention overlap. CPU/CUDA lease suites cover provisional bytes, delayed frontier, back-to-back append,
+cancellation, stale generation, and injected first/second staged-copy failure.
+The real UD-IQ4_XS test passes TG1–TG4 and successive draft appends with zero
+reported stock-logit error; the 262K attached-MTP memory probe also passes.
+A CUDA Nsight API trace of that real-model test recorded no
+`cudaDeviceSynchronize` calls. It did record stream synchronizations elsewhere
+in the full test, so this result does not establish zero stream-level stalls or
+a throughput benefit; those remain part of step 4.
 
 ## Milestone 11: end-to-end speculative server integration
 
@@ -412,3 +508,61 @@ The experimental `LLAMA_RS_HOST_SPILL=1` path is isolated from the default serve
 - Stage 9.5, infrastructure scope: two real CPU schedulers and two CUDA schedulers alternately compute on one physical arena, with one active lease and equal workspace addresses. The CUDA test retires native captures before release and proves that an independent staged D2H copy remains valid across handoff. The actual target/MTP contexts are not yet constructed under this owner; that bridge depends on MTP KV integration and remains part of Milestones 10-11.
 
 The existing KV-streaming speculative gate remains in place. Do not claim MTP-on-adaptive-KV inference or a long-context token-rate speedup from these tests. Milestone 9's generic workspace contract is validated; real-context construction and MTP KV ownership remain for Milestones 10-11. Before enabling the path by default, benchmark verification and draft throughput at several context lengths, qualify cancellation under real server requests, and add adapters for other backends.
+
+## MTP complete-layer prefill admission fix (2026-09-26)
+
+Root cause: uniform strict-prefill placement does not enter the decode overlap-sizing path and has no decode deadline feedback. The startup ring can therefore stay much smaller than one MTP suffix. Complete-layer acquisition then rejects the retained lease, and the former stock-attention fallback has an incompatible bounded output allocation for narrow managed attention.
+
+The backend-neutral policy now reserves one requested physical layer through its future-token frontier. If the current placement cannot provide the configured overlap headroom, it demotes resident pages within the existing pool and uses a uniform layout. The session drains old copies and captures before installing that layout; fixed or physically impossible budgets reject admission without changing the policy or cache frontiers. MTP acquisition invokes this admission before building or populating its retained TG1-TG4 plans. Admission failure returns an explicit error instead of silently using stock attention.
+
+Wide strict prefill gathering remains unchanged. This fix concerns retained narrow catch-up and drafting; it does not alter attention arithmetic, add a new device allocation, or optimize lease renewal and recurrent rollback.
+
+Validation:
+
+- Pure policy tests cover the original 250-resident/12-ring, 17-layer failure, idempotence, future-tail page crossings, concentrated placement, fixed-ring rejection, impossible budgets, and exhaustive small-pool page conservation. Release and ASan/leak-check runs pass 32 cases and 144,897 assertions.
+- The grown-ring CUDA regression checks the unchanged pool allocation and buffer identity, TG1-TG4 covering plans, release/reacquisition, and stock attention comparisons. TG1/TG2 maximum absolute errors are 3.72529e-9 and 1.86265e-9; TG3/TG4 are exact. CUDA memcheck reports zero errors.
+- All CUDA model tests pass (11 cases / 388 assertions), including impossible-budget rejection with unchanged layout and frontiers. All session tests pass (15 cases / 669 assertions). The pool-growth session test now waits before reading asynchronous device output and compares against the host oracle only after the complete append publishes. It additionally checks stock CUDA outputs at 1e-5 tolerance; all four grown-pool stock comparisons are exact.
+- Real UD-IQ4_XS requests at 96K with 1, 2, and 3 draft tokens complete 32-token continuations without the stock fallback. Prefill admission demotes resident pages from 250 to 241 and grows the ring from 12 to 165 slots inside the same 2,360 MiB parent.
+- The exact original 98,044-token prompt also completes a 258-token continuation with one draft token. At the former failure boundary, target=98044 and reserved=98045, the prefill ring grows from 12 to 165 slots without stock fallback.
+- A 192K check with the same arena reaches a separate CUDA graph-instantiation OOM before long prefill. With a 2,240 MiB arena, the 192K three-draft request completes 32 generated tokens; prefill admission changes resident pages 147->105 and ring slots 20->734. This is a correctness check, not a performance comparison.
+
+Performance work remains deferred: capacity-based MTP lease reuse, rollback traffic, and host-fence reduction are separate from this correctness fix.
+
+## MTP correctness investigation (2026-09-26)
+
+The 8K IQ4_XS sweep sends the same 7,932-token article prefix and greedy sampling settings to every draft length. Each response contains exactly 256 token IDs, and their detokenized text matches the SSE content. Repeated no-MTP requests are identical. The original adaptive path first differs at generated token 17 for one draft, 108 for two drafts, and 30 for three drafts.
+
+Two comparisons must remain separate:
+
+1. Stock vector TG1/TG2 versus stock MMA TG3/TG4 is not a bit-equivalence contract. Quantized vector attention quantizes Q to Q8_1, while MMA uses FP16 inputs and different reductions. Recurrent snapshot versus full-checkpoint/replay modes also change execution and batching.
+2. Adaptive versus stock at the same query width, token prefix, and rollback mode should not introduce the additional TG2 error found here.
+
+The teacher-forced target test uses the real article, Q8_0 K/Q4_0 V, 8K capacity, 256/256 batches, separate stock/adaptive contexts, and typed recurrent snapshots. The GGUF has 24 query heads and four KV heads, not the 64/8 geometry used in earlier qualification fixtures. It tests identical TG2 inputs plus checkpoint restore and replay. Prefill is exact; the guarded span/resume path introduces a few-ULP attention-output difference that propagates into recurrent state and logits. In this fixed-input reproduction, the maximum later logit difference reaches 1.70069 and the recurrent-state difference reaches 2.26504.
+
+CUDA graph disabling, explicit stream synchronization, and CUDA_LAUNCH_BLOCKING do not remove the error. Nsight records identical native/resumed vector grids (1,17,24) and blocks (32,4,1), ruling out different split counts.
+
+The span executor currently selects the tail-safe TG2 resumable specialization even for completely page-aligned regions. Selecting only the existing aligned specialization inside that same executor restores exact stock logits and recurrent state in the reproduction. Buffers, masks, launch grids, checkpoint handling, and asynchronous behavior are unchanged. This is the actionable dispatch gap; the exact compiler-level rounding instruction has not been isolated.
+
+Additional controls show that full checkpoint rollback alone does not reproduce the one-draft error in stock. With native target attention and matching full-checkpoint mode, adaptive and stock two/three-draft controls produce identical 64-token continuations, although they differ from no-MTP at tokens 40/30. Those higher-draft differences must not be attributed solely to KV streaming.
+
+The strict opt-in regression reproduced 14 failures before the correction and now passes with exact stock logits and recurrent state:
+
+```sh
+build-device-memory-infra-cuda-release/bin/test-kv-stream-context --model MODEL.gguf --mtp-target-drift PREFILL.txt
+```
+
+Correction applied: the vector span executor selects the existing aligned resumable specialization only when the complete extent and every region start/length are multiples of 256 tokens. Partial regions retain guarded handling. The policy, allocation budget, transfer scheduling, and backend interface are unchanged.
+
+Validation: CUDA span tests pass 13 cases / 549 assertions; resume 9 / 311; model 11 / 388; session 15 / 669; the real-model regression 2 / 1,334. New 24/4-head coverage checks exact contiguous, resident-plus-streamed, and physically wrapped TG2 regions, plus guarded partial tails and irregular cuts. Focused GQA6 CUDA memcheck passes 2 cases / 73 assertions with zero errors.
+
+An 8K matched-mode comparison uses the same 7,932-token prompt, 256 generated tokens, 256/256 batches, no UVM, and Q8_0/Q4_0 for target and draft KV. Stock is forced to n_rs_seq=0 for this diagnostic comparison only; the temporary override is removed afterward. Complete token arrays and timings are retained in benchmarks/results/tg2-fixed-matched-stock-20260926/results.jsonl.
+
+| Max draft length | Adaptive decode tok/s | Stock full-checkpoint decode tok/s | Output / acceptance |
+| ---: | ---: | ---: | --- |
+| 1 | 43.05 | 45.68 | 256/256 tokens identical; 101/127 accepted |
+| 2 | 48.01 | 50.18 | 256/256 tokens identical; 129/180 accepted |
+| 3 | 60.51 | 62.31 | 256/256 tokens identical; 160/210 accepted |
+
+These are single-run correctness comparisons, not a full performance sweep. Adaptive prefill is about 1,596-1,598 tok/s versus 1,692-1,696 for stock, consistent with the retained strict-prefill gathering path. The no-MTP adaptive baseline measures 46.62 decode tok/s. Different outputs across draft lengths remain possible in stock's full-checkpoint mode; matching the execution mode is required before classifying them as streaming regressions.
+
+A post-fix 96K real-article streaming smoke test with three drafts completes a 32-token continuation without OOM or admission failure. This is a lifecycle/capacity check, not a long-context stock-equivalence comparison. The test helper now initializes every query head, including the actual 24-head fixture. Temporary stock-mode instrumentation is removed; no production configuration or container state is changed.

@@ -13,6 +13,7 @@ class llama_batch_allocr;
 
 class llama_io_write_i;
 class llama_io_read_i;
+class llama_kv_stream_logical_cache;
 
 struct llama_memory_params {
     // kv cache
@@ -25,6 +26,7 @@ struct llama_memory_params {
     llama_context_type ctx_type;
 
     llama_memory_t mem_other;
+    llama_kv_stream_logical_cache * mtp_host_cache = nullptr;
     ggml_backend_t kv_stream_backend = nullptr;
     size_t kv_stream_pool_bytes = 0;
     size_t shared_device_memory_bytes = 0;

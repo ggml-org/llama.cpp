@@ -10,6 +10,8 @@
 #include <algorithm>
 
 using model_arena_ptr = std::unique_ptr<ggml_backend_memory_arena,decltype(&ggml_backend_memory_arena_free)>;
+using mtp_lease_ptr = std::unique_ptr<llama_kv_stream_complete_layer_lease,
+    decltype(&llama_kv_stream_complete_layer_lease_free)>;
 using model_lease_ptr = std::unique_ptr<ggml_backend_memory_lease,decltype(&ggml_backend_memory_lease_free)>;
 static std::atomic<uint64_t> model_cache_id{1};
 
@@ -19,9 +21,14 @@ struct llama_kv_stream_model::implementation {
     std::shared_ptr<llama_kv_stream_content> content;
     llama_kv_stream_policy_config physical_policy;
     std::shared_ptr<llama_kv_stream_logical_cache> auxiliary_cache;
+    std::unique_ptr<llama_kv_stream_layer_lease_owner> mtp_owner;
+    std::vector<mtp_lease_ptr> mtp_plans;
+    std::shared_ptr<const llama_kv_stream_ring_guard> mtp_guard;
     model_arena_ptr arena{nullptr,ggml_backend_memory_arena_free};
+    size_t mtp_reserved_tokens = 0;
     model_arena_ptr attention_arena{nullptr,ggml_backend_memory_arena_free};
     size_t decode_bytes = 0;
+    size_t mma_bytes = 0;
     std::array<model_lease_ptr,3> leases{{{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free},{nullptr,ggml_backend_memory_lease_free}}};
     std::unique_ptr<llama_kv_stream_session> session;
     const ggml_tensor * pending_k = nullptr;
@@ -36,7 +43,14 @@ struct llama_kv_stream_model::implementation {
     llama_memory_resource_id pool_resource = 0, writer_resource = 0, attention_resource = 0;
     llama_memory_stage_id prefill_stage = 0, decode_stage = 0;
 
-    ~implementation() { abort(); }
+    ~implementation() {
+        abort();
+        // The target session drops its ring snapshot before the physical reservation.
+        session.reset();
+        mtp_guard.reset();
+        mtp_plans.clear();
+        mtp_owner.reset();
+    }
 
     std::unique_ptr<llama_kv_stream_session> create_session(
             const std::array<model_lease_ptr,3> & grants,
@@ -56,6 +70,7 @@ struct llama_kv_stream_model::implementation {
             (policy.pool_bytes > config.pool_bytes ||
              ggml_backend_buffer_get_size(attention_buffer) == decode_bytes);
         session_config.cross_token_prefetch = config.cross_token_prefetch && config.resume_decode;
+        session_config.mma_workspace_bytes = mma_bytes;
         session_config.pool_resource = pool_id;
         session_config.writer_resource = writer_id;
         session_config.attention_resource = attention_id;
@@ -193,32 +208,63 @@ struct llama_kv_stream_model::implementation {
         if (std::find(checked_indices.begin(),checked_indices.end(),tensor->data) != checked_indices.end()) return true;
         if (ggml_nelements(tensor) != queries || !tensor->data) return false;
         indices.resize(queries); ggml_backend_tensor_get(tensor,indices.data(),0,queries*sizeof(int64_t));
-        for (size_t i = 0; i < indices.size(); ++i) if (indices[i] != int64_t(session->tokens()+i)) return false;
+        for (size_t i = 0; i < indices.size(); ++i) if (indices[i] != int64_t(session->tokens()+i)) {
+            LLAMA_LOG_WARN("%s: target KV index mismatch at row %zu: actual=%lld expected=%zu\n",
+                __func__, i, (long long) indices[i], session->tokens()+i);
+            return false;
+        }
         checked_indices.push_back(tensor->data); return true;
     }
     ggml_status compute(ggml_backend_t backend, ggml_tensor * op) {
-        if (backend != config.backend) return GGML_STATUS_FAILED;
+        if (backend != config.backend) {
+            LLAMA_LOG_WARN("%s: target execution backend mismatch op=%s actual=%p expected=%p\n",
+                __func__, ggml_op_name(op->op), (void *) backend, (void *) config.backend);
+            return GGML_STATUS_FAILED;
+        }
         if (op->op != GGML_OP_SET_ROWS && op->op != GGML_OP_FLASH_ATTN_EXT) return GGML_STATUS_SUCCESS;
-        if (!session || !session->active()) return GGML_STATUS_FAILED;
+        if (!session || !session->active()) {
+            LLAMA_LOG_WARN("%s: target execution without active session: op=%s\n", __func__, ggml_op_name(op->op));
+            return GGML_STATUS_FAILED;
+        }
         if (op->op == GGML_OP_SET_ROWS) {
             uint32_t layer; bool value;
-            if (!plane(op->src[2],layer,value) || !validate_indices(op->src[1])) return GGML_STATUS_FAILED;
+            if (!plane(op->src[2],layer,value) || !validate_indices(op->src[1])) {
+                LLAMA_LOG_WARN("%s: target SET_ROWS rejected source plane or indices, rows=%u\n",
+                    __func__, queries);
+                return GGML_STATUS_FAILED;
+            }
             if (!value) {
-                if (pending_k) return GGML_STATUS_FAILED;
+                if (pending_k) {
+                    LLAMA_LOG_WARN("%s: target K producer already pending at layer %u\n", __func__, pending_layer);
+                    return GGML_STATUS_FAILED;
+                }
                 pending_k = op->src[0]; pending_layer = layer;
                 pending_owner.reset(ggml_backend_buffer_retain(pending_k->view_src ? pending_k->view_src->buffer : pending_k->buffer));
                 return GGML_STATUS_SUCCESS;
             }
             // The extra dependency keeps K's allocator slot live until this V operation completes.
-            if (!pending_k || layer != pending_layer || op->src[3] != pending_k) return GGML_STATUS_FAILED;
+            if (!pending_k || layer != pending_layer || op->src[3] != pending_k) {
+                LLAMA_LOG_WARN("%s: target V pair mismatch layer=%u pending=%u hasK=%d dep=%d\n",
+                    __func__, layer, pending_layer, int(pending_k != nullptr), int(op->src[3] == pending_k));
+                return GGML_STATUS_FAILED;
+            }
             const bool ok = session->produce(layer,pending_k,op->src[0]);
+            if (!ok) LLAMA_LOG_WARN("%s: target KV publication failed at layer %u, rows %u\n",
+                __func__, layer, queries);
             pending_k = nullptr; pending_owner.reset();
             return ok ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
         }
         uint32_t layer; bool value;
-        if (pending_k || !plane(op->src[1],layer,value)) return GGML_STATUS_FAILED;
+        if (pending_k || !plane(op->src[1],layer,value)) {
+            LLAMA_LOG_WARN("%s: target attention rejected plane or pending K: pending=%d rows=%u\n",
+                __func__, int(pending_k != nullptr), queries);
+            return GGML_STATUS_FAILED;
+        }
         float scale; std::memcpy(&scale,op->op_params,sizeof(scale));
-        return session->attention(layer,op->src[0],op->src[3],op,scale) ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
+        const bool ok = session->attention(layer,op->src[0],op->src[3],op,scale);
+        if (!ok) LLAMA_LOG_WARN("%s: target attention failed at layer %u, rows %u\n",
+            __func__, layer, queries);
+        return ok ? GGML_STATUS_SUCCESS : GGML_STATUS_FAILED;
     }
     void abort() {
         if (session) session->abort();
@@ -318,6 +364,7 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             size_t mma_bytes=0;
             if (get()->mma_workspace(config.backend,config.host.shape.type_k,config.host.shape.type_v,
                     config.query_heads,config.host.shape.heads,s->host->layout().tokens,3,mma_bytes)) {
+                s->mma_bytes = mma_bytes;
                 s->decode_bytes=std::max(s->decode_bytes,mma_bytes);
             }
         }
@@ -327,7 +374,15 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
             [](void * p,ggml_backend_t b,ggml_tensor * t) {
                 auto & s = **static_cast<std::shared_ptr<implementation> *>(p);
                 try { const auto result = s.compute(b,t); if (result != GGML_STATUS_SUCCESS) s.abort(); return result; }
-                catch (...) { s.abort(); return GGML_STATUS_FAILED; }
+                catch (const std::exception & error) {
+                    LLAMA_LOG_ERROR("%s: target managed op %s threw: %s\n", __func__,
+                        ggml_op_name(t->op), error.what());
+                    s.abort(); return GGML_STATUS_FAILED;
+                } catch (...) {
+                    LLAMA_LOG_ERROR("%s: target managed op %s threw unknown exception\n",
+                        __func__, ggml_op_name(t->op));
+                    s.abort(); return GGML_STATUS_FAILED;
+                }
             },
             [](void * p) { auto & s = **static_cast<std::shared_ptr<implementation> *>(p); return !s.session || !s.session->active(); },
             [](void * p) { (*static_cast<std::shared_ptr<implementation> *>(p))->modified(); },
@@ -351,19 +406,233 @@ std::shared_ptr<llama_kv_stream_logical_cache> llama_kv_stream_model::auxiliary_
 llama_kv_stream_binding_view llama_kv_stream_model::binding_view() const noexcept {
     return impl->session ? impl->session->binding_view() : llama_kv_stream_binding_view{};
 }
+bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
+    auto & s = *impl;
+    if (!s.session || s.external_mutation || s.mtp_owner || s.mtp_guard ||
+            !s.mtp_plans.empty() || !s.auxiliary_cache || !complete()) return false;
+    const auto mtp = s.auxiliary_cache;
+    const size_t target_tokens = s.session->tokens();
+    const size_t mtp_tokens = mtp->tokens();
+    if (mtp_tokens < 4 || mtp_tokens > target_tokens) return false;
+    if (target_tokens > s.config.host.context_tokens || future_tokens > 4 ||
+            future_tokens > s.config.host.context_tokens - target_tokens) return false;
+    const size_t reserved_tokens = target_tokens + future_tokens;
+    const uint32_t physical_layer = s.config.host.layers;
+    if (!s.session->reserve_complete_layer(physical_layer, reserved_tokens)) return false;
+    const auto view = s.session->binding_view();
+    if (!view.lease || !view.buffer || view.config.layers <= s.config.host.layers ||
+            view.config.caches.size() != 2 ||
+            view.config.caches[0].id != s.host->cache_id() ||
+            view.config.caches[0].layers != s.config.host.layers ||
+            view.config.caches[1].id != mtp->identity().id ||
+            view.config.caches[1].layers != 1) return false;
+
+    const uint64_t revision = s.session->layout_revision();
+    const uint64_t generation = mtp->identity().generation;
+    auto owner = llama_kv_stream_layer_lease_owner::create(view.lease,
+        {view.config, s.session->policy(), reserved_tokens, revision, generation, target_tokens});
+    if (!owner) {
+        LLAMA_LOG_WARN("%s: MTP physical layout rejected target=%zu host=%zu reserved=%zu resident=%u ring=%u revision=%llu\n",
+            __func__, target_tokens, mtp_tokens, reserved_tokens,
+            s.session->policy().resident_pages_per_layer, s.session->policy().ring_slots,
+            (unsigned long long) revision);
+        return false;
+    }
+    std::vector<mtp_lease_ptr> plans;
+    plans.reserve(4);
+    for (uint32_t width = 1; width <= 4; ++width) {
+        const llama_kv_stream_complete_layer_request request{
+            physical_layer, width, revision, generation, mtp->identity().id, mtp_tokens};
+        auto * raw = width == 1 ?
+            owner->acquire_populated(s.config.backend, request, *mtp) :
+            owner->acquire(request);
+        if (!raw) {
+            const auto frontier = mtp->frontiers();
+            LLAMA_LOG_WARN("%s: MTP TG%u population/plan rejected target=%zu host=%zu reserved=%zu generation=%llu frontiers=%zu/%zu/%zu/%zu\n",
+                __func__, width, target_tokens, mtp_tokens, reserved_tokens,
+                (unsigned long long) generation, frontier.reserved, frontier.host, frontier.device, frontier.committed);
+            return false;
+        }
+        plans.emplace_back(raw, llama_kv_stream_complete_layer_lease_free);
+    }
+    auto guard = owner->hold_ring();
+    if (!guard || !s.session->set_ring_guard(guard)) return false;
+    s.mtp_owner = std::move(owner);
+    s.mtp_plans = std::move(plans);
+    s.mtp_guard = std::move(guard);
+    s.mtp_reserved_tokens = reserved_tokens;
+    return true;
+}
+
+bool llama_kv_stream_model::advance_mtp_layer_tail() {
+    auto & s = *impl;
+    if (!s.session || !s.mtp_owner || !s.mtp_guard || s.mtp_plans.size() != 4 ||
+            !s.auxiliary_cache || !complete() ||
+            s.session->layout_revision() != s.mtp_owner->layout_revision()) return false;
+    const auto cache = s.auxiliary_cache;
+    if (cache->tokens() < 4 || cache->tokens() > s.mtp_reserved_tokens) return false;
+    const uint64_t generation = cache->identity().generation;
+    if (s.mtp_owner->content_generation() != generation) {
+        llama_kv_stream_population_stats delta;
+        if (!s.mtp_owner->publish_tail(s.config.backend, s.mtp_plans.front().get(),
+                *cache, delta)) return false;
+    }
+    // Allocation can fail after the tail copy. Keep the old (now invalid) handles
+    // until all replacements exist; a retry here will not repeat the H2D transfer.
+    std::vector<mtp_lease_ptr> refreshed;
+    refreshed.reserve(4);
+    for (uint32_t width = 1; width <= 4; ++width) {
+        const llama_kv_stream_complete_layer_request request{
+            s.config.host.layers, width, s.session->layout_revision(),
+            generation, cache->identity().id, cache->tokens()};
+        auto * raw = s.mtp_owner->acquire(request);
+        if (!raw) return false;
+        refreshed.emplace_back(raw, llama_kv_stream_complete_layer_lease_free);
+    }
+    s.mtp_plans.swap(refreshed);
+    return true;
+}
+
+bool llama_kv_stream_model::stage_mtp_tail_async(
+        ggml_backend_t backend, size_t first, bool value,
+        const ggml_tensor * encoded, size_t row, size_t count,
+        llama_kv_stream_population_stats & staged) {
+    auto & s = *impl;
+    return backend && s.session && s.mtp_owner && s.mtp_guard &&
+        s.mtp_plans.size() == 4 && s.auxiliary_cache &&
+        s.auxiliary_cache->tokens() == first &&
+        s.session->layout_revision() == s.mtp_owner->layout_revision() &&
+        s.mtp_owner->stage_tail_async(backend, s.mtp_plans.front().get(),
+            first, value, encoded, row, count, staged);
+}
+
+llama_kv_stream_complete_layer_lease_t llama_kv_stream_model::provisional_mtp_layer(
+        uint32_t query_tokens, size_t active_tokens) {
+    auto & s = *impl;
+    if (!s.session || !s.mtp_owner || !s.mtp_guard || !s.auxiliary_cache ||
+            s.mtp_plans.size() != 4 || !query_tokens || query_tokens > 4 ||
+            active_tokens <= s.auxiliary_cache->tokens() ||
+            active_tokens > s.mtp_reserved_tokens ||
+            s.session->layout_revision() != s.mtp_owner->layout_revision()) return nullptr;
+    return s.mtp_owner->acquire({
+        s.config.host.layers, query_tokens, s.session->layout_revision(),
+        s.mtp_owner->content_generation(), s.auxiliary_cache->identity().id, active_tokens});
+}
+
+bool llama_kv_stream_model::advance_mtp_layer_tail_staged(
+        const llama_kv_stream_population_stats & staged) {
+    auto & s = *impl;
+    if (!s.session || !s.mtp_owner || !s.mtp_guard || s.mtp_plans.size() != 4 ||
+            !s.auxiliary_cache || !complete() ||
+            s.session->layout_revision() != s.mtp_owner->layout_revision()) return false;
+    const auto cache = s.auxiliary_cache;
+    const uint64_t generation = cache->identity().generation;
+    if (cache->tokens() < 4 || cache->tokens() > s.mtp_reserved_tokens ||
+            generation <= s.mtp_owner->content_generation() ||
+            !s.mtp_owner->adopt_staged_tail(s.mtp_plans.front().get(), *cache, staged))
+        return false;
+    std::vector<mtp_lease_ptr> refreshed;
+    refreshed.reserve(4);
+    for (uint32_t width = 1; width <= 4; ++width) {
+        const llama_kv_stream_complete_layer_request request{
+            s.config.host.layers, width, s.session->layout_revision(),
+            generation, cache->identity().id, cache->tokens()};
+        auto * raw = s.mtp_owner->acquire(request);
+        if (!raw) return false;
+        refreshed.emplace_back(raw, llama_kv_stream_complete_layer_lease_free);
+    }
+    s.mtp_plans.swap(refreshed);
+    return true;
+}
+
+
+bool llama_kv_stream_model::truncate_mtp_layer(size_t tokens) {
+    auto & s = *impl;
+    const auto cache = s.auxiliary_cache;
+    if (!cache || tokens > cache->tokens() || !complete()) return false;
+    if (tokens == cache->tokens()) return true;
+    if (!s.mtp_owner) return cache->truncate(tokens);
+    if (!s.session || s.session->layout_revision() != s.mtp_owner->layout_revision() ||
+            s.mtp_plans.size() != 4) return false;
+    if (!cache->truncate(tokens)) return false;
+    if (tokens < 4 || !s.mtp_owner->adopt_truncated_prefix(
+            s.mtp_plans.front().get(), *cache)) return release_mtp_layer();
+    try {
+        std::vector<mtp_lease_ptr> refreshed;
+        refreshed.reserve(4);
+        for (uint32_t width = 1; width <= 4; ++width) {
+            const llama_kv_stream_complete_layer_request request{
+                s.config.host.layers, width, s.session->layout_revision(),
+                cache->identity().generation, cache->identity().id, tokens};
+            auto * raw = s.mtp_owner->acquire(request);
+            if (!raw) return release_mtp_layer();
+            refreshed.emplace_back(raw, llama_kv_stream_complete_layer_lease_free);
+        }
+        s.mtp_plans.swap(refreshed);
+        return true;
+    } catch (const std::bad_alloc &) {
+        return release_mtp_layer();
+    }
+}
+bool llama_kv_stream_model::release_mtp_layer() {
+    auto & s = *impl;
+    if (!s.mtp_owner) return true;
+    if (!s.session || !s.session->set_ring_guard({})) return false;
+    s.mtp_guard.reset();
+    s.mtp_plans.clear();
+    s.mtp_owner.reset();
+    s.mtp_reserved_tokens = 0;
+    return true;
+}
+
+ggml_kv_stream_span_plan_t llama_kv_stream_model::mtp_layer_plan(uint32_t queries) const noexcept {
+    const auto & plans = impl->mtp_plans;
+    return queries >= 1 && queries <= plans.size() ?
+        llama_kv_stream_complete_layer_lease_plan(plans[queries - 1].get()) : nullptr;
+}
+
+size_t llama_kv_stream_model::mtp_reserved_tokens() const noexcept {
+    return impl->mtp_owner ? impl->mtp_reserved_tokens : 0;
+}
+llama_kv_stream_population_stats llama_kv_stream_model::mtp_layer_population() const noexcept {
+    return impl->mtp_plans.empty() ? llama_kv_stream_population_stats{} :
+        llama_kv_stream_complete_layer_lease_population(impl->mtp_plans.front().get());
+}
+
+bool llama_kv_stream_model::has_mtp_layer() const noexcept {
+    return impl->mtp_owner != nullptr;
+}
+
+bool llama_kv_stream_model::set_ring_guard(std::shared_ptr<const llama_kv_stream_ring_guard> guard) {
+    return impl->session && !impl->external_mutation && !impl->mtp_owner &&
+        impl->session->set_ring_guard(std::move(guard));
+}
 bool llama_kv_stream_model::begin(size_t active,uint32_t queries,bool decode) {
-    if (!impl->session || impl->external_mutation || impl->session->active() || impl->session->failed() || !queries || queries > impl->config.max_batch_rows ||
-            (decode && queries > 4) || active < impl->session->tokens() || active-impl->session->tokens() != queries ||
-            active > impl->host->config().context_tokens) return false;
-    if (!impl->resize_attention(decode ? impl->decode_bytes : impl->host->layout().bytes,decode) ||
-            !impl->session->begin(active,queries,decode)) return false;
-    impl->queries = queries; impl->pending_k = nullptr; impl->pending_owner.reset(); impl->checked_indices.clear(); return true;
+    auto & s = *impl;
+    if (!s.session || s.external_mutation || s.session->active() || s.session->failed() || !queries || queries > s.config.max_batch_rows ||
+            (decode && queries > 4) || active < s.session->tokens() || active-s.session->tokens() != queries ||
+            active > s.host->config().context_tokens) return false;
+    // A new KV page can require physical repartition; retire the MTP guard
+    // before admitting that page, never after an already submitted target copy.
+    const size_t page = s.config.host.shape.page_tokens;
+    if (s.mtp_owner && page && s.session->tokens() &&
+            (active - 1)/page != (s.session->tokens() - 1)/page && !release_mtp_layer()) return false;
+    if (!s.resize_attention(decode ? s.decode_bytes : s.host->layout().bytes,decode)) return false;
+    if (!s.session->begin(active,queries,decode)) {
+        // Feedback can also request repartition within one page. A guarded
+        // rejection that did not poison the session is safe to retry unguarded.
+        if (!s.mtp_owner || s.session->failed() || !release_mtp_layer() ||
+                !s.session->begin(active,queries,decode)) return false;
+    }
+    s.queries = queries; s.pending_k = nullptr; s.pending_owner.reset(); s.checked_indices.clear(); return true;
 }
 bool llama_kv_stream_model::complete() const noexcept { return impl->session && !impl->external_mutation && !impl->session->active() && !impl->session->failed() && !impl->pending_k; }
 void llama_kv_stream_model::abort() { impl->abort(); }
-bool llama_kv_stream_model::reset(bool clear) { return impl->reset(clear); }
-bool llama_kv_stream_model::restore(size_t tokens) { return impl->restore(tokens); }
-bool llama_kv_stream_model::truncate(size_t tokens) { return impl->truncate(tokens); }
+bool llama_kv_stream_model::reset(bool clear) {
+    return release_mtp_layer() && impl->reset(clear);
+}
+bool llama_kv_stream_model::restore(size_t tokens) { return !impl->mtp_owner && impl->restore(tokens); }
+bool llama_kv_stream_model::truncate(size_t tokens) { return !impl->mtp_owner && impl->truncate(tokens); }
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
     if (impl->shared) return device_grant_bytes();
@@ -393,7 +662,7 @@ bool llama_kv_stream_model::memory_requirements(
 
 bool llama_kv_stream_model::prepare_shared_memory() {
     auto & s = *impl;
-    if (s.shared || s.pending_k || (s.session && s.session->active())) return false;
+    if (s.mtp_owner || s.shared || s.pending_k || (s.session && s.session->active())) return false;
     if (s.suspended && !s.session) return true;
     s.suspended_tokens = s.session ? s.session->tokens() : s.suspended_tokens;
     s.release_device_memory();
@@ -403,7 +672,7 @@ bool llama_kv_stream_model::prepare_shared_memory() {
 
 bool llama_kv_stream_model::resume_private_memory() {
     auto & s = *impl;
-    return !s.shared && s.suspended && !s.session && s.allocate_private();
+    return !s.mtp_owner && !s.shared && s.suspended && !s.session && s.allocate_private();
 }
 
 static bool model_region(
@@ -423,7 +692,7 @@ bool llama_kv_stream_model::attach_shared_memory(
         const llama_kv_stream_memory_binding & binding) {
     auto & s = *impl;
     llama_kv_stream_memory_requirements requirements;
-    if (!memory_requirements(requirements) || !s.suspended || s.session || s.shared ||
+    if (!memory_requirements(requirements) || s.mtp_owner || !s.suspended || s.session || s.shared ||
             !binding.parent || !binding.pool || !binding.writer || !binding.attention ||
             !binding.pool_resource || !binding.writer_resource || !binding.attention_resource ||
             binding.pool_resource == binding.writer_resource ||
@@ -492,7 +761,7 @@ bool llama_kv_stream_model::attach_shared_memory(
 bool llama_kv_stream_model::detach_shared_memory() noexcept {
     auto & s = *impl;
     if (!s.shared) return s.suspended && !s.session;
-    if (s.pending_k || (s.session && s.session->active())) return false;
+    if (s.mtp_owner || s.pending_k || (s.session && s.session->active())) return false;
     s.suspended_tokens = s.session ? s.session->tokens() : s.suspended_tokens;
     s.release_device_memory();
     s.pool_resource = s.writer_resource = s.attention_resource = 0;
@@ -536,6 +805,12 @@ size_t llama_kv_stream_model::writer_grant_bytes() const noexcept {
 
 size_t llama_kv_stream_model::attention_grant_bytes() const noexcept {
     return impl->session ? impl->session->attention_workspace_bytes() : 0;
+}
+ggml_backend_buffer_t llama_kv_stream_model::mtp_attention_workspace() const noexcept {
+    return impl->session ? impl->session->attention_workspace_buffer() : nullptr;
+}
+ggml_backend_buffer_t llama_kv_stream_model::mtp_writer_workspace() const noexcept {
+    return impl->session ? impl->session->writer_workspace_buffer() : nullptr;
 }
 
 bool llama_kv_stream_model::runtime_diagnostics(

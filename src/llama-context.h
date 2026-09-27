@@ -73,6 +73,9 @@ struct llama_context {
 
     // Report whether this context uses serial coordinated workspace ownership.
     bool uses_memory_coordinator() const;
+    // Internal diagnostics; the context retains ownership of this scheduler coordinator.
+    const llama_context_memory * get_compute_memory() const noexcept;
+
 
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;
@@ -384,10 +387,8 @@ private:
     ggml_backend_sched_ptr sched;
     // Destroy coordinated ownership before the scheduler, including constructor-failure unwinding.
     std::unique_ptr<llama_context_memory> compute_memory;
-    // Drain publication before releasing the coordinator and scheduler source buffers.
-    ggml_backend_buffer_ptr mtp_writer_scratch;
-    std::shared_ptr<llama_kv_stream_writer> mtp_writer;
-    ggml_backend_t mtp_writer_backend = nullptr;
+    // Validated source context outlives this MTP context; no cross-context ownership cycle.
+    llama_context * mtp_target_ctx = nullptr;
 
     llama_compute_reserve_state sched_reserve_state;
 

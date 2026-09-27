@@ -37,7 +37,7 @@ struct block_inputs {
             masks[query*padded+token] = ggml_fp32_to_fp16(!masked && token <= active-queries+query ? 0 : -INFINITY);
         ggml_backend_tensor_set(q, qdata.data(), 0, qdata.size()*sizeof(float));
         ggml_backend_tensor_set(mask, masks.data(), 0, masks.size()*sizeof(ggml_fp16_t));
-        std::vector<float> sentinel(queries*4*256, -77);
+        std::vector<float> sentinel(queries*query_heads*256, -77);
         ggml_backend_tensor_set(output, sentinel.data(), 0, sentinel.size()*sizeof(float));
     }
     // Read only the public output, not intermediate or padded scratch bytes.

@@ -127,7 +127,7 @@ std::unique_ptr<llama_kv_stream_writer> llama_kv_stream_writer::create(ggml_back
     } catch (const std::bad_alloc &) { return {}; }
 }
 
-// Only completed dense F32 source rows from this backend are admitted at this synchronous boundary.
+// Admit dense F32 source rows; ordered backend work may still be pending when submission begins.
 bool llama_kv_stream_writer::matches_shape(const ggml_kv_stream_shape & shape) const noexcept {
     if (!impl) return false;
     const auto & actual = impl->shape;
