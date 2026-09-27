@@ -138,6 +138,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "JinaBertForMaskedLM": "bert",
     "JinaBertModel": "bert",
     "JinaEmbeddingsV5Model": "bert",
+    "K2HorizonForCausalLM": "k2_horizon",
+    "K2AuroraForCausalLM": "k2_horizon", # TODO: DELETE
     "KORMoForCausalLM": "qwen",
     "KimiK25ForConditionalGeneration": "deepseek",
     "KimiK3ForConditionalGeneration": "kimi_k3",
