@@ -1,5 +1,5 @@
 #include "transport.h"
-#include "ggml-impl.h"
+#include "log.h"
 
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
@@ -42,11 +42,6 @@ using ssize_t = __int64;
 #else
 typedef int sockfd_t;
 #endif
-
-static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
-
-#define LOG_DBG(...) \
-    do { if (RPC_DEBUG) GGML_LOG_DEBUG(__VA_ARGS__); } while (0)
 
 #ifdef GGML_RPC_RDMA
 static constexpr size_t RDMA_GID_SIZE = 16;            // RoCE GID / IB GID is always 16 bytes
@@ -342,7 +337,7 @@ bool socket_t::impl::rdma_probe() {
     } else if (gid_version == IBV_GID_TYPE_ROCE_V1) {
         ver_str = " RoCEv1";
     }
-    GGML_LOG_INFO("RDMA probed: dev=%s gid=%d%s qpn=%u inline=%u\n",
+    LOG_INFO("RDMA probed: dev=%s gid=%d%s qpn=%u inline=%u\n",
                   matched_dev, gid_idx, ver_str, rdma_local.qpn, rdma->max_inline);
     return true;
 }
@@ -407,7 +402,7 @@ bool socket_t::impl::rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, con
 
     rdma->last_active = std::chrono::steady_clock::now();
 
-    GGML_LOG_INFO("RDMA activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
+    LOG_INFO("RDMA activated: qpn=%u->%u mtu=%d rx_depth=%d\n",
                   rdma_local.qpn, remote_qpn, 128 << rdma_local.path_mtu, RDMA_RX_DEPTH);
     return true;
 }
@@ -445,7 +440,7 @@ bool socket_t::impl::rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc) {
         if (n > 0) {
             c->last_active = std::chrono::steady_clock::now();
             if (wc->status != IBV_WC_SUCCESS) {
-                GGML_LOG_ERROR("RDMA CQ wc error: status=%d (%s) vendor_err=0x%x\n",
+                LOG_ERROR("RDMA CQ wc error: status=%d (%s) vendor_err=0x%x\n",
                     wc->status, ibv_wc_status_str(wc->status), wc->vendor_err);
             }
             return wc->status == IBV_WC_SUCCESS;
@@ -537,6 +532,7 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
 #endif // GGML_RPC_RDMA
 
 bool socket_t::impl::send_data(const void * data, size_t size) {
+    LOG_DBG3("[%s] transport: %s, size: %zu\n", __func__, use_rdma ? "RDMA" : "TCP", size);
 #ifdef GGML_RPC_RDMA_APPLE
     if (use_rdma) {
         return rdma->send(data, size);
@@ -551,7 +547,7 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
         size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
         ssize_t n = send(fd, (const char *)data + bytes_sent, size_to_send, 0);
         if (n < 0) {
-            GGML_LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
+            LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
                            bytes_sent, size_to_send);
             return false;
         }
@@ -561,6 +557,7 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
 }
 
 bool socket_t::impl::recv_data(void * data, size_t size) {
+    LOG_DBG3("[%s] transport: %s, size: %zu\n", __func__, use_rdma ? "RDMA" : "TCP", size);
 #ifdef GGML_RPC_RDMA_APPLE
     if (use_rdma) {
         return rdma->recv(data, size);
@@ -575,7 +572,7 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
         size_t size_to_recv = std::min(size - bytes_recv, MAX_CHUNK_SIZE);
         ssize_t n = recv(fd, (char *)data + bytes_recv, size_to_recv, 0);
         if (n < 0) {
-            GGML_LOG_ERROR("recv failed (bytes_recv=%zu, size_to_recv=%zu)\n",
+            LOG_ERROR("recv failed (bytes_recv=%zu, size_to_recv=%zu)\n",
                            bytes_recv, size_to_recv);
             return false;
         }
@@ -599,6 +596,9 @@ void socket_t::impl::get_caps(uint8_t * local_caps) {
     if (target_gid) {
         rdma = apple_rdma::probe(fd, target_gid->data(), local_caps);
     }
+    if (!rdma) {
+        LOG_DBG2("[%s] RDMA probe failed, continuing with TCP\n", __func__);
+    }
 #  else
     rdma_local = {};
     if (rdma_probe()) {
@@ -609,6 +609,7 @@ void socket_t::impl::get_caps(uint8_t * local_caps) {
         memcpy(local_caps, &rc, sizeof(rc));
     } else {
         rdma.reset();
+        LOG_DBG2("[%s] RDMA probe failed, continuing with TCP\n", __func__);
     }
 #  endif
 #endif // GGML_RPC_RDMA
@@ -623,6 +624,9 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
         remote_rdma |= remote_caps[i] != 0;
     }
     if (!rdma || !remote_rdma) {
+        if (rdma && !remote_rdma) {
+            LOG_DBG("[%s] peer does not support RDMA, continuing with TCP\n", __func__);
+        }
         rdma.reset();
         return;
     }
@@ -636,7 +640,7 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
     if (activated) {
         use_rdma = true;
     } else {
-        GGML_LOG_ERROR("RDMA activate failed, staying on TCP\n");
+        LOG_ERROR("RDMA activate failed, staying on TCP\n");
         rdma.reset();
     }
 #else
@@ -679,6 +683,10 @@ void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
 }
 
+const char * socket_t::transport_name() const {
+    return pimpl->use_rdma ? "RDMA" : "TCP";
+}
+
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
     return sockfd != INVALID_SOCKET;
@@ -706,9 +714,10 @@ socket_ptr socket_t::accept() {
         return nullptr;
     }
     if (!set_no_delay(client_socket_fd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    LOG_DBG("[%s] accepted client connection\n", __func__);
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
@@ -718,11 +727,11 @@ socket_ptr socket_t::create_server(const char * host, int port) {
         return nullptr;
     }
     if (!set_reuse_addr(sockfd)) {
-        GGML_LOG_ERROR("Failed to set SO_REUSEADDR\n");
+        LOG_ERROR("Failed to set SO_REUSEADDR\n");
         return nullptr;
     }
     if (inet_addr(host) == INADDR_NONE) {
-        GGML_LOG_ERROR("Invalid host address: %s\n", host);
+        LOG_ERROR("Invalid host address: %s\n", host);
         return nullptr;
     }
     struct sockaddr_in serv_addr;
@@ -736,6 +745,7 @@ socket_ptr socket_t::create_server(const char * host, int port) {
     if (listen(sockfd, 1) < 0) {
         return nullptr;
     }
+    LOG_DBG("[%s] listening on %s:%d\n", __func__, host, port);
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 
@@ -745,7 +755,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
         return nullptr;
     }
     if (!set_no_delay(sockfd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
     struct sockaddr_in addr;
@@ -753,13 +763,14 @@ socket_ptr socket_t::connect(const char * host, int port) {
     addr.sin_port = htons(port);
     struct hostent * server = gethostbyname(host);
     if (server == NULL) {
-        GGML_LOG_ERROR("Cannot resolve host '%s'\n", host);
+        LOG_ERROR("Cannot resolve host '%s'\n", host);
         return nullptr;
     }
     memcpy(&addr.sin_addr.s_addr, server->h_addr, server->h_length);
     if (::connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         return nullptr;
     }
+    LOG_DBG("[%s] connected to %s:%d\n", __func__, host, port);
     return socket_ptr(new socket_t(std::make_unique<impl>(sockfd)));
 }
 

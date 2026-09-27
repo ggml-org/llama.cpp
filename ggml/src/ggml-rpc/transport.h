@@ -24,6 +24,8 @@ struct socket_t {
 
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
+    // transport in use after the HELLO negotiation: "TCP" or "RDMA"
+    const char * transport_name() const;
 
     static socket_ptr create_server(const char * host, int port);
     static socket_ptr connect(const char * host, int port);
