@@ -1476,6 +1476,32 @@ static void test_all(const std::string & title, std::function<void(const TestCas
         )"""
     });
 
+    test({
+        SUCCESS,
+        "regexp with escaped hyphen in a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[a-z\\-]+$"
+        })""",
+        R"""(
+            root ::= "\"" ([a-z\-]+) "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with escaped hyphen outside a character class",
+        R"""({
+            "type": "string",
+            "pattern": "^a\\-b$"
+        })""",
+        R"""(
+            root ::= "\"" ("a\-b") "\""
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
     // a regexp that is invalid under any flavor is still an error
     test({
         FAILURE,
@@ -1494,7 +1520,7 @@ static void test_all(const std::string & title, std::function<void(const TestCas
         R"""({
             "type": "object",
             "properties": {
-                "a": { "type": "string", "pattern": "^[a-z\\-]+$" }
+                "a": { "type": "string", "pattern": "^(?=a)a$" }
             },
             "required": ["a"],
             "additionalProperties": false

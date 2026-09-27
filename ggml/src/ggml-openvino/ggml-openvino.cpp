@@ -28,12 +28,7 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#    include <sys/mman.h>
-#    include <unistd.h>
-#endif
-
-#if defined(_WIN32)
+#ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
 #        define NOMINMAX
@@ -61,6 +56,7 @@
 // - CPU repack buffer: tensor->extra stores tensor_traits with repacked data
 // =====================================================
 
+namespace {
 // Buffer context that manages per-tensor allocations (no contiguous buffer for weights)
 struct ggml_backend_openvino_buffer_context {
     int device;
@@ -199,6 +195,7 @@ struct ggml_backend_openvino_buffer_type_context {
     int device;
     std::string name;
 };
+}  // namespace
 
 // =====================================================
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS)
@@ -258,14 +255,16 @@ void ggml_openvino_release_weight_buffers() {
     for (const auto & b : reg.buffers) {
         // Align down/up to page boundaries so madvise only drops whole pages
         // fully owned by this buffer.
-        const long page = sysconf(_SC_PAGESIZE);
-        uintptr_t start = reinterpret_cast<uintptr_t>(b.first);
-        uintptr_t end = start + b.second;
-        uintptr_t astart = (start + page - 1) & ~(uintptr_t) (page - 1);
-        uintptr_t aend = end & ~(uintptr_t) (page - 1);
-        if (aend > astart) {
-            if (madvise(reinterpret_cast<void *>(astart), aend - astart, MADV_DONTNEED) == 0) {
-                total += aend - astart;
+        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+        const uintptr_t ustart = reinterpret_cast<uintptr_t>(b.first);
+        const size_t offset_to_page = (page - (ustart & (page - 1))) & (page - 1);
+        if (b.second > offset_to_page) {
+            const size_t aligned_len = (b.second - offset_to_page) & ~(page - 1);
+            if (aligned_len > 0) {
+                char * astart = static_cast<char *>(b.first) + offset_to_page;
+                if (madvise(astart, aligned_len, MADV_DONTNEED) == 0) {
+                    total += aligned_len;
+                }
             }
         }
     }
@@ -876,11 +875,13 @@ GGML_BACKEND_API bool ggml_backend_is_openvino(ggml_backend_t backend) {
     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_openvino_guid());
 }
 
+namespace {
 struct ggml_backend_openvino_device_context {
     int device;
     std::string name;
     std::string description;
 };
+}
 
 static const char * ggml_backend_openvino_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
@@ -1588,9 +1589,11 @@ static const struct ggml_backend_device_i ggml_backend_openvino_device_interface
     /* .event_synchronize    = */ NULL,
 };
 
+namespace {
 struct ggml_backend_openvino_reg_context {
     std::vector<ggml_backend_dev_t> devices;
 };
+}
 
 static const char * ggml_backend_openvino_reg_get_name(ggml_backend_reg_t reg) {
     return GGML_OPENVINO_NAME;

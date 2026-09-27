@@ -55,7 +55,9 @@ fi
 # Some generic functions
 usage() {
     echo "Usage: $0 [ --include-path <dir> ] --generate <build-dir> libXXX [ libYYY ... ]" >&2
-    echo "       $0 --check <old-build-dir> <new-build-dir>" >&2
+    echo "       $0 [ --strict ] --check <old-build-dir> <new-build-dir>" >&2
+    echo "" >&2
+    echo "  --strict: fail on any API/ABI change, including backwards-compatible additions" >&2
 }
 
 get_cmake_project_name() {
@@ -72,6 +74,7 @@ get_cmake_version() {
 # Option parsing and validation
 DO_GEN=0
 DO_CHECK=0
+STRICT=0
 BUILD_DIR=
 BUILD_DIR_NEW=
 INCLUDE_PATHS=
@@ -118,6 +121,10 @@ while [ "$#" -gt 0 ]; do
         fi
         INCLUDE_PATHS="$INCLUDE_PATHS $2"
         shift 2
+        ;;
+    --strict)
+        STRICT=1
+        shift
         ;;
     -h | --help)
         usage
@@ -258,13 +265,24 @@ elif [ "$DO_CHECK" -eq 1 ]; then
         abidiff "$xml_file" "$xml_file_new"
         res=$?
         [ "$((res & 8))" -ne 0 ] && ABI_RESULT=1
+        # check bit 2 for compatible ABI changes (like new symbols) and if
+        # STRICT is set then handle this as an error.
+        [ "$STRICT" -eq 1 ] && [ "$((res & 4))" -ne 0 ] && ABI_RESULT=1
     done
 
     if [ "$API_RESULT" -gt 0 ]; then
-        echo "ERROR: API changed with possible backwards-compatibility problems." >&2
+        if [ "$STRICT" -eq 1 ]; then
+            echo "ERROR: API changed — a minor version bump is required." >&2
+        else
+            echo "ERROR: API changed with backwards-incompatible problems — a major version bump is required." >&2
+        fi
     fi
     if [ "$ABI_RESULT" -gt 0 ]; then
-        echo "ERROR: ABI changed with possible backwards-compatibility problems." >&2
+        if [ "$STRICT" -eq 1 ]; then
+            echo "ERROR: ABI changed — a minor version bump is required." >&2
+        else
+            echo "ERROR: ABI changed with backwards-incompatible problems — a major version bump is required." >&2
+        fi
     fi
     if [ "$((API_RESULT + ABI_RESULT))" -gt 0 ]; then
         exit 1

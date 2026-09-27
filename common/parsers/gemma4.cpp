@@ -272,6 +272,10 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
                 /* max = */ inputs.parallel_tool_calls ? -1 : 1
             ));
 
+            if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+                return start + thought + tool_call;
+            }
+
             auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until("<|tool_call>"));
             auto content = p.rule("content", p.content(p.until_one_of({"<|channel>", "<channel|>", "<|tool_call>"})));
             auto message = p.rule("message", thought + content);
