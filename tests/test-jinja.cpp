@@ -1590,6 +1590,44 @@ static void test_array_methods(testing & t) {
         "b c "
     );
 
+    test_template(t, "array|selectattr by index",
+        "{% for item in items|selectattr('1') %}{{ item[0] }} {% endfor %}",
+        {{"items", json::array({
+            json::array({"a", false}),
+            json::array({"b", true}),
+            json::array({"c", true})
+        })}},
+        "b c "
+    );
+
+    test_template(t, "array|selectattr by index with operator",
+        "{% for item in items|selectattr('0', 'equalto', 'b') %}{{ item[1] }} {% endfor %}",
+        {{"items", json::array({
+            json::array({"a", 1}),
+            json::array({"b", 2}),
+            json::array({"c", 3})
+        })}},
+        "2 "
+    );
+
+    test_template(t, "array|selectattr by index out of range",
+        "{% for item in items|selectattr('5') %}{{ item[0] }} {% endfor %}",
+        {{"items", json::array({json::array({"a", 1})})}},
+        ""
+    );
+
+    test_template(t, "array|selectattr by index beyond int64",
+        "{% for item in items|selectattr('999999999999999999999999') %}{{ item[0] }}{% endfor %}",
+        {{"items", json::array({json::array({"a", 1})})}},
+        ""
+    );
+
+    test_template(t, "dict|items|rejectattr by index",
+        "{% for k, v in obj|items|rejectattr('0', 'equalto', '$ref') %}{{ k }}={{ v }} {% endfor %}",
+        {{"obj", {{"$ref", "#/$defs/City"}, {"description", "origin"}}}},
+        "description=origin "
+    );
+
     test_template(t, "array|tojson",
         "{{ arr|tojson }}",
         {{"arr", json::array({1, 2, 3})}},

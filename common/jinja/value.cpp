@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <cctype>
+#include <charconv>
 #include <vector>
 #include <optional>
 #include <algorithm>
@@ -261,6 +262,22 @@ static value tojson(const func_args & args) {
     return mk_val<value_string>(json_str);
 }
 
+// like jinja2, an all-digit attribute is an index into a sequence item,
+// e.g. rejectattr('0', 'equalto', '$ref') on the (key, value) pairs of dict|items
+static value get_attribute(const value & item, const value & attribute, value & default_val) {
+    const std::string attr = attribute->as_string().str();
+    const bool is_index = !attr.empty() && attr.find_first_not_of("0123456789") == std::string::npos;
+    if (is_index && is_val<value_array>(item)) {
+        int64_t index;
+        const auto result = std::from_chars(attr.data(), attr.data() + attr.size(), index);
+        return result.ec == std::errc() ? item->at(index, default_val) : default_val;
+    }
+    if (!is_val<value_object>(item)) {
+        throw raised_exception("selectattr: item is not an object");
+    }
+    return item->at(attribute, default_val);
+}
+
 template<bool is_reject>
 static value selectattr(const func_args & args) {
     args.ensure_count(2, 4);
@@ -274,10 +291,7 @@ static value selectattr(const func_args & args) {
     if (args.count() == 2) {
         // example: array | selectattr("active")
         for (const auto & item : arr) {
-            if (!is_val<value_object>(item)) {
-                throw raised_exception("selectattr: item is not an object");
-            }
-            value attr_val = item->at(attribute, val_default);
+            value attr_val = get_attribute(item, attribute, val_default);
             bool is_selected = attr_val->as_bool();
             if constexpr (is_reject) is_selected = !is_selected;
             if (is_selected) out->push_back(item);
@@ -318,10 +332,7 @@ static value selectattr(const func_args & args) {
         }
         auto test_fn = it->second;
         for (const auto & item : arr) {
-            if (!is_val<value_object>(item)) {
-                throw raised_exception("selectattr: item is not an object");
-            }
-            value attr_val = item->at(attribute, val_default);
+            value attr_val = get_attribute(item, attribute, val_default);
             func_args test_args(args.ctx);
             test_args.push_back(attr_val); // attribute value
             test_args.push_back(extra_arg); // extra argument
