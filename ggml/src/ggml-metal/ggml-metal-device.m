@@ -5,6 +5,7 @@
 #import "ggml-backend-impl.h"
 #import "ggml-metal-impl.h"
 #import "ggml-metal-common.h"
+#import "ggml-metal-ops.h"
 
 #include <Foundation/Foundation.h>
 
@@ -1724,8 +1725,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
-            // K/V row lists (ggml_flash_attn_ext_rows) are not supported
-            if (op->src[5] != NULL) {
+            // K/V row lists (ggml_flash_attn_ext_rows) are supported by the vec kernels only for now
+            if (op->src[5] != NULL && !ggml_metal_op_flash_attn_ext_use_vec(op)) {
                 return false;
             }
             // for new head sizes, add checks here
