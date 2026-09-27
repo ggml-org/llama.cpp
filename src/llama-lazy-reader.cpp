@@ -6,6 +6,7 @@
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -22,8 +23,15 @@ void llama_lazy_reader_factory::add(const ggml_tensor * tensor, const llama_file
         ++file;
     }
     if (file == sources.size()) {
-        const auto path = std::filesystem::absolute(std::filesystem::u8path(source.name())).u8string();
-        auto handle = std::make_unique<llama_file>(path.c_str(), "rb", /*use_direct_io =*/ false);
+        const auto & name = source.name();
+#if defined(__cpp_lib_char8_t)
+        const auto path = std::filesystem::absolute(std::filesystem::path(std::u8string(name.begin(), name.end())));
+#else
+        const auto path = std::filesystem::absolute(std::filesystem::u8path(name));
+#endif
+        const auto u8path = path.u8string();
+        const std::string abs_path(reinterpret_cast<const char *>(u8path.data()), u8path.size());
+        auto handle = std::make_unique<llama_file>(abs_path.c_str(), "rb", /*use_direct_io =*/ false);
         if (!source.same_file(*handle)) {
             throw std::runtime_error(format("model file changed while opening lazy reader: %s", source.name().c_str()));
         }
