@@ -222,7 +222,7 @@ llama_token common_peg_tokens::token_id(const std::string & text) const {
 // A delimiter an until or ac parser stops at, as trie symbols and as text
 struct until_delimiter {
     std::vector<common_trie::symbol> symbols;
-    std::string                     text;
+    std::string text;
 };
 
 // Expand a delimiter parser into every delimiter it matches. A choice adds the delimiters of each branch and
@@ -1225,7 +1225,7 @@ common_peg_parser_builder::common_peg_parser_builder(common_peg_tokens tokens) {
 common_peg_parser common_peg_parser_builder::until_one_of(const std::vector<std::string> & delimiters) {
     common_peg_until_parser p;
     p.delimiters = delimiters;
-    p.matcher    = common_trie(delimiters);
+    p.matcher = common_trie(delimiters);
     return add(std::move(p));
 }
 
@@ -1572,7 +1572,7 @@ common_peg_parser common_peg_parser_builder::ac(const common_peg_parser & p, con
         throw std::runtime_error("ac parser requires at least one branch");
     }
     common_peg_ac_parser ac;
-    ac.child    = p.id();
+    ac.child = p.id();
     ac.branches = branches;
     ac.optional = optional;
     build_branch_matcher(arena_, ac);
@@ -1864,7 +1864,7 @@ static std::string gbnf_including_grammar(const common_grammar_builder &   build
 // The rules and the tokens named by token rules that the grammar of a parser reaches
 struct common_peg_reachable {
     std::set<std::string> rules;
-    std::set<uint32_t>    tokens;
+    std::set<uint32_t> tokens;
 };
 
 static void collect_reachable(
@@ -2169,7 +2169,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
 
     if (lazy && scans) {
         // The root scans for a trigger start and then constrains its rest
-        common_trie              starts;
+        common_trie starts;
         std::vector<std::string> rests;
         for (const auto * rule : trigger_rules) {
             for (size_t i = 0; i < rule->triggers.size(); i++) {
@@ -2495,7 +2495,7 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             throw std::runtime_error("ac parser requires 'child' and a non-empty 'branches' array");
         }
         common_peg_ac_parser parser;
-        parser.child    = j["child"].get<common_peg_parser_id>();
+        parser.child = j["child"].get<common_peg_parser_id>();
         parser.optional = j.value("optional", false);
         for (const auto & b : j["branches"]) {
             if (!b.contains("delimiter")) {
@@ -2572,7 +2572,7 @@ common_peg_arena common_peg_arena::from_json(const common_json & j) {
             if (!token_json.contains("id") || !token_json.contains("text") || !token_json.contains("attr")) {
                 throw std::runtime_error("special token missing required fields");
             }
-            auto id   = token_json["id"].get<llama_token>();
+            auto id = token_json["id"].get<llama_token>();
             auto text = token_json["text"].get<std::string>();
             arena.tokens_.ids.emplace(text, id);
             arena.tokens_.tokens.emplace(id, common_peg_token{
