@@ -3,6 +3,7 @@
 #include "llama.h"
 #include "llama-cparams.h"
 
+#include <algorithm>
 #include <bitset>
 #include <cassert>
 #include <cstring>
@@ -52,6 +53,8 @@ public:
         for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
             seq_pos[s].clear();
         }
+
+        seq_cells_ok.reset();
     }
 
     void reset_shift() {
@@ -368,6 +371,34 @@ public:
         return -1;
     }
 
+    // number of cells that contain seq_id
+    uint32_t seq_n_cells(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        return seq_pos[seq_id].size();
+    }
+
+    // the cells that contain seq_id, in no particular order
+    const std::vector<int32_t> & seq_cells(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        auto & res = seq_cells_list[seq_id];
+
+        if (!seq_cells_ok.test(seq_id)) {
+            res.clear();
+            res.reserve(seq_pos[seq_id].size());
+            for (const auto & [p, i] : seq_pos[seq_id]) {
+                res.push_back(i);
+            }
+
+            seq_cells_ok.set(seq_id);
+        }
+
+        return res;
+    }
+
     // the minimum position of sequence seq_id currently present in any of the cells
     // return -1 if the sequence is not present
     llama_pos seq_pos_min(llama_seq_id seq_id) const {
@@ -531,16 +562,39 @@ private:
     //
     std::set<std::pair<llama_pos, uint32_t>> seq_pos[LLAMA_MAX_SEQ];
 
+    // flat copy of the cells of each seq for fast iteration: new cells are appended, a removal rebuilds it on the next use
+    mutable std::vector<int32_t>    seq_cells_list[LLAMA_MAX_SEQ];
+    mutable std::bitset<LLAMA_MAX_SEQ> seq_cells_ok;
+
     // helper functions for updating `seq_pos`, once cell at a time:
 
     void seq_pos_dec(llama_seq_id s, uint32_t i) {
         const auto n = seq_pos[s].erase({ pos[i], i });
         assert(n == 1);
         GGML_UNUSED(n);
+
+        // recently added cells are removed often (f.ex. prepare() reverts a trial apply), look for them near the end
+        if (seq_cells_ok.test(s)) {
+            auto & list = seq_cells_list[s];
+
+            const size_t n_search = std::min<size_t>(list.size(), 4096);
+            for (size_t k = 0; k < n_search; ++k) {
+                if (list[list.size() - 1 - k] == (int32_t) i) {
+                    list.erase(list.end() - 1 - k);
+                    return;
+                }
+            }
+
+            seq_cells_ok.reset(s);
+        }
     }
 
     void seq_pos_inc(llama_seq_id s, uint32_t i) {
         seq_pos[s].insert({ pos[i], i });
+
+        if (seq_cells_ok.test(s)) {
+            seq_cells_list[s].push_back(i);
+        }
     }
 
     // remove cell i
