@@ -49,7 +49,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { backendsStore, modelsStore, settingsStore, uiStore } from '$lib/stores';
+	import {
+		backendsModelsStore,
+		backendsStore,
+		modelsStore,
+		settingsStore,
+		uiStore
+	} from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
 	import { getBackendCapabilities } from '$lib/utils/backend';
@@ -709,13 +715,17 @@
 					{/if}
 				{/snippet}
 
+				{@const backendState = group.backendId ? backendsModelsStore.get(group.backendId) : null}
+
 				<ModelsSection
 					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					chevronClass="mr-7"
 					count={group.items.length}
 					defaultOpen={group.kind !== 'hidden'}
+					error={Boolean(backendState?.error)}
 					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					loading={Boolean(backendState?.loading)}
 					persistKey={group.key}
 					revealChevronOnHover
 					sticky

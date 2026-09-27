@@ -29,6 +29,8 @@
 		class?: string;
 		currentModel?: string | null;
 		disabled?: boolean;
+		/** The provider behind this selector is unreachable. */
+		error?: boolean;
 		forceForegroundText?: boolean;
 		onModelChange?: (
 			modelId: string,
@@ -42,6 +44,7 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
+		error = false,
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
@@ -239,13 +242,15 @@
 								{...props}
 								class={[
 									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-									!ms.isCurrentModelInCache
-										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-										: forceForegroundText
-											? 'text-foreground'
-											: ms.isHighlightedCurrentModelActive
+									error
+										? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
+										: !ms.isCurrentModelInCache
+											? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+											: forceForegroundText
 												? 'text-foreground'
-												: 'text-foreground',
+												: ms.isHighlightedCurrentModelActive
+													? 'text-foreground'
+													: 'text-foreground',
 									isOpen && 'text-foreground',
 									'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
 								]}

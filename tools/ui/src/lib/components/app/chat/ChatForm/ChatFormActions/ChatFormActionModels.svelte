@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { useBackendAvailability } from '$lib/hooks/use-backend-availability.svelte';
+	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import {
+		backendsModelsStore,
 		backendsStore,
 		conversationsStore,
 		deviceStore,
@@ -35,8 +36,14 @@
 	}: Props = $props();
 
 	let isRouter = $derived(serverStore.isRouterMode);
-	const availability = useBackendAvailability();
-	let isOffline = $derived(availability.isOffline);
+	// the provider this selector is pointed at, which is the one its colours report
+	let selectorError = $derived.by(() => {
+		const backendId = backendsStore.active.id;
+
+		return backendId === LOCAL_BACKEND_ID
+			? Boolean(serverStore.error)
+			: backendsModelsStore.get(backendId).error !== null;
+	});
 
 	let conversationModel = $derived(
 		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
@@ -169,7 +176,8 @@
 	<ModelsSelectorSheet
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
-		disabled={disabled || isOffline}
+		{disabled}
+		error={selectorError}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
@@ -177,7 +185,8 @@
 	<ModelsSelectorDropdown
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
-		disabled={disabled || isOffline}
+		{disabled}
+		error={selectorError}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
