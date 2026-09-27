@@ -8624,6 +8624,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
     const ggml_tensor * v     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
+    const ggml_tensor * kv_rows = dst->src[5];
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -8731,6 +8732,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         q_to_vec_dot(pq, Q_q, DK);
 
+        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + iq3*kv_rows->nb[1]) : nullptr;
+
         // online softmax / attention
         // loop over n_kv and n_head_kv
         // ref: https://arxiv.org/pdf/2112.05682.pdf
@@ -8741,9 +8744,14 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 continue;
             }
 
+            const int64_t ik1 = rows ? rows[ic] : ic;
+            if (ik1 < 0) {
+                continue;
+            }
+
             float s; // KQ value
 
-            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
+            const char * k_data = (const char *) k->data + (ik1*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
             s = s*scale; // scale KQ value
@@ -8759,7 +8767,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
             float vs = 1.0f; // post-softmax KQ value, expf(s - M)
 
-            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+            const char * v_data = ((const char *) v->data + (ik1*nbv1 + iv2*nbv2 + iv3*nbv3));
 
             if (v->type == GGML_TYPE_F16) {
                 if (s > M) {
@@ -8926,12 +8934,20 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
     static constexpr int Q_TILE_SZ  = ggml_fa_tile_config::Q;
     static constexpr int KV_TILE_SZ = ggml_fa_tile_config::KV;
 
+    // with kv_rows the loop runs over the mask columns and reads K/V rows through kv_rows
+    const ggml_tensor * kv_rows = dst->src[5];
+    const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : nek1;
+
     int ir = ir0;
     while (ir < ir1) {
         // q indices for the start of this tile
         const int iq3 = ir/(neq2*neq1);
         const int iq2 = (ir - iq3*neq2*neq1)/neq1;
         const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);
+
+        // padding rows are masked, read row 0 for them
+        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + iq3*kv_rows->nb[1]) : nullptr;
+        auto kv_row = [rows](int64_t i) -> int64_t { return rows ? std::max<int32_t>(rows[i], 0) : i; };
 
         // Number of valid rows in this tile:
         // - limited by tile size (Q_TILE_SZ)
@@ -8992,8 +9008,8 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         memset(K_f32, 0, DK * KV_TILE_SZ * sizeof(float));
         memset(V32,   0, KV_TILE_SZ * DV * sizeof(float));
 
-        for (int64_t ic = 0; ic < nek1; ic += KV_TILE_SZ) {
-            const int kv_tile = (int)std::min((int64_t)KV_TILE_SZ, nek1 - ic);
+        for (int64_t ic = 0; ic < n_kv_cols; ic += KV_TILE_SZ) {
+            const int kv_tile = (int)std::min((int64_t)KV_TILE_SZ, n_kv_cols - ic);
 
             // skip the tile entirely if all the masks are -inf
             if (mask) {
@@ -9020,7 +9036,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             // Pack K tile transposed: K_f32[dk][kv] so KV_TILE is contiguous (SIMD dim)
             // Zero-pad the last tile so the GEMM always operates on KV_TILE_SZ columns
             for (int tk = 0; tk < kv_tile; tk++) {
-                const char * k_data = (const char *)k->data + (ic + tk)*nbk1 + ik2*nbk2 + ik3*nbk3;
+                const char * k_data = (const char *)k->data + kv_row(ic + tk)*nbk1 + ik2*nbk2 + ik3*nbk3;
                 if (kv_type == GGML_TYPE_F16) {
                     const ggml_fp16_t * k_f16 = (const ggml_fp16_t *)k_data;
                     for (int64_t dk = 0; dk < DK; dk++) {
@@ -9085,7 +9101,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             // V accumulation: VKQ32 += softmax(KQ) * V
             // Pack V tile to contiguous F32, zero-padded
             for (int tk = 0; tk < kv_tile; tk++) {
-                const char * v_data = (const char *)v->data + (ic + tk)*nbv1 + iv2*nbv2 + iv3*nbv3;
+                const char * v_data = (const char *)v->data + kv_row(ic + tk)*nbv1 + iv2*nbv2 + iv3*nbv3;
                 if (kv_type == GGML_TYPE_F16) {
                     ggml_cpu_fp16_to_fp32((const ggml_fp16_t *)v_data, V32 + tk * DV, DV);
                 } else {
@@ -9257,8 +9273,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     // When use_ref is set, force the vec-only reference implementation (no tiling, no KV-chunking)
     const bool use_ref = params->use_ref;
 
+    // with kv_rows the loops run over the mask columns, the split KV path does not support it
+    const ggml_tensor * kv_rows = dst->src[5];
+    const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : nek1;
+
     const bool kv_is_f32_or_f16 = (k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
-    const bool use_split_kv_path = !use_ref && (neq1 == 1 && neq3 == 1) && kv_is_f32_or_f16 && (k->type == v->type) && q->type == GGML_TYPE_F32 && nek1 >= 512;
+    const bool use_split_kv_path = !use_ref && !kv_rows && (neq1 == 1 && neq3 == 1) && kv_is_f32_or_f16 && (k->type == v->type) && q->type == GGML_TYPE_F32 && nek1 >= 512;
 
     if (use_split_kv_path) {
         const int64_t chunk_size = (nek1 + nth - 1) / nth;
@@ -9337,7 +9357,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             if (use_tiled) {
                 ggml_compute_forward_flash_attn_ext_tiled(params, dst, ir0, ir1);
             } else {
-                ggml_compute_forward_flash_attn_ext_f16_one_chunk(params, dst, ir0, ir1, 0, nek1, nullptr, 0);
+                ggml_compute_forward_flash_attn_ext_f16_one_chunk(params, dst, ir0, ir1, 0, n_kv_cols, nullptr, 0);
             }
 
             current_chunk = ggml_threadpool_chunk_add(params->threadpool, 1);

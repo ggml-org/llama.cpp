@@ -188,6 +188,13 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    // attention over the cells of each sequence of the ubatch instead of the whole cache (see ggml_flash_attn_ext_rows)
+    // the ubatch splits into n_slices groups of tokens with one sequence each, 0 if it does not
+    static uint32_t get_n_kv_slices(const llama_ubatch & ubatch);
+
+    // padded length of the cell list of each slice, 0 if the ubatch should attend to the whole cache
+    uint32_t get_n_kv_rows(const llama_ubatch & ubatch, uint32_t n_kv) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -229,7 +236,8 @@ public:
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, const ggml_tensor * kv_rows = nullptr) const;
+    void set_input_kv_rows   (ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -395,6 +403,7 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_n_kv_rows() const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
@@ -425,7 +434,8 @@ public:
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_shift   (ggml_tensor * dst) const;
-    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, const ggml_tensor * kv_rows = nullptr) const;
+    void set_input_kv_rows   (ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
@@ -466,4 +476,7 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    // see llama_kv_cache::get_n_kv_rows
+    uint32_t n_kv_rows = 0;
 };
