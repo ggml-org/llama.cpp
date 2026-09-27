@@ -47,6 +47,7 @@
 
 #define GGML_COMMON_IMPL_CPP
 #include "ggml-backend-impl.h"
+#include "ggml-alloc.h"
 #include "ggml-common.h"
 #include "ggml-hexagon.h"
 #include "ggml-impl.h"
@@ -2145,25 +2146,143 @@ static bool ggml_backend_hexagon_host_buffer_type_is_host(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+struct ggml_backend_hexagon_alloc_buffer_n_plan_item {
+    size_t size;
+    int    first;
+    int    last;
+};
+
+using ggml_backend_hexagon_alloc_buffer_n_plan_t = std::vector<ggml_backend_hexagon_alloc_buffer_n_plan_item>;
+
+static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buffer_n_plan(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    ggml_backend_hexagon_alloc_buffer_n_plan_t plan;
+
+    const size_t alignment = ggml_backend_buft_get_alignment(buft);
+    const size_t max_size  = ggml_backend_buft_get_max_size(buft);
+
+    size_t cur_buf_size = 0;
+    int    first        = 0;
+
+    for (int i = 0; i < n_tensors; i++) {
+        size_t this_size = 0;
+        struct ggml_tensor * t = tensors[i];
+        if (t->data == NULL && t->view_src == NULL) {
+            this_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+        }
+
+        if (cur_buf_size > 0 && (cur_buf_size + this_size) > max_size) {
+            plan.push_back({ cur_buf_size, first, i });
+            cur_buf_size = this_size;
+            first        = i;
+        } else {
+            cur_buf_size += this_size;
+        }
+    }
+
+    if (cur_buf_size > 0) {
+        plan.push_back({ cur_buf_size, first, n_tensors });
+    }
+
+    return plan;
+}
+
+static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer_n(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    const ggml_backend_hexagon_alloc_buffer_n_plan_t plan = ggml_backend_hexagon_alloc_buffer_n_plan(buft, tensors, n_tensors);
+
+    std::vector<ggml_backend_buffer_t> buffers;
+    buffers.reserve(plan.size());
+
+    for (const auto & item : plan) {
+        ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, item.size);
+        if (buffer == NULL) {
+            GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(buft), item.size);
+            for (ggml_backend_buffer_t b : buffers) {
+                ggml_backend_buffer_free(b);
+            }
+            return NULL;
+        }
+
+        struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
+
+        struct ggml_tensor * t_failed = NULL;
+        for (int j = item.first; j < item.last; j++) {
+            struct ggml_tensor * t = tensors[j];
+            if (t->data == NULL) {
+                if (t->view_src == NULL) {
+                    if (ggml_tallocr_alloc(&tallocr, t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                } else if (t->buffer == NULL) {
+                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                }
+            } else {
+                if (t->view_src != NULL && t->buffer == NULL) {
+                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+                        t_failed = t;
+                        break;
+                    }
+                }
+            }
+        }
+        if (t_failed != NULL) {
+            GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t_failed->name);
+            for (ggml_backend_buffer_t b : buffers) {
+                ggml_backend_buffer_free(b);
+            }
+            ggml_backend_buffer_free(buffer);
+            return NULL;
+        }
+
+        buffers.push_back(buffer);
+    }
+
+    if (buffers.empty()) {
+        return NULL;
+    }
+
+    if (buffers.size() == 1) {
+        return buffers[0];
+    }
+
+    return ggml_backend_multi_buffer_alloc_buffer(buffers.data(), buffers.size());
+}
+
+static size_t ggml_backend_hexagon_buffer_type_get_alloc_size_n(
+        ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
+    const ggml_backend_hexagon_alloc_buffer_n_plan_t plan = ggml_backend_hexagon_alloc_buffer_n_plan(buft, tensors, n_tensors);
+
+    size_t total = 0;
+    for (const auto & item : plan) {
+        total += item.size;
+    }
+    return total;
+}
+
 static ggml_backend_buffer_type_i ggml_backend_hexagon_buffer_type_interface = {
     /* .get_name            = */ ggml_backend_hexagon_buffer_type_name,
     /* .alloc_buffer        = */ ggml_backend_hexagon_buffer_type_alloc_buffer,
-    /* .alloc_buffer_n      = */ NULL,
+    /* .alloc_buffer_n      = */ ggml_backend_hexagon_buffer_type_alloc_buffer_n,
     /* .get_alignment       = */ ggml_backend_hexagon_buffer_type_get_alignment,
     /* .get_max_size        = */ ggml_backend_hexagon_buffer_type_get_max_size,
     /* .get_alloc_size      = */ ggml_backend_hexagon_buffer_type_get_alloc_size,
-    /* .get_alloc_size_n    = */ NULL,
+    /* .get_alloc_size_n    = */ ggml_backend_hexagon_buffer_type_get_alloc_size_n,
     /* .is_host             = */ ggml_backend_hexagon_buffer_type_is_host,
 };
 
 static ggml_backend_buffer_type_i ggml_backend_hexagon_host_buffer_type_interface = {
     /* .get_name            = */ ggml_backend_hexagon_buffer_type_name,
     /* .alloc_buffer        = */ ggml_backend_hexagon_host_buffer_type_alloc_buffer,
-    /* .alloc_buffer_n      = */ NULL,
+    /* .alloc_buffer_n      = */ ggml_backend_hexagon_buffer_type_alloc_buffer_n,
     /* .get_alignment       = */ ggml_backend_hexagon_buffer_type_get_alignment,
     /* .get_max_size        = */ ggml_backend_hexagon_buffer_type_get_max_size,
     /* .get_alloc_size      = */ ggml_backend_hexagon_buffer_type_get_alloc_size,
-    /* .get_alloc_size_n    = */ NULL,
+    /* .get_alloc_size_n    = */ ggml_backend_hexagon_buffer_type_get_alloc_size_n,
     /* .is_host             = */ ggml_backend_hexagon_host_buffer_type_is_host,
 };
 
