@@ -75,7 +75,7 @@
 		</div>
 
 		<a
-			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border/30 px-2.5 py-1.5 text-xs font-medium shadow-sm transition-colors hover:bg-muted dark:border-border/20"
 			href={HuggingFaceService.getModelUrl(modelId)}
 			rel="noopener noreferrer"
 			target="_blank"

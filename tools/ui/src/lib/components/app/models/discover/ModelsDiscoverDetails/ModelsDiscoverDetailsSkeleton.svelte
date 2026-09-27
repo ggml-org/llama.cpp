@@ -45,7 +45,7 @@
 
 	<!-- Download options: quant rows, CTA, terminal command -->
 	<div
-		class="rounded-3xl border border-border/30 bg-muted/40 p-4 shadow-xs dark:border-border/20 dark:bg-muted/50"
+		class="rounded-3xl border border-border/30 bg-muted/40 p-4 shadow-sm dark:border-border/20 dark:bg-muted/50"
 	>
 		<div class="space-y-3 divide-y divide-border/50 dark:divide-border/35 pb-1">
 			{#each [0, 1, 2] as _, index (index)}

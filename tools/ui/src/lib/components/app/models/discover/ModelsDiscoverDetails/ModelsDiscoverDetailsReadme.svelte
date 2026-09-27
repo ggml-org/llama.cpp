@@ -10,7 +10,7 @@
 
 {#if readme}
 	<section
-		class="p-3 rounded-3xl border border-border/30 bg-muted/60 shadow-xs dark:border-border/20"
+		class="p-3 rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20"
 	>
 		<MarkdownContent allowHtml class="prose-sm max-w-none" content={readme} />
 	</section>

@@ -39,7 +39,7 @@
 
 			<button
 				aria-label="Copy chat template"
-				class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:bg-muted"
+				class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border/30 px-2 py-1 text-xs font-medium shadow-sm transition-colors hover:bg-muted dark:border-border/20"
 				onclick={() => void copy()}
 				type="button"
 			>

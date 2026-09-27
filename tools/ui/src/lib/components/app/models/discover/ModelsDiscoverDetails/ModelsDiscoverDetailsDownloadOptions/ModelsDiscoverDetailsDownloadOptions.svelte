@@ -144,7 +144,7 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="rounded-3xl border border-border/30 bg-muted/60 shadow-xs dark:border-border/20">
+	<section class="rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
 		<!-- One chip per file, each an independent download action with its own
 			 lifecycle state; nothing here selects anything. -->
 		<div class="flex w-full flex-col divide-y divide-border/50 px-4 pb-1 dark:divide-border/35">
