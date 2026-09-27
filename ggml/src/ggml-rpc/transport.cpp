@@ -31,6 +31,9 @@
 #  endif
 #  ifdef GGML_RPC_RDMA_APPLE
 #    include "transport-apple.h"
+#  else
+#    include <rdma/rdma_cma.h>
+#    include <cerrno>
 #  endif
 #endif // GGML_RPC_RDMA
 
@@ -55,6 +58,10 @@ using rdma_gid_t = std::array<uint8_t, RDMA_GID_SIZE>;
 static constexpr size_t RDMA_CHUNK    = 256 * 1024;   // 256 KiB per send/recv (fits default 8 MiB memlock)
 static constexpr int    RDMA_RX_DEPTH = 24;            // pre-posted recv ring: 24 × 256 KiB = 6 MiB
 
+static constexpr uint32_t RDMA_CM_MAGIC      = 0x4d435752; // tags caps as rdma_cm, not RoCE
+static constexpr int      RDMA_CM_TIMEOUT_MS = 10000;
+static constexpr uint32_t RDMA_CM_MAX_INLINE = 64;         // irdma rejects 128 and above
+
 struct rdma_conn {
     struct ibv_context * ctx = nullptr;
     struct ibv_pd * pd  = nullptr;
@@ -70,6 +77,11 @@ struct rdma_conn {
     int             rx_head = 0;
 
     uint32_t        max_inline = 0;
+
+    // set when the QP comes from rdma_cm; the cm id then owns ctx, pd and qp
+    struct rdma_event_channel * cm_ch        = nullptr;
+    struct rdma_cm_id         * cm_id        = nullptr;
+    struct rdma_cm_id         * cm_listen_id = nullptr;
 
     uint8_t * rx_slot(int i) const {
         return static_cast<uint8_t *>(rx_buf) + static_cast<size_t>(i) * RDMA_CHUNK;
@@ -87,11 +99,40 @@ struct rdma_conn {
         return ibv_post_recv(qp, &wr, &bad) == 0;
     }
 
+    bool alloc_bufs() {
+        tx_buf = aligned_alloc(4096, RDMA_CHUNK);
+        rx_buf = aligned_alloc(4096, static_cast<size_t>(RDMA_RX_DEPTH) * RDMA_CHUNK);
+        if (!tx_buf || !rx_buf) return false;
+        tx_mr = ibv_reg_mr(pd, tx_buf, RDMA_CHUNK, IBV_ACCESS_LOCAL_WRITE);
+        rx_mr = ibv_reg_mr(pd, rx_buf, static_cast<size_t>(RDMA_RX_DEPTH) * RDMA_CHUNK,
+                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+        return tx_mr && rx_mr;
+    }
+
+    bool post_rx_all() {
+        for (int i = 0; i < RDMA_RX_DEPTH; i++) {
+            if (!post_rx(i)) return false;
+        }
+        return true;
+    }
+
     ~rdma_conn() {
         if (tx_mr) ibv_dereg_mr(tx_mr);
         if (rx_mr) ibv_dereg_mr(rx_mr);
         free(tx_buf);
         free(rx_buf);
+        if (cm_ch) {
+            if (cm_id && cm_id->qp) {
+                rdma_disconnect(cm_id);
+                rdma_destroy_qp(cm_id);
+            }
+            if (scq) ibv_destroy_cq(scq);
+            if (rcq) ibv_destroy_cq(rcq);
+            if (cm_id)        rdma_destroy_id(cm_id);
+            if (cm_listen_id) rdma_destroy_id(cm_listen_id);
+            rdma_destroy_event_channel(cm_ch);
+            return;
+        }
         if (qp)  ibv_destroy_qp(qp);
         if (scq) ibv_destroy_cq(scq);
         if (rcq) ibv_destroy_cq(rcq);
@@ -119,10 +160,21 @@ struct rdma_caps {
 
 static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match conn_caps size");
 
+// iWARP has no IP-mapped GIDs and cannot reach RTS with a manual transition, so
+// the peer advertises the port of its rdma_cm listener instead of a QPN/GID.
+// The connecting side advertises port 0: it dials, it does not listen.
+struct rdma_cm_caps {
+    uint32_t magic;
+    uint16_t port;
+    uint8_t  pad[18];
+};
+
+static_assert(sizeof(rdma_cm_caps) == RPC_CONN_CAPS_SIZE, "rdma_cm_caps must match conn_caps size");
+
 #endif // GGML_RPC_RDMA && !GGML_RPC_RDMA_APPLE
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
+    impl(sockfd_t fd, bool listen_side = false) : use_rdma(false), listen_side(listen_side), fd(fd) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -143,11 +195,20 @@ struct socket_t::impl {
     bool rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, const uint8_t * remote_gid);
     bool rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc);
 
+    bool rdma_cm_probe();
+    bool rdma_cm_activate(uint16_t remote_port);
+    bool rdma_cm_setup_qp(struct rdma_cm_id * id);
+
+    enum rdma_mode { RDMA_MODE_NONE, RDMA_MODE_ROCE, RDMA_MODE_CM };
+
     std::unique_ptr<rdma_conn> rdma;
     rdma_local_info            rdma_local = {};
+    rdma_mode                  mode         = RDMA_MODE_NONE;
+    uint16_t                   rdma_cm_port = 0;
 #  endif
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
+    bool     listen_side;
     sockfd_t fd;
 };
 
@@ -403,7 +464,10 @@ bool socket_t::impl::rdma_poll(struct ibv_cq * cq, struct ibv_wc * wc) {
     for (uint64_t s = 0; ; s++) {
         int n = ibv_poll_cq(cq, 1, wc);
         if (n > 0) {
-            if (wc->status != IBV_WC_SUCCESS) {
+            if (wc->status == IBV_WC_WR_FLUSH_ERR) {
+                // the peer went away and the QP flushed the pre-posted recv ring
+                LOG_DBG("[%s] work request flushed\n", __func__);
+            } else if (wc->status != IBV_WC_SUCCESS) {
                 GGML_LOG_ERROR("RDMA CQ wc error: status=%d (%s) vendor_err=0x%x\n",
                     wc->status, ibv_wc_status_str(wc->status), wc->vendor_err);
             }
@@ -470,6 +534,196 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
         dst += got;
         rem -= got;
     }
+    return true;
+}
+
+// Copy of the socket's local or peer address with the port replaced. rdma_cm
+// resolves the device from the address, so this keeps RDMA on the same
+// interface the TCP connection already uses.
+static bool rdma_cm_addr(sockfd_t fd, bool peer, uint16_t port, sockaddr_storage & out) {
+    socklen_t len = sizeof(out);
+    memset(&out, 0, sizeof(out));
+    int r = peer ? getpeername(fd, reinterpret_cast<sockaddr *>(&out), &len)
+                 : getsockname(fd, reinterpret_cast<sockaddr *>(&out), &len);
+    if (r != 0) {
+        return false;
+    }
+    if (out.ss_family == AF_INET) {
+        reinterpret_cast<sockaddr_in *>(&out)->sin_port = htons(port);
+        return true;
+    }
+    if (out.ss_family == AF_INET6) {
+        reinterpret_cast<sockaddr_in6 *>(&out)->sin6_port = htons(port);
+        return true;
+    }
+    return false;
+}
+
+static bool rdma_cm_wait(struct rdma_event_channel * ch, enum rdma_cm_event_type want,
+                         struct rdma_cm_id ** out_id) {
+    struct pollfd pfd = { ch->fd, POLLIN, 0 };
+    if (poll(&pfd, 1, RDMA_CM_TIMEOUT_MS) <= 0) {
+        GGML_LOG_ERROR("RDMA CM: timed out waiting for %s\n", rdma_event_str(want));
+        return false;
+    }
+    struct rdma_cm_event * ev = nullptr;
+    if (rdma_get_cm_event(ch, &ev) != 0) {
+        return false;
+    }
+    bool ok = ev->event == want;
+    if (!ok) {
+        GGML_LOG_ERROR("RDMA CM: got %s, expected %s\n", rdma_event_str(ev->event), rdma_event_str(want));
+    } else if (out_id) {
+        *out_id = ev->id;
+    }
+    rdma_ack_cm_event(ev);
+    return ok;
+}
+
+// The listening side binds an rdma_cm listener to an ephemeral port and
+// advertises it. The connecting side only checks that its local address has an
+// RDMA device, so it never makes the peer wait for a connection it cannot make.
+bool socket_t::impl::rdma_cm_probe() {
+    rdma.reset();
+
+    sockaddr_storage local = {};
+    if (!rdma_cm_addr(fd, false, 0, local)) {
+        return false;
+    }
+
+    if (!listen_side) {
+        struct rdma_event_channel * ch = rdma_create_event_channel();
+        if (!ch) {
+            return false;
+        }
+        struct rdma_cm_id * id = nullptr;
+        bool ok = rdma_create_id(ch, &id, nullptr, RDMA_PS_TCP) == 0 &&
+                  rdma_bind_addr(id, reinterpret_cast<sockaddr *>(&local)) == 0;
+        if (id) {
+            rdma_destroy_id(id);
+        }
+        rdma_destroy_event_channel(ch);
+        if (!ok) {
+            return false;
+        }
+        rdma_cm_port = 0;
+        LOG_DBG("[%s] rdma_cm device available for this address\n", __func__);
+        return true;
+    }
+
+    rdma = std::make_unique<rdma_conn>();
+    rdma->cm_ch = rdma_create_event_channel();
+    if (!rdma->cm_ch) {
+        return false;
+    }
+    if (rdma_create_id(rdma->cm_ch, &rdma->cm_listen_id, nullptr, RDMA_PS_TCP) != 0) {
+        return false;
+    }
+    if (rdma_bind_addr(rdma->cm_listen_id, reinterpret_cast<sockaddr *>(&local)) != 0) {
+        return false;
+    }
+    if (rdma_listen(rdma->cm_listen_id, 1) != 0) {
+        return false;
+    }
+    rdma_cm_port = ntohs(rdma_get_src_port(rdma->cm_listen_id));
+    GGML_LOG_INFO("RDMA CM probed: listening on port %u\n", rdma_cm_port);
+    return true;
+}
+
+bool socket_t::impl::rdma_cm_setup_qp(struct rdma_cm_id * id) {
+    rdma->cm_id = id;
+    rdma->ctx   = id->verbs;
+    rdma->pd    = id->pd;
+
+    // irdma rejects a QP that shares one CQ between send and recv
+    rdma->scq = ibv_create_cq(id->verbs, 16, nullptr, nullptr, 0);
+    rdma->rcq = ibv_create_cq(id->verbs, RDMA_RX_DEPTH + 4, nullptr, nullptr, 0);
+    if (!rdma->scq || !rdma->rcq) {
+        return false;
+    }
+
+    ibv_qp_init_attr qia = {};
+    qia.send_cq = rdma->scq;
+    qia.recv_cq = rdma->rcq;
+    qia.qp_type = IBV_QPT_RC;
+    qia.cap.max_send_wr     = 4;
+    qia.cap.max_recv_wr     = RDMA_RX_DEPTH + 4;
+    qia.cap.max_send_sge    = 1;
+    qia.cap.max_recv_sge    = 1;
+    qia.cap.max_inline_data = RDMA_CM_MAX_INLINE;
+
+    if (rdma_create_qp(id, id->pd, &qia) != 0) {
+        GGML_LOG_ERROR("RDMA CM: rdma_create_qp failed: %s\n", strerror(errno));
+        return false;
+    }
+    rdma->qp = id->qp;
+    rdma->max_inline = qia.cap.max_inline_data;
+
+    return rdma->alloc_bufs() && rdma->post_rx_all();
+}
+
+bool socket_t::impl::rdma_cm_activate(uint16_t remote_port) {
+    if (listen_side) {
+        if (!rdma || !rdma->cm_listen_id) {
+            return false;
+        }
+        struct rdma_cm_id * id = nullptr;
+        if (!rdma_cm_wait(rdma->cm_ch, RDMA_CM_EVENT_CONNECT_REQUEST, &id)) {
+            return false;
+        }
+        if (!rdma_cm_setup_qp(id)) {
+            return false;
+        }
+        if (rdma_accept(id, nullptr) != 0) {
+            GGML_LOG_ERROR("RDMA CM: rdma_accept failed: %s\n", strerror(errno));
+            return false;
+        }
+    } else {
+        if (remote_port == 0) {
+            return false;
+        }
+        sockaddr_storage src = {};
+        sockaddr_storage dst = {};
+        if (!rdma_cm_addr(fd, false, 0, src) || !rdma_cm_addr(fd, true, remote_port, dst)) {
+            return false;
+        }
+
+        rdma = std::make_unique<rdma_conn>();
+        rdma->cm_ch = rdma_create_event_channel();
+        if (!rdma->cm_ch) {
+            return false;
+        }
+        if (rdma_create_id(rdma->cm_ch, &rdma->cm_id, nullptr, RDMA_PS_TCP) != 0) {
+            return false;
+        }
+        struct rdma_cm_id * id = rdma->cm_id;
+        if (rdma_resolve_addr(id, reinterpret_cast<sockaddr *>(&src),
+                              reinterpret_cast<sockaddr *>(&dst), RDMA_CM_TIMEOUT_MS) != 0) {
+            return false;
+        }
+        if (!rdma_cm_wait(rdma->cm_ch, RDMA_CM_EVENT_ADDR_RESOLVED, nullptr)) {
+            return false;
+        }
+        if (rdma_resolve_route(id, RDMA_CM_TIMEOUT_MS) != 0) {
+            return false;
+        }
+        if (!rdma_cm_wait(rdma->cm_ch, RDMA_CM_EVENT_ROUTE_RESOLVED, nullptr)) {
+            return false;
+        }
+        if (!rdma_cm_setup_qp(id)) {
+            return false;
+        }
+        if (rdma_connect(id, nullptr) != 0) {
+            GGML_LOG_ERROR("RDMA CM: rdma_connect failed: %s\n", strerror(errno));
+            return false;
+        }
+    }
+    if (!rdma_cm_wait(rdma->cm_ch, RDMA_CM_EVENT_ESTABLISHED, nullptr)) {
+        return false;
+    }
+
+    GGML_LOG_INFO("RDMA CM activated: qpn=%u inline=%u rx_depth=%d\n",
+                  rdma->qp->qp_num, rdma->max_inline, RDMA_RX_DEPTH);
     return true;
 }
 
@@ -542,12 +796,20 @@ void socket_t::impl::get_caps(uint8_t * local_caps) {
     }
 #  else
     rdma_local = {};
+    mode = RDMA_MODE_NONE;
     if (rdma_probe()) {
+        mode = RDMA_MODE_ROCE;
         rdma_caps rc = {};
         rc.qpn = rdma_local.qpn;
         rc.psn = rdma_local.psn;
         memcpy(rc.gid, rdma_local.gid, RDMA_GID_SIZE);
         memcpy(local_caps, &rc, sizeof(rc));
+    } else if (rdma_cm_probe()) {
+        mode = RDMA_MODE_CM;
+        rdma_cm_caps cc = {};
+        cc.magic = RDMA_CM_MAGIC;
+        cc.port  = rdma_cm_port;
+        memcpy(local_caps, &cc, sizeof(cc));
     } else {
         rdma.reset();
     }
@@ -563,16 +825,34 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
     for (size_t i = 0; i < RPC_CONN_CAPS_SIZE; i++) {
         remote_rdma |= remote_caps[i] != 0;
     }
-    if (!rdma || !remote_rdma) {
+#  ifdef GGML_RPC_RDMA_APPLE
+    bool local_rdma = rdma != nullptr;
+#  else
+    bool local_rdma = mode != RDMA_MODE_NONE;
+#  endif
+    if (!local_rdma || !remote_rdma) {
         rdma.reset();
         return;
     }
 #  ifdef GGML_RPC_RDMA_APPLE
     bool activated = rdma->activate(remote_caps);
 #  else
-    rdma_caps rc = {};
-    memcpy(&rc, remote_caps, sizeof(rc));
-    bool activated = rdma_activate(rc.qpn, rc.psn, rc.gid);
+    rdma_cm_caps cc = {};
+    memcpy(&cc, remote_caps, sizeof(cc));
+    bool remote_cm = cc.magic == RDMA_CM_MAGIC;
+    if (remote_cm != (mode == RDMA_MODE_CM)) {
+        GGML_LOG_INFO("RDMA: peer uses a different setup path, staying on TCP\n");
+        rdma.reset();
+        return;
+    }
+    bool activated;
+    if (remote_cm) {
+        activated = rdma_cm_activate(cc.port);
+    } else {
+        rdma_caps rc = {};
+        memcpy(&rc, remote_caps, sizeof(rc));
+        activated = rdma_activate(rc.qpn, rc.psn, rc.gid);
+    }
 #  endif
     if (activated) {
         use_rdma = true;
@@ -650,7 +930,7 @@ socket_ptr socket_t::accept() {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
-    return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
+    return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd, true)));
 }
 
 socket_ptr socket_t::create_server(const char * host, int port) {
