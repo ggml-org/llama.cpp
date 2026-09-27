@@ -353,6 +353,15 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Configure full-tensor MoE expert prefetch on a scheduler (mindcontrol port of
+    // --prefetch-experts-slots). Only engages for splits whose MUL_MAT_ID weights are
+    // host-resident (GGML_BACKEND_BUFFER_USAGE_WEIGHTS, e.g. --n-cpu-moe) during large
+    // prefill batches; decode is unaffected (batch ids < 2*n_expert).
+    //   slots == 0  -> prefetch disabled (no memory overhead)
+    //   slots >= 2  -> prefetch enabled with 1-deep lookahead and per-split cross-stream wait;
+    //                  GPU staging cost = slots * max_expert_tensor. Capped at GGML_SCHED_MAX_PREFETCH_SLOTS.
+    GGML_API void                 ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, int slots);
+
     //
     // Meta backend
     //
