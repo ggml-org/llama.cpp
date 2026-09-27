@@ -19,6 +19,7 @@
 #include "htp/ssm-conv.h"
 #include "htp/gated-delta-net-ops.h"
 #include "htp/softmax-ops.h"
+#include "htp/argsort-ops.h"
 
 struct htp_opnode {
     ggml_tensor * node   { nullptr };
@@ -367,6 +368,12 @@ struct htp_opformat {
                    node.opcode == HTP_OP_SUB || node.opcode == HTP_OP_DIV) {
             const auto * kparams = (const struct htp_binary_kernel_params *) node.kernel_params;
             snprintf(str, max_size, "vtcm %u", (unsigned int) kparams->vtcm_size);
+        } else if (node.opcode == HTP_OP_ARGSORT || node.opcode == HTP_OP_TOP_K) {
+            const auto * kparams = (const struct htp_sort_kernel_params *) node.kernel_params;
+            snprintf(str, max_size, "%s nth %d nchk %d chk %d vtcm %d",
+                     node.opcode == HTP_OP_TOP_K ? "top_k" : "argsort",
+                     (int) kparams->n_threads, (int) kparams->n_chunks,
+                     (int) kparams->chunk_elems, (int) kparams->vtcm_size);
         } else {
             snprintf(str, max_size, "----");
         }

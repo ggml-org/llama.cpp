@@ -136,7 +136,7 @@ set(CMAKE_SHARED_LIBRARY_SONAME_C_FLAG   "-Wl,-soname,")
 set(CMAKE_SHARED_LIBRARY_SONAME_CXX_FLAG "-Wl,-soname,")
 
 # Compiler Options
-set(COMMON_FLAGS "${ARCH_FLAGS} -fvectorize -flto -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
+set(COMMON_FLAGS "${ARCH_FLAGS} -fno-vectorize -fno-slp-vectorize -flto -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
 
 set(CMAKE_CXX_FLAGS_DEBUG          "${COMMON_FLAGS} -O0 -D_DEBUG -g")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${COMMON_FLAGS} -O2 -g")

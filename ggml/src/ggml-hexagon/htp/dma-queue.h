@@ -426,6 +426,22 @@ static inline bool dma_queue_push(dma_queue *q, dma_data ddata, size_t dst_strid
 
 #endif
 
+static inline void dma_sync_read(dma_queue * dma_q, void * dst, dma_addr_t src, size_t bytes) {
+    const uint32_t b = (uint32_t) bytes;
+    if (b > 0) {
+        dma_queue_push(dma_q, dma_make_data(dst, src), b, b, b, 1);
+        dma_queue_pop(dma_q);
+    }
+}
+
+static inline void dma_sync_write(dma_queue * dma_q, dma_addr_t dst, const void * src, size_t bytes) {
+    const uint32_t b = (uint32_t) bytes;
+    if (b > 0) {
+        dma_queue_push(dma_q, dma_make_data(dst, src), b, b, b, 1);
+        dma_queue_pop(dma_q);
+    }
+}
+
 #define DMA_CACHE_MAX_SIZE 256U
 
 // Fully assoc LRU cache

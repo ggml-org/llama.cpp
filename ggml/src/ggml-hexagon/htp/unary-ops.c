@@ -409,6 +409,20 @@ static void log_f16(const void * restrict src,
     }
 }
 
+static void step_f16(const void * restrict src,
+                     void * restrict dst,
+                     const uint32_t num_rows,
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_step_f16_aa((uint8_t *) dst_local, (const uint8_t *) src_local, ne0);
+    }
+}
+
 static void l2_norm_f16(const void * restrict src,
                         void * restrict dst,
                         const uint32_t num_rows,
@@ -662,6 +676,20 @@ static void relu_f32(const void * restrict src,
     }
 }
 
+static void step_f32(const void * restrict src,
+                     void * restrict dst,
+                     const uint32_t num_rows,
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_step_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
 static void log_f32(const void * restrict src,
                     void * restrict dst,
                     const uint32_t num_rows,
@@ -765,6 +793,11 @@ static void tile_log_f32(void * restrict dst, const void * restrict src, uint32_
 static void tile_relu_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
     (void) uctx;
     hvx_max_scalar_f32((uint8_t *) dst, (const uint8_t *) src, 0.0f, tw);
+}
+
+static void tile_step_f32(void * restrict dst, const void * restrict src, uint32_t tw, const struct htp_unary_context * uctx) {
+    (void) uctx;
+    hvx_step_f32_aa((uint8_t *) dst, (const uint8_t *) src, tw);
 }
 
 static void tri_apply_tile_f32(const void * restrict src, void * restrict dst,
@@ -1486,6 +1519,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_ABS:       op_type = is_f16 ? "abs-f16"      : "abs-f32";          break;
         case HTP_OP_UNARY_LOG:       op_type = is_f16 ? "log-f16"      : "log-f32";          break;
         case HTP_OP_UNARY_RELU:      op_type = "relu-f32";                                   break;
+        case HTP_OP_UNARY_STEP:      op_type = is_f16 ? "step-f16"     : "step-f32";         break;
         case HTP_OP_L2_NORM:         op_type = is_f16 ? "l2norm-f16"   : "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";                                    break;
         default:
@@ -1506,6 +1540,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_L2_NORM:
             case HTP_OP_UNARY_ABS:
             case HTP_OP_UNARY_LOG:
+            case HTP_OP_UNARY_STEP:
                 break;
             default:
                 FARF(ERROR, "unary-%s: not supported for F16\n", op_type);
@@ -1634,6 +1669,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_ABS:       compute_func = (void *) tile_abs_f32;            break;
             case HTP_OP_UNARY_LOG:       compute_func = (void *) tile_log_f32;            break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) tile_relu_f32;           break;
+            case HTP_OP_UNARY_STEP:      compute_func = (void *) tile_step_f32;           break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tiled_tri_f32;
                 compute_func = (void *) tri_apply_tile_f32;
@@ -1652,6 +1688,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f16;             break;
             case HTP_OP_UNARY_ABS:       compute_func = (void *) abs_f16;                 break;
             case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f16;                 break;
+            case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f16;                break;
             default:                     break;
         }
     } else {
@@ -1678,6 +1715,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_UNARY_ABS:       compute_func = (void *) abs_f32;                 break;
             case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f32;                 break;
             case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
+            case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
             case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
             case HTP_OP_TRI:
                 task_func    = unary_thread_tri_f32;

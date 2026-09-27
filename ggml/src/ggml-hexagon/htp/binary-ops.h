@@ -17,6 +17,7 @@ enum htp_binary_kernel_type {
     HTP_BINARY_KERNEL_ADD_ID,
     HTP_BINARY_KERNEL_COMPLEX,
     HTP_BINARY_KERNEL_REPEAT,
+    HTP_BINARY_KERNEL_CHUNKED,
 };
 
 struct htp_binary_kernel_params {
@@ -30,6 +31,10 @@ struct htp_binary_kernel_params {
 
     uint32_t src1_size;
     uint32_t vtcm_size;
+
+    uint32_t chunk_size;
+    uint32_t chunk_bytes;
+    uint32_t is_scalar;
 };
 
 #if defined(__cplusplus)
@@ -65,6 +70,40 @@ static inline void htp_binary_vtcm_layout_build(
 
     const uint32_t n_threads = kparams->n_threads;
     if (n_threads == 0) {
+        return;
+    }
+
+    if (kparams->kernel_type == HTP_BINARY_KERNEL_CHUNKED) {
+        const size_t chunk_bytes = kparams->chunk_bytes;
+        if (chunk_bytes == 0) {
+            return;
+        }
+
+        L->src0_bytes_per_thread = 2 * chunk_bytes;
+        L->src1_bytes_per_thread = kparams->is_scalar ? 0 : (2 * chunk_bytes);
+        L->dst_bytes_per_thread  = 2 * chunk_bytes;
+
+        L->src0_spad_half_size = chunk_bytes;
+        L->src1_spad_half_size = kparams->is_scalar ? 0 : chunk_bytes;
+        L->dst_spad_half_size  = chunk_bytes;
+
+        L->rows_per_buffer = 1;
+        L->src1_size = 0;
+
+        const size_t src0_total = n_threads * L->src0_bytes_per_thread;
+        const size_t src1_total = kparams->is_scalar ? 128 : (n_threads * L->src1_bytes_per_thread);
+        const size_t dst_total  = n_threads * L->dst_bytes_per_thread;
+
+        size_t off = 0;
+        VTCM_LAYOUT_ALLOC(off, off_src0, src0_total);
+        VTCM_LAYOUT_ALLOC(off, off_src1, src1_total);
+        VTCM_LAYOUT_ALLOC(off, off_dst,  dst_total);
+
+        if (off > vtcm_size) {
+            return;
+        }
+
+        L->total_bytes = off;
         return;
     }
 

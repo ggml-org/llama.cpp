@@ -69,6 +69,7 @@ enum htp_op_code {
     HTP_OP_UNARY_ABS,
     HTP_OP_UNARY_LOG,
     HTP_OP_UNARY_RELU,
+    HTP_OP_UNARY_STEP,
     HTP_OP_GLU_SWIGLU,
     HTP_OP_GLU_SWIGLU_OAI,
     HTP_OP_GLU_GEGLU,
@@ -86,6 +87,7 @@ enum htp_op_code {
     HTP_OP_TOP_K,
     HTP_OP_SQR,
     HTP_OP_SQRT,
+    HTP_OP_SUM,
     HTP_OP_SUM_ROWS,
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,
@@ -108,6 +110,7 @@ enum htp_op_code {
     HTP_OP_GLU_SWIGLU_CLAMP,
     HTP_OP_MDEV_GROUP,
     HTP_OP_ROLL,
+    HTP_OP_ARGMAX,
 
     HTP_OP_INVALID
 };
