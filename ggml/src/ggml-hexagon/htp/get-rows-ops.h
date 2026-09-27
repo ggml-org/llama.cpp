@@ -7,15 +7,20 @@
 #include "hex-fastdiv.h"
 #include "matmul-ops.h"
 
+enum htp_get_rows_kernel_type {
+    HTP_GET_ROWS_KERNEL_SAMETYPE = 0,
+    HTP_GET_ROWS_KERNEL_TILED,
+    HTP_GET_ROWS_KERNEL_FLAT,
+};
+
 struct htp_get_rows_kernel_params {
     int32_t  n_threads;
-    int32_t  use_dma;
+    int32_t  kernel_type;
     int32_t  chunks_per_row;
     int32_t  chunk_size;
     int32_t  total_tasks;
     int32_t  tasks_per_thread;
     int32_t  vtcm_size;
-    int32_t  tiled;
 
     // Fastdiv helpers
     struct fastdiv_values div_ne10;
@@ -39,18 +44,17 @@ struct htp_get_rows_vtcm_layout {
 
 static inline void htp_get_rows_vtcm_layout_build(
     struct htp_get_rows_vtcm_layout * vtcm_layout,
+    int kernel_type,
     int type,
     uint32_t ne00,
-    uint32_t n_threads,
-    bool use_dma,
-    bool tiled) {
+    uint32_t n_threads) {
 
-    if (use_dma) {
+    if (kernel_type == HTP_GET_ROWS_KERNEL_SAMETYPE) {
         memset(vtcm_layout, 0, sizeof(*vtcm_layout));
         return;
     }
 
-    if (tiled) {
+    if (kernel_type == HTP_GET_ROWS_KERNEL_TILED) {
         const size_t tile_size   = type == HTP_TYPE_Q4_0 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
         const size_t tile_stride = (tile_size + 127) & ~127;
         const uint32_t n_k_tiles = ne00 / HTP_MM_HMX_TILE_N_COLS;
@@ -67,9 +71,6 @@ static inline void htp_get_rows_vtcm_layout_build(
 
     uint32_t src0_row_size = 0;
     switch (type) {
-        case HTP_TYPE_F32:
-            src0_row_size = ne00 * 4;
-            break;
         case HTP_TYPE_F16:
             src0_row_size = ne00 * 2;
             break;

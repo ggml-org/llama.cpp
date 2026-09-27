@@ -375,10 +375,13 @@ struct htp_opformat {
                      (int) kparams->chunk_elems, (int) kparams->vtcm_size);
         } else if (node.opcode == HTP_OP_GET_ROWS) {
             const auto * kparams = (const struct htp_get_rows_kernel_params *) node.kernel_params;
-            snprintf(str, max_size, "%s%s vtcm %u",
-                     kparams->tiled ? "tiled" : (kparams->use_dma ? "dma" : "dt"),
-                     kparams->n_threads > 1 ? "-multi" : "",
-                     (unsigned int) kparams->vtcm_size);
+            const char * ktype_str = "unknown";
+            switch (kparams->kernel_type) {
+                case HTP_GET_ROWS_KERNEL_SAMETYPE: ktype_str = "sametype"; break;
+                case HTP_GET_ROWS_KERNEL_TILED:    ktype_str = "tiled"; break;
+                case HTP_GET_ROWS_KERNEL_FLAT:     ktype_str = "flat"; break;
+            }
+            snprintf(str, max_size, "%s%s vtcm %u", ktype_str, kparams->n_threads > 1 ? "-multi" : "", (unsigned int) kparams->vtcm_size);
         } else {
             snprintf(str, max_size, "----");
         }

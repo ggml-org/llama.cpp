@@ -199,15 +199,8 @@ static void get_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned 
     dma_queue_flush(dma_q);                                                                                                     \
 }
 
-#define F32_BYTES(n)  ((n) * sizeof(float))
 #define F16_BYTES(n)  ((n) * sizeof(__fp16))
 #define Q8_0_BYTES(n) (((n) / 32) * sizeof(block_q8_0))
-
-static __attribute__((noinline)) void compute_get_rows_f32(uint8_t * dst_spad, const uint8_t * src_spad, uint32_t cur_elems) {
-    if (cur_elems > 0) {
-        hvx_copy_f32_uu(dst_spad, src_spad, cur_elems);
-    }
-}
 
 static __attribute__((noinline)) void compute_get_rows_f16(float * dst_spad, const void * src_spad, uint32_t cur_elems) {
     hvx_dequantize_row_f16_f32(dst_spad, src_spad, cur_elems);
@@ -216,9 +209,6 @@ static __attribute__((noinline)) void compute_get_rows_f16(float * dst_spad, con
 static __attribute__((noinline)) void compute_get_rows_q8_0(float * dst_spad, const void * src_spad, uint32_t cur_elems) {
     hvx_dequantize_row_q8_0_f32(dst_spad, src_spad, cur_elems);
 }
-
-GET_ROWS_THREAD_DT_FN(f32,  F32_BYTES,  int32_t, { compute_get_rows_f32((uint8_t *)dst_spad, (const uint8_t *)src_spad, cur_elems); })
-GET_ROWS_THREAD_DT_FN(f32,  F32_BYTES,  int64_t, { compute_get_rows_f32((uint8_t *)dst_spad, (const uint8_t *)src_spad, cur_elems); })
 
 GET_ROWS_THREAD_DT_FN(f16,  F16_BYTES,  int32_t, { compute_get_rows_f16((float *)dst_spad, src_spad, cur_elems); })
 GET_ROWS_THREAD_DT_FN(f16,  F16_BYTES,  int64_t, { compute_get_rows_f16((float *)dst_spad, src_spad, cur_elems); })
@@ -386,9 +376,14 @@ int op_get_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if ((octx->src[0]->type == HTP_TYPE_I32 && octx->dst->type != HTP_TYPE_I32) ||
-        (octx->src[0]->type != HTP_TYPE_I32 && octx->dst->type != HTP_TYPE_F32)) {
-        return HTP_STATUS_NO_SUPPORT;
+    if (kparams->kernel_type == HTP_GET_ROWS_KERNEL_SAMETYPE) {
+        if (octx->src[0]->type != octx->dst->type) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
+    } else {
+        if (octx->dst->type != HTP_TYPE_F32) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
     }
 
     if (octx->src[1]->type != HTP_TYPE_I32 && octx->src[1]->type != HTP_TYPE_I64) {
@@ -436,7 +431,7 @@ int op_get_rows(struct htp_ops_context * octx) {
     grctx.index_i32 = octx->src[1]->type == HTP_TYPE_I32;
 
     const uint32_t ne00 = octx->src[0]->ne[0];
-    htp_get_rows_vtcm_layout_build(&grctx.vtcm_layout, octx->src[0]->type, ne00, n_threads, kparams->use_dma != 0, kparams->tiled != 0);
+    htp_get_rows_vtcm_layout_build(&grctx.vtcm_layout, kparams->kernel_type, octx->src[0]->type, ne00, n_threads);
 
     if (grctx.vtcm_layout.total_bytes > octx->ctx->vtcm_size) {
         FARF(ERROR, "get-rows: VTCM reservation %zu is too small, needed %zu\n",
@@ -445,31 +440,33 @@ int op_get_rows(struct htp_ops_context * octx) {
     }
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
-    const bool q4_0_tiled = octx->src[0]->type == HTP_TYPE_Q4_0 && kparams->tiled;
-    const bool q8_0_tiled = octx->src[0]->type == HTP_TYPE_Q8_0 && kparams->tiled;
 
     work_queue_func_t q_func = NULL;
-    if (q4_0_tiled || q8_0_tiled) {
-        q_func = get_rows_thread_tiled;
-    } else if (kparams->use_dma) {
-        q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t : get_rows_thread_st_int64_t);
-    } else {
-        switch (octx->src[0]->type) {
-            case HTP_TYPE_F32:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f32_int32_t  : get_rows_thread_f32_int64_t);  break;
-            case HTP_TYPE_F16:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f16_int32_t  : get_rows_thread_f16_int64_t);  break;
-            case HTP_TYPE_Q8_0: q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q8_0_int32_t : get_rows_thread_q8_0_int64_t); break;
-            case HTP_TYPE_I32:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t   : get_rows_thread_st_int64_t);   break;
-            default:            return HTP_STATUS_NO_SUPPORT;
-        }
+    switch (kparams->kernel_type) {
+        case HTP_GET_ROWS_KERNEL_SAMETYPE:
+            q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t : get_rows_thread_st_int64_t);
+            break;
+        case HTP_GET_ROWS_KERNEL_TILED:
+            q_func = get_rows_thread_tiled;
+            break;
+        case HTP_GET_ROWS_KERNEL_FLAT:
+            switch (octx->src[0]->type) {
+                case HTP_TYPE_F16:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f16_int32_t  : get_rows_thread_f16_int64_t);  break;
+                case HTP_TYPE_Q8_0: q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q8_0_int32_t : get_rows_thread_q8_0_int64_t); break;
+                default:            return HTP_STATUS_NO_SUPPORT;
+            }
+            break;
+        default:
+            return HTP_STATUS_NO_SUPPORT;
     }
 
-    FARF(HIGH, "get-rows: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu dst-vtcm-size %zu use-dma %d n-threads %d\n",
+    FARF(HIGH, "get-rows: (%ux%ux%ux%u) x (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu dst-vtcm-size %zu kernel-type %d n-threads %d\n",
          octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
          octx->src[1]->ne[0], octx->src[1]->ne[1], octx->src[1]->ne[2], octx->src[1]->ne[3],
          octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
          grctx.vtcm_layout.src0_bytes_per_thread * n_threads,
          grctx.vtcm_layout.dst_bytes_per_thread  * n_threads,
-         kparams->use_dma, n_threads);
+         kparams->kernel_type, n_threads);
 
     work_queue_run(octx->ctx->work_queue, q_func, &grctx, n_threads);
     return HTP_STATUS_OK;
