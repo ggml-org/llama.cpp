@@ -4,34 +4,40 @@ static __device__ __forceinline__ float op_clamp(float x, float min, float max) 
     return fminf(fmaxf(x, min), max);
 }
 
-// src and dst may be views: rows are contiguous, dims 1..3 follow the tensor
-// strides (in elements).
+// src and dst may be views: rows are contiguous, dims 1..3 follow the strides (in elements).
 template <class T>
-static __global__ void op_clamp_kernel(const T * x, T * dst, const T min, const T max,
-        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t n,
-        const int64_t s01, const int64_t s02, const int64_t s03,
-        const int64_t s1,  const int64_t s2,  const int64_t s3) {
-    const int64_t i = (int64_t) blockDim.x*blockIdx.x + threadIdx.x;
+static __global__ void op_clamp_kernel(const T * x, T * dst, const T min, const T max, const uint32_t k,
+        const uint3 ne0, const uint3 ne1, const uint3 ne2,
+        const uint32_t s01, const uint32_t s02, const uint32_t s03,
+        const uint32_t s1,  const uint32_t s2,  const uint32_t s3) {
+    const uint32_t i = blockDim.x*blockIdx.x + threadIdx.x;
 
-    if (i >= n) {
+    if (i >= k) {
         return;
     }
 
-    const int64_t i0 = i % ne0;
-    const int64_t i1 = (i / ne0) % ne1;
-    const int64_t i2 = (i / (ne0*ne1)) % ne2;
-    const int64_t i3 = i / (ne0*ne1*ne2);
+    const uint2 d0 = fast_div_modulo(i,    ne0); // <i / ne0, i0>
+    const uint2 d1 = fast_div_modulo(d0.x, ne1); // <i / (ne0*ne1), i1>
+    const uint2 d2 = fast_div_modulo(d1.x, ne2); // <i3, i2>
 
-    dst[i0 + i1*s1 + i2*s2 + i3*s3] = (T)op_clamp((float)x[i0 + i1*s01 + i2*s02 + i3*s03], (float)min, (float)max);
+    const size_t i_src = d0.y + size_t(d1.y)*s01 + size_t(d2.y)*s02 + size_t(d2.x)*s03;
+    const size_t i_dst = d0.y + size_t(d1.y)*s1  + size_t(d2.y)*s2  + size_t(d2.x)*s3;
+
+    dst[i_dst] = (T)op_clamp((float)x[i_src], (float)min, (float)max);
 }
 
 template <class T>
 static void clamp_cuda(const T * x, T * dst, const T min, const T max, const ggml_tensor * src0, const ggml_tensor * t, cudaStream_t stream) {
-    const int64_t n = ggml_nelements(src0);
+    const int64_t k  = ggml_nelements(src0);
     const size_t  ts = sizeof(T);
-    const int64_t num_blocks = (n + CUDA_CLAMP_BLOCK_SIZE - 1) / CUDA_CLAMP_BLOCK_SIZE;
-    op_clamp_kernel<<<num_blocks, CUDA_CLAMP_BLOCK_SIZE, 0, stream>>>(x, dst, min, max,
-        src0->ne[0], src0->ne[1], src0->ne[2], n,
+    GGML_ASSERT(k <= std::numeric_limits<uint32_t>::max());
+
+    const uint3 ne0 = init_fastdiv_values(src0->ne[0]);
+    const uint3 ne1 = init_fastdiv_values(src0->ne[1]);
+    const uint3 ne2 = init_fastdiv_values(src0->ne[2]);
+
+    const int64_t num_blocks = (k + CUDA_CLAMP_BLOCK_SIZE - 1) / CUDA_CLAMP_BLOCK_SIZE;
+    op_clamp_kernel<<<num_blocks, CUDA_CLAMP_BLOCK_SIZE, 0, stream>>>(x, dst, min, max, (uint32_t) k, ne0, ne1, ne2,
         src0->nb[1]/ts, src0->nb[2]/ts, src0->nb[3]/ts,
         t->nb[1]/ts,    t->nb[2]/ts,    t->nb[3]/ts);
 }
