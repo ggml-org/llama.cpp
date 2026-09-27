@@ -299,6 +299,23 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("delimiters see through tags and atomics", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.until(p.tag("open", p.literal("a") + p.atomic(p.literal("b"))));
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-5
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-5 ::= | [a] until-5-01 | [^a] until-5
+            until-5-01 ::= | [a] until-5-01 | [^ab] until-5
+        )""", gbnf);
+    });
+
     t.test("delimiters reject anything but sequences of literals and tokens", [](testing &t) {
         bool threw = false;
         try {
@@ -358,6 +375,89 @@ void test_gbnf_generation(testing &t) {
             root ::= ac-3
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
         )""", gbnf);
+    });
+
+    t.test("trigger rule emits its alternatives when not lazy", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            std::vector<common_peg_trigger> triggers = { { p.literal("ab"), p.literal("x") }, { p.literal("cd"), p.literal("y") } };
+            return p.until(triggers) + p.trigger_rule("tool", triggers);
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, false);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= until-4 tool
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            tool ::= "ab" "x" | "cd" "y"
+            until-4 ::= | [a] until-4-01 | [c] until-4-03 | [^ac] until-4
+            until-4-01 ::= | [a] until-4-01 | [c] until-4-03 | [^abc] until-4
+            until-4-03 ::= | [a] until-4-01 | [c] until-4-03 | [^acd] until-4
+        )""", gbnf);
+    });
+
+    t.test("trigger rule makes the lazy grammar scan for its starts", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            std::vector<common_peg_trigger> triggers = { { p.literal("ab"), p.literal("x") }, { p.literal("cd"), p.literal("y") } };
+            return p.until(triggers) + p.trigger_rule("tool", triggers);
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, true);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= trigger
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            tool-rest-0 ::= "x"
+            tool-rest-1 ::= "y"
+            trigger ::= | [a] trigger-01 | [c] trigger-03 | [^ac] trigger
+            trigger-01 ::= | [b] tool-rest-0 | [a] trigger-01 | [c] trigger-03 | [^abc] trigger
+            trigger-03 ::= | [d] tool-rest-1 | [a] trigger-01 | [c] trigger-03 | [^acd] trigger
+        )""", gbnf);
+    });
+
+    t.test("scanning grammar lets other named tokens through", [](testing &t) {
+        common_peg_tokens tokens;
+        tokens.ids.emplace("<a>", 1);
+        tokens.ids.emplace("<b>", 2);
+        tokens.tokens.emplace(1, common_peg_token{ "<a>", LLAMA_TOKEN_ATTR_CONTROL });
+        tokens.tokens.emplace(2, common_peg_token{ "<b>", LLAMA_TOKEN_ATTR_CONTROL });
+
+        common_peg_parser_builder p(tokens);
+        std::vector<common_peg_trigger> triggers = { { p.token("<a>") + p.literal("x"), p.token("<b>") } };
+        p.set_root(p.until(triggers) + p.trigger_rule("tool", triggers));
+        auto parser = p.build();
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder, true);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= trigger
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            tool-rest-0 ::= <[2]>
+            trigger ::= | <[1]> trigger-01 | (. | <[2]>) trigger
+            trigger-01 ::= | [x] tool-rest-0 | <[1]> trigger-01 | ([^x] | <[2]>) trigger
+        )""", gbnf);
+    });
+
+    t.test("trigger rules reject a shared start", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
+            return p.trigger_rule("one", { { p.literal("ab"), p.literal("x") } }) |
+                   p.trigger_rule("two", { { p.literal("ab"), p.literal("y") } });
+        });
+
+        bool threw = false;
+        try {
+            build_grammar([&](const common_grammar_builder & builder) {
+                parser.build_grammar(builder, true);
+            });
+        } catch (const std::runtime_error &) {
+            threw = true;
+        }
+        t.assert_equal("duplicate_rejected", true, threw);
     });
 
     t.test("ac grammar suffix delimiter offers both rests", [](testing &t) {
