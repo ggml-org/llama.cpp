@@ -470,6 +470,27 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
+    t.test("token sets", [](testing &t) {
+        common_peg_tokens tokens;
+        tokens.ids.emplace("<a>", 1);
+        tokens.ids.emplace("<b>", 2);
+        tokens.tokens.emplace(1, common_peg_token{ "<a>", LLAMA_TOKEN_ATTR_CONTROL });
+        tokens.tokens.emplace(2, common_peg_token{ "<b>", LLAMA_TOKEN_ATTR_CONTROL });
+
+        common_peg_parser_builder p(tokens);
+        p.set_root(p.token({ "<a>", "<b>" }) + p.token({ "<a>", "<b>" }, true));
+        auto parser = p.build();
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        assert_gbnf_equal(t, R"""(
+            root ::= (<[1]> | <[2]>) !<[1-2]>
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )""", gbnf);
+    });
+
     t.test("trigger start choice shares one rest", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
             auto start = p.literal("a") + (p.literal("b") | p.literal("d"));
