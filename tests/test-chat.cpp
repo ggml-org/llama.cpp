@@ -3032,6 +3032,26 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_content_and_tool_call("Hello, world!\nWhat's up?", "get_time", R"({"city": "Paris"})"))
             .run();
 
+        // Required tool call
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect(message_with_tool_calls("get_time", R"({"city": "Paris"})"))
+            .run();
+
+        // Required tool call after reasoning
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|><|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", {} },
+            })
+            .run();
+
         // Parallel tool calls
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>"
@@ -6335,6 +6355,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
+            .run();
+
+        // A tool call as the first message of the turn: "<|start|>assistant" is the
+        // generation prompt, so the output starts at " to=".
+        tst.test(" to=special_function<|message|>" + call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_call)
             .run();
 
         // "Inform then act": the model answers the user and calls a tool in ONE generation,
