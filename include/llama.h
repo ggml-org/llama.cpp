@@ -1108,6 +1108,9 @@ extern "C" {
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
 
+    // Returns whether the context is currently using causal attention
+    LLAMA_API bool llama_get_causal_attn(const struct llama_context * ctx);
+
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     //
