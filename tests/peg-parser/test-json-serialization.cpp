@@ -38,6 +38,21 @@ void test_json_serialization(testing &t) {
         t.assert_equal("same_grammar", grammar(original), grammar(deserialized));
     });
 
+    t.test("trigger rules rebuild the same scanning grammar", [](testing &t) {
+        auto original = build_peg_parser([](common_peg_parser_builder & p) {
+            std::vector<common_peg_trigger> triggers = { { p.literal("<tag>"), p.literal("x") } };
+            return p.until(triggers) + p.trigger_rule("tool", triggers);
+        });
+        auto deserialized = common_peg_arena::from_json(common_json::parse(original.to_json().dump()));
+
+        auto grammar = [](const common_peg_arena & arena) {
+            return build_grammar([&](const common_grammar_builder & builder) {
+                arena.build_grammar(builder, true);
+            });
+        };
+        t.assert_equal("same_grammar", grammar(original), grammar(deserialized));
+    });
+
     t.bench("deserialize", [&]() {
         auto deserialized = common_peg_arena::from_json(common_json::parse(json_serialized));
     }, 100);

@@ -107,6 +107,7 @@ For a more complete example, see `test_example_native()` in
 - **`ref(name)`** - Creates a lightweight reference to a named rule (for recursive grammars)
 - **`rule(name, p, trigger)`** - Creates a named rule and returns a reference
 - **`trigger_rule(name, p)`** - Creates a trigger rule (entry point for lazy grammar generation)
+- **`trigger_rule(name, triggers)`** - Creates a trigger rule from `{ start, rest }` pairs, gating the lazy grammar on the starts
 - **`schema(p, name, schema, raw)`** - Wraps parser with JSON schema metadata for grammar generation
 - **`schema(p, name, doc, node, raw)`** - Same, for a node of a `common_chat_schema_document` built earlier, e.g. one tool parameter
 
@@ -141,6 +142,15 @@ During lazy grammar generation, only rules reachable from a `trigger_rule(p)`
 are emitted in the grammar. All trigger rules are added as alternations in the
 root rule. It is still necessary to define trigger patterns, as the parser has
 no interaction with the grammar sampling.
+
+When the trigger rules are built from triggers, `trigger_rule(name, triggers)`,
+the lazy grammar scans for the triggers instead: the root lets anything through
+until the start of a trigger completes and from there only the rest of that
+trigger may follow, or it may end before any start completes. The sampler runs such a
+grammar from the first token, so `grammar_lazy` is false and no trigger
+patterns are needed. A start may only be a sequence of literals and tokens,
+possibly wrapped in tags and atomics, and `until(triggers)` matches content up
+to any of them.
 
 ### JSON Schema
 

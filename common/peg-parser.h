@@ -302,10 +302,17 @@ struct common_peg_schema_parser {
     bool raw;
 };
 
+// A tool call start the lazy grammar scans for and the parser that follows it
+struct common_peg_trigger {
+    common_peg_parser_id start;
+    common_peg_parser_id rest;
+};
+
 struct common_peg_rule_parser {
     std::string name;
     common_peg_parser_id child;
     bool trigger;
+    std::vector<common_peg_trigger> triggers; // set when the rule was built from triggers
 };
 
 struct common_peg_ref_parser {
@@ -506,11 +513,14 @@ class common_peg_parser_builder {
     common_peg_parser until_one_of(const std::vector<std::string> & delimiters);
 
     // Matches all characters until one of the delimiters is found (delimiter not consumed). A delimiter may only be
-    // a sequence of literals and tokens.
+    // a sequence of literals and tokens, possibly wrapped in tags and atomics.
     //   S -> (!delim .)*
     common_peg_parser until(const std::vector<common_peg_parser> & delimiters);
     common_peg_parser until(std::initializer_list<common_peg_parser> delimiters) { return until(std::vector<common_peg_parser>(delimiters)); }
     common_peg_parser until(const common_peg_parser & delimiter) { return until({ delimiter }); }
+
+    // Matches all characters until the start of one of the triggers is found (start not consumed).
+    common_peg_parser until(const std::vector<common_peg_trigger> & triggers);
 
     // Matches everything
     //   S -> .*
@@ -586,6 +596,11 @@ class common_peg_parser_builder {
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
 
+    // Creates a trigger rule matching the start and rest of any trigger. A lazy grammar scans for a start
+    // and then only allows its rest. A start may only be a sequence of literals and tokens, possibly
+    // wrapped in tags and atomics.
+    common_peg_parser trigger_rule(const std::string & name, const std::vector<common_peg_trigger> & triggers);
+
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is
     // intended for situations where partial output is undesirable.
@@ -604,7 +619,8 @@ class common_peg_parser_builder {
     // from there only the rest of its branch may follow, or nothing when the branch has no rest. With
     // optional the grammar may also end before any delimiter completes. Parsing delegates entirely to
     // the child, which is responsible for consuming the delimiter and rest (e.g. until(D) + literal(D) + R).
-    // A delimiter may only be a sequence of literals and tokens, and no two branches may share one.
+    // A delimiter may only be a sequence of literals and tokens, possibly wrapped in tags and atomics, and no two
+    // branches may share one.
     common_peg_parser ac(const common_peg_parser & p, const std::vector<common_peg_ac_branch> & branches, bool optional = false);
     common_peg_parser ac(const common_peg_parser & p, std::initializer_list<common_peg_ac_branch> branches, bool optional = false) { return ac(p, std::vector<common_peg_ac_branch>(branches), optional); }
     common_peg_parser ac(const common_peg_parser & p, const std::vector<std::string> & delimiters);

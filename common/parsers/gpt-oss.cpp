@@ -69,7 +69,8 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
 
     auto parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
-        auto start           = p.rule("start", p.token("<|start|>") + p.literal("assistant"));
+        auto start_assistant = p.token("<|start|>") + p.literal("assistant");
+        auto start           = p.rule("start", start_assistant);
         auto end             = p.rule("end", p.token("<|end|>"));
         auto content         = p.rule("message-content", p.until(p.token("<|end|>")));
         auto channel         = p.token("<|channel|>") + (p.literal("commentary") | p.literal("analysis"));
@@ -104,35 +105,40 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            auto tool_choice = p.choice();
+            auto in_role    = p.choice();
+            auto in_channel = p.choice();
 
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
                 const auto   params   = common_chat_tool_parameters(function);
 
-                auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
+                auto func_name  = p.tool_name(p.literal(name));
                 auto constraint = p.optional(p.space() + p.optional(p.token("<|constrain|>")) + constrain_type);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
                 // recipient in role header
                 //   <|start|>assistant to=functions.NAME<|channel|>(commentary|analysis)[constraint]<|message|>ARGS
-                auto tool_in_role = p.tool(p.tool_open(func_name + channel + constraint + p.token("<|message|>")) + args);
+                in_role |= p.rule("tool-" + name + "-in-role", func_name + channel + constraint + p.token("<|message|>") + args);
 
                 // recipient in channel header
-                //   <|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
-                auto tool_in_channel = p.tool(p.tool_open(channel + func_name + constraint + p.token("<|message|>")) + args);
-
-                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
+                //   <|start|>assistant<|channel|>(commentary|analysis) to=functions.NAME[constraint]<|message|>ARGS
+                in_channel |= p.rule("tool-" + name + "-in-channel", func_name + constraint + p.token("<|message|>") + args);
             });
 
-            auto tool_call  = p.trigger_rule("tool-call", tool_choice);
+            // The recipient prefix is the trigger, so the grammar constrains the name that follows it
+            auto to_functions = p.tool_open(p.literal(" to=functions."));
+            auto tool_call    = p.trigger_rule("tool-call", {
+                { start_assistant + to_functions,                                                    in_role    },
+                { start_assistant + p.token("<|channel|>") + p.literal("commentary") + to_functions, in_channel },
+                { start_assistant + p.token("<|channel|>") + p.literal("analysis") + to_functions,   in_channel },
+            });
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                return p.zero_or_more(start + any) + start + tool_call;
+                return p.zero_or_more(start + any) + tool_call;
             }
 
-            return p.zero_or_more(start + any) + start + (tool_call | final_msg);
+            return p.zero_or_more(start + any) + (tool_call | start + final_msg);
         }
 
         return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
@@ -141,17 +147,11 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        // The grammar scans for the triggers itself, so the sampler runs it from the first token
+        data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            parser.build_grammar(builder, !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO);
         });
-
-        data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^\\s+to$" },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^<\\|channel\\|>(?:commentary|analysis)\\s+to=functions$" },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(\\s+to)" },
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant(<\\|channel\\|>(?:commentary|analysis)\\s+to)" }
-        };
     }
 
     return data;

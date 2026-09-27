@@ -82,7 +82,6 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 p.ac(p.tool_arg_string_value(p.until("\n</parameter>\n")) + arg_close, "\n</parameter>\n"));
 
             struct function_parsers {
-                std::string       name;
                 common_peg_parser opener;
                 common_peg_parser body;
             };
@@ -146,7 +145,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 auto body   = p.literal("\n") + p.tool_args(args) + p.tool_close(p.literal("</function>\n"));
 
                 tool_choice |= p.rule("tool-" + name, p.tool(opener + body));
-                functions.push_back({ name, opener, body });
+                functions.push_back({ opener, body });
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
@@ -155,40 +154,20 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
             auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
-            // Each trigger as the plain delimiter the grammar waits for, the tagged parser that consumes it, and
-            // the rest that follows it
-            struct trigger {
-                common_peg_parser delimiter;
-                common_peg_parser start;
-                common_peg_parser rest;
-            };
-            auto tool_call_token = p.token("<tool_call>");
-            std::vector<trigger> triggers = { { tool_call_token, tool_call_token, p.literal("\n") + tool_call_body + more } };
+            std::vector<common_peg_trigger> triggers = { { p.token("<tool_call>"), p.literal("\n") + tool_call_body + more } };
 
             if (is_qwen3_coder) {
                 // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
                 // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
                 // constraining on <function which may occur in valid content generation, e.g. #include <functional>
                 for (const auto & f : functions) {
-                    triggers.push_back({ p.literal("<function=" + f.name + ">"), f.opener,
-                                         f.body + p.token("</tool_call>") + p.space() + more });
+                    triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
                 }
             }
 
-            std::vector<common_peg_parser>    tool_call_start;
-            std::vector<common_peg_ac_branch> branches;
-            auto                              tool_calls = p.choice();
-            for (const auto & t : triggers) {
-                tool_call_start.push_back(t.delimiter);
-                branches.push_back({ t.delimiter, t.rest });
-                tool_calls |= t.start + t.rest;
-            }
+            auto tool_calls = p.trigger_rule("tool-calls", triggers);
 
-            // The grammar lets content through until a trigger completes and then constrains the rest
-            auto tool_section = p.trigger_rule("tool-section",
-                p.ac(p.content(p.until(tool_call_start)) << p.repeat(tool_calls, min_calls, 1), branches, min_calls == 0));
-
-            return generation_prompt + (reasoning << tool_section);
+            return generation_prompt + (reasoning << p.content(p.until(triggers)) << p.repeat(tool_calls, min_calls, 1));
         }
 
         // Content only parser
@@ -198,10 +177,10 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
     data.parser = parser.save();
 
     if (include_grammar) {
-        // The tool section grammar waits for the triggers itself, so the sampler runs it from the first token
+        // The grammar scans for the triggers itself, so the sampler runs it from the first token
         data.grammar_lazy = false;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, !has_response_format);
+            parser.build_grammar(builder, !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO);
         });
     }
 

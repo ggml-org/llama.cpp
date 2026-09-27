@@ -229,7 +229,9 @@ struct until_delimiter {
 static until_delimiter flatten_delimiter(const common_peg_arena & arena, common_peg_parser_id id) {
     return std::visit([&](const auto & p) -> until_delimiter {
         using T = std::decay_t<decltype(p)>;
-        if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
+        if constexpr (std::is_same_v<T, common_peg_tag_parser> || std::is_same_v<T, common_peg_atomic_parser>) {
+            return flatten_delimiter(arena, p.child);
+        } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
             until_delimiter d;
             size_t pos = 0;
             while (pos < p.literal.size()) {
@@ -253,7 +255,7 @@ static until_delimiter flatten_delimiter(const common_peg_arena & arena, common_
             }
             return d;
         } else {
-            throw std::invalid_argument("a delimiter may only be a sequence of literals and tokens");
+            throw std::invalid_argument("a delimiter may only be a sequence of literals and tokens, possibly wrapped in tags and atomics");
         }
     }, arena.get(id));
 }
@@ -1000,6 +1002,10 @@ void common_peg_arena::resolve_refs() {
                 }
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 p.child = resolve_ref(p.child);
+                for (auto & t : p.triggers) {
+                    t.start = resolve_ref(t.start);
+                    t.rest  = resolve_ref(t.rest);
+                }
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 p.child = resolve_ref(p.child);
             } else if constexpr (std::is_same_v<T, common_peg_epsilon_parser> ||
@@ -1213,6 +1219,15 @@ common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_
     return add(std::move(p));
 }
 
+common_peg_parser common_peg_parser_builder::until(const std::vector<common_peg_trigger> & triggers) {
+    common_peg_until_parser p;
+    for (const auto & t : triggers) {
+        p.delimiter_parsers.push_back(t.start);
+    }
+    build_delimiter_matcher(arena_, p);
+    return add(std::move(p));
+}
+
 common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
     auto token = arena_.tokens_.token_id(piece);
     if (token == LLAMA_TOKEN_NULL) {
@@ -1325,6 +1340,23 @@ common_peg_parser common_peg_parser_builder::rule(const std::string & name, cons
     auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, parser.id(), trigger});
     arena_.rules_[clean_name] = rule_id;
 
+    return ref(clean_name);
+}
+
+common_peg_parser common_peg_parser_builder::trigger_rule(const std::string & name, const std::vector<common_peg_trigger> & triggers) {
+    if (triggers.empty()) {
+        throw std::runtime_error("trigger rule requires at least one trigger");
+    }
+    auto alternatives = choice();
+    for (const auto & t : triggers) {
+        if (flatten_delimiter(arena_, t.start).symbols.empty()) {
+            throw std::invalid_argument("trigger start must not match the empty string");
+        }
+        alternatives |= sequence(std::vector<common_peg_parser_id>{ t.start, t.rest });
+    }
+    auto clean_name = rule_name(name);
+    auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, alternatives.id(), true, triggers});
+    arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
 }
 
@@ -1647,6 +1679,7 @@ static std::string gbnf_ac_grammar(
     const common_grammar_builder & builder,
     const std::string &            prefix,
     const common_trie &            trie,
+    const std::set<uint32_t> &     opaque,
     const std::function<std::string(const gbnf_ac_symbols &,
                                     const std::map<size_t, gbnf_ac_symbols> &,
                                     const std::map<size_t, gbnf_ac_symbols> &,
@@ -1696,10 +1729,20 @@ static std::string gbnf_ac_grammar(
         std::string fallback;
         if (token_only) {
             fallback = gbnf_token_set(specific.tokens, true);
-        } else if (specific.chars.empty()) {
-            fallback = ".";
         } else {
-            fallback = gbnf_char_class(specific.chars, true);
+            fallback = specific.chars.empty() ? "." : gbnf_char_class(specific.chars, true);
+
+            // A token named by a token rule never matches a char rule, so the other named tokens are let
+            // through by name
+            std::vector<uint32_t> others;
+            for (auto token : opaque) {
+                if (std::find(specific.tokens.begin(), specific.tokens.end(), token) == specific.tokens.end()) {
+                    others.push_back(token);
+                }
+            }
+            if (!others.empty()) {
+                fallback = "(" + fallback + " | " + gbnf_token_set(others, false) + ")";
+            }
         }
         fallback += " " + state_name(0);
 
@@ -1722,8 +1765,9 @@ static std::string gbnf_ac_grammar(
 // ref: https://github.com/ggml-org/llama.cpp/pull/24839
 static std::string gbnf_excluding_grammar(const common_grammar_builder & builder,
                                           const std::string &            prefix,
-                                          const common_trie &            trie) {
-    return gbnf_ac_grammar(builder, prefix, trie,
+                                          const common_trie &            trie,
+                                          const std::set<uint32_t> &     opaque) {
+    return gbnf_ac_grammar(builder, prefix, trie, opaque,
         [](const gbnf_ac_symbols & /*completing*/,
            const std::map<size_t, gbnf_ac_symbols> & /*completing_to*/,
            const std::map<size_t, gbnf_ac_symbols> & buckets,
@@ -1749,6 +1793,7 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
 static std::string gbnf_including_grammar(const common_grammar_builder &   builder,
                                           const std::string &              prefix,
                                           const common_trie &              trie,
+                                          const std::set<uint32_t> &       opaque,
                                           const std::vector<std::string> & rests,
                                           bool                             optional) {
     common_aho_corasick ac(trie);
@@ -1771,7 +1816,7 @@ static std::string gbnf_including_grammar(const common_grammar_builder &   build
         return alts;
     };
 
-    return gbnf_ac_grammar(builder, prefix, trie,
+    return gbnf_ac_grammar(builder, prefix, trie, opaque,
         [&](const gbnf_ac_symbols & /*completing*/,
             const std::map<size_t, gbnf_ac_symbols> & completing_to,
             const std::map<size_t, gbnf_ac_symbols> & buckets,
@@ -1806,11 +1851,17 @@ static std::string gbnf_including_grammar(const common_grammar_builder &   build
         });
 }
 
-static std::set<std::string> collect_reachable_rules(
+// The rules and the tokens named by token rules that the grammar of a parser reaches
+struct common_peg_reachable {
+    std::set<std::string> rules;
+    std::set<uint32_t>    tokens;
+};
+
+static void collect_reachable(
     const common_peg_arena & arena,
-    const common_peg_parser_id & rule
+    const common_peg_parser_id & root,
+    common_peg_reachable & reachable
 ) {
-    std::set<std::string> reachable;
     std::set<std::string> visited;
 
     std::function<void(common_peg_parser_id)> visit = [&](common_peg_parser_id id) {
@@ -1822,14 +1873,19 @@ static std::set<std::string> collect_reachable_rules(
             if constexpr (std::is_same_v<T, common_peg_epsilon_parser> ||
                           std::is_same_v<T, common_peg_start_parser> ||
                           std::is_same_v<T, common_peg_end_parser> ||
-                          std::is_same_v<T, common_peg_until_parser> ||
                           std::is_same_v<T, common_peg_literal_parser> ||
-                          std::is_same_v<T, common_peg_token_parser> ||
                           std::is_same_v<T, common_peg_chars_parser> ||
                           std::is_same_v<T, common_peg_space_parser> ||
                           std::is_same_v<T, common_peg_any_parser> ||
                           std::is_same_v<T, common_peg_string_parser>) {
                 // These parsers do not have any children
+            } else if constexpr (std::is_same_v<T, common_peg_token_parser>) {
+                reachable.tokens.insert(p.token);
+            } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
+                // The delimiters name their tokens in the grammar
+                for (auto delimiter : p.delimiter_parsers) {
+                    visit(delimiter);
+                }
             } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
                 for (auto child : p.children) {
                     visit(child);
@@ -1849,6 +1905,7 @@ static std::set<std::string> collect_reachable_rules(
             } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
                 visit(p.child);
                 for (const auto & branch : p.branches) {
+                    visit(branch.delimiter);
                     if (branch.rest != COMMON_PEG_INVALID_PARSER_ID) {
                         visit(branch.rest);
                     }
@@ -1856,7 +1913,7 @@ static std::set<std::string> collect_reachable_rules(
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 if (visited.find(p.name) == visited.end()) {
                     visited.insert(p.name);
-                    reachable.insert(p.name);
+                    reachable.rules.insert(p.name);
                     visit(p.child);
                 }
             } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -1869,12 +1926,14 @@ static std::set<std::string> collect_reachable_rules(
         }, parser);
     };
 
-    visit(rule);
-    return reachable;
+    visit(root);
 }
 
 // GBNF generation implementation
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
+    // The rules to emit and the tokens the grammar names, filled in once the entry points are known
+    common_peg_reachable reachable;
+
     // A raw string value is parsed by the child rather than constrained by the schema
     auto schema_delegates = [](const common_peg_schema_parser & s) -> bool {
         return !s.node || (s.raw && s.node->may_be_string());
@@ -2009,7 +2068,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 if (p.delimiters.empty()) {
                     return ".*";
                 }
-                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.matcher);
+                return gbnf_excluding_grammar(builder, "until-" + std::to_string(id), p.matcher, reachable.tokens);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 if (schema_delegates(p)) {
                     return to_gbnf(p.child);
@@ -2033,7 +2092,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                     auto rest = p.branches[b].rest;
                     rests.push_back(rest == COMMON_PEG_INVALID_PARSER_ID ? "" : builder.add_rule(prefix + "-rest-" + std::to_string(b), to_gbnf(rest)));
                 }
-                return gbnf_including_grammar(builder, prefix, p.matcher, rests, p.optional);
+                return gbnf_including_grammar(builder, prefix, p.matcher, reachable.tokens, rests, p.optional);
             } else {
                 static_assert(is_always_false_v<T>);
             }
@@ -2051,24 +2110,40 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
     std::sort(trigger_rules.begin(), trigger_rules.end(), [](const auto * a, const auto * b) { return a->name < b->name; });
 
-    // Collect reachable rules
-    std::set<std::string> reachable_rules;
-
-    if (lazy) {
-        // Collect rules reachable from trigger rules
+    // A lazy grammar scans for the triggers when the trigger rules were built from them
+    bool scans = false;
+    for (const auto * rule : trigger_rules) {
+        scans = scans || !rule->triggers.empty();
+    }
+    if (scans) {
         for (const auto * rule : trigger_rules) {
-            reachable_rules.insert(rule->name);
-            auto add_rules = collect_reachable_rules(*this, rules_.at(rule->name));
-            reachable_rules.insert(add_rules.begin(), add_rules.end());
+            if (rule->triggers.empty()) {
+                throw std::runtime_error("trigger rule without triggers in a scanning grammar: " + rule->name);
+            }
+        }
+    }
+
+    if (lazy && scans) {
+        // Collect what the triggers reach
+        for (const auto * rule : trigger_rules) {
+            for (const auto & t : rule->triggers) {
+                collect_reachable(*this, t.start, reachable);
+                collect_reachable(*this, t.rest, reachable);
+            }
+        }
+    } else if (lazy) {
+        // Collect what the trigger rules reach
+        for (const auto * rule : trigger_rules) {
+            collect_reachable(*this, rules_.at(rule->name), reachable);
         }
     } else {
-        // Collect rules reachable from root
-        reachable_rules = collect_reachable_rules(*this, root_);
+        // Collect what the root reaches
+        collect_reachable(*this, root_, reachable);
     }
 
     // Create GBNF rules for all reachable rules
     for (const auto & [name, rule_id] : rules_) {
-        if (reachable_rules.find(name) == reachable_rules.end()) {
+        if (reachable.rules.find(name) == reachable.rules.end()) {
             continue;
         }
 
@@ -2078,7 +2153,22 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         }
     }
 
-    if (lazy) {
+    if (lazy && scans) {
+        // The root scans for a trigger start and then constrains its rest
+        common_trie              starts;
+        std::vector<std::string> rests;
+        for (const auto * rule : trigger_rules) {
+            for (size_t i = 0; i < rule->triggers.size(); i++) {
+                const auto & t = rule->triggers[i];
+                auto d = flatten_delimiter(*this, t.start);
+                if ((size_t) starts.insert(d.symbols) != rests.size()) {
+                    throw std::runtime_error("trigger rules must not share a start: " + d.text);
+                }
+                rests.push_back(builder.add_rule(rule->name + "-rest-" + std::to_string(i), to_gbnf(t.rest)));
+            }
+        }
+        builder.add_rule("root", gbnf_including_grammar(builder, "trigger", starts, reachable.tokens, rests, /* optional = */ true));
+    } else if (lazy) {
         // Generate root rule from trigger rules only
         std::vector<std::string> trigger_names;
         for (const auto * rule : trigger_rules) {
@@ -2154,12 +2244,20 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
                 {"raw", p.raw}
             };
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
-            return json{
+            json j{
                 {"type", "rule"},
                 {"name", p.name},
                 {"child", p.child},
                 {"trigger", p.trigger}
             };
+            if (!p.triggers.empty()) {
+                auto triggers = json::array();
+                for (const auto & t : p.triggers) {
+                    triggers.push_back({{"start", t.start}, {"rest", t.rest}});
+                }
+                j["triggers"] = std::move(triggers);
+            }
+            return j;
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
             return json{{"type", "ref"}, {"name", p.name}};
         } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
@@ -2335,6 +2433,11 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             j["child"].get<common_peg_parser_id>(),
             j["trigger"].get<bool>()
         };
+        if (j.contains("triggers")) {
+            for (const auto & t : j["triggers"]) {
+                parser.triggers.push_back({ t.at("start").get<common_peg_parser_id>(), t.at("rest").get<common_peg_parser_id>() });
+            }
+        }
         return parser;
     }
     if (type == "ref") {
