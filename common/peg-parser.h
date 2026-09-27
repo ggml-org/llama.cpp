@@ -200,10 +200,8 @@ struct common_peg_tokens {
 };
 
 struct common_peg_parse_context {
-    std::string input;
-    // The token that starts at each byte of input, LLAMA_TOKEN_NULL inside a token piece. Empty when the
-    // input has no tokens.
-    std::vector<llama_token> tokens;
+    std::string input;               // [h,   e,  l,  l,  o,  _,  w,  o,  r,  l,  d]
+    std::vector<llama_token> tokens; // [id, -1, -1, -1, -1, id, -1, -1, -1, -1, -1]
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
