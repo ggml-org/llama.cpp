@@ -229,3 +229,45 @@ Code (each needs the CPU oracle green and a paired campaign):
 - Batched submission was probed only in a synthetic loop; its real gain on
   Ornith decode depends on segment length between CPU splits and may be
   smaller than the dense Mistral +32%.
+
+## 8. Addendum (same day): upstream PRs merged and what they measured on the A770
+
+Cherry-picked onto `ornith-improve` with `-x` provenance (authorship preserved; #29375 squashed
+because its later commits rewrite its earlier ones); `master` received the same ports through the
+stacked `upstream-pr/*` branches (#64, #65, #68 merged; #66, #67, #70 open at the time of writing). Probes: `test-backend-ops` on this A770 with
+the production SYCL server resident but idle, default perf shapes, pre-PR binary as baseline.
+
+| PR | what | A770 result |
+|---|---|---|
+| ggml-org#29476 vulkan GDN Intel tuning | subgroup-16 GDN pipeline on Intel | GDN 32 heads S=128: 24.9 -> 6.2 us decode, 6986 -> 1500 us at 512 tokens; 40/40 correct |
+| ggml-org#29186 Q8_0 ESIMD DMMV + wide MMVQ | `GGML_SYCL_MMVQ_WIDE` (default 1) | q8_0 n=1 matvec 177 -> 157 us, 187 -> 172 us (+9-13%); the gain is the ESIMD DMMV, wide MMVQ alone is neutral to -7% |
+| ggml-org#29375 Q5_K reorder MMVQ + fused GLU | Q5_K vec_dot restructure, row pairing at 3..5 cols | as-is: pairing halves throughput at n=3..5 (275 -> 529, 298 -> 676, 335 -> 823 us); unpaired the restructured vec_dot is slow at n=8 (2109 us). Fork pairs Q5_K only from 6 columns: n=1..5 at 1.00-1.05x of pre-PR, n=8 0.93x (1261 vs 1167 us), n=512 1.00x |
+| ggml-org#29245 grouped MoE XMX GEMM | `GGML_SYCL_XMX_GATHER_TYPES`, IQ4_NL / IQ3_S only | correct (joint_matrix at SG16 JIT-compiles and passes here); no measurable gain at MoE shapes with 256 experts x 512 tokens; dense fused dequant GEMM 0.99x |
+| ggml-org#29506 ExternalProject SYCL build | `GGML_SYCL_SEPARATE_BUILD` (default OFF) | build-system only; its `#if GGML_SYCL_DNNL` fix was already in the fork |
+
+Correctness: q5_K / q8_0 / iq4_nl / iq3_s `MUL_MAT`, `MUL_MAT_VEC_FUSION` (1265 cases) and
+`MUL_MAT_ID` all pass against CPU; `test-sycl-turbo-correctness` default sweep 0 GATE-FAIL. The
+`MUL_MAT_ID` sweep aborts at the TQ3_1S / TQ4_1S cases (`unsupport src0 data type` in
+`ggml_sycl_op_mul_mat_vec_q`) on the pre-PR binary as well: SYCL `supports_op` accepts MoE
+matmuls on the TQ weight types but no matvec kernel exists. Pre-existing fork bug, not caused
+by these PRs.
+
+**Pre-existing multi-column MMVQ cliff on the A770 (Q4_K, the Ornith weight type).** Same probe,
+`MUL_MAT` q4_K, us per call:
+
+| m x k | n=1 | n=2 | n=3 | n=4 | n=5 | n=8 | n=512 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 4096 x 14336 | 108 | 199 | 191 | **660** | 278 | **2169** | 1825 |
+| 4096 x 4096 | 46 | 82 | 85 | **225** | - | **654** | - |
+| 14336 x 4096 | 100 | 173 | 177 | **590** | - | **2068** | - |
+
+n=4 (Q4_K pairs rows at 3..4) costs 3.5x n=3, and n=8 (last MMVQ column count before the GEMM
+route) costs more than n=512. Speculative-decoding verify batches of 4 and 8 tokens land
+exactly there for every dense projection. The Q5_K experiment above points at the mechanism for
+n=8: `mul_mat_vec_q_reorder_ncols` has a "shared weights" single-row path (load the weight block
+once, loop activations over the columns) that types with `reorder_vec_dot_shared_weights` take;
+at 8 columns that path is ~2x slower than either the plain per-column vec_dot (Q5_K before the
+PR, 1167 us) or the two-rows-per-subgroup variant (1261 us). Q4_K has used the shared-weights
+path all along. Follow-up candidates, in order: pair rows or use the plain vec_dot for n >= 6,
+restrict Q4_K pairing to n=3 (the n=4 cliff), or route n >= 6 to the GEMM path on this arch;
+re-measure each. Not done here.
