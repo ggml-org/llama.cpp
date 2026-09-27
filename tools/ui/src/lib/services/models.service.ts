@@ -239,7 +239,7 @@ export class ModelsService {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiModelsLoadResponse>(apiUrl(API_MODELS.LOAD, backendId), payload);
+		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload, { backendId });
 	}
 
 	/**
@@ -409,9 +409,7 @@ export class ModelsService {
 	 * @returns Unload response from the server
 	 */
 	static async unload(modelId: string, backendId?: string): Promise<ApiModelsUnloadResponse> {
-		return apiPost<ApiModelsUnloadResponse>(apiUrl(API_MODELS.UNLOAD, backendId), {
-			model: modelId
-		});
+		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId }, { backendId });
 	}
 
 	/**
