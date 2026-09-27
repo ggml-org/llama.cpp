@@ -511,11 +511,14 @@ struct ggml_backend_sycl_context {
         const int64_t time_now = ggml_time_us();
         const int64_t eviction_timeout_us = g_ggml_sycl_graph_eviction_timeout * 1'000'000LL;
 
-        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout
+        // sweep every half the eviction timeout, evicting graphs unused for >= the eviction timeout.
+        // Never evict the key being looked up on this same call: an interactive caller idling
+        // longer than the timeout between requests should re-warm, not have its own lookup wiped
+        // out by the sweep that runs immediately ahead of it.
         if (time_now - last_graph_eviction_sweep >= eviction_timeout_us / 2) {
             last_graph_eviction_sweep = time_now;
             for (auto it = sycl_graphs.begin(); it != sycl_graphs.end(); ) {
-                if (time_now - it->second->last_used_time >= eviction_timeout_us) {
+                if (it->first != first_node_ptr && time_now - it->second->last_used_time >= eviction_timeout_us) {
                     it = sycl_graphs.erase(it);
                 } else {
                     ++it;

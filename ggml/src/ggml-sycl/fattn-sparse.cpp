@@ -171,6 +171,11 @@ static bool sparse_fa_applicable(const ggml_tensor * dst, int64_t & n_kv_g_out) 
     return true;
 }
 
+bool ggml_sycl_flash_attn_ext_sparse_applicable(const ggml_tensor * dst) {
+    int64_t n_kv_g = 0;
+    return sparse_fa_enabled() && sparse_fa_applicable(dst, n_kv_g);
+}
+
 bool ggml_sycl_flash_attn_ext_sparse(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     int64_t n_kv_g = 0;
     if (!sparse_fa_enabled() || !sparse_fa_applicable(dst, n_kv_g)) {

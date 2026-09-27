@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <float.h>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <stdint.h>
@@ -6691,9 +6692,9 @@ static bool ggml_sycl_graph_profile_enabled() {
 struct ggml_sycl_graph_profile {
     std::atomic<uint64_t> graph_calls       = 0;
     std::atomic<uint64_t> replay_calls      = 0;
+    std::atomic<uint64_t> gen_rerecords     = 0;
     std::atomic<uint64_t> direct_calls      = 0;
     std::atomic<uint64_t> nodes             = 0;
-    std::atomic<uint64_t> prepare_us        = 0;
     std::atomic<uint64_t> record_us         = 0;
     std::atomic<uint64_t> finalize_calls    = 0;
     std::atomic<uint64_t> finalize_us       = 0;
@@ -6710,13 +6711,14 @@ struct ggml_sycl_graph_profile {
         }
         fprintf(
             stderr,
-            "GGML_SYCL_GRAPH_PROFILE: graph_calls=%" PRIu64 " replay_calls=%" PRIu64 " direct_calls=%" PRIu64
-            " nodes=%" PRIu64 " prepare_us=%" PRIu64 " record_us=%" PRIu64
+            "GGML_SYCL_GRAPH_PROFILE: graph_calls=%" PRIu64 " replay_calls=%" PRIu64
+            " gen_rerecords=%" PRIu64 " direct_calls=%" PRIu64
+            " nodes=%" PRIu64 " record_us=%" PRIu64
             " finalize_calls=%" PRIu64 " finalize_us=%" PRIu64
             " update_calls=%" PRIu64 " update_fallbacks=%" PRIu64
             " update_us=%" PRIu64 " submit_us=%" PRIu64
             " wait_us=%" PRIu64 " direct_enqueue_us=%" PRIu64 "\n",
-            graph_calls.load(), replay_calls.load(), direct_calls.load(), nodes.load(), prepare_us.load(),
+            graph_calls.load(), replay_calls.load(), gen_rerecords.load(), direct_calls.load(), nodes.load(),
             record_us.load(), finalize_calls.load(), finalize_us.load(), update_calls.load(),
             update_fallbacks.load(), update_us.load(), submit_us.load(), wait_us.load(),
             direct_enqueue_us.load());
@@ -6893,7 +6895,29 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 uses_library = true;
                 break;
             case GGML_OP_FLASH_ATTN_EXT:
-                uses_library = ggml_sycl_flash_attn_ext_uses_library(ctx->device, node);
+                // Sparse FA (opt-in, GGML_SYCL_SPARSE_FA=1) is tried before the dense kernels
+                // and, like the library routes below, ends with a blocking stream->wait().
+                uses_library = ggml_sycl_flash_attn_ext_uses_library(ctx->device, node) ||
+                               ggml_sycl_flash_attn_ext_sparse_applicable(node);
+                break;
+            case GGML_OP_SET_ROWS:
+                // The K-quant/IQ block-structured types (anything reorder_qw() and the fast
+                // per-type set_rows_sycl_q<>() kernels don't cover) fall back to a host-side
+                // quantization path in set_rows.cpp that reads the tensors back with a blocking
+                // stream->wait() per row. None of these are valid --cache-type-k/-v choices
+                // (see kv_cache_types in common/arg.cpp) so this is not known to be reachable
+                // today, but nothing enforces that invariant here, so gate on it directly.
+                switch (node->type) {
+                    case GGML_TYPE_Q2_K: case GGML_TYPE_Q3_K: case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q5_K: case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_IQ2_XXS: case GGML_TYPE_IQ2_XS: case GGML_TYPE_IQ2_S:
+                    case GGML_TYPE_IQ3_XXS: case GGML_TYPE_IQ3_S:
+                    case GGML_TYPE_IQ1_S: case GGML_TYPE_IQ1_M: case GGML_TYPE_IQ4_XS:
+                        uses_library = true;
+                        break;
+                    default:
+                        break;
+                }
                 break;
             case GGML_OP_MUL_MAT:
                 // We cannot use graphs with ggml_sycl_mul_mat() when SYCL async memory allocation extensions are not available,
@@ -6912,7 +6936,9 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
         }
 
         if (uses_library) {
-            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to node type %s using oneMKL or oneDNN\n", __func__,
+            // covers oneMKL/oneDNN GEMM routes, sparse FA, and the SET_ROWS host fallback -
+            // all end in a blocking call a SYCL graph cannot capture
+            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to node type %s reaching a blocking call\n", __func__,
                            ggml_op_name(node_op));
             return false;
         }
@@ -6942,8 +6968,17 @@ static bool graph_needs_reorder(ggml_backend_sycl_context * ctx, const ggml_cgra
             // reads as "reorder eligible" here, but its extra->optimized_feature.reorder flag can
             // never become true, so graph_needs_reorder() would return true forever and graphs
             // would never enable for that model on this path.
+            //
+            // opt_for_reorder() picks its type predicate from the mul_mat_algo the *runtime*
+            // dispatch in ggml_sycl_mul_mat() selects (DMMV, MMVQ, or the MUL_MAT_SYCL/library
+            // last resort), which this static scan cannot know ahead of time. Union all three:
+            // a false positive here only makes graphs stay off a call longer, a false negative
+            // lets an actual reorder happen mid-recording - the hang this whole gate exists to
+            // prevent.
             reorder_eligible = should_reorder_tensor(*ctx, node) &&
-                                ggml_sycl_supports_reorder_mul_mat_sycl(src0->type);
+                                (ggml_sycl_supports_reorder_dmmv(src0->type) ||
+                                 ggml_sycl_supports_reorder_mmvq(src0->type) ||
+                                 ggml_sycl_supports_reorder_mul_mat_sycl(src0->type));
         } else if (node->op == GGML_OP_MUL_MAT_ID &&
                    (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K)) {
             // mirrors the id_reorder_needs_async_alloc gate in check_graph_compatibility()
@@ -7010,35 +7045,6 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
     }
 
     return res;
-}
-
-static void ggml_sycl_graph_prepare_fattn_buffers(
-        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph) {
-    size_t k_f16_elems = 0;
-    size_t v_f16_elems = 0;
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        if (node->op != GGML_OP_FLASH_ATTN_EXT) {
-            continue;
-        }
-
-        const ggml_tensor * k = node->src[1];
-        const ggml_tensor * v = node->src[2];
-        if (k->type != GGML_TYPE_F16) {
-            k_f16_elems = std::max(k_f16_elems, (size_t) ggml_nelements(k));
-        }
-        if (v->type != GGML_TYPE_F16) {
-            v_f16_elems = std::max(v_f16_elems, (size_t) ggml_nelements(v));
-        }
-    }
-
-    ggml_sycl_fattn_kv_buffers & buffers = sycl_ctx->fattn_buffers();
-    if (k_f16_elems > 0) {
-        buffers.K.ensure_half(k_f16_elems);
-    }
-    if (v_f16_elems > 0) {
-        buffers.V.ensure_half(v_f16_elems);
-    }
 }
 
 #endif
@@ -7147,20 +7153,25 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // replaying it.
         if (!sycl_graph_update_required && graph->fattn_generation != sycl_ctx->fattn_buffers().generation()) {
             sycl_graph_update_required = true;
+            if (graph_profile != nullptr) {
+                graph_profile->gen_rerecords.fetch_add(1, std::memory_order_relaxed);
+            }
         }
 
         if (sycl_graph_update_required) {
             const bool graph_update_support = ggml_sycl_info().devices[sycl_ctx->device].graph_update_support;
 
-            // Scratch allocation may wait on the queue. Grow it before recording; waiting while a
-            // queue is being captured is forbidden by oneAPI.
-            const auto prepare_start = std::chrono::steady_clock::now();
-            ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
-            if (graph_profile != nullptr) {
-                graph_profile->prepare_us.fetch_add(
-                    ggml_sycl_elapsed_us(prepare_start), std::memory_order_relaxed);
-            }
-            graph->fattn_generation = sycl_ctx->fattn_buffers().generation();
+            // No explicit pre-growth of fattn_buffers() here (unlike the direct port of this
+            // code): every path that reaches this block either just ran this exact cgraph eagerly
+            // (the warmup-completion call, which sized the buffers for these exact shapes via the
+            // real kernels' own need_f16 logic) or is only here because *another* graph's growth
+            // bumped the generation counter, which means the buffers are already at least as big
+            // as what this graph itself has ever needed (ensure_half() never shrinks). The
+            // before/after generation check below is a backstop for that invariant, not the
+            // primary defense: growing mid-capture would call qptr->wait() on a recording queue,
+            // which SYCL_CHECK turns into a hard abort, so this can only catch the one subcase
+            // that doesn't wait - a first-ever allocation with no prior buffer to free.
+            const uint64_t fattn_gen_before = sycl_ctx->fattn_buffers().generation();
 
             sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
@@ -7172,19 +7183,50 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 // compute_impl or end_recording throws, so a mid-capture exception
                 // cannot leave the flag stuck true and permanently suppress the FA
                 // profile on this context.
+                // RAII: also ends the recording itself on unwind, not just the flag. Without
+                // this, an exception thrown out of compute_impl (a node reached a blocking
+                // call the compatibility scan didn't anticipate) would leave the underlying
+                // SYCL queue stuck in the recording state for the rest of the process.
                 struct graph_recording_guard {
-                    bool & flag;
-                    explicit graph_recording_guard(bool & f) : flag(f) { flag = true; }
-                    ~graph_recording_guard() { flag = false; }
-                } recording_guard(sycl_ctx->graph_recording);
+                    bool &                 recording_flag;
+                    std::function<void()>  end_recording;
+                    bool                   ended = false;
+                    graph_recording_guard(bool & f, std::function<void()> end_recording_)
+                        : recording_flag(f), end_recording(std::move(end_recording_)) {
+                        recording_flag = true;
+                    }
+                    void end() {
+                        end_recording();
+                        ended = true;
+                    }
+                    ~graph_recording_guard() {
+                        if (!ended) {
+                            try {
+                                end_recording();
+                            } catch (...) {
+                                // best-effort during unwind; nothing more can be done here
+                            }
+                        }
+                        recording_flag = false;
+                    }
+                } recording_guard(sycl_ctx->graph_recording,
+                                  [&model_sycl_graph]() { model_sycl_graph.end_recording(); });
                 graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
-                model_sycl_graph.end_recording();
+                recording_guard.end();
             }
             if (graph_profile != nullptr) {
                 graph_profile->graph_calls.fetch_add(1, std::memory_order_relaxed);
                 graph_profile->nodes.fetch_add(cgraph->n_nodes, std::memory_order_relaxed);
                 graph_profile->record_us.fetch_add(
                     ggml_sycl_elapsed_us(record_start), std::memory_order_relaxed);
+            }
+            const uint64_t fattn_gen_after = sycl_ctx->fattn_buffers().generation();
+            if (graph_status == GGML_STATUS_SUCCESS && fattn_gen_after != fattn_gen_before) {
+                // The invariant above didn't hold: this recording may have baked in a pointer
+                // that a concurrent growth elsewhere has already freed. Discard it rather than
+                // finalize/replay it.
+                GGML_LOG_DEBUG("%s: discarding a recording made during FA scratch growth\n", __func__);
+                graph_status = GGML_STATUS_FAILED;
             }
             if (graph_status != GGML_STATUS_SUCCESS) {
                 // Whatever exec_graph currently holds (nullptr, or a graph recorded for the old
@@ -7195,6 +7237,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 ggml_backend_sycl_record_failed_status(dev_ctx);
                 return graph_status;
             }
+            graph->fattn_generation = fattn_gen_after;
 
             const auto finalize_update_start = std::chrono::steady_clock::now();
             if (!graph->exec_graph || !graph_update_support) {
@@ -7250,6 +7293,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             }
         } catch (sycl::exception const & e) {
             GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
+            // A failed launch/wait leaves no guarantee this exec_graph is still valid to
+            // resubmit; force a full re-record next time rather than retrying it as-is.
+            graph->warmup_complete = false;
+            graph->exec_graph.reset();
             ggml_backend_sycl_record_failed_exception(dev_ctx, e);
             return GGML_STATUS_FAILED;
         }
