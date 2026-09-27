@@ -13,6 +13,7 @@ constant int32_t FC_flash_attn_ext_vec_ns20 [[function_constant(FC_FLASH_ATTN_EX
 constant int32_t FC_flash_attn_ext_vec_nsg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 22)]];
 constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EXT_VEC + 23)]];
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
+constant bool    FC_flash_attn_ext_vec_has_kv_rows [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
 template<
     typename q4_t,  // query types in shared memory
     typename k4_t,  // key types in shared memory
@@ -89,8 +90,8 @@ kernel void kernel_flash_attn_ext_vec(
     threadgroup half  * sm  = (threadgroup half  *) (shmem_f16 + SMEM_Q + sgitg*SH + 2*Q*C); // scratch buffer for mask
     threadgroup o4_t  * so4 = (threadgroup o4_t  *) (shmem_f16 + SMEM_Q + SMEM_S + 2*sgitg*Q*PV); // scratch buffer for the results
 
-    // sparse indices for the current block
-    threadgroup int * spidx = FC_flash_attn_ext_vec_has_sparse
+    // sparse indices for the current block (sparse mask or kv_rows)
+    threadgroup int * spidx = (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_kv_rows)
         ? (threadgroup int *) (shmem_f16 + SMEM) + sgitg*C
         : nullptr;
 
@@ -159,10 +160,13 @@ kernel void kernel_flash_attn_ext_vec(
 
         // sparse indices: the list of finite mask entries per query row
         // the sparse path requires Q == 1 (enforced by the host)
+        // kv_rows: the list of K/V rows per mask column and slice
         device const int * pidx = nullptr;
         if (FC_flash_attn_ext_vec_has_sparse) {
             pidx = (device const int *) idx +
                 ((int64_t)(iq3%args.ne33)*args.ne32 + (iq2%args.ne32))*args.ne31*args.n_kv_max_padded + (iq1%args.ne31)*args.n_kv_max_padded;
+        } else if (FC_flash_attn_ext_vec_has_kv_rows) {
+            pidx = (device const int *) idx + (int64_t) iq3 * args.ne11;
         }
 
         float slope = 1.0f;
@@ -223,11 +227,15 @@ kernel void kernel_flash_attn_ext_vec(
             }
 
             // load the sparse KV indices for the current block into shared memory
-            if (FC_flash_attn_ext_vec_has_sparse) {
+            if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_kv_rows) {
                 FOR_UNROLL (short ii = 0; ii < C/NW; ++ii) {
                     const short i = ii*NW + tiisg;
 
-                    spidx[i] = pidx[ic + i];
+                    if (FC_flash_attn_ext_vec_has_kv_rows) {
+                        spidx[i] = ic + i < args.ne11 ? max(pidx[ic + i], -1) : -1;
+                    } else {
+                        spidx[i] = pidx[ic + i];
+                    }
                 }
                 simdgroup_barrier(mem_flags::mem_threadgroup);
             }
@@ -238,6 +246,14 @@ kernel void kernel_flash_attn_ext_vec(
                         const int i11 = spidx[tiisg];
                         if ((iq1*Q + qq) < args.ne01 && i11 >= 0) {
                             sm[qq*C + tiisg] = pm[qq][i11];
+                        } else {
+                            sm[qq*C + tiisg] = -MAXHALF;
+                        }
+                    }
+                } else if (FC_flash_attn_ext_vec_has_kv_rows) {
+                    FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
+                        if ((iq1*Q + qq) < args.ne01) {
+                            sm[qq*C + tiisg] = ic + tiisg < args.ne11 ? pm[qq][ic + tiisg] : -MAXHALF;
                         } else {
                             sm[qq*C + tiisg] = -MAXHALF;
                         }
@@ -276,7 +292,7 @@ kernel void kernel_flash_attn_ext_vec(
             {
                 device      const k4_t * pk4 = nullptr;
 
-                if (!FC_flash_attn_ext_vec_has_sparse) {
+                if (!FC_flash_attn_ext_vec_has_sparse && !FC_flash_attn_ext_vec_has_kv_rows) {
                     pk4 = (device const k4_t *) (k + ic*args.nb11);
 
                     pk4 += ty*NS10/4 + tx;
@@ -291,7 +307,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                 // each simdgroup processes Q queries and NE (NW/NL) cache elements
                 FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
-                    if (FC_flash_attn_ext_vec_has_sparse) {
+                    if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_kv_rows) {
                         // the KV rows are gathered from the index list; -1 entries are padding
                         const int i11 = spidx[NE*cc + ty];
                         if (i11 >= 0) {
@@ -434,7 +450,7 @@ kernel void kernel_flash_attn_ext_vec(
                     }
                 }
 
-                if (FC_flash_attn_ext_vec_has_sparse) {
+                if (FC_flash_attn_ext_vec_has_sparse || FC_flash_attn_ext_vec_has_kv_rows) {
                     FOR_UNROLL (short cc = 0; cc < C/NE; ++cc) {
                         // the KV rows are gathered from the index list; -1 entries are padding
                         const int i11 = spidx[NE*cc + ty];
