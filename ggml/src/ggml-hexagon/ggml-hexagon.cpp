@@ -5243,7 +5243,7 @@ static void ggml_hexagon_precompute_get_rows_params(
         kparams->n_threads = (std::min)(total_tasks, (uint32_t)sess->n_threads);
     }
 
-    struct htp_get_rows_vtcm_layout vtcm_layout;
+    struct htp_get_rows_vtcm_layout vtcm_layout = {};
     while (kparams->n_threads > 0) {
         htp_get_rows_vtcm_layout_build(&vtcm_layout, src0->type, ne00, kparams->n_threads, use_dma, tiled);
         if (vtcm_layout.total_bytes <= sess->vtcm_size) {
@@ -5252,24 +5252,22 @@ static void ggml_hexagon_precompute_get_rows_params(
         --kparams->n_threads;
     }
 
-    if (kparams->n_threads == 0) {
-        kparams->vtcm_size = (int32_t) (sess->vtcm_size + 1);
-        return;
+    if (kparams->n_threads == 0 && total_tasks > 0) {
+        htp_get_rows_vtcm_layout_build(&vtcm_layout, src0->type, ne00, 1, use_dma, tiled);
     }
 
-    kparams->tasks_per_thread = (total_tasks + kparams->n_threads - 1) / kparams->n_threads;
+    kparams->vtcm_size = (total_tasks == 0) ? 0 : vtcm_layout.total_bytes;
+    kparams->tasks_per_thread = kparams->n_threads > 0 ? (total_tasks + kparams->n_threads - 1) / kparams->n_threads : 0;
 
     kparams->chunks_per_row = chunks_per_row;
     kparams->chunk_size = chunk_size;
     kparams->total_tasks = total_tasks;
 
-    kparams->div_ne10 = init_fastdiv_values(ne10);
-    kparams->div_ne10_ne11 = init_fastdiv_values(ne10 * ne11);
-    kparams->div_chunks_per_row = init_fastdiv_values(chunks_per_row);
-    kparams->div_ne02 = init_fastdiv_values(ne02);
-    kparams->div_ne03 = init_fastdiv_values(ne03);
-
-    kparams->vtcm_size = vtcm_layout.total_bytes;
+    kparams->div_ne10 = ne10 > 0 ? init_fastdiv_values(ne10) : (struct fastdiv_values) {0, 0};
+    kparams->div_ne10_ne11 = (ne10 * ne11) > 0 ? init_fastdiv_values(ne10 * ne11) : (struct fastdiv_values) {0, 0};
+    kparams->div_chunks_per_row = chunks_per_row > 0 ? init_fastdiv_values(chunks_per_row) : (struct fastdiv_values) {0, 0};
+    kparams->div_ne02 = ne02 > 0 ? init_fastdiv_values(ne02) : (struct fastdiv_values) {0, 0};
+    kparams->div_ne03 = ne03 > 0 ? init_fastdiv_values(ne03) : (struct fastdiv_values) {0, 0};
 }
 
 static void ggml_hexagon_precompute_set_rows_params(

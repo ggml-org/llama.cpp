@@ -211,7 +211,7 @@ GET_ROWS_THREAD_DT_FN(f16,  F16_BYTES,  int64_t, { hvx_dequantize_row_f16_f32((f
 GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int32_t, { hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00); })
 GET_ROWS_THREAD_DT_FN(q8_0, Q8_0_BYTES, int64_t, { hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00); })
 
-static void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4) {
+static __attribute__((noinline)) void compute_get_rows_tiled(float * dst, const uint8_t * tile, uint32_t row, bool q4) {
     const HVX_VectorPred first2 = Q6_Q_vsetq_R(2);
     const HVX_VectorPred first4 = Q6_Q_vsetq_R(4);
     HVX_Vector vq = Q6_V_vzero();

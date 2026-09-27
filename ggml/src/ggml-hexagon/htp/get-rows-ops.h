@@ -51,7 +51,7 @@ static inline void htp_get_rows_vtcm_layout_build(
     }
 
     if (tiled) {
-        const size_t tile_size = type == 2 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
+        const size_t tile_size = type == HTP_TYPE_Q4_0 ? HTP_MM_WEIGHT_TILE_SIZE_Q4_0 : HTP_MM_WEIGHT_TILE_SIZE_Q8_0;
         vtcm_layout->src0_spad_half_size = (tile_size + 255) & ~255;
         vtcm_layout->dst_spad_half_size  = (ne00 * sizeof(float) + 255) & ~255;
         vtcm_layout->src0_bytes_per_thread = 2 * vtcm_layout->src0_spad_half_size;
@@ -64,13 +64,13 @@ static inline void htp_get_rows_vtcm_layout_build(
 
     uint32_t src0_row_size = 0;
     switch (type) {
-        case 0: // HTP_TYPE_F32
+        case HTP_TYPE_F32:
             src0_row_size = ne00 * 4;
             break;
-        case 1: // HTP_TYPE_F16
+        case HTP_TYPE_F16:
             src0_row_size = ne00 * 2;
             break;
-        case 8: // HTP_TYPE_Q8_0
+        case HTP_TYPE_Q8_0:
             src0_row_size = (ne00 / 32) * 34;
             break;
         default:
