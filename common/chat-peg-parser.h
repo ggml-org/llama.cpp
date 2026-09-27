@@ -59,7 +59,8 @@ constexpr size_t COMMON_CHAT_MAX_PERMUTE = 6;
 
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
-    using common_peg_parser_builder::common_peg_parser_builder;
+    common_chat_peg_builder() = default;
+    explicit common_chat_peg_builder(common_peg_tokens tokens) : common_peg_parser_builder(std::move(tokens)) {}
 
     // Tag constants (from former common_chat_peg_base_builder)
     static constexpr const char * REASONING_BLOCK = "reasoning-block";
