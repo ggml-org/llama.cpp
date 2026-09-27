@@ -4849,6 +4849,87 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // K2 Horizon dedicated parser
+    {
+        auto tmpls = read_templates("models/templates/IFM-K2-Horizon-7B.jinja");
+        const auto caps = common_chat_templates_get_caps(tmpls.get());
+        GGML_ASSERT(caps.at("supports_parallel_tool_calls"));
+        GGML_ASSERT(caps.at("supports_object_arguments"));
+        assert_contains(common_chat_format_example(tmpls.get(), true, {}), "Hi there");
+
+        auto tst = peg_tester("models/templates/IFM-K2-Horizon-7B.jinja", detailed_debug);
+
+        const std::string get_time_call =
+            "<ifm|tool_calls>\n"
+            "<ifm|tool_call>get_time\n"
+            "<ifm|arg_key>city</ifm|arg_key>\n"
+            "<ifm|arg_value>Paris</ifm|arg_value>\n"
+            "</ifm|tool_call>\n"
+            "</ifm|tool_calls>";
+
+        // The generation prompt pre-opens <ifm|think>, so the model output starts inside it.
+        tst.test("Simple sum.\n</ifm|think>\n51")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect_reasoning("Simple sum.\n")
+            .expect_content("51")
+            .run();
+
+        // The end-of-turn token must not leak into content.
+        tst.test("Simple sum.\n</ifm|think>\n51<|ifm|im_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect_reasoning("Simple sum.\n")
+            .expect_content("51")
+            .run();
+
+        // A closed think block followed by a tool call section.
+        tst.test("I need the time.\n</ifm|think>\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("I need the time.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // A tool call section may start before the think block is closed.
+        tst.test("I need the time.\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("I need the time.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Non-string arguments parse as JSON, and required arguments may come in any order.
+        tst.test("</ifm|think>\n<ifm|tool_calls>\n<ifm|tool_call>tool_2req_4opt\n"
+                 "<ifm|arg_key>req2</ifm|arg_key>\n<ifm|arg_value>7</ifm|arg_value>\n"
+                 "<ifm|arg_key>req1</ifm|arg_key>\n<ifm|arg_value>hello</ifm|arg_value>\n"
+                 "</ifm|tool_call>\n</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({ { "tool_2req_4opt", R"({"req2": 7, "req1": "hello"})", "" } })
+            .run();
+
+        // Parallel tool calls share one section.
+        tst.test("</ifm|think>\n<ifm|tool_calls>\n"
+                 "<ifm|tool_call>get_time\n<ifm|arg_key>city</ifm|arg_key>\n<ifm|arg_value>Paris</ifm|arg_value>\n</ifm|tool_call>\n"
+                 "<ifm|tool_call>get_time\n<ifm|arg_key>city</ifm|arg_key>\n<ifm|arg_value>Rome</ifm|arg_value>\n</ifm|tool_call>\n"
+                 "</ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .parallel_tool_calls(true)
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", "" },
+                { "get_time", R"({"city": "Rome"})", "" },
+            })
+            .run();
+
+        // reasoning_format=none keeps extracting tool calls.
+        tst.test("I need the time.\n</ifm|think>\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ get_time_tool })
+            .expect_content("I need the time.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+    }
+
     // Kimi-K3 tests - custom parser
     // Unique feature: XTML tags built from <|open|>/<|close|>/<|sep|>, and a
     // generation prompt that leaves the think section already open.
