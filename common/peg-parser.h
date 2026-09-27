@@ -240,6 +240,11 @@ struct common_peg_token_parser {
     std::string piece;
 };
 
+// Matches one token that is not one of the tokens
+struct common_peg_token_not_parser {
+    std::vector<llama_token> tokens;
+};
+
 struct common_peg_sequence_parser {
     std::vector<common_peg_parser_id> children;
 };
@@ -347,6 +352,7 @@ using common_peg_parser_variant = std::variant<
     common_peg_end_parser,
     common_peg_literal_parser,
     common_peg_token_parser,
+    common_peg_token_not_parser,
     common_peg_sequence_parser,
     common_peg_choice_parser,
     common_peg_repetition_parser,
@@ -441,6 +447,12 @@ class common_peg_parser_builder {
     // Matches a token or fallback to literal if the token is not registered with the builder.
     //   S -> <[token-id]>
     common_peg_parser token(const std::string & piece);
+
+    // Matches one of the tokens, or with negate one token that is not one of them. A negated set may only
+    // name tokens registered with the builder.
+    //   S -> <[id1]> | <[id2]> | ...  or  !<[id1,id2,...]>
+    common_peg_parser token(const std::vector<std::string> & pieces, bool negate = false);
+    common_peg_parser token(std::initializer_list<std::string> pieces, bool negate = false) { return token(std::vector<std::string>(pieces), negate); }
 
     // Matches a sequence of parsers in order, all must succeed.
     //   S -> A B C
