@@ -64,7 +64,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
         // The template strips the newline before </think>, so leave it out of the reasoning
         auto think_end   = (p.literal("\n") + p.token("</think>")) | p.token("</think>");
-        auto think_body  = p.until({ p.literal("\n") + p.token("</think>"), p.token("</think>"), p.token("<tool_call>") });
+        auto think_body  = p.until(think_end | p.token("<tool_call>"));
         auto think_close = think_end | p.peek(p.token("<tool_call>"));
 
         auto reasoning_extracted = p.optional(p.token("<think>") + p.space() + p.reasoning(think_body) + think_close);
@@ -164,18 +164,16 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
             auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
-            auto tool_call_token = p.token("<tool_call>");
-
-            std::vector<common_peg_parser>  tool_call_start = { tool_call_token };
-            std::vector<common_peg_trigger> triggers        = { { tool_call_token, p.literal("\n") + tool_call_body + more } };
+            auto starts = p.token("<tool_call>");
+            std::vector<common_peg_trigger> triggers = { { starts, p.literal("\n") + tool_call_body + more } };
 
             if (is_qwen3_coder) {
                 // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
                 // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
                 // constraining on <function which may occur in valid content generation, e.g. #include <functional>
                 for (const auto & f : functions) {
-                    tool_call_start.push_back(f.opener);
                     triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
+                    starts |= f.opener;
                 }
             }
 
@@ -183,10 +181,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
 
             // The templates separate content from the tool calls with one or two newlines,
             // stop the content before them
-            std::vector<common_peg_parser> content_end;
-            for (const auto & start : tool_call_start) {
-                content_end.insert(content_end.end(), { p.literal("\n\n") + start, p.literal("\n") + start, start });
-            }
+            auto content_end = (p.literal("\n\n") + starts) | (p.literal("\n") + starts) | starts;
 
             return generation_prompt + (reasoning << p.content(p.until(content_end)) << p.repeat(tool_calls, min_calls, 1));
         }
