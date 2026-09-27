@@ -197,12 +197,12 @@ static ggml_tensor * bailingmoe3_causal_conv1d(
     x_proj = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state, ggml_transpose(ctx0, x_proj), 0);
 
+    // all K slots are written so the graph shape does not depend on the ubatch size; slots past the ubatch get the state from before it, at offset 0 of conv_x
     const int64_t K = (int64_t) n_rs_seq + 1;
-    const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
-    for (int64_t slot = 0; slot < n_written; ++slot) {
+    for (int64_t slot = 0; slot < K; ++slot) {
         ggml_tensor * conv_snap = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
-                conv_x->nb[1], conv_x->nb[2], (conv_x->ne[0] - (d_conv - 1) - slot) * conv_x->nb[0]);
+                conv_x->nb[1], conv_x->nb[2], std::max<int64_t>(0, conv_x->ne[0] - (d_conv - 1) - slot) * conv_x->nb[0]);
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
                 ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
                     (d_conv - 1) * ggml_element_size(conv_states_all),
