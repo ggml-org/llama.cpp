@@ -203,7 +203,7 @@ struct common_peg_parse_context {
     std::string input;
     // The token that starts at each byte of input, LLAMA_TOKEN_NULL inside a token piece. Empty when the
     // input has no tokens.
-    std::vector<llama_token> token_map;
+    std::vector<llama_token> tokens;
     common_peg_parse_flags flags;
     common_peg_ast_arena ast;
 
@@ -215,9 +215,9 @@ struct common_peg_parse_context {
     common_peg_parse_context(const std::string & input, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
         : input(input), flags(flags), parse_depth(0) {}
 
-    common_peg_parse_context(std::string input, std::vector<llama_token> token_map, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
-        : input(std::move(input)), token_map(std::move(token_map)), flags(flags), parse_depth(0) {
-        GGML_ASSERT(this->token_map.empty() || this->token_map.size() == this->input.size());
+    common_peg_parse_context(std::string input, std::vector<llama_token> tokens, common_peg_parse_flags flags = COMMON_PEG_PARSE_FLAG_NONE)
+        : input(std::move(input)), tokens(std::move(tokens)), flags(flags), parse_depth(0) {
+        GGML_ASSERT(this->tokens.empty() || this->tokens.size() == this->input.size());
     }
 
     bool is_lenient() const { return flags & COMMON_PEG_PARSE_FLAG_LENIENT; }

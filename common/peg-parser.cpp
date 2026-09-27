@@ -407,13 +407,13 @@ struct parser_executor {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
 
-        if (start_pos >= ctx.token_map.size() || ctx.token_map[start_pos] != p.token) {
+        if (start_pos >= ctx.tokens.size() || ctx.tokens[start_pos] != p.token) {
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
         }
 
         // Skip the rest of the piece, up to the next token or the end of the input
         auto pos = start_pos + 1;
-        while (pos < ctx.input.size() && ctx.token_map[pos] == LLAMA_TOKEN_NULL) {
+        while (pos < ctx.input.size() && ctx.tokens[pos] == LLAMA_TOKEN_NULL) {
             ++pos;
         }
 
@@ -819,7 +819,7 @@ struct parser_executor {
         std::vector<common_peg_invalid_utf8> invalid_utf8;
 
         while (pos < ctx.input.size()) {
-            auto step = matcher.next(ctx.input, ctx.token_map, pos);
+            auto step = matcher.next(ctx.input, ctx.tokens, pos);
 
             if (step.status == utf8_parse_result::INCOMPLETE && ctx.is_lenient()) {
                 // The rest of the sequence may still arrive, return what we have so far
@@ -836,7 +836,7 @@ struct parser_executor {
             }
 
             // Check if a delimiter starts at this position
-            auto match = matcher.check_at(ctx.input, ctx.token_map, pos);
+            auto match = matcher.check_at(ctx.input, ctx.tokens, pos);
 
             if (match == common_trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
