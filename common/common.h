@@ -809,7 +809,9 @@ static std::vector<T> string_split(const std::string & str, char delim) {
     while (std::getline(str_stream, token, delim)) {
         T value;
         std::istringstream token_stream(token);
-        token_stream >> value;
+        if (!(token_stream >> value)) {
+            throw std::invalid_argument("invalid value: \"" + token + "\"");
+        }
         values.push_back(value);
     }
     return values;
