@@ -356,10 +356,18 @@ namespace sycl_ex = sycl::ext::oneapi::experimental;
 
 #ifdef GGML_SYCL_GRAPH
 struct ggml_sycl_graph {
+    // Only the fields that affect what got recorded: comparing the raw ggml_tensor (its
+    // struct padding and the tail of its fixed-size name buffer are never fully initialized)
+    // produced spurious mismatches unrelated to any real change.
     // src data/ne/nb are kept next to the node copy: the scheduler can hand back the same src
     // pointer with different contents or shape, see https://github.com/ggml-org/llama.cpp/pull/21736
     struct node_properties {
-        ggml_tensor node;
+        void *      node_data;
+        ggml_type   node_type;
+        ggml_op     node_op;
+        int64_t     node_ne[GGML_MAX_DIMS];
+        size_t      node_nb[GGML_MAX_DIMS];
+        int32_t     node_op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
         void *      node_src_data_ptrs[GGML_MAX_SRC];
         int64_t     node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
         size_t      node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
@@ -370,6 +378,11 @@ struct ggml_sycl_graph {
     bool     warmup_complete = false;
     uint64_t uid             = 0;
     int64_t  last_used_time  = 0;
+
+    // Generation of ggml_sycl_fattn_kv_buffers this graph was last (re)recorded against. A
+    // mismatch against the context's current generation means this graph's baked-in K/V
+    // scratch pointers may be dangling and it must be re-recorded before its next replay.
+    uint64_t fattn_generation = 0;
 
     // result of check_graph_compatibility() and graph_needs_reorder(), and the uid they were made for
     bool     compatible     = false;

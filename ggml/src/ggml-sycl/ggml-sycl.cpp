@@ -468,6 +468,14 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_fa_force_vec_standard = ggml_sycl_get_env("GGML_SYCL_FA_FORCE_VEC_STANDARD", 0);
         g_ggml_sycl_fa_q8_gqa_tile = ggml_sycl_get_env("GGML_SYCL_FA_Q8_GQA_TILE", 0);
         g_ggml_sycl_graph_eviction_timeout = ggml_sycl_get_env("GGML_SYCL_GRAPH_EVICTION_TIMEOUT", 10);
+        if (g_ggml_sycl_graph_eviction_timeout <= 0) {
+            // A timeout <= 0 makes the sweep in ggml_backend_sycl_context::sycl_graph() run on
+            // every call and evict the entry being looked up before it is used, so no graph
+            // ever survives long enough to replay.
+            GGML_LOG_WARN("%s: ignoring invalid GGML_SYCL_GRAPH_EVICTION_TIMEOUT=%d, using 10\n",
+                          __func__, g_ggml_sycl_graph_eviction_timeout);
+            g_ggml_sycl_graph_eviction_timeout = 10;
+        }
 
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
 
@@ -6728,12 +6736,34 @@ static uint64_t ggml_sycl_elapsed_us(std::chrono::steady_clock::time_point start
 #ifdef GGML_SYCL_GRAPH
 // Reports if ggml_sycl_mul_mat() gives this node to oneMKL or oneDNN. Both libraries chain the
 // submission on events made before recording started, which SYCL graphs do not allow.
+// Mirrors ggml_sycl_op_fwht()'s own preconditions (fwht.cpp) without launching a kernel, so the
+// graph-compatibility scan can tell whether a Hadamard-hinted MUL_MAT will actually take that
+// path or fall through to the ordinary dispatch below it.
+static bool ggml_sycl_fwht_supported_shape(const ggml_tensor * src, const ggml_tensor * dst) {
+    if (src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_are_same_shape(src, dst) || !ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+    switch (src->ne[0]) {
+        case 64: case 128: case 256: case 512:
+        case 384: case 768: case 640: case 1280:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool mul_mat_uses_library_gemm(ggml_tensor * dst) {
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src1 = dst->src[1];
 
-    // The WHT hint routes to ggml_sycl_op_fwht() instead of the dispatch below; never a library.
-    if (ggml_get_op_params_i32(dst, 1) == GGML_HINT_SRC0_IS_HADAMARD) {
+    // ggml_sycl_mul_mat() only takes the WHT-hint early-out (never a library) when
+    // ggml_sycl_op_fwht() actually handles the shape; otherwise it falls through to the same
+    // dispatch evaluated below, which for F32 rotation weights can reach oneMKL.
+    if (ggml_get_op_params_i32(dst, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
+        ggml_sycl_fwht_supported_shape(src1, dst)) {
         return false;
     }
 
@@ -6907,7 +6937,13 @@ static bool graph_needs_reorder(ggml_backend_sycl_context * ctx, const ggml_cgra
 
         bool reorder_eligible = false;
         if (node->op == GGML_OP_MUL_MAT) {
-            reorder_eligible = should_reorder_tensor(*ctx, node);
+            // should_reorder_tensor() does not itself gate on src0->type: without this check,
+            // a decode-shaped MUL_MAT of a type reorder_qw() never handles (F16, IQ*, MXFP4, ...)
+            // reads as "reorder eligible" here, but its extra->optimized_feature.reorder flag can
+            // never become true, so graph_needs_reorder() would return true forever and graphs
+            // would never enable for that model on this path.
+            reorder_eligible = should_reorder_tensor(*ctx, node) &&
+                                ggml_sycl_supports_reorder_mul_mat_sycl(src0->type);
         } else if (node->op == GGML_OP_MUL_MAT_ID &&
                    (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q5_K || src0->type == GGML_TYPE_Q6_K)) {
             // mirrors the id_reorder_needs_async_alloc gate in check_graph_compatibility()
@@ -6952,7 +6988,12 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_sycl_graph::node_properties prop = {};
-        memcpy(&prop.node, cgraph->nodes[i], sizeof(ggml_tensor));
+        prop.node_data = cgraph->nodes[i]->data;
+        prop.node_type = cgraph->nodes[i]->type;
+        prop.node_op   = cgraph->nodes[i]->op;
+        memcpy(prop.node_ne, cgraph->nodes[i]->ne, sizeof(prop.node_ne));
+        memcpy(prop.node_nb, cgraph->nodes[i]->nb, sizeof(prop.node_nb));
+        memcpy(prop.node_op_params, cgraph->nodes[i]->op_params, sizeof(prop.node_op_params));
 
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
             if (cgraph->nodes[i]->src[j]) {
@@ -6972,7 +7013,7 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
 }
 
 static void ggml_sycl_graph_prepare_fattn_buffers(
-        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph, bool * grew) {
+        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph) {
     size_t k_f16_elems = 0;
     size_t v_f16_elems = 0;
     for (int i = 0; i < cgraph->n_nodes; ++i) {
@@ -6993,14 +7034,33 @@ static void ggml_sycl_graph_prepare_fattn_buffers(
 
     ggml_sycl_fattn_kv_buffers & buffers = sycl_ctx->fattn_buffers();
     if (k_f16_elems > 0) {
-        buffers.K.ensure_half(k_f16_elems, grew);
+        buffers.K.ensure_half(k_f16_elems);
     }
     if (v_f16_elems > 0) {
-        buffers.V.ensure_half(v_f16_elems, grew);
+        buffers.V.ensure_half(v_f16_elems);
     }
 }
 
 #endif
+
+// Runs cgraph without a SYCL graph, recording the direct-call profile counters. Shared by the
+// graph-incompatible fallback and by GGML_SYCL_GRAPH's own not-yet-warmed-up/graph-unsupported
+// paths so both stay in sync.
+static ggml_status ggml_sycl_graph_direct_compute(
+        ggml_backend_sycl_context * sycl_ctx, ggml_backend_sycl_device_context * dev_ctx,
+        ggml_cgraph * cgraph, ggml_sycl_graph_profile * graph_profile) {
+    const auto direct_start = std::chrono::steady_clock::now();
+    const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+    if (graph_profile != nullptr) {
+        graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
+        graph_profile->direct_enqueue_us.fetch_add(
+            ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
+    }
+    if (status != GGML_STATUS_SUCCESS) {
+        ggml_backend_sycl_record_failed_status(dev_ctx);
+    }
+    return status;
+}
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
@@ -7076,43 +7136,31 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         }
 
         if (!replay_graph) {
-            const auto direct_start = std::chrono::steady_clock::now();
-            const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
-            if (graph_profile != nullptr) {
-                graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
-                graph_profile->direct_enqueue_us.fetch_add(
-                    ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
-            }
-            if (status != GGML_STATUS_SUCCESS) {
-                ggml_backend_sycl_record_failed_status(dev_ctx);
-            }
-            return status;
+            return ggml_sycl_graph_direct_compute(sycl_ctx, dev_ctx, cgraph, graph_profile);
+        }
+
+        // The FA K/V F16 scratch (fattn_buffers()) is shared by every graph in this context's
+        // map, and grows (freeing the old allocation) not only here but also on any eager,
+        // non-recorded flash-attention call - the warmup call, a post-reset eager call, or the
+        // plain non-graph path below. A cached graph whose recording predates the buffer's
+        // current generation has a freed pointer baked into it, so force a re-record instead of
+        // replaying it.
+        if (!sycl_graph_update_required && graph->fattn_generation != sycl_ctx->fattn_buffers().generation()) {
+            sycl_graph_update_required = true;
         }
 
         if (sycl_graph_update_required) {
             const bool graph_update_support = ggml_sycl_info().devices[sycl_ctx->device].graph_update_support;
 
             // Scratch allocation may wait on the queue. Grow it before recording; waiting while a
-            // queue is being captured is forbidden by oneAPI. A growth invalidates every other
-            // cached graph in this context too: they share these buffers, and their baked-in
-            // pointers would otherwise dangle on their next replay.
-            bool fattn_buffers_grew = false;
+            // queue is being captured is forbidden by oneAPI.
             const auto prepare_start = std::chrono::steady_clock::now();
-            ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph, &fattn_buffers_grew);
+            ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
             if (graph_profile != nullptr) {
                 graph_profile->prepare_us.fetch_add(
                     ggml_sycl_elapsed_us(prepare_start), std::memory_order_relaxed);
             }
-            if (fattn_buffers_grew) {
-                const void * this_graph_key = ggml_sycl_graph_get_key(cgraph);
-                for (auto it = sycl_ctx->sycl_graphs.begin(); it != sycl_ctx->sycl_graphs.end(); ) {
-                    if (it->first != this_graph_key) {
-                        it = sycl_ctx->sycl_graphs.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
+            graph->fattn_generation = sycl_ctx->fattn_buffers().generation();
 
             sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
@@ -7139,6 +7187,11 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     ggml_sycl_elapsed_us(record_start), std::memory_order_relaxed);
             }
             if (graph_status != GGML_STATUS_SUCCESS) {
+                // Whatever exec_graph currently holds (nullptr, or a graph recorded for the old
+                // properties/pointers that triggered this re-record) is not safe to replay next
+                // call: force a full re-record from a clean warmup.
+                graph->warmup_complete = false;
+                graph->exec_graph.reset();
                 ggml_backend_sycl_record_failed_status(dev_ctx);
                 return graph_status;
             }
@@ -7203,15 +7256,8 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     } else
 #endif
     {
-        const auto direct_start = std::chrono::steady_clock::now();
-        const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
-        if (graph_profile != nullptr) {
-            graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
-            graph_profile->direct_enqueue_us.fetch_add(
-                ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
-        }
+        const ggml_status status = ggml_sycl_graph_direct_compute(sycl_ctx, dev_ctx, cgraph, graph_profile);
         if (status != GGML_STATUS_SUCCESS) {
-            ggml_backend_sycl_record_failed_status(dev_ctx);
             return status;
         }
     }

@@ -28,14 +28,19 @@ struct ggml_sycl_fattn_kv_buffers {
         kv_buffer(const kv_buffer &) = delete;
         kv_buffer & operator=(const kv_buffer &) = delete;
 
-        // *grew (when non-null) is set true if this call reallocated the backing storage,
-        // which invalidates any pointer to it baked into a previously recorded SYCL graph.
-        sycl::half * ensure_half(size_t n_elems, bool * grew = nullptr);
+        sycl::half * ensure_half(size_t n_elems);
+
+        // Bumped every time ensure_half() reallocates. A SYCL graph that bakes in this
+        // buffer's pointer is only safe to replay while this generation is unchanged;
+        // reallocation happens on both the recording path and any eager (non-recorded)
+        // flash-attention call, so callers must poll this rather than a per-call flag.
+        uint64_t generation() const { return gen; }
 
     private:
         sycl::half * ptr      = nullptr;
         size_t       capacity = 0;
         queue_ptr    qptr     = nullptr;
+        uint64_t     gen      = 0;
         [[maybe_unused]] int device = 0;
     };
 
@@ -46,6 +51,10 @@ struct ggml_sycl_fattn_kv_buffers {
 
     ggml_sycl_fattn_kv_buffers(const ggml_sycl_fattn_kv_buffers &) = delete;
     ggml_sycl_fattn_kv_buffers & operator=(const ggml_sycl_fattn_kv_buffers &) = delete;
+
+    // Monotonic: changes exactly when K or V reallocates. Not a count of reallocations,
+    // just a comparable value for "did anything grow since I last checked".
+    uint64_t generation() const { return K.generation() + V.generation(); }
 };
 
 /**

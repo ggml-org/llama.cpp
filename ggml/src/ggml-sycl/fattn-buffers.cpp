@@ -12,16 +12,14 @@
 
 #include "common.hpp"
 
-sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems, bool * grew) {
+sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems) {
     const size_t need_bytes = n_elems * sizeof(sycl::half);
 
     if (capacity >= need_bytes) {
         return ptr;
     }
 
-    if (grew) {
-        *grew = true;
-    }
+    ++gen;
 
     if (ptr) {
         SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));

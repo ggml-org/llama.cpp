@@ -252,13 +252,20 @@ Full evidence lives in `docs/research/` (dated artifacts, notably
 - **Turbo is a CAPACITY feature**, not a speed feature: more context or a bigger model in the same
   VRAM. Parity with f16/q8_0 decode t/s is not the bar, and the turbo FA-speed chase is closed.
 - Measured dead ends, do not re-run without a driver/compiler change: SLM centroid-LUT dequant in
-  the FA VEC path (-8% at depth), global large-GRF mode, non-PVC direct upload, exact SYCL graph
-  replay, GPU-oneDNN prefill, alternate MMVQ geometry, DMMV/reorder rerouting, MoE reorder,
-  radix-4 / tensor-core WHT (already at parity, and WHT is a graph op outside the FA hot loop).
+  the FA VEC path (-8% at depth), global large-GRF mode, non-PVC direct upload, GPU-oneDNN prefill,
+  alternate MMVQ geometry, DMMV/reorder rerouting, MoE reorder, radix-4 / tensor-core WHT (already
+  at parity, and WHT is a graph op outside the FA hot loop).
 - `joint_matrix` XMX at sub-group 16 hits an IGC internal compiler error on A770; SG=8 is verified
   viable but 4-7x slower than VEC, hence the XMX kernel ships off by default.
-- SYCL-Graph replay cannot amortize on this driver: DG2 lacks `aspect::ext_oneapi_graph`, so each
-  pass re-records and re-finalizes. Re-probe after any compute-runtime upgrade before reopening.
+- **Superseded 2026-09-27 (PR #62):** the prior "SYCL-Graph replay cannot amortize" note described
+  the old per-call re-record-and-`update()` design. `GGML_SYCL_ENABLE_GRAPH=1` now records once and
+  replays for stable-shape decode; measured `graph_calls=1 replay_calls=46` on this driver
+  (real decode, `GGML_SYCL_GRAPH_PROFILE=1`), byte-identical vs `GGML_SYCL_ENABLE_GRAPH=0`. DG2
+  still lacks `aspect::ext_oneapi_graph` (in-place update support: `update_calls=0` always), so a
+  property change forces a full re-finalize rather than an update - that remains the real limit,
+  not an inability to amortize. `--n-cpu-moe`'s multi-graph-per-context map exists and falls back
+  safely, but has not been observed actually holding more than zero live graphs (the one model
+  tested had graph-incompatible dense layers for an unrelated reason - a library GEMM route).
 - Speculative decoding changing temperature-0 output is **expected upstream behavior** (kernels are
   not batch-invariant), not a fork bug - gate acceptance on logit tolerance, not exact hashes.
 - Promoted and retained: per-kernel device-code split (default ON), default-on
