@@ -64,8 +64,8 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
         if (extract_reasoning) {
             auto block = inputs.enable_thinking
                              ? p.literal(THINK_START) + p.space() +
-                                   p.ac(p.reasoning(p.until(THINK_END)) + p.literal(THINK_END), THINK_END)
-                             : p.literal(THINK_START) + p.ac(p.until(THINK_END) + p.literal(THINK_END), THINK_END);
+                                   p.until(p.reasoning(p.until(THINK_END)), THINK_END)
+                             : p.literal(THINK_START) + p.until(p.until(THINK_END), THINK_END);
 
             // A turn without reasoning is prefixed with a bare </mm:think>, written either by the
             // generation prompt (thinking_mode = "disabled") or by the model itself.
@@ -113,7 +113,7 @@ common_chat_params common_chat_params_init_minimax_m3(const common_chat_template
 
                 // A string accepts anything, so a union with a string alternative is a string
                 if (schema.may_be_string()) {
-                    return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
+                    return p.until(p.tool_arg_string_value(p.until(close)), close_tag);
                 }
 
                 if (schema.kind() == common_chat_schema::KIND_ANY_OF) {
