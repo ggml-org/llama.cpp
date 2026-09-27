@@ -63,8 +63,8 @@ common_chat_params common_chat_params_init_minicpm5(const common_chat_template &
             // CDATA lets a value carry characters that would otherwise close the tag (e.g.
             // </param>); capture the inner text only, excluding the CDATA markers.
             auto string_value = p.choice({
-                p.literal("<![CDATA[") + p.ac(p.tool_arg_string_value(p.until("]]>")) + p.literal("]]>"), "]]>") + p.tool_arg_close(p.literal("</param>")),
-                p.negate(p.literal("<![CDATA[")) + p.ac(p.tool_arg_string_value(p.until("</param>")) + p.tool_arg_close(p.literal("</param>")), "</param>")
+                p.literal("<![CDATA[") + p.until(p.tool_arg_string_value(p.until("]]>")), "]]>") + p.tool_arg_close(p.literal("</param>")),
+                p.negate(p.literal("<![CDATA[")) + p.until(p.tool_arg_string_value(p.until("</param>")), p.tool_arg_close(p.literal("</param>")))
             });
 
             auto tool_choice = p.choice();

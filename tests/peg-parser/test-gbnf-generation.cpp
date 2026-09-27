@@ -129,14 +129,14 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= until-0
+            root ::= until-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [<] until-0-01 | [^<] until-0
-            until-0-01 ::= | [<] until-0-01 | [/] until-0-02 | [^/<] until-0
-            until-0-02 ::= | [<] until-0-01 | [t] until-0-03 | [^<t] until-0
-            until-0-03 ::= | [<] until-0-01 | [a] until-0-04 | [^<a] until-0
-            until-0-04 ::= | [<] until-0-01 | [g] until-0-05 | [^<g] until-0
-            until-0-05 ::= | [<] until-0-01 | [^<>] until-0
+            until-1 ::= | [<] until-1-01 | [^<] until-1
+            until-1-01 ::= | [<] until-1-01 | [/] until-1-02 | [^/<] until-1
+            until-1-02 ::= | [<] until-1-01 | [t] until-1-03 | [^<t] until-1
+            until-1-03 ::= | [<] until-1-01 | [a] until-1-04 | [^<a] until-1
+            until-1-04 ::= | [<] until-1-01 | [g] until-1-05 | [^<g] until-1
+            until-1-05 ::= | [<] until-1-01 | [^<>] until-1
         )""", gbnf);
     });
 
@@ -150,22 +150,22 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= until-0
+            root ::= until-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [\n] until-0-01 | [^\n] until-0
-            until-0-01 ::= | [\n] until-0-01 | [<] until-0-02 | [^\n<] until-0
-            until-0-02 ::= | [\n] until-0-01 | [/] until-0-03 | [^\n/] until-0
-            until-0-03 ::= | [\n] until-0-01 | [p] until-0-04 | [^\np] until-0
-            until-0-04 ::= | [\n] until-0-01 | [a] until-0-05 | [^\na] until-0
-            until-0-05 ::= | [\n] until-0-01 | [r] until-0-06 | [^\nr] until-0
-            until-0-06 ::= | [\n] until-0-01 | [a] until-0-07 | [^\na] until-0
-            until-0-07 ::= | [\n] until-0-01 | [m] until-0-08 | [^\nm] until-0
-            until-0-08 ::= | [\n] until-0-01 | [e] until-0-09 | [^\ne] until-0
-            until-0-09 ::= | [\n] until-0-01 | [t] until-0-10 | [^\nt] until-0
-            until-0-10 ::= | [\n] until-0-01 | [e] until-0-11 | [^\ne] until-0
-            until-0-11 ::= | [\n] until-0-01 | [r] until-0-12 | [^\nr] until-0
-            until-0-12 ::= | [\n] until-0-01 | [>] until-0-13 | [^\n>] until-0
-            until-0-13 ::= | [^\n] until-0
+            until-1 ::= | [\n] until-1-01 | [^\n] until-1
+            until-1-01 ::= | [\n] until-1-01 | [<] until-1-02 | [^\n<] until-1
+            until-1-02 ::= | [\n] until-1-01 | [/] until-1-03 | [^\n/] until-1
+            until-1-03 ::= | [\n] until-1-01 | [p] until-1-04 | [^\np] until-1
+            until-1-04 ::= | [\n] until-1-01 | [a] until-1-05 | [^\na] until-1
+            until-1-05 ::= | [\n] until-1-01 | [r] until-1-06 | [^\nr] until-1
+            until-1-06 ::= | [\n] until-1-01 | [a] until-1-07 | [^\na] until-1
+            until-1-07 ::= | [\n] until-1-01 | [m] until-1-08 | [^\nm] until-1
+            until-1-08 ::= | [\n] until-1-01 | [e] until-1-09 | [^\ne] until-1
+            until-1-09 ::= | [\n] until-1-01 | [t] until-1-10 | [^\nt] until-1
+            until-1-10 ::= | [\n] until-1-01 | [e] until-1-11 | [^\ne] until-1
+            until-1-11 ::= | [\n] until-1-01 | [r] until-1-12 | [^\nr] until-1
+            until-1-12 ::= | [\n] until-1-01 | [>] until-1-13 | [^\n>] until-1
+            until-1-13 ::= | [^\n] until-1
         )""", gbnf);
     });
 
@@ -181,15 +181,15 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= until-0
+            root ::= until-1
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [<] until-0-01 | [^<] until-0
-            until-0-01 ::= | [<] until-0-01 | [\uFF5C] until-0-02 | [^<\uFF5C] until-0
-            until-0-02 ::= | [<] until-0-01 | [D] until-0-03 | [^<D] until-0
-            until-0-03 ::= | [<] until-0-01 | [S] until-0-04 | [^<S] until-0
-            until-0-04 ::= | [<] until-0-01 | [M] until-0-05 | [^<M] until-0
-            until-0-05 ::= | [<] until-0-01 | [L] until-0-06 | [^<L] until-0
-            until-0-06 ::= | [<] until-0-01 | [^<\uFF5C] until-0
+            until-1 ::= | [<] until-1-01 | [^<] until-1
+            until-1-01 ::= | [<] until-1-01 | [\uFF5C] until-1-02 | [^<\uFF5C] until-1
+            until-1-02 ::= | [<] until-1-01 | [D] until-1-03 | [^<D] until-1
+            until-1-03 ::= | [<] until-1-01 | [S] until-1-04 | [^<S] until-1
+            until-1-04 ::= | [<] until-1-01 | [M] until-1-05 | [^<M] until-1
+            until-1-05 ::= | [<] until-1-01 | [L] until-1-06 | [^<L] until-1
+            until-1-06 ::= | [<] until-1-01 | [^<\uFF5C] until-1
         )""", gbnf);
     });
 
@@ -203,18 +203,18 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            root ::= until-0
+            root ::= until-3
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
-            until-0 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^ace] until-0
-            until-0-01 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^abce] until-0
-            until-0-03 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acde] until-0
-            until-0-05 ::= | [a] until-0-01 | [c] until-0-03 | [e] until-0-05 | [^acef] until-0
+            until-3 ::= | [a] until-3-01 | [c] until-3-03 | [e] until-3-05 | [^ace] until-3
+            until-3-01 ::= | [a] until-3-01 | [c] until-3-03 | [e] until-3-05 | [^abce] until-3
+            until-3-03 ::= | [a] until-3-01 | [c] until-3-03 | [e] until-3-05 | [^acde] until-3
+            until-3-05 ::= | [a] until-3-01 | [c] until-3-03 | [e] until-3-05 | [^acef] until-3
         )""", gbnf);
     });
 
-    t.test("ac grammar", [](testing &t) {
+    t.test("until grammar with content", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.until("</tag>") + p.literal("</tag>"), "</tag>");
+            return p.until(p.until("</tag>"), "</tag>");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -222,20 +222,21 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-4 ::= [<] ac-4-01 | [^<] ac-4
-            ac-4-01 ::= [<] ac-4-01 | [/] ac-4-02 | [^/<] ac-4
-            ac-4-02 ::= [<] ac-4-01 | [t] ac-4-03 | [^<t] ac-4
-            ac-4-03 ::= [<] ac-4-01 | [a] ac-4-04 | [^<a] ac-4
-            ac-4-04 ::= [<] ac-4-01 | [g] ac-4-05 | [^<g] ac-4
-            ac-4-05 ::= [>] | [<] ac-4-01 | [^<>] ac-4
-            root ::= ac-4
+            root ::= until-3
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-3 ::= [<] until-3-01 | [^<] until-3
+            until-3-01 ::= [<] until-3-01 | [/] until-3-02 | [^/<] until-3
+            until-3-02 ::= [<] until-3-01 | [t] until-3-03 | [^<t] until-3
+            until-3-03 ::= [<] until-3-01 | [a] until-3-04 | [^<a] until-3
+            until-3-04 ::= [<] until-3-01 | [g] until-3-05 | [^<g] until-3
+            until-3-05 ::= [>] | [<] until-3-01 | [^<>] until-3
+            
         )""", gbnf);
     });
 
-    t.test("ac grammar terminates at first delimiter", [](testing &t) {
+    t.test("until grammar with content terminates at first delimiter", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.until("\n</parameter>\n") + p.literal("\n</parameter>\n"), "\n</parameter>\n");
+            return p.until(p.until("\n</parameter>\n"), "\n</parameter>\n");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -243,28 +244,29 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-4 ::= [\n] ac-4-01 | [^\n] ac-4
-            ac-4-01 ::= [\n] ac-4-01 | [<] ac-4-02 | [^\n<] ac-4
-            ac-4-02 ::= [\n] ac-4-01 | [/] ac-4-03 | [^\n/] ac-4
-            ac-4-03 ::= [\n] ac-4-01 | [p] ac-4-04 | [^\np] ac-4
-            ac-4-04 ::= [\n] ac-4-01 | [a] ac-4-05 | [^\na] ac-4
-            ac-4-05 ::= [\n] ac-4-01 | [r] ac-4-06 | [^\nr] ac-4
-            ac-4-06 ::= [\n] ac-4-01 | [a] ac-4-07 | [^\na] ac-4
-            ac-4-07 ::= [\n] ac-4-01 | [m] ac-4-08 | [^\nm] ac-4
-            ac-4-08 ::= [\n] ac-4-01 | [e] ac-4-09 | [^\ne] ac-4
-            ac-4-09 ::= [\n] ac-4-01 | [t] ac-4-10 | [^\nt] ac-4
-            ac-4-10 ::= [\n] ac-4-01 | [e] ac-4-11 | [^\ne] ac-4
-            ac-4-11 ::= [\n] ac-4-01 | [r] ac-4-12 | [^\nr] ac-4
-            ac-4-12 ::= [\n] ac-4-01 | [>] ac-4-13 | [^\n>] ac-4
-            ac-4-13 ::= [\n] | [^\n] ac-4
-            root ::= ac-4
+            root ::= until-3
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-3 ::= [\n] until-3-01 | [^\n] until-3
+            until-3-01 ::= [\n] until-3-01 | [<] until-3-02 | [^\n<] until-3
+            until-3-02 ::= [\n] until-3-01 | [/] until-3-03 | [^\n/] until-3
+            until-3-03 ::= [\n] until-3-01 | [p] until-3-04 | [^\np] until-3
+            until-3-04 ::= [\n] until-3-01 | [a] until-3-05 | [^\na] until-3
+            until-3-05 ::= [\n] until-3-01 | [r] until-3-06 | [^\nr] until-3
+            until-3-06 ::= [\n] until-3-01 | [a] until-3-07 | [^\na] until-3
+            until-3-07 ::= [\n] until-3-01 | [m] until-3-08 | [^\nm] until-3
+            until-3-08 ::= [\n] until-3-01 | [e] until-3-09 | [^\ne] until-3
+            until-3-09 ::= [\n] until-3-01 | [t] until-3-10 | [^\nt] until-3
+            until-3-10 ::= [\n] until-3-01 | [e] until-3-11 | [^\ne] until-3
+            until-3-11 ::= [\n] until-3-01 | [r] until-3-12 | [^\nr] until-3
+            until-3-12 ::= [\n] until-3-01 | [>] until-3-13 | [^\n>] until-3
+            until-3-13 ::= [\n] | [^\n] until-3
+            
         )""", gbnf);
     });
 
-    t.test("ac grammar multiple delimiters", [](testing &t) {
+    t.test("until grammar with content multiple delimiters", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), std::vector<std::string>{"ab", "cd", "ef"});
+            return p.until(p.eps(), { { p.literal("ab") }, { p.literal("cd") }, { p.literal("ef") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -272,12 +274,13 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-4 ::= [a] ac-4-01 | [c] ac-4-03 | [e] ac-4-05 | [^ace] ac-4
-            ac-4-01 ::= [b] | [a] ac-4-01 | [c] ac-4-03 | [e] ac-4-05 | [^abce] ac-4
-            ac-4-03 ::= [d] | [a] ac-4-01 | [c] ac-4-03 | [e] ac-4-05 | [^acde] ac-4
-            ac-4-05 ::= [f] | [a] ac-4-01 | [c] ac-4-03 | [e] ac-4-05 | [^acef] ac-4
-            root ::= ac-4
+            root ::= until-4
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-4 ::= [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^ace] until-4
+            until-4-01 ::= [b] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^abce] until-4
+            until-4-03 ::= [d] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^acde] until-4
+            until-4-05 ::= [f] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^acef] until-4
+            
         )""", gbnf);
     });
 
@@ -345,11 +348,11 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("space_rejected", true, threw);
     });
 
-    t.test("ac branches reject a shared delimiter", [](testing &t) {
+    t.test("until branches reject a shared delimiter", [](testing &t) {
         bool threw = false;
         try {
             build_peg_parser([](common_peg_parser_builder & p)  {
-                return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("ab"), p.literal("y") } });
+                return p.until(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("ab"), p.literal("y") } });
             });
         } catch (const std::invalid_argument &) {
             threw = true;
@@ -357,9 +360,9 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("duplicate_rejected", true, threw);
     });
 
-    t.test("ac grammar branches continue with their rest", [](testing &t) {
+    t.test("until grammar branches continue with their rest", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
+            return p.until(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -367,18 +370,19 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-4 ::= [a] ac-4-01 | [c] ac-4-03 | [^ac] ac-4
-            ac-4-01 ::= [b] ac-4-rest-0 | [a] ac-4-01 | [c] ac-4-03 | [^abc] ac-4
-            ac-4-03 ::= [d] | [a] ac-4-01 | [c] ac-4-03 | [^acd] ac-4
-            ac-4-rest-0 ::= "x"
-            root ::= ac-4
+            root ::= until-4
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-4 ::= [a] until-4-01 | [c] until-4-03 | [^ac] until-4
+            until-4-01 ::= [b] until-4-rest-0 | [a] until-4-01 | [c] until-4-03 | [^abc] until-4
+            until-4-03 ::= [d] | [a] until-4-01 | [c] until-4-03 | [^acd] until-4
+            until-4-rest-0 ::= "x"
+            
         )""", gbnf);
     });
 
-    t.test("ac grammar optional may end before a delimiter", [](testing &t) {
+    t.test("until grammar optional may end before a delimiter", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), { { p.literal("ab"), p.literal("x") } }, true);
+            return p.until(p.eps(), { { p.literal("ab"), p.literal("x") } }, true);
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -386,11 +390,12 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-3 ::= | [a] ac-3-01 | [^a] ac-3
-            ac-3-01 ::= | [b] ac-3-rest-0 | [a] ac-3-01 | [^ab] ac-3
-            ac-3-rest-0 ::= "x"
-            root ::= ac-3
+            root ::= until-3
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-3 ::= | [a] until-3-01 | [^a] until-3
+            until-3-01 ::= | [b] until-3-rest-0 | [a] until-3-01 | [^ab] until-3
+            until-3-rest-0 ::= "x"
+            
         )""", gbnf);
     });
 
@@ -502,9 +507,9 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("duplicate_rejected", true, threw);
     });
 
-    t.test("ac grammar suffix delimiter offers both rests", [](testing &t) {
+    t.test("until grammar suffix delimiter offers both rests", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.ac(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
+            return p.until(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -512,14 +517,15 @@ void test_gbnf_generation(testing &t) {
         });
 
         assert_gbnf_equal(t, R"""(
-            ac-5 ::= [x] ac-5-01 | [a] ac-5-04 | [^ax] ac-5
-            ac-5-01 ::= [x] ac-5-01 | [a] ac-5-02 | [^ax] ac-5
-            ac-5-02 ::= [b] (ac-5-rest-0 | ac-5-rest-1) | [x] ac-5-01 | [a] ac-5-04 | [^abx] ac-5
-            ac-5-04 ::= [b] ac-5-rest-1 | [x] ac-5-01 | [a] ac-5-04 | [^abx] ac-5
-            ac-5-rest-0 ::= "1"
-            ac-5-rest-1 ::= "2"
-            root ::= ac-5
+            root ::= until-5
             space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            until-5 ::= [x] until-5-01 | [a] until-5-04 | [^ax] until-5
+            until-5-01 ::= [x] until-5-01 | [a] until-5-02 | [^ax] until-5
+            until-5-02 ::= [b] (until-5-rest-0 | until-5-rest-1) | [x] until-5-01 | [a] until-5-04 | [^abx] until-5
+            until-5-04 ::= [b] until-5-rest-1 | [x] until-5-01 | [a] until-5-04 | [^abx] until-5
+            until-5-rest-0 ::= "1"
+            until-5-rest-1 ::= "2"
+            
         )""", gbnf);
     });
 
