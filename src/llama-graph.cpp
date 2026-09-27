@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <numeric>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -227,6 +228,37 @@ bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     res &= n_outputs == params.n_outputs;
+
+    return res;
+}
+
+void llm_graph_input_moe_ids::set_input(const llama_ubatch * ubatch) {
+    GGML_ASSERT(ggml_backend_buffer_is_host(ids->buffer));
+
+    const int64_t n_used   = ids->ne[0];
+    const int64_t n_tokens = ids->ne[1];
+
+    // seed from the position: new ids for each step, also when the graph is rebuilt
+    std::mt19937 rng(ubatch->pos ? (uint32_t) ubatch->pos[0] : 0);
+
+    std::vector<int32_t> perm(n_expert);
+    std::iota(perm.begin(), perm.end(), 0);
+
+    int32_t * data = (int32_t *) ids->data;
+
+    // partial Fisher-Yates: n_used distinct experts per token
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        for (int64_t j = 0; j < n_used; ++j) {
+            std::swap(perm[j], perm[j + rng() % (n_expert - j)]);
+            data[i*n_used + j] = perm[j];
+        }
+    }
+}
+
+bool llm_graph_input_moe_ids::can_reuse(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= ids->ne[1] == params.ubatch.n_tokens;
 
     return res;
 }
@@ -1334,6 +1366,7 @@ void llm_graph_result::reset() {
     t_sampled_probs.clear();
     t_sampled_logits.clear();
     t_candidates.clear();
+    t_moe_ids.clear();
 
     params = {};
 
@@ -2163,6 +2196,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
 
+    // benchmark only: the expert GEMMs use random ids, the router above is not changed
+    if (cparams.moe_random_routing && n_expert == hparams.n_expert && n_expert_used <= hparams.n_expert_used_max() && n_tokens <= ubatch.n_tokens) {
+        // fused top-k kernels write the router ids together with the weights, so keep the ids alive until here
+        // the empty get_rows is skipped by the backends, it only adds this dependency
+        ggml_build_forward_expand(gf, ggml_get_rows(ctx0, weights, ggml_view_2d(ctx0, selected_experts, 0, n_tokens, selected_experts->nb[1], 0)));
+
+        selected_experts = build_inp_moe_ids(n_expert_used, n_tokens);
+    }
+
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
     if (weight_before_ffn) {
@@ -2534,6 +2576,35 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
     res->add_input(std::move(inp));
 
     return cur;
+}
+
+ggml_tensor * llm_graph_context::build_inp_moe_ids(int64_t n_used, int64_t n_rows) const {
+    auto & ts = res->t_moe_ids;
+
+    if (ts.empty()) {
+        auto inp = std::make_unique<llm_graph_input_moe_ids>(hparams.n_expert);
+
+        auto & cur = inp->ids;
+
+        cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, hparams.n_expert_used_max(), n_tokens);
+        ggml_set_input(cur);
+        cb(cur, "inp_moe_ids", -1);
+
+        ts.push_back(cur);
+
+        res->add_input(std::move(inp));
+    }
+
+    // one tensor per shape: each distinct tensor is copied to the device on each ubatch
+    for (auto * t : ts) {
+        if (t->ne[0] == n_used && t->ne[1] == n_rows) {
+            return t;
+        }
+    }
+
+    ts.push_back(ggml_view_2d(ctx0, ts[0], n_used, n_rows, ts[0]->nb[1], 0));
+
+    return ts.back();
 }
 
 ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
