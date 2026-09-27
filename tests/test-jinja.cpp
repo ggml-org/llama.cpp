@@ -1976,6 +1976,30 @@ static void test_object_methods(testing & t) {
         json::object(),
         ""
     );
+
+    test_template(t, "dict from dict",
+        "{% set o = dict({'a': 3, 'b': 1, 'c': 2}) %}{{ o|tojson }}",
+        json::object(),
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from kwargs",
+        "{% set o = dict(a=3, b=1, c=2) %}{{ o|tojson }}",
+        json::object(),
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from tuples",
+        "{% set o = dict((obj | items | list)) %}{{ o|tojson }}",
+        {{"obj", {{"a", 3}, {"b", 1}, {"c", 2}}}},
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from tuples and kwargs",
+        "{% set o = dict((obj | items | list), c=2) %}{{ o|tojson }}",
+        {{"obj", {{"a", 3}, {"b", 1}}}},
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
 }
 
 static void test_hasher(testing & t) {
