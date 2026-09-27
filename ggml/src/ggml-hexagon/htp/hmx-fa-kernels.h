@@ -48,7 +48,7 @@ static const int16_t d_tile_scatter_offsets[64] __attribute__((aligned(128))) = 
 };
 // Inner HMX tile computation kernels
 
-static void hmx_fa_qk_dot_tile(
+static inline void hmx_fa_qk_dot_tile(
     const __fp16 * row_tiles,
     const __fp16 * col_tiles,
     __fp16 *       out_tile,
@@ -116,7 +116,7 @@ static void hmx_fa_qk_dot_tile(
     );
 }
 
-static void hmx_fa_o_update_tile(
+static inline void hmx_fa_o_update_tile(
     const __fp16 * d_diag,
     const __fp16 * o_rc,
     const __fp16 * p_tile_in,

@@ -45,9 +45,11 @@
 
 <ToolCallBlock {isStreaming} meta={readMediaMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
-		<span class="text-muted-foreground">Read media </span>
+		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
+			<span class="shrink-0 text-muted-foreground">Read media</span>
 
-		<span class="font-mono">{readMediaMeta?.fileName}</span>
+			<span class="min-w-0 overflow-x-auto font-mono">{readMediaMeta?.fileName}</span>
+		</span>
 	{/snippet}
 
 	{#snippet children(_meta, _ctx)}
