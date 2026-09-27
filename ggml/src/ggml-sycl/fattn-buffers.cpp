@@ -12,17 +12,20 @@
 
 #include "common.hpp"
 
-sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems) {
+sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems, bool * grew) {
     const size_t need_bytes = n_elems * sizeof(sycl::half);
 
     if (capacity >= need_bytes) {
         return ptr;
     }
 
+    if (grew) {
+        *grew = true;
+    }
+
     if (ptr) {
         SYCL_CHECK(CHECK_TRY_ERROR(qptr->wait()));
-        ggml_sycl_memtrace_del(ptr);
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
+        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(ptr, *qptr)));
         ptr = nullptr;
         capacity = 0;
     }
@@ -32,20 +35,20 @@ sycl::half * ggml_sycl_fattn_kv_buffers::kv_buffer::ensure_half(size_t n_elems) 
         cap += CHUNK_SIZE;
     }
 
+    // ggml_sycl_malloc_device() prefers the Level Zero relaxed-allocation path over raw
+    // sycl::malloc_device(), which is capped below 4 GiB on Intel GPU.
     void * dev_ptr;
     SYCL_CHECK(
-        CHECK_TRY_ERROR(dev_ptr = sycl::malloc_device(
-                        cap, *qptr)));
+        CHECK_TRY_ERROR(dev_ptr = ggml_sycl_malloc_device(
+                        cap, *qptr, GGML_SYCL_MEM_FATTN_KV)));
 
     if (!dev_ptr) {
         GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device\n", __func__, cap);
-        ggml_sycl_memtrace_fail(GGML_SYCL_MEM_FATTN_KV, cap);
         GGML_ABORT("fattn buffer alloc failed");
     }
 
     ptr = static_cast<sycl::half *>(dev_ptr);
     capacity = cap;
-    ggml_sycl_memtrace_add(GGML_SYCL_MEM_FATTN_KV, ptr, cap);
     return ptr;
 }
 
@@ -54,7 +57,6 @@ ggml_sycl_fattn_kv_buffers::kv_buffer::~kv_buffer() {
     GGML_LOG_INFO("ggml_sycl_fattn_kv_buffer[%d]: %.2f MiB\n", device, capacity / 1024.0 / 1024.0);
 #endif
     if (ptr) {
-        ggml_sycl_memtrace_del(ptr);
-        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, *qptr)));
+        SYCL_CHECK(CHECK_TRY_ERROR(ggml_sycl_free_device(ptr, *qptr)));
     }
 }
