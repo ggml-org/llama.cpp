@@ -249,7 +249,7 @@ static void hmxfa_red_fn(unsigned int n, unsigned int i, void * data) {
             else rows[t] = (float *) (st->dst->data + (size_t) st->h * st->dst->nb[1] + (size_t) (st->i0 + r) * st->dst->nb[2] + (size_t) st->seq * st->dst->nb[3]) + ct * 32;
         }
         int nv = W->N - ct * 32; nv = nv > 32 ? 32 : nv;
-        hmxi_reduce_tile(st->v_stage + (((size_t) rt * W->nct + ct) * W->ng) * 2048, W->ng, rows, st->sa + rt * 16, W->k512 + ct * 32, W->C + ct * 32, 0, nv);
+        hmxi_reduce_tile(st->v_stage + (((size_t) rt * W->nct + ct) * W->ng) * 2048, W->ng, rows, st->sa + rt * 16, W->k512 + ct * 32, W->C + ct * 32, 0, nv, NULL);
     }
 }
 

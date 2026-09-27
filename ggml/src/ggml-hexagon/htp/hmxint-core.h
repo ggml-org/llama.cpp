@@ -242,7 +242,8 @@ static inline void hmxi_cvt_group_whole(const uint8_t * qtiles, int nb, uint8_t 
 //   rows: 16 dst row pointers (NULL = skip); sa: 16 token scales; k512: per column 512 * 2^-j_c / 256; C: per column correction
 //   ncols: valid columns in this tile (< 32 only for the last, padded tile)
 static inline void hmxi_reduce_tile(const uint8_t * stage, int n_g, float * const * rows, const float * sa,
-                                    const float * k512, const float * C, int accumulate, int ncols) {
+                                    const float * k512, const float * C, int accumulate, int ncols,
+                                    const float * const * add_rows) {   // add_rows: optional per-row residual (NULL = none)
     const HVX_Vector vK = hmxi_ldu(k512), vC = hmxi_ldu(C), half = Q6_V_vsplat_R(32768);
     for (int j = 0; j < 8; j++) {                 // vector j = tokens 2j (even halfwords) and 2j+1 (odd)
         HVX_Vector acc_e = Q6_V_vzero(), acc_o = Q6_V_vzero();
@@ -264,12 +265,14 @@ static inline void hmxi_reduce_tile(const uint8_t * stage, int n_g, float * cons
             HVX_Vector t   = Q6_Vqf32_vsub_VsfVsf(Q6_Vsf_equals_Vw(acc), vC);
             HVX_Vector ks  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(vK, Q6_V_vsplat_R(hmxi_f2u(sa[2 * j + h]))));
             HVX_Vector y   = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(t), ks));
+            const float * arow = add_rows ? add_rows[2 * j + h] : NULL;
             if (ncols >= 32) {
                 if (accumulate) y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(y, hmxi_ldu(row)));
+                if (arow) y = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_VsfVsf(y, hmxi_ldu(arow)));
                 hmxi_stu(row, y);
             } else {                                  // partial column tile (dst narrower than the padded weight)
                 float tmp[32]; hmxi_stu(tmp, y);
-                for (int c = 0; c < ncols; c++) row[c] = accumulate ? row[c] + tmp[c] : tmp[c];
+                for (int c = 0; c < ncols; c++) row[c] = (accumulate ? row[c] + tmp[c] : tmp[c]) + (arow ? arow[c] : 0.0f);
             }
         }
     }

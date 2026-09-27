@@ -146,30 +146,25 @@ static void hmxi_red_fn(unsigned int n, unsigned int i, void * data) {
     for (int tt = i; tt < st->nrt * ch->nc; tt += n) {
         int rt = tt / ch->nc, ctl = tt % ch->nc;
         int col = ch->n0 + ctl * 32;
-        if (tt + (int) n < st->nrt * ch->nc) {
+        const int last_k = st->kt0 + st->nk == st->n_k_tiles;
+        const float * src2 = (st->src2 && last_k) ? st->src2 : NULL;
+        if (tt + (int) n < st->nrt * ch->nc && (st->kt0 > 0 || src2)) {   // prefetch only what is read: dst (accumulate) or residual
             int rt2 = (tt + n) / ch->nc, col2 = ch->n0 + ((tt + n) % ch->nc) * 32, row2 = st->m0 + rt2 * 16;
             int h2 = st->m - row2 < 16 ? st->m - row2 : 16;
-            if (h2 > 0 && col2 < st->dst_cols) hex_l2fetch(st->dst + (size_t) row2 * st->dst_stride + col2, 128, st->dst_stride * 4, h2);
+            if (h2 > 0 && col2 < st->dst_cols) {
+                if (st->kt0 > 0) hex_l2fetch(st->dst + (size_t) row2 * st->dst_stride + col2, 128, st->dst_stride * 4, h2);
+                if (src2) hex_l2fetch(src2 + (size_t) row2 * st->src2_stride + col2, 128, st->src2_stride * 4, h2);
+            }
         }
-        float * rows[16];
+        float * rows[16]; const float * arows[16];
         for (int t = 0; t < 16; t++) {
             int row = st->m0 + rt * 16 + t;
             rows[t] = (row < st->m && col < st->dst_cols) ? st->dst + (size_t) row * st->dst_stride + col : NULL;
-#ifdef HMXI_RED_TEST        // timing experiment: write into a VTCM scratch instead of DDR (results are wrong)
-            if (rows[t]) rows[t] = (float *) ((uint8_t *) st->ctx->vtcm_base + st->ctx->vtcm_size - 65536) + i * 512 + t * 32;
-#endif
+            arows[t] = (rows[t] && src2) ? src2 + (size_t) row * st->src2_stride + col : NULL;
         }
         hmxi_reduce_tile(ch->v_stage + (((size_t) rt * ch->nc + ctl) * st->ng) * 2048, st->ng, rows, st->sa + st->m0 + rt * 16,
-                         hmxi_k512_of(st, ch, col), ch->C + ctl * 32, st->kt0 > 0, st->dst_cols - col < 32 ? st->dst_cols - col : 32);
-#ifdef HMXI_RED_TEST
-        continue;
-#endif
-        if (st->src2 && st->kt0 + st->nk == st->n_k_tiles) {
-            for (int t = 0; t < 16; t++) if (rows[t]) {
-                int row = st->m0 + rt * 16 + t;
-                for (int c = 0; c < 32 && col + c < st->dst_cols; c++) rows[t][c] += st->src2[(size_t) row * st->src2_stride + col + c];
-            }
-        }
+                         hmxi_k512_of(st, ch, col), ch->C + ctl * 32, st->kt0 > 0, st->dst_cols - col < 32 ? st->dst_cols - col : 32,
+                         src2 ? arows : NULL);
     }
 }
 
