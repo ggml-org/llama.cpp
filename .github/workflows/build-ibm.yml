@@ -105,6 +105,9 @@ jobs:
     runs-on: ubuntu-24.04-s390x
     # z17 (-march=arch15) needs GCC >= 15.1 and binutils >= 2.44, which Ubuntu 24.04 does not provide
     container: ubuntu:26.04
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Build Dependencies
