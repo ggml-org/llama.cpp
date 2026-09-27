@@ -226,6 +226,10 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
 }
 
 static void make_tensor_clean(struct htp_context * ctx, const struct htp_tensor * t) {
+    if (!t || (t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE))) {
+        return;
+    }
+
     uint32_t t_start = t->data;
     uint32_t t_end   = t_start + t->size;
 
@@ -236,6 +240,7 @@ static void make_tensor_clean(struct htp_context * ctx, const struct htp_tensor 
         if (r->start < t_end && t_start < r->end) {
             if (t_start <= r->start && r->end <= t_end) {
                 r->start = 0;
+                r->end   = 0;
             } else if (t_start <= r->start) {
                 r->start = t_end;
             } else if (r->end <= t_end) {
@@ -246,6 +251,10 @@ static void make_tensor_clean(struct htp_context * ctx, const struct htp_tensor 
 }
 
 static inline bool is_tensor_dirty(struct htp_context * ctx, const struct htp_tensor * t) {
+    if (!t || (t->flags & (HTP_TENSOR_WEIGHT | HTP_TENSOR_FENCE))) {
+        return false;
+    }
+
     uint32_t t_start = t->data;
     uint32_t t_end   = t_start + t->size;
 
@@ -327,7 +336,7 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (t && is_tensor_dirty(ctx, t)) {
+        if (is_tensor_dirty(ctx, t)) {
             dirty_tensors[n_dirty++] = t;
             ranges[n_dirty - 1].start = t->data;
             ranges[n_dirty - 1].end   = t->data + t->size;
