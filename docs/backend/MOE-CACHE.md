@@ -10,6 +10,14 @@ supported expert matvecs to the GPU. Unsupported operations and failed cache
 work fall back to the CPU `MUL_MAT_ID` implementation. Cache sessions belong to
 a scheduler; weights are not persisted across process restarts.
 
+**Default is `off`.** `--moe-cache` is opt-in: with a working provider
+registered and `--fit on`, fit's own placement planner can decide to spill
+every routed expert to host RAM on the assumption a cache will absorb the
+resulting slowdown, without that assumption being verified against what the
+provider can actually deliver (see "Known gaps" below). Enabling `auto`/`on`/
+`soft` without first reading that section can make decode slower than leaving
+the cache off.
+
 The SYCL provider reuses the existing `ggml_sycl_mul_mat_vec_q_id()` kernel
 dispatcher (`mmvq.cpp`) for the actual matvec: the cache slab is addressed
 exactly like the stacked expert-weight buffer that function already expects,
@@ -47,6 +55,9 @@ Look for the provider's cache activation and pool messages, not just acceptance
 of `--moe-cache`. Use `-lv 4` for diagnostic detail. Missing providers, unsupported
 shapes, inadequate capacity, or fully resident weights can leave caching dormant.
 
+## Known gaps
+
+**Fit's spill decision is disconnected from the provider's real budget.**
 `on`/`auto`/`soft` (no explicit MiB) reach the provider with `budget_mib=0`
 (`arg.cpp`'s encoding for "resolve free-minus-reserve yourself"). `--fit`'s
 own placement planner separately computes its own projected free-VRAM figure
@@ -56,17 +67,50 @@ but that computed figure is never wired back into the value
 `common/fit.cpp`, `common/common.cpp`, and `src/llama-context.cpp`: the
 scheduler call always gets the original, still-zero `--moe-cache` value, not
 fit's derived one). Fixing that disconnect is a shared fit/scheduler change
-outside this backend's files.
+outside either provider's files. This is why the default is `off`: as soon as
+any provider is registered, fit's placement decision can go through even
+though the actual session may end up dormant or under-provisioned - a real
+decode regression versus not registering a provider at all.
 
-The SYCL provider works around it locally: `session_create()` derives its own
-free-minus-reserve figure independently when it receives a zero budget from
-an explicit `on`/`auto`/`soft` request, so the session isn't permanently
-dormant while fit believes a cache exists. This is an independent
-approximation of the same free-VRAM state fit already queried moments
-earlier, not a wired-through value - the two are not guaranteed identical,
-though in practice VRAM state rarely shifts meaningfully between fit running
-and scheduler creation. The Vulkan provider does not have this workaround and
-stays dormant in the same scenario, exactly as it does today.
+The SYCL provider partially works around it: `session_create()` derives its
+own free-minus-reserve figure independently when it receives a zero budget
+from an explicit `on`/`auto`/`soft` request, so the session isn't
+permanently dormant while fit believes a cache exists. This is an
+independent approximation of the same free-VRAM state fit already queried
+moments earlier, not a wired-through value - the two are not guaranteed
+identical. The Vulkan provider does not have this workaround and stays
+dormant in the same scenario.
+
+**Free-memory queries can silently report the wrong number.**
+`ggml_backend_sycl_get_device_memory()` falls back to reporting free equal to
+total when neither the Level Zero Sysman API (needs `ZES_ENABLE_SYSMAN=1`,
+not set by default in most environments) nor the SYCL
+`ext_intel_free_memory` aspect is available. Confirmed directly: with a
+separate process holding ~14 GiB of an Arc A770's 16 GiB, `--list-devices`
+still reported "15473 MiB, 15473 MiB free". The SYCL provider's budget
+derivation above checks for this (refuses to derive a budget when free
+equals total, logging the raw free/total pair instead of trusting it) but
+cannot distinguish a genuinely idle device from an unmeasurable one - set
+`ZES_ENABLE_SYSMAN=1` if you need the automatic derivation to actually
+reflect device state on a shared or multi-process box.
+
+**Pools thrash below their working set.** A pool is keyed by
+`(expert_size, wtype)` alone, so every tensor of that shape shares it, but
+its slot count is capped by whichever tensor's `n_expert` happened to create
+it - not the aggregate demand of every tensor that ends up sharing it. A
+model with many layers using the same expert shape can thrash a pool sized
+for one layer's worth of experts; this was confirmed empirically (eviction
+counts roughly matching fill counts in end-to-end testing). The correct fix
+needs the aggregate shape inventory known in advance to size pools fairly
+against the whole model's demand; `sycl_moe_find_or_create_pool()`'s comment
+in the SYCL provider documents why an incremental per-discovery growth
+heuristic was tried and reverted rather than shipped (it just moves the
+imbalance to whichever shape is discovered last).
+
+Given the two gaps above, benchmark before relying on `auto`/`on`/`soft` in
+production: compare `--moe-cache off` against your intended mode with
+`llama-bench` on your actual model and hardware, and only switch the default
+on for your deployment once the comparison favors it.
 
 ## Vulkan and SYCL implementation limits
 

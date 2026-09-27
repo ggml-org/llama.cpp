@@ -2908,9 +2908,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--moe-cache"}, "MODE",
         "adaptively cache the hottest CPU-resident MoE experts in spare VRAM "
-        "(default: auto; auto = preserve weight repacking; on = automatic budget without weight repacking; "
+        "(default: off; auto = preserve weight repacking; on = automatic budget without weight repacking; "
         "soft = try spare VRAM first, evict experts only as needed; "
-        "off/0 = disabled; N = VRAM budget in MiB per device without weight repacking)",
+        "off/0 = disabled; N = VRAM budget in MiB per device without weight repacking; "
+        "auto/on/soft without a numeric N can regress decode when combined with --fit - "
+        "see the SYCL/Vulkan MoE cache docs before enabling on a production config)",
         [](common_params & params, const std::string & value) {
             params.moe_cache.mode_explicit = true;
             params.moe_cache.fit_selected = false;

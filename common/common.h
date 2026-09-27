@@ -467,7 +467,16 @@ enum common_moe_cache_mode {
 };
 
 struct common_moe_cache_params {
-    common_moe_cache_mode mode = COMMON_MOE_CACHE_MODE_AUTO;
+    // Off by default: with a working cache provider registered (SYCL or
+    // Vulkan) and --fit on, fit.cpp's own placement planner evaluates the
+    // cache and can commit to spilling every routed expert to host RAM on
+    // the assumption a cache will absorb the resulting slowdown - but the
+    // budget that assumption is based on is never wired back into the
+    // provider (see PR discussion for feature/sycl-moe-cache), so a session
+    // that ends up dormant or under-provisioned regresses decode versus not
+    // spilling at all. auto|on|soft|N remain fully available, opt-in only,
+    // until that disconnect and the cache's pool-sizing gaps are resolved.
+    common_moe_cache_mode mode = COMMON_MOE_CACHE_MODE_OFF;
     size_t budget_mib          = 0;
     bool mode_explicit         = false;
     bool fit_selected          = false;

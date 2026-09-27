@@ -270,16 +270,6 @@ static int sycl_moe_query_shape(int wtype, int64_t n_in, int64_t n_out,
 // Pool lifecycle
 // ---------------------------------------------------------------------------
 
-// Grow an existing pool by up to `extra_slots` more slots (bounded by what
-// budget_bytes allows), preserving every existing slot's index, data, and
-// LRU/map linkage untouched: the new slab is bulk-copied from the old one at
-// the same byte offsets, so no slot moves and nothing needs re-indexing. This
-// is what lets a pool keyed by (expert_size, wtype) actually hold the working
-// set of every tensor that shares that shape, rather than staying capped at
-// whichever tensor's n_expert happened to create it first - the ID dispatcher
-// this provider reuses (ggml_sycl_mul_mat_vec_q_id) takes one contiguous
-// vx_base and does its own base+id*stride addressing, so growth must extend a
-// single allocation rather than add separate segments.
 // Sizing note (documented debt, not fixed here): a pool is keyed by
 // (expert_size, wtype) alone, so every tensor with that shape shares it - but
 // its slot count is capped by whichever tensor's n_expert happened to create
@@ -482,13 +472,29 @@ static void * sycl_moe_session_create(void * const * backends, int n_backends,
         // several non-provider files, out of scope here. Deriving the same
         // free-minus-reserve figure independently at session-create time at
         // least lets the session engage instead of staying permanently
-        // dormant while fit believes a cache is available; sycl_moe_grow_pool
-        // (below) is what makes a resulting session usable rather than
-        // thrashing, since a session with a real budget but pools still
-        // capped at one tensor's expert count would be worse than dormant.
+        // dormant while fit believes a cache is available.
         if (supplied_config && config.budget_mb == 0) {
             size_t free_bytes = 0, total_bytes = 0;
             ggml_backend_sycl_get_device_memory(sctx->device, &free_bytes, &total_bytes);
+            MOE_CACHE_LOG("[moe-cache] SYCL%d: device memory query: free=%zu MiB total=%zu MiB\n",
+                          sctx->device, free_bytes >> 20, total_bytes >> 20);
+            // ggml_backend_sycl_get_device_memory() falls back to reporting
+            // free == total when neither the Level Zero Sysman API (needs
+            // ZES_ENABLE_SYSMAN=1, not set by default) nor the SYCL
+            // ext_intel_free_memory aspect is available (ggml-sycl/mem.cpp).
+            // Confirmed on this exact box: --list-devices reported "15473
+            // MiB, 15473 MiB free" while a separate process held ~14 GiB of
+            // the same device. That is a fallback constant, not a
+            // measurement, and free-minus-reserve computed from it would
+            // massively overcommit VRAM (starting with this session's own
+            // model weights, already resident by the time this runs).
+            // Refuse rather than trust it.
+            if (free_bytes == total_bytes) {
+                MOE_CACHE_LOG("[moe-cache] SYCL%d: free memory equals total - the memory query "
+                              "could not measure real usage (see ZES_ENABLE_SYSMAN); refusing to "
+                              "derive a budget from it\n", sctx->device);
+                return nullptr;
+            }
             const size_t reserve_bytes = config.reserve_mb << 20;
             const size_t usable_bytes = free_bytes > reserve_bytes ? free_bytes - reserve_bytes : 0;
             config.budget_mb = usable_bytes >> 20;
