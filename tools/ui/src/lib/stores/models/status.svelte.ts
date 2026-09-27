@@ -25,6 +25,7 @@ import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
 import type { ApiModelsSseDownloadProgressData, ModelDownloadProgress } from '$lib/types';
+import { backendIdFromModelId } from '$lib/utils/model-option-id';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -160,14 +161,14 @@ export class ModelStatusManager {
 	 * waiter is registered here.
 	 */
 	async cancelLoad(modelId: string): Promise<void> {
-		await this.ensureLocalTarget();
+		const backendId = this.backendIdFor(modelId);
 
 		if (!serverStore.isRouterMode) return;
 
 		this.subscribe();
 
 		try {
-			await ModelsService.unload(modelId);
+			await ModelsService.unload(modelId, backendId);
 			toast.info(`Load cancelled: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {
 			toast.error(`Failed to cancel load: ${this.host.toDisplayName(modelId)}`);
@@ -330,7 +331,7 @@ export class ModelStatusManager {
 	}
 
 	async load(modelId: string, extraArgs?: string[]): Promise<void> {
-		await this.ensureLocalTarget();
+		const backendId = this.backendIdFor(modelId);
 
 		if (this.host.isModelLoaded(modelId)) return;
 
@@ -347,7 +348,7 @@ export class ModelStatusManager {
 		reachedLoaded.catch(() => {});
 
 		try {
-			await ModelsService.load(modelId, extraArgs);
+			await ModelsService.load(modelId, extraArgs, backendId);
 			await reachedLoaded;
 			toast.success(`Model loaded: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {
@@ -399,7 +400,7 @@ export class ModelStatusManager {
 	}
 
 	async unload(modelId: string): Promise<void> {
-		await this.ensureLocalTarget();
+		const backendId = this.backendIdFor(modelId);
 
 		if (!this.host.isModelLoaded(modelId)) return;
 
@@ -415,7 +416,7 @@ export class ModelStatusManager {
 		reachedUnloaded.catch(() => {});
 
 		try {
-			await ModelsService.unload(modelId);
+			await ModelsService.unload(modelId, backendId);
 			await reachedUnloaded;
 			toast.info(`Model unloaded: ${this.host.toDisplayName(modelId)}`);
 		} catch (error) {
@@ -590,14 +591,6 @@ export class ModelStatusManager {
 		}
 	}
 
-	private deletePausedDownload(repoWithTag: string): boolean {
-		if (!this.pausedDownloads.delete(repoWithTag)) return false;
-
-		this.persistPausedDownloads();
-
-		return true;
-	}
-
 	/**
 	 * Open the /models/sse feed and keep it live with auto reconnect.
 	 * Idempotent and router mode only.
@@ -607,6 +600,33 @@ export class ModelStatusManager {
 	 * target first when the action comes from a row while a remote backend is
 	 * the selected one.
 	 */
+	/**
+	 * Backend a model belongs to: the one its qualified id names, else whichever
+	 * enabled backend lists it. Loading an external llama-server's model must not
+	 * become a request to the server this UI is served from.
+	 */
+	private backendIdFor(modelId: string): string {
+		const qualified = backendIdFromModelId(modelId);
+
+		if (qualified) return qualified;
+
+		for (const backend of backendsStore.enabled) {
+			const state = backendsModelsStore.get(backend.id);
+
+			if (state.models.some((option) => option.model === modelId)) return backend.id;
+		}
+
+		return backendsStore.active.id;
+	}
+
+	private deletePausedDownload(repoWithTag: string): boolean {
+		if (!this.pausedDownloads.delete(repoWithTag)) return false;
+
+		this.persistPausedDownloads();
+
+		return true;
+	}
+
 	private async ensureLocalTarget(): Promise<void> {
 		if (backendsStore.active.id === LOCAL_BACKEND_ID) return;
 

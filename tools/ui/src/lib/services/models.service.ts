@@ -225,16 +225,21 @@ export class ModelsService {
 	 *
 	 * @param modelId - Model identifier to load
 	 * @param extraArgs - Optional additional arguments to pass to the model instance
+	 * @param backendId - Backend serving the model; the active one when omitted
 	 * @returns Load response from the server
 	 */
-	static async load(modelId: string, extraArgs?: string[]): Promise<ApiModelsLoadResponse> {
+	static async load(
+		modelId: string,
+		extraArgs?: string[],
+		backendId?: string
+	): Promise<ApiModelsLoadResponse> {
 		const payload: { model: string; extra_args?: string[] } = { model: modelId };
 
 		if (extraArgs && extraArgs.length > 0) {
 			payload.extra_args = extraArgs;
 		}
 
-		return apiPost<ApiModelsLoadResponse>(API_MODELS.LOAD, payload);
+		return apiPost<ApiModelsLoadResponse>(apiUrl(API_MODELS.LOAD, backendId), payload);
 	}
 
 	/**
@@ -400,10 +405,13 @@ export class ModelsService {
 	 * before unloading completes — use polling to await actual unload status.
 	 *
 	 * @param modelId - Model identifier to unload
+	 * @param backendId - Backend serving the model; the active one when omitted
 	 * @returns Unload response from the server
 	 */
-	static async unload(modelId: string): Promise<ApiModelsUnloadResponse> {
-		return apiPost<ApiModelsUnloadResponse>(API_MODELS.UNLOAD, { model: modelId });
+	static async unload(modelId: string, backendId?: string): Promise<ApiModelsUnloadResponse> {
+		return apiPost<ApiModelsUnloadResponse>(apiUrl(API_MODELS.UNLOAD, backendId), {
+			model: modelId
+		});
 	}
 
 	/**
