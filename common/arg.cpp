@@ -824,7 +824,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
             if (!seen_args.insert(arg).second) {
-                const bool skip = (arg == "--spec-type");
+                // arguments that genuinely accumulate. The System One question flags each
+                // add one question, and the comma-separated form the warning recommends
+                // would fold them into a single question whose instructions carry a comma.
+                const bool skip = (arg == "--spec-type" ||
+                                   arg == "--noul" || arg == "--choice" || arg == "--score");
 
                 if (!skip) {
                     LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());

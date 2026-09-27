@@ -227,6 +227,46 @@ static std::vector<system_one_answer> decode_slots(llama_context * ctx, const sy
     return system_one_answers_from_logits(p, rows);
 }
 
+// scored_slot: one sequence per question, every option marked inside it, and the model's own
+// head turns each marked position into a single number. decode_slots() cannot stand in: it reads
+// the first sequence only, which for this readout is question 0 and nothing else.
+static std::vector<system_one_answer> decode_scored(llama_context * ctx, const system_one_plan & p) {
+    std::vector<float> scores;
+
+    for (const auto & seq : p.sequences) {
+        const auto & t = seq.tok;
+
+        if (auto * mem = llama_get_memory(ctx)) {
+            llama_memory_clear(mem, true);
+        }
+
+        llama_batch batch = llama_batch_init((int32_t) t.ids.size(), 0, 1);
+        batch.n_tokens = (int32_t) t.ids.size();
+        for (size_t i = 0; i < t.ids.size(); i++) {
+            batch.token[i]     = t.ids[i];
+            batch.pos[i]       = (llama_pos) i;
+            batch.n_seq_id[i]  = 1;
+            batch.seq_id[i][0] = 0;
+            batch.logits[i]    = 1;
+        }
+        const int rc = llama_decode(ctx, batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("llama_decode failed with " + std::to_string(rc));
+        }
+
+        for (int slot : t.slots) {
+            const float * e = llama_get_embeddings_ith(ctx, slot);
+            if (e == nullptr) {
+                throw std::runtime_error("the model returned no score at a marked position");
+            }
+            scores.push_back(e[0]);
+        }
+    }
+
+    return system_one_answers_from_scores(p, scores);
+}
+
 // rank_head: one sequence per option, scored by the model's head. They are independent, so a
 // chunk of them shares a decode -- bounded by seq_id count, and by the ubatch, since a
 // bidirectional sequence cannot be split across one.
@@ -411,8 +451,11 @@ int main(int argc, char ** argv) {
     }
 
     // Scoring one sequence per option wants them in one decode, capped so a 255-option
-    // question does not demand a 255-sequence micro-batch.
-    const size_t n_seq = std::min<size_t>(plan.sequences.size(), MAX_BATCHED_SEQS);
+    // question does not demand a 255-sequence micro-batch. A scored_slot plan also has many
+    // sequences, but they are decoded one at a time, so sizing the context for their sum would
+    // reserve a micro-batch nothing ever fills.
+    const size_t n_seq = plan.scored_slots
+        ? 1 : std::min<size_t>(plan.sequences.size(), MAX_BATCHED_SEQS);
     if (n_seq > 1) {
         size_t n_tok = 0;
         bool   share = false;
@@ -431,6 +474,16 @@ int main(int argc, char ** argv) {
         params.n_ctx      = std::max<int32_t>(params.n_ctx,      params.n_ubatch);
     }
 
+    if (plan.scored_slots) {
+        size_t longest = 0;
+        for (const auto & s : plan.sequences) {
+            longest = std::max(longest, s.tok.ids.size());
+        }
+        params.n_ubatch = std::max<int32_t>(params.n_ubatch, (int32_t) longest);
+        params.n_batch  = std::max<int32_t>(params.n_batch,  params.n_ubatch);
+        params.n_ctx    = std::max<int32_t>(params.n_ctx,    params.n_ubatch);
+    }
+
     llama_context_params cparams = common_context_params_to_llama(params);
     llama_context * ctx = llama_init_from_model(model, cparams);
     if (ctx == nullptr) {
@@ -441,7 +494,9 @@ int main(int argc, char ** argv) {
 
     std::vector<system_one_answer> answers;
     try {
-        answers = plan.rank_pooling ? decode_ranked(ctx, plan) : decode_slots(ctx, plan);
+        answers = plan.rank_pooling ? decode_ranked(ctx, plan)
+                : plan.scored_slots ? decode_scored(ctx, plan)
+                                    : decode_slots(ctx, plan);
     } catch (const std::exception & e) {
         LOG_ERR("%s: %s\n", __func__, e.what());
         llama_free(ctx); llama_model_free(model);
