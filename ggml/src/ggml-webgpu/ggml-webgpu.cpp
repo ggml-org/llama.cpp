@@ -3778,7 +3778,7 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // Write the misaligned head bytes using compute memset, then increment total_offset
     // and data pointer so that they are 4-aligned.
     if (total_offset % 4 != 0) {
-        size_t lane = total_offset % 4;   // in-word lane the head starts at (the tail below always starts at 0)
+        size_t lane = total_offset % 4;  // in-word lane the head starts at (the tail below always starts at 0)
         size_t head = std::min<size_t>(4 - lane, size);
 
         // Pack head bytes into a uint32_t
@@ -3789,8 +3789,8 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
         ggml_backend_webgpu_buffer_memset(buf_ctx->global_ctx, buf_ctx->buffer, head_val, total_offset, head);
 
         total_offset += head;
-        size         -= head;
-        data          = (const uint8_t *) data + head;
+        size -= head;
+        data = (const uint8_t *) data + head;
     }
 
     if (size > 0) {
