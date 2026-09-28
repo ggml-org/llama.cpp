@@ -770,6 +770,9 @@ class DFlashModel(Qwen3Model):
             else:
                 embd = target_embd.detach().clone()
                 mask = torch.load(str(mask_emb_file), map_location="cpu", weights_only=True)
+                # the file may wrap the vector in a dict/list rather than being a bare tensor
+                if isinstance(mask, (dict, list, tuple)):
+                    mask = next(iter(mask.values()) if isinstance(mask, dict) else iter(mask))
                 mask = torch.as_tensor(mask).reshape(-1)
                 if mask.numel() != embd.shape[1]:
                     logger.warning(f"DFlash: mask embedding width {mask.numel()} != token_embd width {embd.shape[1]}, skipping")
