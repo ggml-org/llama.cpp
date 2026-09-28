@@ -18,22 +18,5 @@
  */
 export { default as ModelsDiscover } from './ModelsDiscover.svelte';
 
-/**
- * **ModelsDiscoverAvatar** - Org avatar for a model row
- *
- * Shows the org's avatar image, falling back to a monogram on a stable hue
- * derived from the org name when the image fails to load. Shared by the list,
- * the detail header and the model selector rows.
- */
-export { default as ModelsDiscoverAvatar } from './ModelsDiscoverAvatar.svelte';
-
-/**
- * **ModelsDiscoverDownloadProgressBar** - Thin download progress bar
- *
- * Normalizes bytes to a 0..100% bar; can pin to the bottom edge as an overlay.
- * Shared by the quant chips and the model selector's download rows.
- */
-export { default as ModelsDiscoverDownloadProgressBar } from './ModelsDiscoverDownloadProgressBar.svelte';
-
 export * from './ModelsDiscoverList';
 export * from './ModelsDiscoverDetails';

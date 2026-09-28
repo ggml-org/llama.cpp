@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ModelsDiscoverDownloadProgressBar from '../../ModelsDiscoverDownloadProgressBar.svelte';
+	import ModelDownloadProgressBar from '../../../ModelDownloadProgressBar.svelte';
 	import { labelFor } from './download-options.utils';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -232,7 +232,7 @@
 		{@render tooltipTrigger('Cancel downloading', cancelChip)}
 
 		{#if percent !== null}
-			<ModelsDiscoverDownloadProgressBar
+			<ModelDownloadProgressBar
 				downloadedBytes={entry.progress?.downloadedBytes ?? 0}
 				overlay
 				totalBytes={entry.progress?.totalBytes ?? 0}
