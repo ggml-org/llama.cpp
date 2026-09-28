@@ -162,6 +162,8 @@ public:
 
     bool is_stateful() const { return m_decoder->is_stateful(); }
 
+    bool is_prefill() const { return m_decoder->is_prefill(); }
+
     int get_ssm_state_size() const { return m_decoder->get_ssm_state_size(); }
 
 private:

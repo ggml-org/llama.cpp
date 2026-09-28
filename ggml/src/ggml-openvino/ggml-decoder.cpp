@@ -1332,6 +1332,8 @@ bool GgmlOvDecoder::is_s_copy_leaf(const ggml_tensor * tensor) const {
 }
 
 void GgmlOvDecoder::add_extra_inputs() {
+    m_model_extra_inputs.clear();
+
     // Extra inputs:
     // 1. `attention_size`, used in FLASH_ATTN where the shape of the matmul's are 256 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
@@ -1359,6 +1361,31 @@ void GgmlOvDecoder::add_extra_inputs() {
     create_1d_input("seq_active_end", m_compute_params.seq_active_start + m_compute_params.n_seq_active);
     if (m_compute_params.token_len_per_seq != -1) {
         create_1d_input("token_len_per_seq", m_compute_params.token_len_per_seq);
+    }
+    if (m_is_static && m_is_prefill && ggml_openvino_npu_hfa_prefill_enabled()) {
+        if (m_compute_params.n_seq_active != 1) {
+            throw std::runtime_error("GGML_OPENVINO_NPU_HFA_PREFILL currently requires one active sequence");
+        }
+        if (!m_model_params.swa_layers.empty()) {
+            throw std::runtime_error("GGML_OPENVINO_NPU_HFA_PREFILL does not yet support sliding-window layers");
+        }
+        const auto chunk_size = static_cast<size_t>(m_prefill_chunk_size);
+        const auto input_len = static_cast<size_t>(m_compute_params.input_len);
+        const auto num_chunks = (input_len + chunk_size - 1) / chunk_size;
+        const auto past_capacity = std::max(chunk_size, (num_chunks - 1) * chunk_size);
+        for (const auto & [kv_name, kv_tensor] : m_inputs) {
+            if (kv_name.rfind("cache_k_l", 0) != 0 && kv_name.rfind("cache_v_l", 0) != 0) {
+                continue;
+            }
+            const auto n_heads_kv = static_cast<size_t>(get_n_heads_kv_for_tensor(kv_tensor));
+            const auto combined_dim = static_cast<size_t>(kv_tensor->ne[0]);
+            GGML_ASSERT(n_heads_kv > 0 && combined_dim % n_heads_kv == 0);
+            const auto head_size = combined_dim / n_heads_kv;
+            m_model_extra_inputs["ggml_hfa_past_" + kv_name] = {
+                get_ov_type(kv_tensor), ov::Shape{1, n_heads_kv, past_capacity, head_size}, 0, true};
+        }
+        m_model_extra_inputs["ggml_hfa_mask"] = {
+            ov::element::f16, ov::Shape{1, 1, chunk_size, past_capacity + chunk_size}, 0, true};
     }
     // create_1d_input("token_len", m_compute_params.token_len_per_seq * m_compute_params.n_seq_active);
 
@@ -1644,6 +1671,16 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
         }
     }
     return nullptr;
+}
+
+std::string GgmlOvDecoder::get_hfa_history_input_name() const {
+    for (const auto & [name, tensor] : m_inputs) {
+        const auto * op = get_tensor_used_op(tensor);
+        if (op != nullptr && is_inp_pos(tensor, op)) {
+            return name;
+        }
+    }
+    throw std::runtime_error("HFA prefill position input was not found");
 }
 
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {

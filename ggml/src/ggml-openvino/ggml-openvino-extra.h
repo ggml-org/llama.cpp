@@ -122,6 +122,7 @@ bool ggml_openvino_is_npu();
 bool ggml_openvino_npu_kv_slice_enabled();
 bool ggml_openvino_npu_fast_mask_enabled();
 bool ggml_openvino_npu_l0_host_tensors_enabled();
+bool ggml_openvino_npu_hfa_prefill_enabled();
 
 // Check if running on a GPU (GPU, GPU.0, GPU.1, ...)
 bool ggml_openvino_is_gpu();
