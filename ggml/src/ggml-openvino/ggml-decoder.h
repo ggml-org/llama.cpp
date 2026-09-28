@@ -255,7 +255,24 @@ public:
     virtual void visit_subgraph(
         std::function<void(std::shared_ptr<GgmlDecoder>, int node_idx)> node_visitor) const override;
 
-    ggml_tensor * get_input_ggml_tensor(const std::string & name) const { return m_inputs.at(name); }
+    ggml_tensor * get_input_ggml_tensor(const std::string & name) const {
+        auto it = m_inputs.find(name);
+        if (it == m_inputs.end()) {
+            throw std::runtime_error("OpenVINO ggml input not found: " + name);
+        }
+        return it->second;
+    }
+
+    ov::Tensor get_or_create_hfa_past_tensor(const std::string & name,
+                                             const ov::element::Type & type,
+                                             const ov::Shape & shape) {
+        auto it = m_hfa_past_tensors.find(name);
+        if (it == m_hfa_past_tensors.end() || it->second.get_element_type() != type ||
+            it->second.get_shape() != shape) {
+            it = m_hfa_past_tensors.insert_or_assign(name, ov::Tensor(type, shape)).first;
+        }
+        return it->second;
+    }
 
     virtual int get_op_case(int node_idx) const override { return m_node_info_list[node_idx].node_op_case; }
 
@@ -318,6 +335,8 @@ public:
     virtual bool is_static() const override { return m_is_static; }
 
     virtual bool is_stateful() const override { return m_is_stateful; }
+
+    virtual bool is_prefill() const override { return m_is_prefill; }
 
     int get_static_n_tokens() const { return m_is_prefill ? m_prefill_chunk_size : 1; }
 
@@ -401,6 +420,8 @@ public:
     }
 
     const ggml_tensor * get_tensor_from_name(const std::string & name) const;
+
+    std::string get_hfa_history_input_name() const;
 
     void clear_model_weights() { m_model_weights.clear(); }
 
@@ -562,6 +583,7 @@ private:
 
     std::map<std::string, ov::frontend::ggml::ModelInputInfo> m_model_inputs;
     std::map<std::string, ov::frontend::ggml::ModelExtraInputInfo> m_model_extra_inputs;
+    std::map<std::string, ov::Tensor> m_hfa_past_tensors;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::set<std::string> m_model_output_names;

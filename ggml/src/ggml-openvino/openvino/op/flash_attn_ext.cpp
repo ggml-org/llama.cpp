@@ -16,17 +16,64 @@
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scaled_dot_product_attention.hpp>
+#include <openvino/op/scatter_update.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/softmax.hpp>
 #include <openvino/op/tile.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
+#include <optional>
 #include <string>
+#include <unordered_set>
 
 namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
+static std::optional<ov::Output<ov::Node>> find_scatter_updates(const ov::Output<ov::Node> & root) {
+    std::vector<ov::Output<ov::Node>> pending{root};
+    std::unordered_set<const ov::Node *> visited;
+    std::optional<ov::Output<ov::Node>> updates;
+    while (!pending.empty()) {
+        auto output = pending.back();
+        pending.pop_back();
+        auto node = output.get_node_shared_ptr();
+        if (!node || !visited.insert(node.get()).second) {
+            continue;
+        }
+        if (auto scatter = ov::as_type_ptr<ov::op::v3::ScatterUpdate>(node)) {
+            OPENVINO_ASSERT(!updates.has_value(), "HFA KV input contains multiple ScatterUpdate ancestors");
+            updates = scatter->input_value(2);
+            continue;
+        }
+        for (const auto & input : node->inputs()) {
+            pending.push_back(input.get_source_output());
+        }
+    }
+    return updates;
+}
+
+static ov::Output<ov::Node> reshape_present_kv(const ov::Output<ov::Node> & updates,
+                                                int64_t n_heads_kv,
+                                                int64_t head_size) {
+    auto shape = updates.get_partial_shape();
+    OPENVINO_ASSERT(shape.rank().is_static() && shape.rank().get_length() == 4,
+                    "HFA present KV updates must be rank 4");
+    auto reshaped = std::make_shared<ov::op::v1::Reshape>(
+        updates,
+        ov::op::v0::Constant::create(
+            ov::element::i64, {4}, std::vector<int64_t>{1, -1, n_heads_kv, head_size}),
+        false);
+    return std::make_shared<ov::op::v1::Transpose>(
+        reshaped, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+}
+
+static int extract_layer(const std::string & name) {
+    const auto begin = name.find("_l");
+    OPENVINO_ASSERT(begin != std::string::npos, "HFA KV input has no layer suffix: ", name);
+    return std::stoi(name.substr(begin + 2));
+}
+
 static ov::Output<ov::Node> reshape_flat_kv(const ov::Output<ov::Node> & kv_flat,
                                             size_t view_offset_bytes,
                                             size_t nb1_bytes,
@@ -67,6 +114,8 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     auto q_f32 = context.get_input(0);
     auto k = context.get_input(1);
     auto v = context.get_input(2);
+    const auto k_cache = k;
+    const auto v_cache = v;
     const int op_case = context.get_op_case();
 
     if (op_case == 1 || op_case == 2) {
@@ -217,6 +266,41 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         }
         return kv;
     };
+
+    const bool use_hfa_gate = ggml_openvino_npu_hfa_prefill_enabled() && context.is_static() &&
+                              context.is_prefill() && has_mask;
+    if (use_hfa_gate) {
+        const int layer = extract_layer(context.get_input_names()[1]);
+        auto past_k = context.get_input("ggml_hfa_past_cache_k_l" + std::to_string(layer));
+        auto past_v = context.get_input("ggml_hfa_past_cache_v_l" + std::to_string(layer));
+        auto hfa_mask = context.get_input("ggml_hfa_mask");
+        auto present_k_updates = find_scatter_updates(k_cache);
+        auto present_v_updates = find_scatter_updates(v_cache);
+        OPENVINO_ASSERT(present_k_updates.has_value() && present_v_updates.has_value(),
+                        "HFA prefill requires ScatterUpdate-backed K/V cache inputs");
+        auto present_k = reshape_present_kv(*present_k_updates, num_heads_kv, head_size);
+        auto present_v = reshape_present_kv(*present_v_updates, num_heads_kv, head_size);
+        k = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{past_k, present_k}, 2);
+        v = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{past_v, present_v}, 2);
+        k = tile_kv(num_heads, num_heads_kv, head_size, k);
+        v = tile_kv(num_heads, num_heads_kv, head_size, v);
+
+        auto q_scaled = std::make_shared<ov::op::v1::Multiply>(q, scale_node);
+        auto scores = std::make_shared<ov::op::v0::MatMul>(q_scaled, k, false, true);
+        auto masked_scores = std::make_shared<ov::op::v1::Add>(scores, hfa_mask);
+        auto probs = std::make_shared<ov::op::v8::Softmax>(masked_scores, -1);
+        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v);
+        auto transposed = std::make_shared<ov::op::v1::Transpose>(
+            attended, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+        auto output_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {3}, std::vector<int64_t>{0, -1, num_heads * head_size});
+        res = std::make_shared<ov::op::v1::Reshape>(transposed, output_shape, true);
+        auto restored_shape = ov::op::v0::Constant::create(
+            ov::element::i64, {4}, std::vector<int64_t>{0, -1, num_heads, head_size});
+        res = std::make_shared<ov::op::v1::Reshape>(res, restored_shape, true);
+        res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
 
     //auto q_shape = context.get_input_shape(0).to_shape();
     //auto k_shape = context.get_input_shape(1).to_shape();

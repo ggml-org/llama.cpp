@@ -164,6 +164,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_GDN_Q_SCALE",
         "GGML_OPENVINO_NPU_L0_HOST_TENSORS",
         "GGML_OPENVINO_NPU_KV_SLICE",
+        "GGML_OPENVINO_NPU_HFA_PREFILL",
         "GGML_OPENVINO_SELF_CONTAINED_BLOB",
         "GGML_OPENVINO_SELF_CONTAINED_MMAP",
         "GGML_OPENVINO_NPU_SHARED_BANK",
@@ -417,6 +418,10 @@ bool ggml_openvino_npu_fast_mask_enabled() {
 
 bool ggml_openvino_npu_l0_host_tensors_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_L0_HOST_TENSORS") != 0;
+}
+
+bool ggml_openvino_npu_hfa_prefill_enabled() {
+    return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_HFA_PREFILL") != 0;
 }
 
 bool ggml_openvino_shape_from_mask_enabled() {
