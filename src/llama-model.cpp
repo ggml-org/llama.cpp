@@ -1597,8 +1597,15 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    // keep on CPU by default, but mirror the output layer policy when full GPU offload
+    // is requested -- forces GET_ROWS(tok_embd) onto the GPU and avoids unnecessary
+    // CPU<->GPU copies at the start of every forward pass.
+    // See: https://github.com/ggml-org/llama.cpp/issues/25700
+    if (i_gpu_start == 0 && act_gpu_layers >= n_layer_all) {
+        pimpl->dev_input = get_layer_buft_list(0);
+    } else {
+        pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    }
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer_all);
