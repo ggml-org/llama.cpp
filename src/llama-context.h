@@ -365,6 +365,15 @@ private:
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
     llm_graph_result_ptr gf_res_prev;
+    // Separate cache slot for the MTP prefill graph (no outputs). MTP contexts alternate between
+    // prefill (many tokens, n_outputs=0) and verify/draft (small batch, n_outputs>0) submits;
+    // giving prefill its own slot prevents the two shapes from clobbering each other's cached
+    // graph result, which is critical on the CPU-hosted MTP path (--cpu-mtp) where a rebuild
+    // dominates draft wall time.
+    llm_graph_result_ptr gf_res_prev_mtp_prefill;
+    // Tracks which of the two slots holds the last-built graph, so can_reuse() only fires when
+    // the active slot's result was built for the CURRENT slot (not stolen by the other slot).
+    llm_graph_result * gf_res_prev_active = nullptr;
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
