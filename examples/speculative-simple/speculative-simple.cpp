@@ -267,6 +267,10 @@ int main(int argc, char ** argv) {
         if (use_ckpt_tgt && ids.size() - 1 < n_draft) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, n_draft);
 
+            // the accepted tokens are replayed next round without a new draft() call;
+            // report the partial result now so speculators do not get stale feedback
+            common_speculative_accept_partial(spec, seq_id, ids.size() - 1);
+
             draft = std::move(ids);
 
             {
