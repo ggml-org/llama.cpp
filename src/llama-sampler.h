@@ -17,6 +17,9 @@ struct llama_sampler_chain {
 
     uint32_t n_nodes = 0;
 
+    // Zero means that the chain changed after its output width was probed.
+    size_t output_width = 0;
+
     struct info {
         bool is_backend;
 
@@ -36,6 +39,8 @@ struct llama_sampler_chain {
 };
 
 uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler);
+void llama_sampler_backend_init_output_width(llama_sampler * sampler, int64_t n_vocab);
+size_t llama_sampler_backend_output_width(const llama_sampler * sampler, int64_t n_vocab);
 void llama_sampler_backend_begin(llama_sampler * sampler);
 
 struct llama_sampler * llama_sampler_init_dry_testing(

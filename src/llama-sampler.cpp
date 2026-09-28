@@ -578,6 +578,7 @@ static void llama_sampler_backend_copy_state(const struct llama_sampler * src, s
 struct llama_sampler_backend_probe {
     ggml_context_ptr ctx;
     ggml_cgraph * gf;
+    size_t output_width;
 };
 
 static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
@@ -621,7 +622,14 @@ static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
         sampler->iface->backend_reset(sampler);
     }
 
-    return { std::move(ctx_ptr), gf };
+    size_t output_width = 1;
+    for (auto * output : { data.probs, data.candidates }) {
+        if (output) {
+            output_width = std::max(output_width, (size_t) ggml_nelements(output));
+        }
+    }
+
+    return { std::move(ctx_ptr), gf, output_width };
 }
 
 static uint32_t llama_sampler_backend_probe_n_nodes(const llama_sampler_backend_probe & probe) {
@@ -874,6 +882,7 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
             /* .params               = */ params,
             /* .is_init              = */ false,
             /* .n_nodes              = */ 0,
+            /* .output_width         = */ 0,
             /* .samplers             = */ {},
             /* .cur                  = */ {},
             /* .t_sample_us          = */ 0,
@@ -965,6 +974,7 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
 
 void llama_sampler_chain_add(struct llama_sampler * chain, struct llama_sampler * smpl) {
     auto * p = (llama_sampler_chain *) chain->ctx;
+    p->output_width = 0;
     p->samplers.push_back({
         /* .is_backend = */ false,
         /* .ptr        = */ smpl,
@@ -1002,6 +1012,7 @@ struct llama_sampler * llama_sampler_chain_remove(struct llama_sampler * chain, 
 
     auto * result = p->samplers[i].ptr;
     p->samplers.erase(p->samplers.begin() + i);
+    p->output_width = 0;
 
     return result;
 }
@@ -4323,6 +4334,48 @@ void llama_sampler_copy(const struct llama_sampler * src, struct llama_sampler *
 }
 
 // utils
+
+static size_t llama_sampler_backend_probe_output_width(llama_sampler * sampler, int64_t n_vocab) {
+    GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
+    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+    GGML_ASSERT(chain->is_init);
+
+    // Only these samplers have state-independent output shapes.
+    for (const auto & entry : chain->samplers) {
+        if (!entry.is_backend) {
+            break;
+        }
+        const auto * iface = entry.ptr->iface;
+        if (iface != &llama_sampler_empty_i &&
+            iface != &llama_sampler_greedy_i &&
+            iface != &llama_sampler_dist_i &&
+            iface != &llama_sampler_top_k_i &&
+            iface != &llama_sampler_top_p_i &&
+            iface != &llama_sampler_min_p_i &&
+            iface != &llama_sampler_temp_i &&
+            iface != &llama_sampler_temp_ext_i &&
+            iface != &llama_sampler_penalties_i &&
+            iface != &llama_sampler_logit_bias_i) {
+            return n_vocab;
+        }
+    }
+
+    const auto probe = llama_sampler_backend_probe_graph(
+            sampler, n_vocab, std::max<uint32_t>(chain->n_nodes, GGML_DEFAULT_GRAPH_SIZE), false);
+    return probe.output_width;
+}
+
+void llama_sampler_backend_init_output_width(llama_sampler * sampler, int64_t n_vocab) {
+    const size_t width = llama_sampler_backend_probe_output_width(sampler, n_vocab);
+    ((llama_sampler_chain *) sampler->ctx)->output_width = width;
+}
+
+size_t llama_sampler_backend_output_width(const llama_sampler * sampler, int64_t n_vocab) {
+    GGML_ASSERT(sampler->iface == &llama_sampler_chain_i);
+    const auto * chain = (const llama_sampler_chain *) sampler->ctx;
+    // Do not reset a live sampling graph to probe a mutated chain.
+    return chain->output_width == 0 ? (size_t) n_vocab : chain->output_width;
+}
 
 uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl) {
     if (smpl->iface == &llama_sampler_dist_i) {

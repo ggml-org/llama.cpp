@@ -196,6 +196,10 @@ struct llama_context {
 
     llama_memory_breakdown memory_breakdown() const;
 
+    size_t output_buffer_size() const {
+        return buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
+    }
+
     //
     // training
     //
@@ -316,6 +320,8 @@ private:
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
+
+        size_t output_stride = 0;
 
         buffer_view<float>       logits     = {nullptr, 0};
         buffer_view<llama_token> sampled    = {nullptr, 0};
