@@ -12,10 +12,26 @@
 #include <set>
 #include <functional>
 #include <map>
+#include <unordered_map>
 
 struct ggml_cgraph;
 struct ggml_context;
 struct ggml_tensor;
+
+// Maps a folded model weight to the activation-side transform applied
+// immediately before the matmul: optional sign flip, then the normalized
+// blockwise Hadamard rotation.
+struct llama_hadamard_transform {
+    ggml_tensor * rot;
+    ggml_tensor * signs; // nullptr for identity sign mode
+    // when perm_rep > 1 the activation arrives with its feature axis in tiled
+    // head order [hd, nk, rep] and must be permuted to the grouped order
+    // [hd, rep, nk] the fold was computed in, before signs and rotation
+    int64_t perm_hd  = 0;
+    int64_t perm_nk  = 0;
+    int64_t perm_rep = 0;
+};
+using llama_hadamard_rotations = std::unordered_map<const ggml_tensor *, llama_hadamard_transform>;
 
 struct llama_cparams;
 struct llama_layer;
@@ -790,6 +806,9 @@ struct llm_graph_params {
 
     const llama_prec_policy * prec_policy = nullptr;
 
+    const llama_hadamard_rotations * hadamard_rotations = nullptr; // folded weight -> activation transform
+    const llama_hadamard_rotations * hadamard_inverses  = nullptr; // latent lookup table -> inverse transform
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -1032,6 +1051,13 @@ struct llm_graph_context {
 
     const llama_prec_policy * prec_policy;
 
+    const llama_hadamard_rotations * hadamard_rotations;
+    const llama_hadamard_rotations * hadamard_inverses;
+
+    // transforms shared by folded weights that read the same activation, keyed by (input, rotation);
+    // valid for one graph build
+    mutable std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hadamard_memo;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     const llm_graph_cb & cb_func;
@@ -1055,6 +1081,11 @@ struct llm_graph_context {
                      int   il) const;
 
     // do mat_mul, while optionally apply lora and per-tensor scale
+    // apply the activation-side transform of a Hadamard-folded weight, if any
+    ggml_tensor * build_hadamard_input(
+              ggml_tensor * w,
+              ggml_tensor * cur) const;
+
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur,
