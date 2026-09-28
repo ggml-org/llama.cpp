@@ -5,7 +5,7 @@
  */
 
 import type { ChatProtocolAdapter, ChatStreamEvent, ChatStreamReader } from './types';
-import { HEADERS } from '$lib/constants';
+import { BackendProtocol, HEADERS, MaxTokensField } from '$lib/constants';
 import type { Backend } from '$lib/types';
 import type { ApiChatCompletionStreamChunk } from '$lib/types/api';
 import { getBackendCompat } from '$lib/utils/backend';
@@ -60,7 +60,7 @@ function buildChatRequest(
 	body: Record<string, unknown>,
 	backend: Backend
 ): Record<string, unknown> {
-	if (backend.protocol === 'llama.cpp') return body;
+	if (backend.protocol === BackendProtocol.COMPAT) return body;
 
 	const compat = getBackendCompat(backend);
 	const request: Record<string, unknown> = { ...body };
@@ -83,7 +83,10 @@ function buildChatRequest(
 
 	// newer OpenAI models require max_completion_tokens, most compatible
 	// endpoints only understand max_tokens
-	if (compat.maxTokensField === 'max_completion_tokens' && request.max_tokens !== undefined) {
+	if (
+		compat.maxTokensField === MaxTokensField.CHAT_COMPLETION &&
+		request.max_tokens !== undefined
+	) {
 		request.max_completion_tokens = request.max_tokens;
 		delete request.max_tokens;
 	}
