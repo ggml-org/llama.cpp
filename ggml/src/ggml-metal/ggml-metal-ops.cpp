@@ -2996,6 +2996,7 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool
 
     const bool dk_dv_ok = (dk == 64  && dv == 64)  ||
                           (dk == 128 && dv == 128) ||
+                          (dk == 192 && dv == 128) ||
                           (dk == 256 && dv == 256) ||
                           (dk == 512 && dv == 512) ||
                           (dk == 576 && dv == 512);
