@@ -336,7 +336,6 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("indexer.proj")            == std::string::npos;
         quantize &= name.find("indexer_compressor_gate") == std::string::npos;
         quantize &= name.find("indexer_compressor_ape")  == std::string::npos;
-        quantize &= name.find("hc_")                     == std::string::npos;
         quantize &= name.find("ssm_f_a.weight")          == std::string::npos;
         quantize &= name.find("ssm_f_b.weight")          == std::string::npos;
         quantize &= name.find("ssm_g_a.weight")          == std::string::npos;
