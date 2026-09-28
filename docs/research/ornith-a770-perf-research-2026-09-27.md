@@ -49,8 +49,13 @@ bottleneck; the per-token floor is elsewhere.
 | non-expert weights total | 1576 MiB | attn 611, ssm 141, shexp 73, embd 273, output 398 (Q6_K) |
 | KV at 128k q8_0 | ~1.4 GiB | 10 layers only |
 
-Bandwidth floor per decode token is therefore roughly 0.4 GiB (VRAM) + 265 MiB
-(host RAM): about 8 ms. Observed is 48 ms. The gap is overhead, not bytes.
+The routed-expert share of that is roughly 0.4 GiB (VRAM) + 265 MiB (host RAM)
+per token, but every decode step also reads the non-expert weights except the
+embedding table (attn 611 + ssm 141 + shexp 73 + output 398 = 1223 MiB;
+embedding is a per-token row lookup, not a full read, so it's excluded).
+Bandwidth floor per decode token is therefore closer to 1.9 GiB, not 0.7 GiB:
+about 22 ms at the same rate, not 8 ms. Observed is 48 ms - still a real gap,
+smaller than first stated, and still not fully explained by bytes alone.
 
 ## 3. Structural facts verified in source and live output
 
@@ -112,6 +117,17 @@ locally (patch reverted afterwards). "batched" =
 
 (a) test-backend-ops spins a fresh CPU threadpool per graph, so the CPU n=1
 figures include thread start-up; the server's persistent pool will be lower.
+
+**Caveat:** these were collected under shared tenancy (the production server
+resident and idle, Slack and codex also holding the render node per `fuser`)
+per the read-only, no-service-restart scope of this pass. Labeling them
+order-of-magnitude bounds the absolute error but does not remove contention as
+a confound for the relative comparisons below (default vs batched, GPU vs
+CPU) - two runs on the same box can be affected unevenly. None of the readings
+or ranked levers below should be treated as a settled conclusion; each needs
+re-verification under confirmed sole tenancy (stop the service, `fuser`
+check, dmesg check per this fork's GPU-discipline rules) through
+`run-config.sh` before it drives an implementation decision.
 
 Readings:
 

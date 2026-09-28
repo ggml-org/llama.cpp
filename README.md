@@ -52,7 +52,7 @@ All turbo formats use Walsh-Hadamard rotation followed by polar codebook quantiz
 
 | Backend | Quant kernels | Flash Attention | Notes |
 |---|---|---|---|
-| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op; fused single-token MoE `mul_mat_id`; `q8_0` KV "quants-first" layout (default on) | `q8_0` / `f16` KV at mainline parity with VEC, TILE and oneMKL prefill routes; turbo K or V always takes the VEC route (head dim must be a multiple of 128). In the CPU-vs-SYCL correctness harness (section [5], run with `LLAMA_TEST_TURBO_FA=1`) turbo3/turbo4 pass and turbo2 is XFAIL (2-bit precision below the cosine floor) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
+| **SYCL** (Intel Arc / oneAPI) | turbo `mmvq` + WHT custom op; fused single-token MoE `mul_mat_id`; `q8_0` KV "quants-first" layout (default on) | `q8_0` / `f16` KV at mainline parity with VEC, TILE and oneMKL prefill routes; turbo K or V takes the VEC route by default (head dim must be a multiple of 128), with an opt-in XMX (DPAS) route (`GGML_SYCL_FA_XMX=1`, same turbo type on K and V, head dim 128 or 256). In the CPU-vs-SYCL correctness harness (section [5], run with `LLAMA_TEST_TURBO_FA=1`) turbo3/turbo4 pass and turbo2 is XFAIL (2-bit precision below the cosine floor) | A770 (DG2) is the canonical target; builds with `GGML_SYCL_F16=ON` or `OFF` |
 | **Vulkan** | `TQ4_1S` weights, `SET_ROWS` / `GET_ROWS` / `CPY` for `turbo2`/`turbo3`/`turbo4` | scalar and coopmat1 flash attention accept `turbo2`/`turbo3`/`turbo4` K and V (dequant fused into the shader); not on the coopmat2 path | Compute-shader path; nix-buildable |
 
 
@@ -74,7 +74,7 @@ beyond what their own documentation states.
 
 Default on:
 
-- `q8_0` KV "quants-first" layout for 128-wide heads (`GGML_SYCL_Q8_KV_QUANTS_FIRST=0` opts out); measured +8 to +21% decode at depth <= 512
+- `q8_0` KV "quants-first" layout for 128-wide heads (`GGML_SYCL_Q8_KV_QUANTS_FIRST=0` opts out); measured +8 to +21% decode at depth 4096-16384 ([P5.11](docs/research/sycl-a770-p5-performance-campaign-2026-07-19.md#p511---scale-separated-q8_0-kv-rows) paired campaign; depths 0 and 2048 were not covered)
 - oneMKL GEMM prefill route for flash attention (`GGML_SYCL_ENABLE_MKL_FA=0` disables)
 - Fused single-token MoE `mul_mat_id` matvec for Q4_K / Q5_K / Q6_K and the IQ types
 - Per-kernel device-code split (`GGML_SYCL_DEVICE_CODE_SPLIT`) and pre-grown FA scratch buffers
@@ -104,7 +104,8 @@ cmake -B build && cmake --build build -j
 # SYCL (Intel Arc / oneAPI) -- canonical target
 # source /opt/intel/oneapi/setvars.sh first (oneMKL headers); see docs/backend/SYCL.md
 cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_SYCL_F16=ON -DGGML_NATIVE=OFF \
-  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx && cmake --build build -j
+  -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx \
+  -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER= && cmake --build build -j
 
 # Vulkan
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
@@ -164,8 +165,8 @@ llama-quantize model.f16.gguf model.tq3_1s.gguf TQ3_1S
 The following activate based on the selected types -- no flags required:
 
 - **Auto-asymmetric K/V** -- when K and V request the same turbo type on a model with GQA ratio >= 6 or from the Qwen family, K is upgraded (typically to `q8_0`) and V keeps the turbo type. Measured motivation: Qwen2.5 7:1 GQA with symmetric turbo K went from PPL 7.4 to 2887; Mistral 4:1 was fine. Kernels downstream must accept `K=q8_0, V=turbo*`.
-- **Boundary V (layer-aware)** -- `TURBO_LAYER_ADAPTIVE` mode 7 auto-enables for any `turbo2-V` selection (`TURBO_LAYER_ADAPTIVE=0` opts out); inert for non-turbo types.
-- **Flash Attention** -- works with turbo KV at runtime on SYCL (VEC route only) and Vulkan (scalar / coopmat1). `LLAMA_TEST_TURBO_FA=1` is an opt-in for the CPU-vs-SYCL correctness harness, not a runtime switch.
+- **Boundary V (layer-aware)** -- `TURBO_LAYER_ADAPTIVE` mode 7 auto-enables for `turbo2-V` on models with at least 8 layers (`TURBO_LAYER_ADAPTIVE=0` opts out); shallower models stay uniform, and it's inert for non-turbo types.
+- **Flash Attention** -- works with turbo KV at runtime on SYCL (VEC route by default, opt-in XMX via `GGML_SYCL_FA_XMX=1`) and Vulkan (scalar / coopmat1). `LLAMA_TEST_TURBO_FA=1` is an opt-in for the CPU-vs-SYCL correctness harness, not a runtime switch.
 
 If this fork or any of its quantization types is used in your work, please cite the corresponding paper from the [TurboQuant+ paper corpus](https://github.com/TheTom/turboquant_plus/tree/main/docs/papers).
 
@@ -178,18 +179,23 @@ labelled as a paired campaign as order-of-magnitude.
   not expect `f16` / `q8_0` decode parity, and on SYCL any turbo K or V pins flash attention to the VEC kernel (no TILE,
   no oneMKL prefill route). On Ornith-1.5-35B-A3B at 8k context, `q8_0` K + `turbo4` V cost 33% of prefill throughput
   for a 0.07% PPL change, so `q8_0`/`q8_0` was kept there. Reach for turbo when memory, not throughput, is the limit.
-- **Decode on this GPU is launch-bound, not bandwidth-bound.** A hybrid MoE step (Ornith: 40 layers, ~1500 kernels)
-  reads about 0.7 GiB of weights, which the A770 and DDR5 could serve in ~8 ms; the observed token takes ~48 ms. The
-  difference is per-kernel submission cost (~21 us per small kernel in the runtime's default immediate-command-list
+- **Decode on this GPU is launch-bound, not purely bandwidth-bound.** A hybrid MoE step (Ornith: 40 layers, ~1500
+  kernels) reads about 1.9 GiB of weights per token (routed experts plus the non-expert weights every layer reads
+  regardless of routing -- attention, SSM, shared-expert, and output; the embedding table is a per-token row lookup,
+  not a full read, so it's excluded), which the A770 and DDR5 could serve in ~22 ms; the observed token takes ~48 ms.
+  The remaining gap is per-kernel submission cost (~21 us per small kernel in the runtime's default immediate-command-list
   mode, ~7 us batched) plus host-device synchronisation at every CPU/GPU split. Two levers exist and they are the same
   mechanism, so their gains do not add: SYCL-Graph replay (`GGML_SYCL_ENABLE_GRAPH=1`) and batched submission
   (`UR_L0_USE_IMMEDIATE_COMMANDLISTS=0 UR_L0_BATCH_SIZE=64`, +32% tg128 on dense Mistral-7B in the 2026-08-13 paired
   probe). Neither is on by default in the fork or the runtime.
 - **MoE prefill is bounded by the per-expert loop.** SYCL `mul_mat_id` is fused only for single-token decode; any batch
-  larger than one runs one small GEMM per touched expert (256 x 3 launches per layer). Per-matrix cost is nearly flat
-  from 512 to 2048 tokens, so a larger `--ubatch-size` amortises it almost linearly. Speculative-decoding verify batches
-  pay the same penalty, which is why draft-based speculation only wins at very high acceptance (n-gram on code) on
-  this backend. A grouped kernel over the expert-sorted rows is the open code item.
+  larger than one runs one small GEMM per *touched* expert (the loop skips experts nothing routed to). A large
+  prefill ubatch is likely to touch every expert at least once, so at ub=512-2048 that's close to the 256 x 3
+  launches per layer upper bound; a small speculative-decoding verify batch of `n` tokens touches at most `8*n`
+  (8 experts/token), far fewer. Per-matrix cost is nearly flat from 512 to 2048 tokens, so a larger `--ubatch-size`
+  amortises the large-batch case almost linearly, but the *launch count* still scales with the small batch's own
+  `8*n`, which is why draft-based speculation only wins at very high acceptance (n-gram on code) on this backend. A
+  grouped kernel over the expert-sorted rows is the open code item.
 - **CPU/GPU expert placement.** `--fit` on SYCL sees free VRAM equal to total VRAM on this driver, so it assumes sole
   tenancy and only `--fit-target` protects you. CPU-resident experts land in pinned host memory (not repacked); each
   CPU-resident expert layer adds two synchronous split boundaries per token. For a 16 GiB card and a Q4_K_M 35B-A3B
