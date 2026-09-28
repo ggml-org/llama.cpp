@@ -287,8 +287,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
                     const auto n_frame    = rel_pos_scores->ne[1];
                     const auto n_head     = rel_pos_scores->ne[2];
 
-                    rel_pos_scores = ggml_pad(ctx0, rel_pos_scores, 1, 0, 0, 0);
-                    rel_pos_scores = ggml_roll(ctx0, rel_pos_scores, 1, 0, 0, 0);
+                    rel_pos_scores = ggml_pad_ext(ctx0, rel_pos_scores, 1, 0, 0, 0, 0, 0, 0, 0);
 
                     rel_pos_scores = ggml_reshape_3d(ctx0, rel_pos_scores, n_frame, pos_window + 1, n_head);
                     rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
@@ -366,9 +365,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
 
             // use ggml_ssm_conv for f32 precision
             const int dw_pad = (hparams.audio_conv_kernel_size - 1) / 2;
-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
-            cur = ggml_roll(ctx0, cur, dw_pad, 0, 0, 0);
-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_pad_ext(ctx0, cur, dw_pad, dw_pad, 0, 0, 0, 0, 0, 0);
             ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
 
             cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);

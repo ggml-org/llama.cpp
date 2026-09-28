@@ -124,8 +124,7 @@ ggml_cgraph * clip_graph_conformer::build() {
                 const auto pos_len = matrix_bd->ne[0];
                 const auto q_len   = matrix_bd->ne[1];
                 const auto h       = matrix_bd->ne[2];
-                matrix_bd          = ggml_pad(ctx0, matrix_bd, 1, 0, 0, 0);
-                matrix_bd          = ggml_roll(ctx0, matrix_bd, 1, 0, 0, 0);
+                matrix_bd          = ggml_pad_ext(ctx0, matrix_bd, 1, 0, 0, 0, 0, 0, 0, 0);
                 matrix_bd          = ggml_reshape_3d(ctx0, matrix_bd, q_len, pos_len + 1, h);
                 matrix_bd          = ggml_view_3d(ctx0, matrix_bd, q_len, pos_len, h, matrix_bd->nb[1],
                                                         matrix_bd->nb[2], matrix_bd->nb[0] * q_len);
