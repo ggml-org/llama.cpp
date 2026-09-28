@@ -31,22 +31,45 @@ ARG GCC_VERSION
 # CUDA architecture to build for (defaults to all supported archs)
 ARG CUDA_DOCKER_ARCH=default
 
-RUN apt-get update && \
-    apt-get install -y gcc-${GCC_VERSION} g++-${GCC_VERSION} build-essential cmake python3 python3-pip git libssl-dev libgomp1
+RUN apt-get update \
+    && apt-get install -y \
+        gcc-${GCC_VERSION} \
+        g++-${GCC_VERSION} \
+        build-essential \
+        cmake \
+        python3 \
+        python3-pip \
+        git \
+        libssl-dev \
+        libgomp1
+
+ARG CCACHE_ENABLED="false"
+RUN if $CCACHE_ENABLED; then \
+        apt-get update \
+        && apt-get install -y --no-install-recommends \
+            ccache; \
+    fi
 
 ENV CC=gcc-${GCC_VERSION} CXX=g++-${GCC_VERSION} CUDAHOSTCXX=g++-${GCC_VERSION}
 
 WORKDIR /app
 
 COPY . .
-
 COPY --from=web /app/tools/ui/dist tools/ui/dist
 
-RUN if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
-    export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
-    fi && \
-    cmake -B build -DGGML_NATIVE=OFF -DGGML_CUDA=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DLLAMA_BUILD_TESTS=OFF ${CMAKE_ARGS} -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . && \
-    cmake --build build --config Release -j$(nproc)
+RUN --mount=type=cache,target=/root/.cache/ccache \
+    if [ "${CUDA_DOCKER_ARCH}" != "default" ]; then \
+        export CMAKE_ARGS="-DCMAKE_CUDA_ARCHITECTURES=${CUDA_DOCKER_ARCH}"; \
+    fi \
+    && cmake -B build \
+        -DGGML_NATIVE=OFF \
+        -DGGML_CUDA=ON \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
+        -DLLAMA_BUILD_TESTS=OFF \
+        ${CMAKE_ARGS} \
+        -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined . \
+    && cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
     find build -name "*.so*" -exec cp -P {} /app/lib \;
