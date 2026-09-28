@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eject, Power, Server, SquarePen, X } from '@lucide/svelte';
+	import { Eject, Loader2, Power, Server, SquarePen, X } from '@lucide/svelte';
 	import { Logo, ModelAvatar, ModelId } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { Badge } from '$lib/components/ui/badge';
@@ -35,6 +35,8 @@
 			? 'llama.cpp server: reads /props and /slots'
 			: 'OpenAI-compatible: no /props, /slots, load or unload'
 	);
+
+	let isLoading = $derived(status === ServerModelStatus.LOADING);
 
 	let statusLabel = $derived.by(() => {
 		// a provider that cannot load or unload reports no load state, so its
@@ -99,16 +101,8 @@
 
 				<!-- one line, one voice: state, protocol, owner -->
 				<p class="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
-					<span class="flex shrink-0 items-center gap-1.5">
-						<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
-
-						{statusLabel}
-					</span>
-
 					{#if backend && backendName}
-						<span class="flex min-w-0 items-center gap-0.75" title={compatTitle}>
-							<span aria-hidden="true" class="shrink-0 text-muted-foreground/40">&#183;</span>
-
+						<span class="flex min-w-0 items-center gap-1" title={compatTitle}>
 							<BackendIcon {backend} class="size-4">
 								{#snippet fallback()}
 									{#if backend.id === LOCAL_BACKEND_ID}
@@ -123,6 +117,12 @@
 							<span class="truncate">{backendName}</span>
 						</span>
 					{/if}
+
+					<span class="flex shrink-0 items-center gap-1">
+						<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
+
+						{statusLabel}
+					</span>
 				</p>
 			</div>
 		</div>
@@ -146,8 +146,18 @@
 		</Button>
 
 		{#if capabilities.loadUnload}
-			<Button class="flex-1 gap-1.5" onclick={onToggleLoad} size="sm" variant="outline">
-				{#if isLoaded}
+			<Button
+				class="flex-1 gap-1.5"
+				disabled={isLoading}
+				onclick={onToggleLoad}
+				size="sm"
+				variant="outline"
+			>
+				{#if isLoading}
+					<Loader2 class="h-3.5 w-3.5 animate-spin" />
+
+					Loading...
+				{:else if isLoaded}
 					<Eject class="h-3.5 w-3.5" />
 
 					Unload model
