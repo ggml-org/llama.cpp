@@ -103,7 +103,8 @@
 				orgName: 'intel'
 			}
 		],
-		loaded: loadedModels
+		loaded: loadedModels,
+		providers: []
 	};
 
 	function handleSelect(modelId: string) {
@@ -137,7 +138,8 @@
 			currentModel={null}
 			groups={{
 				available: [],
-				loaded: [loadedModels[0]]
+				loaded: [loadedModels[0]],
+				providers: []
 			}}
 			onSelect={handleSelect}
 		/>
@@ -152,7 +154,8 @@
 			favorites={favoriteModels}
 			groups={{
 				available: [],
-				loaded: []
+				loaded: [],
+				providers: []
 			}}
 			onSelect={handleSelect}
 		/>

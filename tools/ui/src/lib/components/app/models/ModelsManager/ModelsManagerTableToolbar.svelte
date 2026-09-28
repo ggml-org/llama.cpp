@@ -5,7 +5,7 @@
 	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
 	import { ModelCapability } from '$lib/enums';
-	import { uiStore } from '$lib/stores';
+	import { backendsStore, uiStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -13,9 +13,15 @@
 		capabilities?: ModelCapability[];
 		/** Smallest context a model must support; 0 keeps every model. */
 		contextLimit?: number;
+		/** Keep only models that have a draft sidecar to speculate with. */
+		draft?: boolean;
 		filter?: string;
 		/** Modalities a model must support at least one of. */
 		modalities?: ModalityKey[];
+		/** Repos each provider contributes to the current search, for the filter menu. */
+		providerCounts?: Record<string, number>;
+		/** Backend ids to keep; empty keeps every provider. */
+		providers?: string[];
 		/** Rendered at the toolbar's right end, past the filters. */
 		toolbarEnd?: Snippet;
 	}
@@ -23,12 +29,21 @@
 	let {
 		capabilities = $bindable<ModelCapability[]>([]),
 		contextLimit = $bindable(0),
+		draft = $bindable(false),
 		filter = $bindable(''),
 		modalities = $bindable<ModalityKey[]>([]),
+		providerCounts = {},
+		providers = $bindable<string[]>([]),
 		toolbarEnd
 	}: Props = $props();
 
-	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
+	let hasFilters = $derived(
+		providers.length > 0 ||
+			contextLimit > 0 ||
+			modalities.length > 0 ||
+			capabilities.length > 0 ||
+			draft
+	);
 	let filterInput = $state<HTMLInputElement | null>(null);
 
 	// the dialog hands focus to its first control, so the filter takes it instead
@@ -59,15 +74,25 @@
 		size="sm"
 	/>
 
-	<ModelsManagerFilters bind:capabilities bind:contextLimit bind:modalities />
+	<ModelsManagerFilters
+		bind:capabilities
+		bind:contextLimit
+		bind:draft
+		bind:modalities
+		bind:providers
+		backends={backendsStore.enabled}
+		{providerCounts}
+	/>
 
 	{#if hasFilters}
 		<Button
 			class="gap-1.5 text-muted-foreground"
 			onclick={() => {
+				providers = [];
 				contextLimit = 0;
 				modalities = [];
 				capabilities = [];
+				draft = false;
 			}}
 			size="sm"
 			variant="ghost"

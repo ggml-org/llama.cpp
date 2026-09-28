@@ -2,20 +2,27 @@
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
 		groupModelQuants,
+		loadOverrides,
 		type ModalityKey,
 		modelContextLength,
+		modelDraftsFor,
+		type ModelOverride,
 		type ModelQuantGroup,
 		MODELS_TABLE_GROUP_LABELS,
 		type ModelsTableGroup,
 		ModelsTableGroupKind,
-		modelSupports
+		modelSupports,
+		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { backendsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { type Snippet } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		class?: string;
@@ -26,15 +33,20 @@
 	let { class: className, toolbarEnd }: Props = $props();
 
 	let filter = $state('');
+	let providerFilter = $state<string[]>([]);
 	let contextLimit = $state(0);
 	let modalityFilter = $state<ModalityKey[]>([]);
 	let capabilityFilter = $state<ModelCapability[]>([]);
+	let draftFilter = $state(false);
 	let selectedId = $state<string | null>(null);
+	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
 	let allModels = $derived(modelsStore.models);
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)
 	);
+	// every filter but the provider one, so a provider count does not fall to zero
+	// the moment that provider is the one being looked at
 	let matching = $derived.by(() => {
 		const term = filter.trim().toLowerCase();
 
@@ -50,6 +62,13 @@
 				return false;
 			}
 
+			if (
+				draftFilter &&
+				modelDraftsFor(option, overrides[option.id]?.load?.speculativeDecoding).length === 0
+			) {
+				return false;
+			}
+
 			// a model whose modalities are unknown cannot be shown to match
 			if (modalityFilter.length > 0 && !modalityFilter.some((key) => option.modalities?.[key])) {
 				return false;
@@ -57,6 +76,24 @@
 
 			return contextLimit === 0 || modelContextLength(option) >= contextLimit;
 		});
+	});
+	let visible = $derived.by(() =>
+		providerFilter.length === 0
+			? matching
+			: matching.filter((option) => providerFilter.includes(option.backendId ?? LOCAL_BACKEND_ID))
+	);
+	// the rail counts follow the active view and filter, so it always says how many
+	// repos each provider contributes to what the table is showing
+	let providerCounts = $derived.by(() => {
+		const counts: Record<string, number> = {};
+
+		for (const entry of groupModelQuants(matching)) {
+			const backendId = entry.base.backendId ?? LOCAL_BACKEND_ID;
+
+			counts[backendId] = (counts[backendId] ?? 0) + 1;
+		}
+
+		return counts;
 	});
 
 	// recently used models lead their section, the rest keep the server's order;
@@ -74,12 +111,16 @@
 	const byRecency = (list: ModelQuantGroup[]) =>
 		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
 	// one entry per repo, so a model with several quants is a single table row;
-	// loaded models lead the table, then favorites, then the local block
-	let entries = $derived(byRecency(groupModelQuants(matching)));
+	// loaded models lead the table, then favorites, then one block per provider,
+	// and an entry lands in the first group that claims it
+	let entries = $derived(byRecency(groupModelQuants(visible)));
 	let groups = $derived.by(() => {
 		// A loaded quant is a model of its own: it moves to the loaded section, and
-		// the quants of its repo that are not loaded stay behind as that repo.
-		const isLoaded = (option: ModelOption) => modelsStore.isModelLoaded(option.model);
+		// the quants of its repo that are not loaded stay behind as that repo. Only
+		// llama-compat servers report a load state.
+		const isLoaded = (option: ModelOption) =>
+			getBackendCapabilities(getBackend(option.backendId)).loadUnload &&
+			modelsStore.isModelLoaded(option.model);
 		const loaded: ModelQuantGroup[] = [];
 		const rest: ModelQuantGroup[] = [];
 
@@ -106,23 +147,54 @@
 			(entry) => !claimed.has(entry.key) && entry.quants.some((q) => modelsStore.isHidden(q.id))
 		);
 		const hiddenKeys = new SvelteSet(hidden.map((entry) => entry.key));
-		const local = rest.filter((entry) => !claimed.has(entry.key) && !hiddenKeys.has(entry.key));
+		const byBackend = new SvelteMap<string, ModelQuantGroup[]>();
+
+		for (const entry of rest) {
+			if (claimed.has(entry.key) || hiddenKeys.has(entry.key)) continue;
+
+			const backendId = entry.base.backendId ?? LOCAL_BACKEND_ID;
+
+			if (!byBackend.has(backendId)) byBackend.set(backendId, []);
+
+			byBackend.get(backendId)!.push(entry);
+		}
+
 		const ordered: ModelsTableGroup[] = [];
-		// loaded models lead the table, then favorites, then the local block
-		const pushSection = (kind: ModelsTableGroupKind, items: ModelQuantGroup[]): void => {
+		// loaded models lead the table, then favorites, then one block per backend
+		const pushSection = (
+			kind: ModelsTableGroup['kind'],
+			items: ModelQuantGroup[],
+			provider?: { id: string; label: string }
+		): void => {
 			if (items.length === 0) return;
 
+			const isLocal = kind === ModelsTableGroupKind.LOCAL;
+
 			ordered.push({
+				backendId: provider?.id ?? (isLocal ? LOCAL_BACKEND_ID : null),
+				isLocal,
 				items,
-				key: kind === ModelsTableGroupKind.LOCAL ? LOCAL_BACKEND_ID : kind,
+				key: provider?.id ?? (isLocal ? LOCAL_BACKEND_ID : kind),
 				kind,
-				label: MODELS_TABLE_GROUP_LABELS[kind]
+				label: provider?.label ?? MODELS_TABLE_GROUP_LABELS[kind as ModelsTableGroupKind]
 			});
 		};
 
 		pushSection(ModelsTableGroupKind.LOADED, loaded);
 		pushSection(ModelsTableGroupKind.FAVORITES, favorites);
-		pushSection(ModelsTableGroupKind.LOCAL, local);
+
+		const localItems = byBackend.get(LOCAL_BACKEND_ID);
+
+		if (localItems?.length) pushSection(ModelsTableGroupKind.LOCAL, localItems);
+
+		for (const backend of backendsStore.enabled) {
+			if (backend.id === LOCAL_BACKEND_ID) continue;
+
+			const items = byBackend.get(backend.id);
+
+			if (items?.length) pushSection('provider', items, { id: backend.id, label: backend.name });
+		}
+
 		pushSection(ModelsTableGroupKind.HIDDEN, hidden);
 
 		return ordered;
@@ -140,6 +212,24 @@
 
 		uiStore.manageModelFocus = null;
 	});
+
+	/** Point the selected model's load settings at another model as its draft. */
+	function useAsDraft(draft: ModelOption, targetId: string): void {
+		const target = modelsStore.models.find((option) => option.id === targetId);
+
+		if (!target) return;
+
+		saveOverride(target, {
+			...overrides[target.id],
+			load: { ...overrides[target.id]?.load, speculativeDecoding: draft.id }
+		});
+	}
+
+	function saveOverride(option: ModelOption, override: ModelOverride): void {
+		overrides = { ...overrides, [option.id]: override };
+		saveOverrides(overrides);
+		toast.success(`Saved settings for ${option.name}`);
+	}
 </script>
 
 <div class={['flex min-h-0 flex-1', className]}>
@@ -147,11 +237,16 @@
 		<ModelsManagerModelsTable
 			bind:capabilities={capabilityFilter}
 			bind:contextLimit
+			bind:draft={draftFilter}
 			bind:filter
 			bind:modalities={modalityFilter}
+			bind:providers={providerFilter}
 			{groups}
 			{isFavorite}
 			onSelect={(option) => (selectedId = option.id)}
+			onUseAsDraft={useAsDraft}
+			{overrides}
+			{providerCounts}
 			{selectedId}
 			{toolbarEnd}
 		/>
