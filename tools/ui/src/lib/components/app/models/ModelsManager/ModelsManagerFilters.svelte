@@ -71,7 +71,7 @@
 	}
 
 	const TOGGLE_ITEM_CLASS =
-		'bg-transparent! border-border/30! dark:border-border/20! data-[state=on]:bg-muted! data-[state=on]:text-foreground!';
+		'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
 
 	// none selected means every provider, so the label names the selection
 	let providerLabel = $derived(
@@ -177,7 +177,7 @@
 		<span
 			aria-hidden="true"
 			class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-shadow {draft
-				? 'border-border/30 bg-muted text-foreground dark:border-border/20 dark:bg-muted/75'
+				? 'border-border/30 bg-muted-foreground/15 text-foreground dark:border-border/20 dark:bg-muted-foreground/25'
 				: 'border-input bg-background dark:bg-input/30'}"
 		>
 			{#if draft}
@@ -189,7 +189,7 @@
 	</Toggle>
 
 	<ToggleGroup.Root
-		class="bg-muted/60 dark:bg-muted/75"
+		class="border border-border/30 bg-muted/60 shadow-sm dark:border-border/20 dark:bg-muted/75"
 		onValueChange={setToggles}
 		type="multiple"
 		value={[...capabilities, ...modalities]}
