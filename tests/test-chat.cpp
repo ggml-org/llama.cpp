@@ -6384,6 +6384,35 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("You invoke it like this:\n" + call_markup)
             .run();
 
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // response_format: a json_schema must produce a non-lazy grammar. peg_tester only
+        // validates a grammar when one exists, so assert it directly.
+        {
+            auto tmpls = read_templates("models/templates/muse-glimmer.jinja");
+            common_chat_templates_inputs rf_inputs;
+            rf_inputs.messages    = { message_user };
+            rf_inputs.json_schema = invoice_schema;
+            auto rf_params = common_chat_templates_apply(tmpls.get(), rf_inputs);
+            if (rf_params.grammar.empty() || rf_params.grammar_lazy) {
+                throw std::runtime_error("Muse Glimmer: json_schema set but no eager grammar was produced (response_format is unenforced)");
+            }
+        }
+
         // Tool markup inside the analysis channel is reasoning, not a call
         tst.test(" to=self<|message|>I could use " + call_markup + " here<|eom|>"
                  "<|start|>assistant to=user<|message|>Hello!<|eot|>")
