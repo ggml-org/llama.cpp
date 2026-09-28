@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Loader2 } from '@lucide/svelte';
+	import { Box, ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		DropdownMenuSearchable,
 		ModelId,
@@ -19,7 +19,7 @@
 	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 	import { rawModelId } from '$lib/utils/model-option-id';
 
@@ -131,6 +131,13 @@
 		}
 
 		highlightedId = visualOrder[index];
+	}
+
+	function handleManageModels() {
+		isOpen = false;
+
+		// let the menu finish closing before the dialog takes focus
+		setTimeout(() => uiStore.openModelsManager(), 0);
 	}
 
 	function handleAddBackend() {
@@ -364,6 +371,18 @@
 								{showOrgName}
 							/>
 						</div>
+
+						{#snippet footer()}
+							<!-- Sticky action footer: it sticks to the bottom of the content
+							     scrollport, past the option list. -->
+							<DropdownMenu.Group class="px-2">
+								<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+									<Box class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+
+									Manage models
+								</DropdownMenu.Item>
+							</DropdownMenu.Group>
+						{/snippet}
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>

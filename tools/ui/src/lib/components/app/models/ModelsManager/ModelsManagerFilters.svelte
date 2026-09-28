@@ -171,7 +171,7 @@
 	<!-- a checkbox chip: the whole pill is the control, the box is its indicator -->
 	<Toggle
 		bind:pressed={draft}
-		class="inline-flex items-center whitespace-nowrap {FILTER_TRIGGER_CLASS}"
+		class="inline-flex items-center whitespace-nowrap {FILTER_TRIGGER_CLASS} px-2!"
 		variant="outline"
 	>
 		<span

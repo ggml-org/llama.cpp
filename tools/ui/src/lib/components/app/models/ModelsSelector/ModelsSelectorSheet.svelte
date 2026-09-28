@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Loader2 } from '@lucide/svelte';
+	import { Box, ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
 		ModelsSelectorList,
@@ -12,7 +12,7 @@
 	import { SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -65,6 +65,13 @@
 		if (!open) {
 			ms.handleOpenChange(false);
 		}
+	}
+
+	function handleManageModels() {
+		sheetOpen = false;
+
+		// let the sheet finish closing before the dialog takes focus
+		setTimeout(() => uiStore.openModelsManager(), 0);
 	}
 
 	function handleAddBackend() {
@@ -200,6 +207,18 @@
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 								{showOrgName}
 							/>
+						</div>
+
+						<div class="px-2 pb-1">
+							<button
+								class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-accent"
+								onclick={handleManageModels}
+								type="button"
+							>
+								<Box class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+
+								Manage models
+							</button>
 						</div>
 					</div>
 				</Sheet.Content>
