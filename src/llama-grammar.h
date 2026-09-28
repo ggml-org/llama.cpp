@@ -93,7 +93,6 @@ std::vector<llama_grammar_candidate> llama_grammar_reject_candidates_for_stack(
         const llama_grammar_stack      & stack,
         const llama_grammar_candidates & candidates);
 
-// decodes a token piece into code points ending in a 0, continuing from a partial UTF-8 sequence
 std::pair<std::vector<uint32_t>, llama_partial_utf8> llama_grammar_decode_utf8(
         const std::string  & src,
         llama_partial_utf8   partial_start);

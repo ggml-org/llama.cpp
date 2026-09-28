@@ -1178,6 +1178,8 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     if (stack_pos->type == LLAMA_GRETYPE_TOKEN || stack_pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
         for (const auto & tok : candidates) {
             if (tok.n_consumed > 0) {
+                // char rules already consumed part of this token, so it cannot be matched by id;
+                // accept it only if they consumed all of it without ending in a partial sequence
                 if (*tok.code_points != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(tok);
                 }
