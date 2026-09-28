@@ -2479,6 +2479,11 @@ bool common_prompt_batch_decode(
                                int   n_batch,
                   std::string_view   state_path,
                               bool   save_state) {
+    // validate before building suffix iterators: an out-of-range n_new would point outside all_tokens
+    if (n_new < 0 || (size_t) n_new > all_tokens.size()) {
+        COM_ERR("n_new = %d is outside [0, %zu]\n", n_new, all_tokens.size());
+        return false;
+    }
     if (n_new == 0) {
         return true;
     }
@@ -2487,7 +2492,10 @@ bool common_prompt_batch_decode(
     if (save_state && n_new > 1) {
         const int n_tokens_before_last = n_new - 1;
 
-        GGML_ASSERT(n_new <= n_batch);
+        if (n_new > n_batch) {
+            COM_ERR("n_new = %d exceeds n_batch = %d\n", n_new, n_batch);
+            return false;
+        }
 
         // Decode all but the last token so we can save the memory state before decoding the last token.
         // This is done so we can restore the session state later and replay the last token.

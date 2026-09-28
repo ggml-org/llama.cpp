@@ -202,6 +202,7 @@ struct common_speculative_impl {
 
     // add a row with an optional paired embedding to a draft batch; false when the draft cannot
     // take it, and the batch is left as it was (a rejected embedding rolls the token row back)
+    // idx_out is written only on success
     static bool draft_add(common_batch & b, llama_token id, llama_pos pos, llama_seq_id seq_id, bool output, llama_embd embd, int32_t * idx_out = nullptr) {
         const int32_t idx = b.add(id, pos, seq_id, output);
         if (idx < 0) {

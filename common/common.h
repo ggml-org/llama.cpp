@@ -1056,7 +1056,8 @@ enum common_context_seq_rm_type {
 };
 
 // check if the llama_context can remove sequences
-// note: clears the memory of the context
+// clears context memory when probing; skips the probe if there is no memory or bounded removal is supported
+// returns COMMON_CONTEXT_SEQ_RM_TYPE_NO if the probe cannot be built or decoded
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
 
 struct common_memory {
@@ -1117,10 +1118,13 @@ struct common_batch {
     bool set_output(int32_t idx, bool value);
 
     // attach a token embedding to the entry at idx, can only be set once per entry
+    // returns false for an invalid index, null data, incompatible embedding size, or an existing embedding
+    // copies the data into the batch, but the token mirror borrows embd.data for downstream readers
     bool set_embd(int32_t idx, llama_embd embd);
 
     // add an embedding-only entry (no token id), returns a negative error code like add() on failure
-    // pos points to n_pos positions
+    // null data or an incompatible embedding size returns -2; failure leaves the batch unchanged
+    // pos must point to n_pos positions; the token mirror borrows embd.data, while the batch owns a copy
     int32_t add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output);
 
     // remove the last entry, e.g. to roll back an add() whose set_embd() failed; false if empty
@@ -1129,20 +1133,29 @@ struct common_batch {
     int32_t size() const { return (int32_t) tokens.size(); }
 };
 
-// create a single-sequence batch from a list of tokens
-// last token always have output_logits set to true
+// create a batch for sequence 0, starting after its last position in context memory (0 if empty)
+// requests logits only for the final input token; empty input produces an empty batch
 // returns an empty batch (size() == 0) if a token cannot be added (batch full or token outside the vocab)
 common_batch common_batch_get_one(struct llama_context * ctx, const llama_tokens & tokens);
 
-// convert a legacy llama_batch, applying its defaults: seq 0, positions continue from memory, last token is output
-// the embd rows are read at the model input width
+// convert a legacy llama_batch; missing sequence IDs default to 0 and missing logits select the last token
+// without explicit positions, assumes the batch was just decoded on ctx and counts back from sequence ends,
+// charging each row to its first sequence ID only (as llama_batch_compat does)
+// the embd rows are read at the model input width; the token mirror borrows their data
+// preserves all sequence IDs in the underlying batch, but only the first in each mirrored token
+// returns an empty batch if any row or additional sequence ID is rejected
 common_batch common_batch_from_llama_batch(struct llama_context * ctx, const llama_batch & batch);
 
 // decodes a single batch of tokens for a prompt and manages session tokens
+// n_new selects the suffix of all_tokens and must be in [0, all_tokens.size()]; otherwise returns false
+// without changing state; n_new == 0 succeeds without changing state
+// advances n_past after each successful decode; returns false if a batch cannot be built or a decode fails
+// earlier progress is retained on failure; state-file save failures do not affect the return value
 //
-// Note: We save state before the last token so that we can replay it to ensure
-// compatibility with all memory types. Recurrent/hybrid models cannot remove
-// tokens from memory, so this approach works across all model architectures.
+// Note: With save_state and n_new > 1, we save state before the last token so we can replay it for
+// compatibility with all memory types (n_new > n_batch returns false without changing state).
+// Recurrent/hybrid models cannot remove tokens from memory, so this approach works across all
+// model architectures.
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
                 const llama_tokens & all_tokens,
@@ -1154,6 +1167,7 @@ bool common_prompt_batch_decode(
 
 // replays the last token after loading state to regenerate logits
 // used after loading session state to ensure the sampling context has valid logits
+// decodes at pos in sequence 0; returns false if adding the token or decoding fails
 bool common_replay_last_token(struct llama_context * ctx, llama_token last_token, int32_t pos);
 
 //
