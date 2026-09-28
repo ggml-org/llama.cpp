@@ -184,10 +184,12 @@ labelled as a paired campaign as order-of-magnitude.
   regardless of routing -- attention, SSM, shared-expert, and output; the embedding table is a per-token row lookup,
   not a full read, so it's excluded), which the A770 and DDR5 could serve in ~22 ms; the observed token takes ~48 ms.
   The remaining gap is per-kernel submission cost (~21 us per small kernel in the runtime's default immediate-command-list
-  mode, ~7 us batched) plus host-device synchronisation at every CPU/GPU split. Two levers exist and they are the same
-  mechanism, so their gains do not add: SYCL-Graph replay (`GGML_SYCL_ENABLE_GRAPH=1`) and batched submission
-  (`UR_L0_USE_IMMEDIATE_COMMANDLISTS=0 UR_L0_BATCH_SIZE=64`, +32% tg128 on dense Mistral-7B in the 2026-08-13 paired
-  probe). Neither is on by default in the fork or the runtime.
+  mode, ~7 us batched) plus host-device synchronisation at every CPU/GPU split. Two levers target the submission cost:
+  SYCL-Graph replay (`GGML_SYCL_ENABLE_GRAPH=1`) and batched submission (`UR_L0_USE_IMMEDIATE_COMMANDLISTS=0
+  UR_L0_BATCH_SIZE=64`). Graph replay was already on in the ~48 ms measurement; graphs on versus off differed by about
+  2% there, and whether Ornith's MoE segments replay at all has not been observed. Batched submission gave +32% tg128 on
+  dense Mistral-7B in the 2026-08-13 paired probe and has not been measured on Ornith. Whether the two gains add is
+  unmeasured until a paired run crosses both settings. Neither is on by default in the fork or the runtime.
 - **MoE prefill is bounded by the per-expert loop.** SYCL `mul_mat_id` is fused only for single-token decode; any batch
   larger than one runs one small GEMM per *touched* expert (the loop skips experts nothing routed to). A large
   prefill ubatch is likely to touch every expert at least once, so at ub=512-2048 that's close to the 256 x 3

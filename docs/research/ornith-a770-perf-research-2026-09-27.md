@@ -194,7 +194,8 @@ baseline, one change per run):
 1. **Batched submission.** Add to a drop-in:
    `Environment=UR_L0_USE_IMMEDIATE_COMMANDLISTS=0`
    `Environment=UR_L0_BATCH_SIZE=64`. Cross with `GGML_SYCL_ENABLE_GRAPH`
-   in {0,1}; graphs and batching are the same mechanism and are not additive.
+   in {0,1} as a paired 2x2: both cut per-kernel submission cost, and whether
+   their gains add is unmeasured until this run.
    Watch pp512 too: the 2026-07-19 campaign saw pp512 -3% from graphs.
 2. **Diagnostic run**: `-lv 4` once, with `GGML_SYCL_GRAPH_PROFILE=1
    GGML_SYCL_FA_PROFILE=1`, then stop the service so the profile prints.
@@ -242,9 +243,10 @@ Code (each needs the CPU oracle green and a paired campaign):
   number.
 - Whether op-offload is currently engaging for CPU expert layers at prefill is
   inferred from `supports_op`, not observed; the `--no-op-offload` A/B decides.
-- Batched submission was probed only in a synthetic loop; its real gain on
-  Ornith decode depends on segment length between CPU splits and may be
-  smaller than the dense Mistral +32%.
+- On Ornith, batched submission was probed only in a synthetic loop (the dense
+  Mistral +32% is a real paired tg128 measurement on a different model); its
+  real gain on Ornith decode depends on segment length between CPU splits and
+  may be smaller.
 
 ## 8. Addendum (same day): upstream PRs merged and what they measured on the A770
 
