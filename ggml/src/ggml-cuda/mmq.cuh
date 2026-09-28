@@ -1084,6 +1084,7 @@ static __global__ void mul_mat_q(
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, has_fusion) / warp_size;
+    constexpr int qk        = ggml_cuda_type_traits<type>::qk;
     constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, has_fusion);
 
     const uint32_t nty = (nrows_x + I - 1) / I; // Number of tiles y
@@ -1173,111 +1174,22 @@ static __global__ void mul_mat_q(
              fusion.glu_op, fusion.glu_limit, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, 0, blocks_per_ne00.z);
         return;
-    } else {
-        constexpr int ITER_K          = ggml_cuda_mmq_get_K_vram(type, J, fallback);
-        constexpr int qk              = ggml_cuda_type_traits<type>::qk;
-        constexpr int blocks_per_iter = ITER_K / qk;
+    }
 
-        // kbc == k block continuous, current index in continuous ijk space.
-        int kbc      = int64_t(blockIdx.x)    *(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
-        int kbc_stop = int64_t(blockIdx.x + 1)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+    constexpr int ITER_K          = ggml_cuda_mmq_get_K_vram(type, J, fallback);
+    constexpr int blocks_per_iter = ITER_K / qk;
 
-        kbc      -= fastmodulo(kbc,      blocks_per_ne00) % blocks_per_iter;
-        kbc_stop -= fastmodulo(kbc_stop, blocks_per_ne00) % blocks_per_iter;
+    // kbc == k block continuous, current index in continuous ijk space.
+    int kbc      = int64_t(blockIdx.x)    *(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
+    int kbc_stop = int64_t(blockIdx.x + 1)*(nsamples_y.z*nchannels_y.z*ntx.z*nty*blocks_per_ne00.z) / gridDim.x;
 
-        // kb0 == k index when doing the matrix multiplication for an output tile.
-        int kb0_start = fastmodulo(kbc, blocks_per_ne00);
-        int kb0_stop  = min(blocks_per_ne00.z, uint32_t(kb0_start + kbc_stop - kbc));
-        while (kbc < kbc_stop && kb0_stop == int(blocks_per_ne00.z)) {
-            int tmp = fastdiv(kbc, blocks_per_ne00);
-            uint2 tmp2 = fast_div_modulo(tmp, ntx);
-            const int jt = tmp2.y;
-            tmp = tmp2.x;
-            tmp2 = fast_div_modulo(tmp, nchannels_y);
-            const int zt = tmp2.y;
-            tmp = tmp2.x;
-            tmp2 = fast_div_modulo(tmp, nsamples_y);
-            const int wt = tmp2.y;
-            const int it = tmp2.x;
+    kbc      -= fastmodulo(kbc,      blocks_per_ne00) % blocks_per_iter;
+    kbc_stop -= fastmodulo(kbc_stop, blocks_per_ne00) % blocks_per_iter;
 
-            // Defaults for regular matrix multiplication:
-            int col_low    = 0;
-            int col_high   = ncols_dst;
-            int col_diff   = ncols_dst;
-            int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
-            int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
-            int offset_y_scale;
-            if constexpr (type == GGML_TYPE_NVFP4) {
-                offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
-            } else {
-                GGML_UNUSED(offset_y_scale);
-            }
-
-            if (ids_dst) {
-                col_low  = expert_bounds[zt + 0];
-                col_high = expert_bounds[zt + 1];
-                col_diff = col_high - col_low;
-
-                offset_y   = 0;
-                offset_dst = 0;
-                if constexpr (type == GGML_TYPE_NVFP4) {
-                    offset_y_scale = 0;
-                }
-
-                if (jt*J >= col_diff) {
-                    kbc += blocks_per_ne00.z;
-                    kbc -= fastmodulo(kbc, blocks_per_ne00);
-
-                    kb0_start = 0;
-                    kb0_stop  = min(blocks_per_ne00.z, uint32_t(kbc_stop - kbc));
-
-                    continue;
-                }
-
-                __syncthreads();
-    #pragma unroll
-                for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
-                    const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
-
-                    if (j0 + nwarps*warp_size > J && j >= J) {
-                        break;
-                    }
-
-                    ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
-                }
-                __syncthreads();
-            }
-
-            offset_y += (col_low + jt * J) * (sizeof(block_q8_1_mmq) / sizeof(int));
-            offset_dst += it*I;
-            const float * y_scale_tile = nullptr;
-            if constexpr (type == GGML_TYPE_NVFP4) {
-                offset_y_scale += col_low + jt * J;
-                y_scale_tile = y_scale ? y_scale + offset_y_scale : nullptr;
-            }
-
-            const int tile_x_max_i = nrows_x  - it*I - 1;
-            const int tile_y_max_j = col_diff - jt*J - 1;
-
-            const int offset_x = fastdiv(wt, sample_ratio)*stride_sample_x + fastdiv(zt, channel_ratio)*stride_channel_x + it*I*stride_row_x;
-
-            constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
-            mul_mat_q_process_tile<type, J, fallback, fixup, false>
-                (x, nullptr, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
-                 GGML_GLU_OP_SWIGLU, 0.0f, stride_row_x, ncols_y, stride_col_dst,
-                 tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
-
-            kbc += blocks_per_ne00.z;
-            kbc -= fastmodulo(kbc, blocks_per_ne00);
-
-            kb0_start = 0;
-            kb0_stop  = min(blocks_per_ne00.z, uint32_t(kbc_stop - kbc));
-        }
-
-        if (kbc >= kbc_stop) {
-            return;
-        }
-
+    // kb0 == k index when doing the matrix multiplication for an output tile.
+    int kb0_start = fastmodulo(kbc, blocks_per_ne00);
+    int kb0_stop  = min(blocks_per_ne00.z, uint32_t(kb0_start + kbc_stop - kbc));
+    while (kbc < kbc_stop && kb0_stop == int(blocks_per_ne00.z)) {
         int tmp = fastdiv(kbc, blocks_per_ne00);
         uint2 tmp2 = fast_div_modulo(tmp, ntx);
         const int jt = tmp2.y;
@@ -1314,12 +1226,17 @@ static __global__ void mul_mat_q(
             }
 
             if (jt*J >= col_diff) {
-                return;
+                kbc += blocks_per_ne00.z;
+                kbc -= fastmodulo(kbc, blocks_per_ne00);
+
+                kb0_start = 0;
+                kb0_stop  = min(blocks_per_ne00.z, uint32_t(kbc_stop - kbc));
+
+                continue;
             }
 
-            // The memory layout for the fixup buffer is always contiguous, therefore reset ids:
             __syncthreads();
-    #pragma unroll
+#pragma unroll
             for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
                 const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
 
@@ -1327,7 +1244,7 @@ static __global__ void mul_mat_q(
                     break;
                 }
 
-                ids_dst_shared[j] = j;
+                ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
             }
             __syncthreads();
         }
@@ -1345,12 +1262,95 @@ static __global__ void mul_mat_q(
 
         const int offset_x = fastdiv(wt, sample_ratio)*stride_sample_x + fastdiv(zt, channel_ratio)*stride_channel_x + it*I*stride_row_x;
 
-        constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
+        constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
         mul_mat_q_process_tile<type, J, fallback, fixup, false>
             (x, nullptr, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
              GGML_GLU_OP_SWIGLU, 0.0f, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
+
+        kbc += blocks_per_ne00.z;
+        kbc -= fastmodulo(kbc, blocks_per_ne00);
+
+        kb0_start = 0;
+        kb0_stop  = min(blocks_per_ne00.z, uint32_t(kbc_stop - kbc));
     }
+
+    if (kbc >= kbc_stop) {
+        return;
+    }
+
+    int tmp = fastdiv(kbc, blocks_per_ne00);
+    uint2 tmp2 = fast_div_modulo(tmp, ntx);
+    const int jt = tmp2.y;
+    tmp = tmp2.x;
+    tmp2 = fast_div_modulo(tmp, nchannels_y);
+    const int zt = tmp2.y;
+    tmp = tmp2.x;
+    tmp2 = fast_div_modulo(tmp, nsamples_y);
+    const int wt = tmp2.y;
+    const int it = tmp2.x;
+
+    // Defaults for regular matrix multiplication:
+    int col_low    = 0;
+    int col_high   = ncols_dst;
+    int col_diff   = ncols_dst;
+    int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
+    int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+    int offset_y_scale;
+    if constexpr (type == GGML_TYPE_NVFP4) {
+        offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
+    } else {
+        GGML_UNUSED(offset_y_scale);
+    }
+
+    if (ids_dst) {
+        col_low  = expert_bounds[zt + 0];
+        col_high = expert_bounds[zt + 1];
+        col_diff = col_high - col_low;
+
+        offset_y   = 0;
+        offset_dst = 0;
+        if constexpr (type == GGML_TYPE_NVFP4) {
+            offset_y_scale = 0;
+        }
+
+        if (jt*J >= col_diff) {
+            return;
+        }
+
+        // The memory layout for the fixup buffer is always contiguous, therefore reset ids:
+        __syncthreads();
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
+            const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
+
+            if (j0 + nwarps*warp_size > J && j >= J) {
+                break;
+            }
+
+            ids_dst_shared[j] = j;
+        }
+        __syncthreads();
+    }
+
+    offset_y += (col_low + jt * J) * (sizeof(block_q8_1_mmq) / sizeof(int));
+    offset_dst += it*I;
+    const float * y_scale_tile = nullptr;
+    if constexpr (type == GGML_TYPE_NVFP4) {
+        offset_y_scale += col_low + jt * J;
+        y_scale_tile = y_scale ? y_scale + offset_y_scale : nullptr;
+    }
+
+    const int tile_x_max_i = nrows_x  - it*I - 1;
+    const int tile_y_max_j = col_diff - jt*J - 1;
+
+    const int offset_x = fastdiv(wt, sample_ratio)*stride_sample_x + fastdiv(zt, channel_ratio)*stride_channel_x + it*I*stride_row_x;
+
+    constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
+    mul_mat_q_process_tile<type, J, fallback, fixup, false>
+        (x, nullptr, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, y_scale_tile,
+         GGML_GLU_OP_SWIGLU, 0.0f, stride_row_x, ncols_y, stride_col_dst,
+         tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 }
 
 template <ggml_type type, int J, bool fallback>
