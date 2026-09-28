@@ -13,7 +13,6 @@ class UiStore {
 	/** Repo the Discover view selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
 	discoverModelsOpen = $state(false);
-
 	/** Whether the desktop sidebar is expanded (open). */
 	isSidebarExpanded = $state(false);
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
