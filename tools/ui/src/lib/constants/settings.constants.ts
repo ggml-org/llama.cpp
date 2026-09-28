@@ -28,6 +28,7 @@ import type {
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
 	AGENTIC: { slug: 'agentic', title: 'Agentic' },
+	BACKENDS: { slug: 'backends', title: 'Providers' },
 	DEVELOPER: { slug: 'developer', title: 'Developer' },
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
@@ -38,6 +39,7 @@ export const SETTINGS_SECTIONS = {
 
 export const SETTINGS_SECTION_SLUGS = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.slug,
+	BACKENDS: SETTINGS_SECTIONS.BACKENDS.slug,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.slug,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
@@ -48,6 +50,7 @@ export const SETTINGS_SECTION_SLUGS = {
 
 export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: SETTINGS_SECTIONS.AGENTIC.title,
+	BACKENDS: SETTINGS_SECTIONS.BACKENDS.title,
 	DEVELOPER: SETTINGS_SECTIONS.DEVELOPER.title,
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
@@ -291,9 +294,16 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Display the organization name in the model selector trigger button.',
-				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
-				label: 'Show organization name in model selector trigger',
+				help: 'Show the modality and capability icons (vision, audio, reasoning, tools) on the models selector rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR,
+				label: 'Show model modalities & capabilities in models selector',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Display the organization name alongside model names in the model selector, in the trigger and in the model rows.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME,
+				label: 'Show organization name in model selector',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -304,17 +314,17 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
-				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
-				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
-				label: 'Group models by family',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
 				defaultValue: false,
 				help: 'Display the full file system path inside file and folder @-mention badges instead of just the file or folder name.',
 				key: SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS,
 				label: 'Show full path in mentions',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
+				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
+				label: 'Group models by family',
 				type: SettingsFieldType.CHECKBOX
 			}
 		],
