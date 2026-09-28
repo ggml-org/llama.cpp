@@ -133,7 +133,7 @@
 
 		<div class="dialog-view min-h-0 flex-1" data-visible={!isSwapping}>
 			{#if shownView === 'manage'}
-				<ModelsManager class="h-full">
+				<ModelsManager class="h-full" onClose={() => handleOpenChange(false)}>
 					{#snippet toolbarEnd()}
 						<Button
 							class="gap-1.5"
