@@ -511,6 +511,24 @@ void llama_memory_hybrid_idx::set_input_qsa(
             cur_cell_blk[j] = blk_of[j] < 0 ? dead_bid : blk_of[j];
         }
 
+        // [TAG_QSA_BIASFIX] the block bias below is indexed by block, but the bid arrays are
+        // indexed by bid, and a unified cache with a second sequence interleaves one entry per
+        // sequence at the same position block. Build the inverse map once per ubatch, keeping the
+        // entry that owns this stream's cells: an entry at index b then really describes block b.
+        std::vector<int32_t> blk_entry(n_blocks, -1);
+
+        for (int32_t t = 0; t < n_bid; ++t) {
+            const int64_t pb = bid_idx[t]/r;
+
+            if (pb >= n_blocks || blk_entry[pb] >= 0) {
+                continue;
+            }
+
+            if (one_seq || cells.seq_has((uint32_t) bid_cell[t], seq_of_stream)) {
+                blk_entry[pb] = t;
+            }
+        }
+
         for (int64_t ii = 0; ii < n_tps; ++ii) {
             const int64_t      i      = s*n_tps + ii;
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
@@ -549,13 +567,17 @@ void llama_memory_hybrid_idx::set_input_qsa(
                 float * cur_blk_bias = dst_bias + i*n_blocks;
 
                 for (int64_t b = 0; b < n_blocks; ++b) {
-                    if (b >= n_bid || !cells.seq_has((uint32_t) bid_cell[b], seq_id)) {
+                    // [TAG_QSA_BIASFIX] the entry that describes block b (not entry b)
+                    const int32_t t = blk_entry[b];
+
+                    if (t < 0) {
+                        // no complete group of ours at this block: invisible, as before
                         cur_blk_bias[b] = -INFINITY;
                         continue;
                     }
 
                     // finite, so it can never meet a -inf and produce a nan
-                    cur_blk_bias[b] = bid_idx[b] >= tail_start ? 1e9f : 0.0f;
+                    cur_blk_bias[b] = bid_idx[t] >= tail_start ? 1e9f : 0.0f;
                 }
 
                 // the spare block holds the unpooled cells, which are the incomplete tail, so
