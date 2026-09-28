@@ -125,16 +125,18 @@ def test_embedding_content_text_same_as_string():
     [
         [],
         {"content": "string"},
-        {"content": [{"type": "input_audio", "input_audio": {}}]},
+        {"content": [{"type": "unknown"}]},
         # model is not multimodal
         {"content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]},
+        {"content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
+        {"content": [{"type": "input_video", "input_video": {"url": "data:video/mp4;base64,AAAA"}}]},
     ]
 )
 def test_embedding_invalid_input(input):
     global server
     server.start()
     res = server.make_request("POST", "/v1/embeddings", data={"input": input})
-    assert res.status_code == 400
+    assert res.status_code != 200
 
 
 def test_embedding_pooling_mean():

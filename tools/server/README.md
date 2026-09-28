@@ -1512,6 +1512,7 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
 For multimodal models (loaded with `--mmproj`), each element of `input` can also be an object with a `content` array, using the same parts as `/v1/chat/completions`:
 - `{ "type": "text", "text": "..." }`: text is added to the prompt as-is
 - `{ "type": "image_url", "image_url": { "url": "..." } }`: remote URL, base64 data URI, or local file (`file://`, requires `--media-path`)
+- `{ "type": "input_audio", "input_audio": { "data": "..." } }` and `{ "type": "input_video", "input_video": { "url": "..." } }`: same as `/v1/chat/completions`, requires a model with audio or video support
 
 Each object gives one embedding. This input shape is not part of the OpenAI Embeddings API; it follows the shape used by providers like OpenRouter for vision embedding models.
 

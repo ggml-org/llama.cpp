@@ -309,16 +309,6 @@ server_tokens tokenize_input_subprompt(
                                         bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
 
-// tokenize an OAI content array: [ { "type": "text", ... }, { "type": "image_url", ... } ]
-server_tokens tokenize_oai_content_array(
-                                        const llama_vocab * vocab,
-                                        mtmd_context * mctx,
-                                        const std::string & media_path,
-                                        const json & content,
-                                        bool add_special,
-                                        bool parse_special,
-                                        const mtmd_helper_init_opt & init_opt);
-
 //
 // OAI utils
 //
@@ -348,6 +338,16 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(

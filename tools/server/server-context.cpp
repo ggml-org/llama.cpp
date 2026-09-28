@@ -5437,10 +5437,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    // same shapes as tokenize_input_prompts(), plus OAI content: { "content": [ { "type": "text"|"image_url", ... } ] }
+    // same shapes as tokenize_input_prompts(), plus OAI content: { "content": [ { "type": "text"|"image_url"|"input_audio"|"input_video", ... } ] }
     auto tokenize_entry = [&](const json & p) {
         if (p.is_object() && p.contains("content")) {
-            return tokenize_oai_content_array(ctx_server.vocab, ctx_server.mctx, meta->chat_params.media_path, p.at("content"), true, true, ctx_server.init_opt);
+            return tokenize_oai_content_array(ctx_server.vocab, ctx_server.mctx, meta->chat_params, p.at("content"), true, true, ctx_server.init_opt);
         }
         return tokenize_input_subprompt(ctx_server.vocab, ctx_server.mctx, p, true, true, ctx_server.init_opt);
     };
