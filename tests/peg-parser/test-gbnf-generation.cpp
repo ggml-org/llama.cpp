@@ -212,9 +212,9 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("until grammar with content", [](testing &t) {
+    t.test("through grammar", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.until("</tag>"), "</tag>");
+            return p.through(p.until("</tag>"), "</tag>");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -234,9 +234,9 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("until grammar with content terminates at first delimiter", [](testing &t) {
+    t.test("through grammar terminates at first delimiter", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.until("\n</parameter>\n"), "\n</parameter>\n");
+            return p.through(p.until("\n</parameter>\n"), "\n</parameter>\n");
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -264,9 +264,9 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("until grammar with content multiple delimiters", [](testing &t) {
+    t.test("through grammar multiple delimiters", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.eps(), { { p.literal("ab") }, { p.literal("cd") }, { p.literal("ef") } });
+            return p.through(p.eps(), { { p.literal("ab") }, { p.literal("cd") }, { p.literal("ef") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -348,11 +348,11 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("space_rejected", true, threw);
     });
 
-    t.test("until branches reject a shared delimiter", [](testing &t) {
+    t.test("through branches reject a shared delimiter", [](testing &t) {
         bool threw = false;
         try {
             build_peg_parser([](common_peg_parser_builder & p)  {
-                return p.until(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("ab"), p.literal("y") } });
+                return p.through(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("ab"), p.literal("y") } });
             });
         } catch (const std::invalid_argument &) {
             threw = true;
@@ -360,9 +360,9 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("duplicate_rejected", true, threw);
     });
 
-    t.test("until grammar branches continue with their rest", [](testing &t) {
+    t.test("through grammar branches continue with their rest", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
+            return p.through(p.eps(), { { p.literal("ab"), p.literal("x") }, { p.literal("cd") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -380,9 +380,9 @@ void test_gbnf_generation(testing &t) {
         )""", gbnf);
     });
 
-    t.test("until grammar optional may end before a delimiter", [](testing &t) {
+    t.test("through grammar optional may end before a delimiter", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.eps(), { { p.literal("ab"), p.literal("x") } }, true);
+            return p.through(p.eps(), { { p.literal("ab"), p.literal("x") } }, true);
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -525,9 +525,9 @@ void test_gbnf_generation(testing &t) {
         t.assert_equal("duplicate_rejected", true, threw);
     });
 
-    t.test("until grammar suffix delimiter offers both rests", [](testing &t) {
+    t.test("through grammar suffix delimiter offers both rests", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
+            return p.through(p.eps(), { { p.literal("xab"), p.literal("1") }, { p.literal("ab"), p.literal("2") } });
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {

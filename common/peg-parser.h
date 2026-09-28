@@ -528,10 +528,10 @@ class common_peg_parser_builder {
     // the branch has no rest. With optional the parse and the grammar may also end before any delimiter completes.
     // No two branches may share a delimiter.
     //   S -> C (D1 R1 | D2 R2 | ...)
-    common_peg_parser until(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
-    common_peg_parser until(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return until(content, std::vector<common_peg_until_branch>(branches), optional); }
-    common_peg_parser until(const common_peg_parser & content, const common_peg_parser & delimiter) { return until(content, { { delimiter } }); }
-    common_peg_parser until(const common_peg_parser & content, const std::string & delimiter) { return until(content, literal(delimiter)); }
+    common_peg_parser through(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
+    common_peg_parser through(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return through(content, std::vector<common_peg_until_branch>(branches), optional); }
+    common_peg_parser through(const common_peg_parser & content, const common_peg_parser & delimiter) { return through(content, { { delimiter } }); }
+    common_peg_parser through(const common_peg_parser & content, const std::string & delimiter) { return through(content, literal(delimiter)); }
 
     // Matches between min and max repetitions of a parser (inclusive).
     //   S -> A{m,n}

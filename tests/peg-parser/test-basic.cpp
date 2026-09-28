@@ -367,9 +367,9 @@ void test_basic(testing & t) {
     });
 
 
-    t.test("until with content", [](testing & t) {
+    t.test("through", [](testing & t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-            return p.until(p.tag("body", p.until_one_of({ "</a>", "</b>" })), { { p.literal("</a>"), p.literal("x") }, { p.literal("</b>") } }, true);
+            return p.through(p.tag("body", p.until_one_of({ "</a>", "</b>" })), { { p.literal("</a>"), p.literal("x") }, { p.literal("</b>") } }, true);
         });
 
         t.test("consumes the delimiter and its rest", [&](testing & t) {
@@ -402,7 +402,7 @@ void test_basic(testing & t) {
 
         t.test("fails when content stops off a delimiter", [&](testing & t) {
             auto parser = build_peg_parser([](common_peg_parser_builder & p) {
-                return p.until(p.literal("he"), "</a>");
+                return p.through(p.literal("he"), "</a>");
             });
             auto ctx    = common_peg_parse_context("hello</a>");
             auto result = parser.parse(ctx);

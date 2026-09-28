@@ -79,7 +79,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto arg_close  = p.tool_arg_close(p.literal("\n</parameter>\n"));
             auto arg_string = p.rule("xml-arg-string",
-                p.until(p.tool_arg_string_value(p.until("\n</parameter>\n")), arg_close));
+                p.through(p.tool_arg_string_value(p.until("\n</parameter>\n")), arg_close));
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
 

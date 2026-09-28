@@ -1307,9 +1307,9 @@ common_peg_parser common_peg_parser_builder::until(const common_peg_parser & del
     return add(std::move(p));
 }
 
-common_peg_parser common_peg_parser_builder::until(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional) {
+common_peg_parser common_peg_parser_builder::through(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional) {
     if (branches.empty()) {
-        throw std::runtime_error("until with content requires at least one branch");
+        throw std::runtime_error("through requires at least one branch");
     }
     common_peg_until_parser p;
     p.branches = branches;
