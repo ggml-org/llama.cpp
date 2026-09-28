@@ -16,6 +16,9 @@ export const DB_APP_NAME_DEPRECATED = 'LlamacppWebui';
 
 export const ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.alwaysAllowedTools`;
 
+/** Id of the backend the selector and new requests target, restored on page load. */
+export const ACTIVE_BACKEND_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.activeBackend`;
+
 /** Paused model download ids (`<repo>:<tag>`), restored on the next page load. */
 export const PAUSED_MODEL_DOWNLOADS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.pausedModelDownloads`;
 export const CONFIG_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.config`;
@@ -30,6 +33,12 @@ export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteMod
 
 /** Open state the user set for a model list section or one of its families, by id. */
 export const MODEL_GROUP_OPEN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelGroupOpen`;
+
+/** Per-model load and inference overrides, keyed by backend-qualified model id. */
+export const MODEL_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelOverrides`;
+
+/** Model the user picked last, kept across reloads. Stores `{ id, model }`. */
+export const SELECTED_MODEL_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.selectedModel`;
 
 /** Recently used model ids, most recent first, backend-qualified. */
 export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`;
