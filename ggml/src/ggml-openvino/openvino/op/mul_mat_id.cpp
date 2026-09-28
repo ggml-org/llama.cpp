@@ -155,6 +155,11 @@ OutputVector translate_mul_mat_id(const NodeContext & context) {
 
     auto expert_weights = process_view_input_new(context, 0);
     auto activations = process_view_input_new(context, 1);
+    // NOTE: ggml lets an id of -1 mark a skipped slot (dst row zeroed, see ggml_mul_mat_id in ggml.h).
+    // The Gather / GatherMatmul lowering below reads ids verbatim, and OpenVINO treats a negative
+    // index as counting from the end, so a -1 id would silently select the last expert instead of
+    // producing a zero row. No model in this tree emits -1 ids today; this backend does not
+    // implement the skip semantics (same gap as upstream PR #26631).
     auto ids = process_view_input_new(context, 2);
 
     if (expert_weights.get_element_type() == ov::element::u8 && expert_weights.get_partial_shape().rank().is_static() &&

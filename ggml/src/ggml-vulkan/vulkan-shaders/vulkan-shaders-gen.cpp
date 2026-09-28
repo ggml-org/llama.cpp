@@ -360,7 +360,8 @@ void string_to_spv_func(std::string name, std::string in_path, std::string out_p
     // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
     // disable spirv-opt for rope shaders for https://github.com/ggml-org/llama.cpp/issues/16860
     // disable spirv-opt for dot2 shaders (spirv-opt doesn't recognize SPV_VALVE_mixed_float_dot_product capability)
-    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos) {
+    // disable spirv-opt for OCP FP4 shaders (shaderc 2026.3 spirv-opt fails with "Invalid capability operand: 4229")
+    if (!coopmat && name.find("bf16") == std::string::npos && name.find("rope") == std::string::npos && name.find("_dot2") == std::string::npos && name.find("_ocp") == std::string::npos) {
         cmd.push_back("-O");
     }
 

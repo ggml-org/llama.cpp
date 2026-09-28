@@ -2006,13 +2006,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
                         ggml_backend_synchronize(ids_backend);
 
-                        // find the used experts
+                        // find the used experts; an id of -1 marks a skipped slot (see ggml_mul_mat_id)
                         used_ids.clear();
                         used_ids.resize(ggml_bitset_size(n_expert));
                         for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
                             for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
                                 int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
-                                GGML_ASSERT(id >= 0 && id < n_expert);
+                                GGML_ASSERT(id >= -1 && id < n_expert);
+                                if (id == -1) {
+                                    continue;
+                                }
                                 ggml_bitset_set(used_ids.data(), id);
                             }
                         }
@@ -2035,9 +2038,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             expert_size_copy + padding_end);
                     };
 
+                    // every slot skipped: no expert is read, nothing to copy
                     int id = 0;
-                    while (!ggml_bitset_get(used_ids.data(), id)) {
+                    while (id < n_expert && !ggml_bitset_get(used_ids.data(), id)) {
                         id++;
+                    }
+                    if (id == n_expert) {
+                        continue;
                     }
                     int32_t first_id = id;
                     int32_t last_id = first_id;

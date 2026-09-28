@@ -1198,6 +1198,8 @@ int32_t llama_batch_ext_add_token(llama_batch_ext * batch, llama_seq_id seq_id, 
         return idx;
     }
     if (!batch->set_token_id(idx, id)) {
+        // roll the entry back: a row without an id would fail the content-type check at decode
+        llama_batch_ext_remove_last(batch);
         return -2;
     }
     return idx;
@@ -1209,9 +1211,36 @@ int32_t llama_batch_ext_add_embd(llama_batch_ext * batch, llama_seq_id seq_id, l
         return idx;
     }
     if (!batch->set_token_embd(idx, embd)) {
+        // roll the entry back, see llama_batch_ext_add_token
+        llama_batch_ext_remove_last(batch);
         return -2;
     }
     return idx;
+}
+
+bool llama_batch_ext_remove_last(llama_batch_ext * batch) {
+    if (batch->tokens.empty()) {
+        return false;
+    }
+    const auto & t = batch->tokens.back();
+    if (t.has_embd) {
+        // rows are appended in set_token_embd() call order, not entry order, so the removed row can
+        // sit anywhere in embd: erase exactly that row and move the rows stored after it down
+        const size_t off = t.embd_off;
+        const size_t len = batch->n_embd;
+        batch->embd.erase(batch->embd.begin() + off, batch->embd.begin() + off + len);
+        for (size_t i = 0; i + 1 < batch->tokens.size(); ++i) {
+            auto & other = batch->tokens[i];
+            if (other.has_embd && other.embd_off > off) {
+                other.embd_off -= len;
+            }
+        }
+        if (batch->embd.empty()) {
+            batch->n_embd = 0;
+        }
+    }
+    batch->tokens.pop_back();
+    return true;
 }
 
 bool llama_batch_ext_add_seq(llama_batch_ext * batch, int32_t idx, llama_seq_id seq_id) {

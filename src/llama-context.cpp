@@ -5098,6 +5098,11 @@ void llama_opt_epoch(struct llama_context *  ctx,
 }
 
 int32_t llama_process(llama_context * ctx, llama_process_type type, llama_batch_ext * batch) {
+    if (batch == nullptr) {
+        // e.g. a render() that could not fit its rows into the context batch
+        LLAMA_LOG_ERROR("%s: no batch to process\n", __func__);
+        return -1;
+    }
     switch (type) {
         case LLAMA_PROCESS_TYPE_ENCODE: return ctx->encode(*batch);
         case LLAMA_PROCESS_TYPE_DECODE: return ctx->decode(*batch);

@@ -217,6 +217,9 @@ struct vk_op_count_experts_push_constants {
     uint32_t hoist_row_ids;
     uint32_t ne00mp;
     uint32_t ne00L;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 };
 
 struct vk_op_glu_push_constants {

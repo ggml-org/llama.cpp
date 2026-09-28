@@ -1071,6 +1071,10 @@ extern "C" {
     LLAMA_API int32_t llama_batch_ext_add_token(struct llama_batch_ext * batch, llama_seq_id seq_id, llama_token id);
     LLAMA_API int32_t llama_batch_ext_add_embd (struct llama_batch_ext * batch, llama_seq_id seq_id, struct llama_embd embd);
 
+    // remove the last entry and its embedding row, e.g. to roll back an add whose follow-up call failed
+    // returns false if the batch is empty
+    LLAMA_API bool llama_batch_ext_remove_last(struct llama_batch_ext * batch);
+
     // Add the token at index idx in the batch to another sequence id. The position will stays the same.
     // Note: this should be called before other _set() functions
     LLAMA_API bool llama_batch_ext_add_seq(

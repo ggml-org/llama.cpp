@@ -52,6 +52,11 @@ OutputVector translate_add_id(const NodeContext & context) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);
     }
 
+    // NOTE: ggml lets an id of -1 mark a skipped slot (the row passes through unchanged, see
+    // ggml_add_id in ggml.h). Gather reads ids verbatim and OpenVINO treats a negative index as
+    // counting from the end, so a -1 id would add the last bias row instead of nothing. No model
+    // in this tree emits -1 ids today; this backend does not implement the skip semantics (same
+    // gap as its MUL_MAT_ID converter and as upstream PR #26631).
     auto gather_axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
     ov::Output<ov::Node> selected_bias = std::make_shared<ov::op::v8::Gather>(bias, ids, gather_axis);
     selected_bias = std::make_shared<ov::op::v1::Reshape>(

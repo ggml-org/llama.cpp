@@ -1042,6 +1042,50 @@ static void test_mtp_embd_width(testing & t) {
     });
 }
 
+// embedding rows are stored in set_token_embd() call order; removing the last entry must drop only
+// its own row and keep the other entries' rows reachable
+static void test_remove_last(testing & t) {
+    t.test("out_of_order_embd", [&](testing & t) {
+        batch_builder bb(2);
+        auto & b = bb.b;
+
+        const int32_t i0 = b.add_token(0);
+        const int32_t i1 = b.add_token(0);
+        t.assert_true("two entries", i0 == 0 && i1 == 1);
+
+        const auto r0 = bb.row(0, 2);
+        const auto r1 = bb.row(1, 2);
+        t.assert_true("set entry 1 first", b.set_token_embd(i1, { r1.data(), 1, 2 }));
+        t.assert_true("set entry 0 second", b.set_token_embd(i0, { r0.data(), 1, 2 }));
+
+        t.assert_true("remove entry 1", llama_batch_ext_remove_last(&b));
+        t.assert_equal("one entry left", (size_t) 1, b.tokens.size());
+        t.assert_equal("one row left", (size_t) 2, b.embd.size());
+        t.assert_true("entry 0 keeps its row", b.tokens[0].has_embd);
+        t.assert_equal("entry 0 row moved to the front", (size_t) 0, b.tokens[0].embd_off);
+        t.assert_equal("entry 0 value 0", r0[0], b.embd[b.tokens[0].embd_off + 0]);
+        t.assert_equal("entry 0 value 1", r0[1], b.embd[b.tokens[0].embd_off + 1]);
+        t.assert_equal("width kept", (size_t) 2, b.n_embd);
+
+        t.assert_true("remove entry 0", llama_batch_ext_remove_last(&b));
+        t.assert_true("empty", b.tokens.empty() && b.embd.empty());
+        t.assert_equal("width reset", (size_t) 0, b.n_embd);
+        t.assert_true("nothing left to remove", !llama_batch_ext_remove_last(&b));
+    });
+
+    t.test("in_order_embd", [&](testing & t) {
+        batch_builder bb(2);
+        const llama_pos p0[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
+        const llama_pos p1[GGML_MROPE_SECTIONS] = { 1, 0, 0, 0 };
+        bb.add_embd(p0, { 0 }, false);
+        bb.add_embd(p1, { 0 }, true);
+
+        t.assert_true("remove entry 1", llama_batch_ext_remove_last(&bb.b));
+        t.assert_equal("one row left", (size_t) 2, bb.b.embd.size());
+        t.assert_equal("entry 0 value 0", bb.row(0, 2)[0], bb.b.embd[bb.b.tokens[0].embd_off]);
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -1064,6 +1108,7 @@ int main(int argc, char ** argv) {
     t.test("keep_tail",      test_keep_tail);
     t.test("mrope",          test_mrope);
     t.test("mtp_embd_width", test_mtp_embd_width);
+    t.test("remove_last",    test_remove_last);
 
     return t.summary();
 }

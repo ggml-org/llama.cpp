@@ -27,14 +27,22 @@ void main() {
     const uint i1 = gl_WorkGroupID.x;
     const uint i2 = gl_WorkGroupID.y;
 
-    const uint i11 = data_c[i1 + i2 * p.s21];
+    const int i11 = data_c[i1 + i2 * p.s21];
 
     const uint s1 = p.ne0;
     const uint s2 = p.ne0 * p.ne1;
 
     const uint d0 = i1 * s1 + i2 * s2;
     const uint a0 = i1 * p.s01 + i2 * p.s02;
-    const uint b0 = i11 * p.s11;
+
+    if (i11 == -1) { // skipped slot, add nothing
+        for (uint i0 = gl_LocalInvocationID.x; i0 < p.ne0; i0 += BLOCK_SIZE) {
+            data_d[d0 + i0] = data_a[a0 + i0];
+        }
+        return;
+    }
+
+    const uint b0 = uint(i11) * p.s11;
 
     for (uint i0 = gl_LocalInvocationID.x; i0 < p.ne0; i0 += BLOCK_SIZE) {
         data_d[d0 + i0] = data_a[a0 + i0] + data_b[b0 + i0];
