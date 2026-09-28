@@ -80,7 +80,7 @@
 	});
 </script>
 
-<header class="space-y-3 px-4 pt-4">
+<header class="space-y-3 pt-4 pl-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<ModelAvatar {option} showBaseModelAvatar size="size-12" />
