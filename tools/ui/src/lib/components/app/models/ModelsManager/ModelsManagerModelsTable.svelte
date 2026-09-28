@@ -93,7 +93,7 @@
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
 	/** Sections that list their models straight, without folding them into families. */
-	const FLAT_SECTIONS = new Set<ModelsTableGroupKind>([
+	const FLAT_SECTIONS = new Set<ModelsTableGroup['kind']>([
 		ModelsTableGroupKind.DOWNLOADING,
 		ModelsTableGroupKind.FAVORITES,
 		ModelsTableGroupKind.LOADED

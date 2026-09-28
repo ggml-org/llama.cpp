@@ -109,6 +109,7 @@
 		parsed.sidecar ||
 			uniqueDraftKinds.length > 0 ||
 			uniqueDraftSidecars.length > 0 ||
+			uniqueDraftKinds.length > 0 ||
 			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
 			primaryAlias ||
