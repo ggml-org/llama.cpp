@@ -55,7 +55,7 @@ The tuner emits whatever token the runtime reports for the machine, so an unregi
 
 Build on the target machine (same targets as above).
 
-Sweep the grid (4 dtypes x a shape-zoo of real weight shapes x a token ladder; about an hour):
+Sweep the grid (26 dtypes x a shape-zoo of real weight shapes x a token ladder; around 20 hours on an M4 Max):
 
 ```bash
 ./build/bin/ggml-metal-tuning mul-mm > mm_rows.txt 2> mm_sweep.log
@@ -67,6 +67,10 @@ The min-max-regret target, the aggregate benefit gate, the real-token floor and 
 Post both: the log is what makes the rows reviewable.
 
 Long sweeps can be split with `--dtype q4_0,f16`; the rows for one dtype do not depend on the others.
+Splitting is the normal way to run the full list, and one shard per dtype is the safest granularity: rows are printed when the process exits, so a shard that is killed part-way leaves nothing behind.
+A single-dtype shard runs anywhere from 15 minutes to three and a half hours, depending on how expensive that type is to dequantize.
+Concatenate the shard outputs in any order; each row carries its own dtype.
+Nothing else may run on the GPU during a shard, including another shard.
 
 Then validate the numerics, where Metal is compared against the CPU reference:
 
@@ -74,7 +78,7 @@ Then validate the numerics, where Metal is compared against the CPU reference:
 ./build/bin/test-backend-ops test -o MUL_MAT -b MTL0
 ```
 
-This forces every instantiated tile geometry (and the baseline) across the tile dtypes and runs the pick-lattice self-test.
+This forces every instantiated tile geometry (and the baseline) across every src0 type the kernel is instantiated for, and runs the pick-lattice self-test.
 The tuner itself does no numerical checks.
 
 Only the exact device is tuned: rows are keyed to the machine that swept them, and any other device (including a sibling SKU of the same GPU family) falls through to the baseline tile, byte-for-byte identical to upstream.

@@ -6,6 +6,7 @@
 #include "ggml.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -46,6 +47,16 @@ static mm_procs mm_resolve_procs(ggml_backend_dev_t dev) {
     p.dev_token  = (device_token_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_device_token");
 
     return p;
+}
+
+// "q4_K" -> "GGML_TYPE_Q4_K". The emitted rows are C++ source and need the enum spelling,
+// not the display name; deriving it keeps a newly swept type from carrying a stale token.
+static std::string mm_dtype_token(ggml_type dt) {
+    std::string s = "GGML_TYPE_";
+    for (const char * p = ggml_type_name(dt); *p; ++p) {
+        s += (char) toupper((unsigned char) *p);
+    }
+    return s;
 }
 
 static bool mm_filter_has(const char * filter, const char * name) {
@@ -186,34 +197,50 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
         return ((N0 + 63) / 64) * ((tokens + 31) / 32);
     };
 
-    // candidates = the instantiated tile family + the baseline anchor (read from the runtime
-    // header, so the sweep can never drift from what the kernel actually instantiates).
+    // candidates = the sweep-budget geometry list + the baseline anchor (read from the
+    // runtime header, so the sweep can never drift from what the runtime can serve).
     struct mm_cand { int nr0, nr1; };
     std::vector<mm_cand> cands;
-    for (const auto & f : ggml_metal_tuning::MM_TILE_FAMILY) {
+    for (const auto & f : ggml_metal_tuning::MM_TILE_SWEEP_CANDIDATES) {
         cands.push_back({ f.nr0, f.nr1 });
     }
     const int base_i = (int) cands.size();
     cands.push_back({ ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr0, ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1 });
 
-    // dtype spellings for the emitted rows; must match MM_TILE_DTYPES in ggml-metal-tuning.h.
-    struct dtype_t { ggml_type type; const char * token; };
-    const dtype_t dtypes[] = {
-        { GGML_TYPE_Q4_0, "GGML_TYPE_Q4_0" },
-        { GGML_TYPE_Q8_0, "GGML_TYPE_Q8_0" },
-        { GGML_TYPE_Q4_K, "GGML_TYPE_Q4_K" },
-        { GGML_TYPE_F16,  "GGML_TYPE_F16"  },
+    // Every src0 type the Metal mul_mm kernel is instantiated for. All of them are
+    // tile-eligible, so all of them are swept; --dtype narrows this for a split run.
+    const ggml_type dtypes[] = {
+        GGML_TYPE_F32,     GGML_TYPE_F16,     GGML_TYPE_BF16,
+        GGML_TYPE_Q1_0,    GGML_TYPE_Q2_0,    GGML_TYPE_Q4_0,   GGML_TYPE_Q4_1,
+        GGML_TYPE_Q5_0,    GGML_TYPE_Q5_1,    GGML_TYPE_Q8_0,   GGML_TYPE_MXFP4,
+        GGML_TYPE_Q2_K,    GGML_TYPE_Q3_K,    GGML_TYPE_Q4_K,   GGML_TYPE_Q5_K,
+        GGML_TYPE_Q6_K,    GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_IQ3_S,   GGML_TYPE_IQ2_S,   GGML_TYPE_IQ1_S,  GGML_TYPE_IQ1_M,
+        GGML_TYPE_IQ4_NL,  GGML_TYPE_IQ4_XS,  GGML_TYPE_TQ2_0,
     };
 
-    // Upstream routes ne11 in [2,8] to mul_mv_ext (K-series: [4,8]), above that to mm. The
-    // sweep forces the mm path (set_sw(1)) to time the tile at t<=8 and forces the upstream
-    // bound (set_sw(8)) to time mv_ext. mv_ext is a routing rival, not a tile, so it stays out
-    // of the tile group_split and only feeds the switch-point analysis.
-    auto mv_ext_applies = [](ggml_type dt, int t) {
+    // mul_mv_ext is a routing rival, not a tile: it stays out of the tile group_split and
+    // only feeds the switch-point analysis. The sweep forces the mm path (set_sw(1)) to time
+    // the tile at t<=8, and forces the upstream bound (set_sw(8)) to time mv_ext.
+    // Mirror of the dispatch condition in ggml-metal-ops.cpp: only these src0 types have an
+    // mv_ext kernel, and the K-series one needs ne11 >= 4. A type absent from both lists has
+    // no mv_ext rival to measure, so it gets no switch row and keeps the upstream dispatch.
+    auto mv_ext_k_series = [](ggml_type dt) {
+        return dt == GGML_TYPE_Q2_K || dt == GGML_TYPE_Q3_K || dt == GGML_TYPE_Q4_K ||
+               dt == GGML_TYPE_Q5_K || dt == GGML_TYPE_Q6_K;
+    };
+    auto mv_ext_applies = [&](ggml_type dt, int t) {
         if (t < 2 || t > 8) { return false; }
-        const bool k_series = (dt == GGML_TYPE_Q4_K || dt == GGML_TYPE_Q5_K ||
-                               dt == GGML_TYPE_Q6_K || dt == GGML_TYPE_Q2_K || dt == GGML_TYPE_Q3_K);
-        return k_series ? (t >= 4) : true;
+        if (mv_ext_k_series(dt)) { return t >= 4; }
+        switch (dt) {
+            case GGML_TYPE_F32:  case GGML_TYPE_F16:  case GGML_TYPE_BF16:
+            case GGML_TYPE_Q1_0: case GGML_TYPE_Q2_0: case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
+            case GGML_TYPE_Q8_0: case GGML_TYPE_MXFP4: case GGML_TYPE_IQ4_NL:
+                return true;
+            default:
+                return false;
+        }
     };
 
     const cooldown_opts cool = {
@@ -233,11 +260,11 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
     std::vector<std::string> switch_rows;
     char rbuf[256];
 
-    for (const auto & dtype : dtypes) {
-        const ggml_type dt = dtype.type;
+    for (const ggml_type dt : dtypes) {
         if (!mm_filter_has(opts.dtype_filter, ggml_type_name(dt))) {
             continue;
         }
+        const std::string dtype_token = mm_dtype_token(dt);
 
         fprintf(stderr, "\n### dtype=%s\n", ggml_type_name(dt));
 
@@ -450,7 +477,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 sanity_row(all_bp, bestD, "L2");
                 snprintf(rbuf, sizeof(rbuf),
                     "    { { %s, %s, -1, %d, {0,0,0,0} }, { %d, %d } },",
-                    dev_token, dtype.token, tb, cands[bestD].nr0, cands[bestD].nr1);
+                    dev_token, dtype_token.c_str(), tb, cands[bestD].nr0, cands[bestD].nr1);
                 dtype_tile_rows.emplace_back(rbuf);
             }
             if (tb == 0) { tok0_L2 = bestD; }
@@ -461,7 +488,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 if (tb == 0) { tok0_L1[b->bN0] = b->Ti; }
                 snprintf(rbuf, sizeof(rbuf),
                     "    { { %s, %s, %d, %d, {0,0,0,0} }, { %d, %d } },",
-                    dev_token, dtype.token, b->bN0, tb, cands[b->Ti].nr0, cands[b->Ti].nr1);
+                    dev_token, dtype_token.c_str(), b->bN0, tb, cands[b->Ti].nr0, cands[b->Ti].nr1);
                 dtype_tile_rows.emplace_back(rbuf);
             }
         }
@@ -507,14 +534,15 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                     if (it == safe.end()) { break; }  // gap in the ladder ends the run
                     if (it->second) { sw = t - 1; } else { break; }
                 }
-                const bool k_series = (dt == GGML_TYPE_Q4_K);
-                GGML_ASSERT(!k_series || sw >= 3);
+                // mv_ext starts at ne11 = 4 for the K-series, so a K-series switch point can
+                // never authorize routing t < 4 into mm: nothing measured that range.
+                GGML_ASSERT(!mv_ext_k_series(dt) || sw >= 3);
                 fprintf(stderr, " => ne11_mm_min=%d\n", sw);
                 if (sw < NE11_MM_MIN_DEFAULT) { sw_by_b[b] = sw; sw_rows_b.insert(b); }
             }
             for (int b : sw_rows_b) {
                 snprintf(rbuf, sizeof(rbuf), "    { %s, %s, %d, %d, {0,0,0,0} },",
-                         dev_token, dtype.token, b, sw_by_b[b]);
+                         dev_token, dtype_token.c_str(), b, sw_by_b[b]);
                 switch_rows.emplace_back(rbuf);
             }
         }

@@ -808,12 +808,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const bool   has_tensor = dev_props->has_tensor;
 
     // Pick (nr0, nr1) from the tuning table; falls back to (64,32) baseline.
-    // The tile kernel is only compiled for the non-tensor path, MM_TILE_DTYPES, and src1=f32.
-    bool tile_dtype = false;
-    for (ggml_type t : ggml_metal_tuning::MM_TILE_DTYPES) {
-        if (tsrc0 == t) { tile_dtype = true; break; }
-    }
-    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32 && tile_dtype;
+    // Non-baseline nr1 is instantiated for every src0 type on the non-tensor path, but only
+    // against src1 = f32: every mul_mat in a graph feeds f32 activations, so the f16 src1
+    // instantiations are not worth doubling the tile variants for.
+    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32;
 
     // pick returns a legal cfg: tuned-table rows are static_assert'd legal and the
     // baseline is legal. name/grid/smem are all derived from this one cfg, so they
@@ -839,19 +837,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    // baseline -> plain kernel_mul_mm; any other tile appends _tile_{nr0}x{nr1}.
-    char tile_suffix[16] = {0};
-    if (nr0 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr0 ||
-        nr1 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1) {
-        snprintf(tile_suffix, sizeof(tile_suffix), "_tile_%dx%d", nr0, nr1);
+    // nr1 is a template parameter, so it selects the base function: the bare name is the
+    // NR1 template default (= the baseline nr1), anything else gets _nr1_{nr1}. nr0 is a
+    // function constant, so it only enters the pipeline variant name.
+    char nr1_suffix[16] = {0};
+    if (nr1 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1) {
+        snprintf(nr1_suffix, sizeof(nr1_suffix), "_nr1_%d", nr1);
     }
-    snprintf(base, 256, "kernel_mul_mm%s_%s_%s", tile_suffix,
-             ggml_type_name(tsrc0), ggml_type_name(tsrc1));
-    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
-             base, bc_inp, bc_out, ne12, ne13, r2, r3);
+    snprintf(base, 256, "kernel_mul_mm_%s_%s%s",
+             ggml_type_name(tsrc0), ggml_type_name(tsrc1), nr1_suffix);
+    snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d_nr0=%d",
+             base, bc_inp, bc_out, ne12, ne13, r2, r3, nr0);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
+        // nr0 is no longer a template parameter, so this is what keeps an illegal geometry
+        // out of the kernel (it used to be a static_assert there).
+        GGML_ASSERT(ggml_metal_tuning::mm_tile_cfg_is_legal(nr0, nr1));
+
         ggml_metal_cv_t cv = ggml_metal_cv_init();
 
         ggml_metal_cv_set_bool(cv, bc_inp, FC_MUL_MM + 0);
@@ -860,6 +863,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         ggml_metal_cv_set_int16(cv, ne13,  FC_MUL_MM + 3);
         ggml_metal_cv_set_int16(cv, r2,    FC_MUL_MM + 4);
         ggml_metal_cv_set_int16(cv, r3,    FC_MUL_MM + 5);
+        ggml_metal_cv_set_int16(cv, (int16_t) nr0, FC_MUL_MM + 7);
 
         res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
 
@@ -876,7 +880,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     } else {
         res.nr0 = nr0;
         res.nr1 = nr1;
-        res.nsg = nr0 / 16;  // must match N_SG in kernel_mul_mm_tile
+        res.nsg = nr0 / 16;  // must match the thread count FC_mul_mm_nr0 implies in the kernel
 
         // smem = max(sa+sb, bc_out buffer): the writeback path reuses shmem as a
         // NR0 x NR1 float scratch, which can exceed the sa+sb load buffers for large tiles.

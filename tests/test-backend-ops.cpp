@@ -11931,6 +11931,41 @@ using set_mm_tile_override_t     = void (*)(int, int);
 using clear_mm_tile_override_t   = void (*)(void);
 using mm_tile_lattice_selftest_t = int  (*)(void);
 
+struct mm_tile_t { int nr0, nr1; };
+
+// Copy of mm_tile_cfg_is_legal (ggml/src/ggml-metal/ggml-metal-tuning.h); the test cannot
+// include a backend-internal header. If the two drift apart, a geometry the runtime can
+// serve silently loses its numerical coverage here, and one it cannot serve shows up as a
+// nil pipeline rather than a wrong result.
+static bool mm_tile_cfg_is_legal_ref(int nr0, int nr1) {
+    if (nr1 != 8 && nr1 != 16 && nr1 != 32) { return false; }
+    if (nr0 % 16 != 0)                      { return false; }
+
+    const int sg_n = (nr1 == 32) ? 2 : 1;
+    if ((nr0 / 16) % sg_n != 0)             { return false; }
+
+    const int sg_m = (nr0 / 16) / sg_n;
+    const int tn   = nr1 / (sg_n * 8);
+    if (sg_m < tn)                          { return false; }
+
+    return 32 * (nr0 / 16) <= 1024;
+}
+
+// nr1 is what picks the instantiation, so every instantiated nr1 has to appear. nr0 is a
+// function constant feeding address arithmetic only, so two values per nr1 are enough:
+// the nr0 = 2*nr1 legality edge and one step above it.
+static std::vector<mm_tile_t> mm_tile_legal_configs() {
+    std::vector<mm_tile_t> r;
+    for (int nr1 : { 8, 16, 32 }) {
+        for (int nr0 : { 32, 64 }) {
+            if (mm_tile_cfg_is_legal_ref(nr0, nr1)) {
+                r.push_back({ nr0, nr1 });
+            }
+        }
+    }
+    return r;
+}
+
 // Forces each instantiated tile geometry and checks Metal against the CPU reference,
 // then runs the pick-lattice self-test. The override is backend-global, so this runs
 // after all parallel workers have joined.
@@ -11948,17 +11983,23 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
         return true;  // not the Metal backend: nothing to force
     }
 
-    // Instantiated tile geometries + the baseline. Keep in sync with MM_TILE_FAMILY and
-    // MM_TILE_BASELINE_CFG in ggml-metal-tuning.h and the INST_MM_TILE list in mul_mm.metal:
-    // a geometry here without an instantiation resolves to a nil pipeline; one missing here
-    // ships without numerical coverage.
-    struct tile_t { int nr0, nr1; };
-    const tile_t    tiles[]  = { { 32, 8 }, { 32, 16 }, { 64, 8 }, { 64, 16 }, { 64, 32 } };
-    const ggml_type dtypes[] = { GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_F16 };
+    // Every src0 type the Metal backend instantiates mul_mm for. nr1 selects the
+    // instantiation, so a type missing here ships a tile without numerical coverage.
+    const ggml_type dtypes[] = {
+        GGML_TYPE_F32,     GGML_TYPE_F16,     GGML_TYPE_BF16,
+        GGML_TYPE_Q1_0,    GGML_TYPE_Q2_0,    GGML_TYPE_Q4_0,   GGML_TYPE_Q4_1,
+        GGML_TYPE_Q5_0,    GGML_TYPE_Q5_1,    GGML_TYPE_Q8_0,   GGML_TYPE_MXFP4,
+        GGML_TYPE_Q2_K,    GGML_TYPE_Q3_K,    GGML_TYPE_Q4_K,   GGML_TYPE_Q5_K,
+        GGML_TYPE_Q6_K,    GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_IQ3_S,   GGML_TYPE_IQ2_S,   GGML_TYPE_IQ1_S,  GGML_TYPE_IQ1_M,
+        GGML_TYPE_IQ4_NL,  GGML_TYPE_IQ4_XS,  GGML_TYPE_TQ2_0,
+    };
+
+    const auto tiles = mm_tile_legal_configs();
 
     const int64_t k = 4096;  // a valid block multiple for every dtype above
 
-    int n_run = 0, n_fail = 0;
+    int n_run = 0, n_fail = 0, n_unsup = 0;
     for (auto t : tiles) {
         for (ggml_type type_a : dtypes) {
             // n (tokens) > 8 routes to the mm branch; two shapes exercise the aligned path
@@ -11972,6 +12013,11 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
                 test_mul_mat tc(type_a, GGML_TYPE_F32, s.m, s.n, k, { 1, 1 }, { 1, 1 });
                 auto st = tc.eval(backend, backend_cpu, "MUL_MAT", nullptr);
                 clear_ov();
+
+                if (st == test_status_t::NOT_SUPPORTED) {
+                    n_unsup++;  // e.g. bf16 on a device without it
+                    continue;
+                }
 
                 if (st == test_status_t::FAIL) {
                     printf("  FAIL mul_mm tile slice: tile=%dx%d type=%s m=%lld n=%lld k=%lld\n",
@@ -11989,8 +12035,9 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
         printf("  FAIL mul_mm pick-lattice self-test: %d assertion(s)\n", selftest_fails);
     }
 
-    printf("  mul_mm tile slice: %d cases run, %d failed; pick-lattice self-test %s\n",
-           n_run, n_fail, selftest_fails == 0 ? "ok" : "FAILED");
+    // cases = legal tile geometries x src0 types x 2 shapes (aligned + bc_out writeback).
+    printf("  mul_mm tile slice: %d cases run, %d failed, %d unsupported; pick-lattice self-test %s\n",
+           n_run, n_fail, n_unsup, selftest_fails == 0 ? "ok" : "FAILED");
 
     return n_fail == 0 && selftest_fails == 0;
 }

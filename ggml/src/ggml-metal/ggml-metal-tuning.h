@@ -112,27 +112,40 @@ struct mm_tile_cfg_t {
     int16_t nr1;  //  8, 16, or  32
 };
 
-// Single source of truth for the instantiated tile variants in mul_mm.metal.
-// Three places must agree: this list, the INST_MM_TILE instantiations in
-// mul_mm.metal, and mm_tile_legal_configs in tests/test-backend-ops.cpp (which
-// drives the numerical gate). Tuned-table rows are static_assert'd to be a
-// family member or the baseline. 64x32 is NOT a family member; it is the
-// baseline, served by the bare kernel_mul_mm.
-// 128x16/128x32 were instantiated during tuning but no tuned row on any device
-// picked them (metallib/compile-time dead weight); re-add in all three places
-// when retuning a new device.
-constexpr mm_tile_cfg_t MM_TILE_FAMILY[] = {
+// Geometries the sweep times, against the baseline anchor below. This is a sweep-budget
+// list, NOT a legality constraint: mm_tile_cfg_is_legal defines what the kernel can serve,
+// and the two are deliberately separate. nr0 is a function constant and nr1 is instantiated
+// for 8/16/32, so a retune can add any legal geometry here - 128x16, 128x32, 96x8 - without
+// touching mul_mm.metal. What bounds this list is sweep time: every entry is timed at every
+// (dtype, shape, token) cell.
+constexpr mm_tile_cfg_t MM_TILE_SWEEP_CANDIDATES[] = {
     { 32, 8 }, { 32, 16 }, { 64, 8 }, { 64, 16 },
 };
 constexpr mm_tile_cfg_t MM_TILE_BASELINE_CFG = { 64, 32 };
 
-// Single source of truth for the tile-eligible src0 types: the tile kernel is only
-// instantiated for these (see INST_MM_TILE in mul_mm.metal), so a type missing here
-// can never reach a tile, and a type here without an instantiation would resolve to
-// a nil pipeline.
-constexpr ggml_type MM_TILE_DTYPES[] = {
-    GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_F16,
-};
+// Legality of a tile geometry, and the single source of truth for it. nr1 selects the
+// instantiation (INST_MM_NR1 in mul_mm.metal, plus the bare names for nr1 = 32); nr0 is a
+// function constant, so every nr0 that passes here is served by that same instantiation.
+// SG_N/TM/TN derive from nr1 alone; nr0 only sets the simdgroup count and the
+// shared-memory strides. sg_m >= tn is the "32*(nr0/16) threads must cover every B-tile
+// block" condition, i.e. nr0 >= 2*nr1. The host asserts this before specializing a
+// pipeline, so the kernel no longer has to static_assert it.
+constexpr bool mm_tile_cfg_is_legal(int nr0, int nr1) {
+    if (nr1 != 8 && nr1 != 16 && nr1 != 32) { return false; }
+    if (nr0 % 16 != 0)                      { return false; }
+
+    const int sg_n = (nr1 == 32) ? 2 : 1;
+    if ((nr0 / 16) % sg_n != 0)             { return false; }
+
+    const int sg_m = (nr0 / 16) / sg_n;
+    const int tn   = nr1 / (sg_n * 8);
+    if (sg_m < tn)                          { return false; }
+
+    return 32 * (nr0 / 16) <= 1024;         // threads per threadgroup
+}
+
+static_assert(mm_tile_cfg_is_legal(MM_TILE_BASELINE_CFG.nr0, MM_TILE_BASELINE_CFG.nr1),
+              "the baseline tile must be servable");
 
 // Occupancy-saturation threshold for the pick-time veto, measured in baseline
 // (64x32) threadgroup count: n_tg = ceil(N_out/64) * ceil(tokens/32). Once the

@@ -1282,18 +1282,10 @@ constexpr mm_tile_entry_t mm_tile_tuned_table[] = {
     { { GGML_METAL_DEVICE_M4_MAX, GGML_TYPE_F16, 1, 3, {0,0,0,0} }, { 64, 16 } },
 };
 
-// Compile-time: every tuned-table row must be a family member or the baseline.
-static constexpr bool mm_tile_cfg_in_family(int16_t nr0, int16_t nr1) {
-    if (nr0 == MM_TILE_BASELINE_CFG.nr0 && nr1 == MM_TILE_BASELINE_CFG.nr1) { return true; }
-    for (const auto & f : MM_TILE_FAMILY) {
-        if (f.nr0 == nr0 && f.nr1 == nr1) { return true; }
-    }
-    return false;
-}
-
+// Compile-time: every tuned-table row must be a geometry the kernel can serve.
 static constexpr bool mm_tile_table_all_legal() {
     for (const auto & e : mm_tile_tuned_table) {
-        if (!mm_tile_cfg_in_family(e.cfg.nr0, e.cfg.nr1)) { return false; }
+        if (!mm_tile_cfg_is_legal(e.cfg.nr0, e.cfg.nr1)) { return false; }
     }
     return true;
 }
