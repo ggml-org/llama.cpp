@@ -118,3 +118,16 @@ export { default as ModelId } from './ModelId.svelte';
  * styling stay consistent across every model-id surface.
  */
 export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
+/**
+ * **ModelId** - Parsed model identifier display
+ *
+ * Displays a model ID with optional org name, parameter badges, quantization,
+ * aliases, and tags. Supports raw mode to show the unprocessed model name.
+ * Respects the user's `showRawModelNames` setting.
+ */
+export { default as ModelCapabilities } from './ModelCapabilities.svelte';
+export { default as ModelContext } from './ModelContext.svelte';
+export { default as ModelAvatar } from './ModelAvatar.svelte';
+export { default as ModelLoadControl } from './ModelLoadControl.svelte';
+export { default as ModelRowActions } from './ModelRowActions.svelte';
+export { default as ModelsSection } from './ModelsSection.svelte';

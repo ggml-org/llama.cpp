@@ -18,6 +18,8 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
+	/** Context size reported by the provider's model listing, when it reports one. */
+	contextLength?: number;
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
@@ -63,4 +65,19 @@ export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
 	hasVideo: boolean;
+}
+
+/**
+ * A draft sidecar file a model listing reports as its own entry. The router lists a
+ * downloaded sidecar as a model, so this is what pairs it back with its model.
+ */
+export interface ModelSidecarFile {
+	id: string;
+	kind: ModelSidecar;
+	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
+	model: string;
+	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
+	params: string | null;
+	/** Quantization of the sidecar file, e.g. `Q4_0`. */
+	quant: string | null;
 }

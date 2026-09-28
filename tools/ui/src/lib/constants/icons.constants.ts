@@ -1,5 +1,5 @@
 /**
- * Icon mappings for file types and model modalities
+ * Icon mappings for file types, models and model modalities
  * Centralized configuration to ensure consistent icon usage across the app
  */
 
@@ -10,6 +10,7 @@ import {
 	Image as ImageIcon,
 	Lightbulb as ReasoningIcon,
 	Mic as AudioIcon,
+	Package as ModelIcon,
 	Video as VideoIcon,
 	Wrench as ToolUseIcon
 } from '@lucide/svelte';
@@ -26,6 +27,12 @@ export const FILE_TYPE_ICONS = {
 } as const;
 
 export const DEFAULT_FILE_ICON = FileIcon;
+
+/** The mark for a model, wherever one is listed. */
+export const MODEL_ICON = ModelIcon;
+
+/** Alias kept for the selector until it adopts MODEL_ICON. */
+export const MODEL_SELECTOR_ICON = ModelIcon;
 
 export const MODALITY_ICONS = {
 	[ModelModality.AUDIO]: AudioIcon,
