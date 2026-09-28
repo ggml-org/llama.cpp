@@ -112,25 +112,23 @@ static bool match_string(const std::string & input, llama_grammar * grammar) {
     for (const auto & in : parsed) {
         const bool allowed = mask_allows(grammar, in);
 
-        bool accepted = true;
+        // the mask decides what can be sampled, so it has to agree with what accepting the token does
         try {
             llama_grammar_accept_token(*grammar, in.token, in.piece);
         } catch (const std::runtime_error & /*e*/) {
-            accepted = false;
-        }
-        accepted = accepted && !stacks_cur.empty();
+            if (allowed) {
+                fprintf(stderr, "❌ (token %d \"%s\" is allowed by the mask but not accepted)\n", in.token, in.piece.c_str());
+            }
+            assert(!allowed);
 
-        // the mask decides what can be sampled, so it has to agree with what accepting the token does
-        if (allowed != accepted) {
-            fprintf(stderr, "❌ (token %d \"%s\" is %s by the mask but %s)\n", in.token, in.piece.c_str(),
-                    allowed ? "allowed" : "masked", accepted ? "accepted" : "not accepted");
-        }
-        assert(allowed == accepted);
-
-        if (!accepted) {
             // no stacks means that the grammar failed to match at this point
             return false;
         }
+
+        if (!allowed) {
+            fprintf(stderr, "❌ (token %d \"%s\" is masked but accepted)\n", in.token, in.piece.c_str());
+        }
+        assert(allowed);
     }
 
     for (const auto & stack : stacks_cur) {
