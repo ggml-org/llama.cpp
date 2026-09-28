@@ -1177,8 +1177,8 @@ static bool llama_grammar_reject_step(
         for (const uint32_t i : cur) {
             const auto & tok = candidates[i];
             if (depth > 0) {
-                // char rules consumed part of the token, so a token rule can only
-                // follow if the token ended cleanly
+                // char rules already consumed part of this token, so it cannot be matched by id;
+                // accept it only if they consumed all of it without ending in a partial sequence
                 if (tok.code_points[depth] != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(i);
                 }
