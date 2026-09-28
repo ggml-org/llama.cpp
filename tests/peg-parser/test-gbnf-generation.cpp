@@ -230,7 +230,6 @@ void test_gbnf_generation(testing &t) {
             until-3-03 ::= [<] until-3-01 | [a] until-3-04 | [^<a] until-3
             until-3-04 ::= [<] until-3-01 | [g] until-3-05 | [^<g] until-3
             until-3-05 ::= [>] | [<] until-3-01 | [^<>] until-3
-            
         )""", gbnf);
     });
 
@@ -260,7 +259,6 @@ void test_gbnf_generation(testing &t) {
             until-3-11 ::= [\n] until-3-01 | [r] until-3-12 | [^\nr] until-3
             until-3-12 ::= [\n] until-3-01 | [>] until-3-13 | [^\n>] until-3
             until-3-13 ::= [\n] | [^\n] until-3
-            
         )""", gbnf);
     });
 
@@ -280,7 +278,6 @@ void test_gbnf_generation(testing &t) {
             until-4-01 ::= [b] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^abce] until-4
             until-4-03 ::= [d] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^acde] until-4
             until-4-05 ::= [f] | [a] until-4-01 | [c] until-4-03 | [e] until-4-05 | [^acef] until-4
-            
         )""", gbnf);
     });
 
@@ -376,7 +373,6 @@ void test_gbnf_generation(testing &t) {
             until-4-01 ::= [b] until-4-rest-0 | [a] until-4-01 | [c] until-4-03 | [^abc] until-4
             until-4-03 ::= [d] | [a] until-4-01 | [c] until-4-03 | [^acd] until-4
             until-4-rest-0 ::= "x"
-            
         )""", gbnf);
     });
 
@@ -395,7 +391,6 @@ void test_gbnf_generation(testing &t) {
             until-3 ::= | [a] until-3-01 | [^a] until-3
             until-3-01 ::= | [b] until-3-rest-0 | [a] until-3-01 | [^ab] until-3
             until-3-rest-0 ::= "x"
-            
         )""", gbnf);
     });
 
@@ -543,7 +538,6 @@ void test_gbnf_generation(testing &t) {
             until-5-04 ::= [b] until-5-rest-1 | [x] until-5-01 | [a] until-5-04 | [^abx] until-5
             until-5-rest-0 ::= "1"
             until-5-rest-1 ::= "2"
-            
         )""", gbnf);
     });
 

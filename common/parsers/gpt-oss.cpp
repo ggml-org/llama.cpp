@@ -137,7 +137,7 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
                 return p.zero_or_more(start + any) + tool_call;
             }
 
-            return p.zero_or_more(start + any) + (tool_call | start + final_msg);
+            return p.zero_or_more(start + any) + (tool_call | (start + final_msg));
         }
 
         return p.zero_or_more(start + any) + start + (final_msg | unsolicited);
