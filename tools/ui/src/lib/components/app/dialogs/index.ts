@@ -19,7 +19,7 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ * **DialogMcpServers** - MCP servers dialog shown from the sidebar
  *
  * Shows the same MCP server list as the `/mcp-servers` route inside a modal
  * dialog.
@@ -106,6 +106,10 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * />
  * ```
  */
+/**
+ * **DialogManageModels** - shell for model management, still to be designed.
+ */
+export { default as DialogManageModels } from './DialogManageModels.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
@@ -450,7 +454,6 @@ export { default as DialogConversationSelection } from './DialogConversationSele
  * <DialogModelInformation bind:open={showModelInfo} />
  * ```
  */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
 
 /**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
@@ -537,38 +540,12 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
+
 /**
- * **DialogConfirmation** - Generic confirmation dialog
+ * **DialogModelsDiscover** - full-screen model discovery dialog.
  *
- * Reusable confirmation dialog with customizable title, description,
- * and action buttons. Supports destructive action styling and custom icons.
- * Used for delete confirmations, irreversible actions, and important decisions.
+ * Two-pane layout: searchable model list (Hugging Face + llama.app catalog)
+ * on the left, model details with download options on the right.
  *
- * **Architecture:**
- * - Uses ShadCN AlertDialog
- * - Supports variant styling (default, destructive)
- * - Customizable button labels and callbacks
- *
- * **Features:**
- * - Customizable title and description text
- * - Destructive variant with red styling for dangerous actions
- * - Custom icon support in header
- * - Cancel and confirm button callbacks
- * - Keyboard accessible (Escape to cancel, Enter to confirm)
- *
- * @example
- * ```svelte
- * <DialogConfirmation
- *   bind:open={showDelete}
- *   title="Delete conversation?"
- *   description="This action cannot be undone."
- *   variant="destructive"
- *   onConfirm={handleDelete}
- *   onCancel={() => showDelete = false}
- * />
- * ```
+ * @see ModelsDiscover in $lib/components/app/models/discover
  */
-/**
- * **DialogManageModels** - shell for model management, still to be designed.
- */
-export { default as DialogManageModels } from './DialogManageModels.svelte';
