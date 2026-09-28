@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eject, Power, SquarePen, X } from '@lucide/svelte';
+	import { Eject, Power, Server, SquarePen, X } from '@lucide/svelte';
 	import { Logo, ModelAvatar, ModelId } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { Badge } from '$lib/components/ui/badge';
@@ -62,7 +62,7 @@
 	});
 </script>
 
-<header class="space-y-3 pt-4 pl-4">
+<header class="space-y-2.5 pt-3 pl-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<ModelAvatar {option} showBaseModelAvatar size="size-12" />
@@ -85,31 +85,37 @@
 					{/if}
 				</div>
 
-				<!-- one line: what state it is in, what it speaks, and who serves it -->
-				<p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-					<span class="flex items-center gap-1.5">
+				<!-- one line, one voice: state, protocol, owner -->
+				<p class="mt-1 flex items-center gap-x-2 text-xs text-muted-foreground">
+					<span class="flex shrink-0 items-center gap-1.5">
 						<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
 
 						{statusLabel}
 					</span>
 
-					<Badge class="h-5 shrink-0 px-1.5 text-[10px]" title={compatTitle} variant="secondary">
+					<!-- each separator travels with its own item, so none is left dangling -->
+					<span class="flex shrink-0 items-center gap-1.5" title={compatTitle}>
+						<span aria-hidden="true" class="text-muted-foreground/40">&#183;</span>
+
 						{compatLabel}
-					</Badge>
+					</span>
 
 					{#if backend && backendName}
-						<span class="flex items-center gap-1.5" title="Served by {backendName}">
-							{#if backend.id === LOCAL_BACKEND_ID}
-								<BackendIcon {backend} class="h-3.5 w-3.5">
-									{#snippet fallback()}
-										<Logo class="shrink-0" style="--size: 0.875rem" />
-									{/snippet}
-								</BackendIcon>
-							{:else}
-								<BackendIcon {backend} class="h-3.5 w-3.5" />
-							{/if}
+						<span class="flex min-w-0 items-center gap-1.5" title="Served by {backendName}">
+							<span aria-hidden="true" class="shrink-0 text-muted-foreground/40">&#183;</span>
 
-							{backendName}
+							<BackendIcon {backend} class="size-4">
+								{#snippet fallback()}
+									{#if backend.id === LOCAL_BACKEND_ID}
+										<Logo class="shrink-0" style="--size: 1rem" />
+									{:else}
+										<Server class="size-4 shrink-0 opacity-70" />
+									{/if}
+								{/snippet}
+							</BackendIcon>
+
+							<!-- a long provider name shortens rather than growing the header -->
+							<span class="truncate">{backendName}</span>
 						</span>
 					{/if}
 				</p>
@@ -128,14 +134,14 @@
 	</div>
 
 	<div class="flex gap-2">
-		<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} variant="outline">
+		<Button class="flex-1 gap-1.5" onclick={onUseInNewChat} size="sm" variant="outline">
 			<SquarePen class="h-3.5 w-3.5" />
 
 			Start a new chat
 		</Button>
 
 		{#if capabilities.loadUnload}
-			<Button class="flex-1 gap-1.5" onclick={onToggleLoad} variant="outline">
+			<Button class="flex-1 gap-1.5" onclick={onToggleLoad} size="sm" variant="outline">
 				{#if isLoaded}
 					<Eject class="h-3.5 w-3.5" />
 
