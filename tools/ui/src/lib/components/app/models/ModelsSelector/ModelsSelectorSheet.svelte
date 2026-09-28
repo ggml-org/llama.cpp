@@ -1,10 +1,9 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorReasoningPanel,
 		ModelsSelectorTriggerIcon,
 		SearchInput
 	} from '$lib/components/app';
@@ -13,7 +12,6 @@
 	import { SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
@@ -56,7 +54,6 @@
 		useGlobalSelection: () => useGlobalSelection
 	});
 
-	const reasoning = useReasoningMenu();
 	// one setting for every model id in the selector: the trigger and the rows
 	const showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
 
@@ -140,10 +137,6 @@
 					/>
 				{/if}
 
-				{#if reasoning.isReasoningActive}
-					<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
-				{/if}
-
 				{#if ms.updating || ms.isLoadingModel}
 					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
@@ -207,10 +200,6 @@
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 								{showOrgName}
 							/>
-						</div>
-
-						<div class="flex flex-col px-2 pb-1">
-							<ModelsSelectorReasoningPanel />
 						</div>
 					</div>
 				</Sheet.Content>

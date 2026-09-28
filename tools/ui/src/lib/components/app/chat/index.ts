@@ -197,6 +197,7 @@ export { default as ChatFormActionSubmit } from './ChatForm/ChatFormActions/Chat
  * Exposes an `open` method for programmatically opening the selector.
  */
 export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/ChatFormActionModels.svelte';
+export { default as ChatFormActionReasoning } from './ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
 
 /**
  * Dropdown submenu for managing tool permissions in the chat form.

@@ -1,12 +1,11 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
 		ModelsSelectorOption,
-		ModelsSelectorReasoningPanel,
 		ModelsSelectorTriggerIcon
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
@@ -20,7 +19,6 @@
 	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 	import { rawModelId } from '$lib/utils/model-option-id';
@@ -63,8 +61,6 @@
 		},
 		useGlobalSelection: () => useGlobalSelection
 	});
-
-	const reasoning = useReasoningMenu();
 
 	const selectedOption = $derived(ms.getDisplayOption());
 	const triggerModel = $derived(selectedOption?.model ?? null);
@@ -135,13 +131,6 @@
 		}
 
 		highlightedId = visualOrder[index];
-	}
-
-	// Pointer/focus interaction with the sticky actions footer (reasoning submenu,
-	// discover models) leaves the option list, so drop the row highlight the same
-	// way we do when the dropdown first opens. Keyboard arrows set it again.
-	function clearHighlight() {
-		highlightedId = null;
 	}
 
 	function handleAddBackend() {
@@ -272,10 +261,6 @@
 									{:else}
 										<span class="min-w-0 font-medium">Select model</span>
 									{/if}
-
-									{#if reasoning.isReasoningActive}
-										<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
-									{/if}
 								</span>
 
 								{#if ms.updating || ms.isLoadingModel}
@@ -379,20 +364,6 @@
 								{showOrgName}
 							/>
 						</div>
-
-						{#snippet footer()}
-							<!-- Sticky actions footer: backends, then the reasoning effort
-							     panel. Sticks to the bottom of the content scrollport. -->
-
-							<ModelsSelectorReasoningPanel inMenu />
-
-							<div
-								class="flex flex-col px-1.5"
-								onfocusin={clearHighlight}
-								onmouseenter={clearHighlight}
-								role="none"
-							></div>
-						{/snippet}
 					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
@@ -430,10 +401,6 @@
 									hideQuantization
 									modelId={selectedOption.model}
 								/>
-							{/if}
-
-							{#if reasoning.isReasoningActive}
-								<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
 							{/if}
 
 							{#if ms.updating}

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
+		ChatFormActionReasoning,
 		ChatFormActionRecord,
 		ChatFormActionsAdd,
 		ChatFormActionSubmit,
@@ -155,6 +156,8 @@
 		{/if}
 
 		{#if showModelSelector}
+			<ChatFormActionReasoning />
+
 			<ChatFormActionModels
 				bind:hasAudioModality
 				bind:hasModelSelected
