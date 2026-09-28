@@ -30,7 +30,6 @@
 	let backendName = $derived(backend?.name ?? null);
 	let capabilities = $derived(getBackendCapabilities(backend));
 	// what the provider speaks decides which server endpoints the pane can read
-	let compatLabel = $derived(backend?.protocol === 'llama.cpp' ? 'Llama-compat' : 'OAI-compat');
 	let compatTitle = $derived(
 		capabilities.props
 			? 'llama.cpp server: reads /props and /slots'
@@ -38,6 +37,10 @@
 	);
 
 	let statusLabel = $derived.by(() => {
+		// a provider that cannot load or unload reports no load state, so its
+		// models are simply on offer
+		if (!capabilities.loadUnload) return 'Available';
+
 		if (status === ServerModelStatus.LOADING) return 'Loading';
 
 		if (status === ServerModelStatus.FAILED) return 'Failed to load';
@@ -50,6 +53,8 @@
 	});
 
 	let statusDot = $derived.by(() => {
+		if (!capabilities.loadUnload) return 'bg-green-500';
+
 		if (status === ServerModelStatus.FAILED) return 'bg-red-500';
 
 		if (status === ServerModelStatus.LOADING) return 'bg-muted-foreground/50 animate-pulse';
@@ -100,21 +105,14 @@
 						{statusLabel}
 					</span>
 
-					<!-- each separator travels with its own item, so none is left dangling -->
-					<span class="flex shrink-0 items-center gap-1.5" title={compatTitle}>
-						<span aria-hidden="true" class="text-muted-foreground/40">&#183;</span>
-
-						{compatLabel}
-					</span>
-
 					{#if backend && backendName}
-						<span class="flex min-w-0 items-center gap-1.5" title="Served by {backendName}">
+						<span class="flex min-w-0 items-center gap-0.75" title={compatTitle}>
 							<span aria-hidden="true" class="shrink-0 text-muted-foreground/40">&#183;</span>
 
 							<BackendIcon {backend} class="size-4">
 								{#snippet fallback()}
 									{#if backend.id === LOCAL_BACKEND_ID}
-										<Logo class="shrink-0" style="--size: 1rem" />
+										<Logo class="shrink-0" style="--size: 0.75rem" />
 									{:else}
 										<Server class="size-4 shrink-0 opacity-70" />
 									{/if}
