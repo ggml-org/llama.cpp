@@ -52,7 +52,7 @@
 	{/if}
 
 	{#if hasModalityIcons && !hideModalities}
-		<span class="inline-flex items-center text-muted-foreground">
+		<span class="inline-flex items-center {gapClass} text-muted-foreground">
 			{#if modalities?.vision}
 				<Tooltip.Root>
 					<Tooltip.Trigger>

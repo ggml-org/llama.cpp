@@ -27,6 +27,18 @@ export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabled
 /** Default disabled tool categories, seeded into newly created conversations */
 export const DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolCategories`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
+
+/** Open state the user set for a model list section or one of its families, by id. */
+export const MODEL_GROUP_OPEN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelGroupOpen`;
+
+/** Recently used model ids, most recent first, backend-qualified. */
+export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`;
+
+/** Last use timestamp per backend-qualified model id. */
+export const RECENT_MODEL_USAGE_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModelUsage`;
+
+/** Model ids kept out of the selector, backend-qualified. */
+export const HIDDEN_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.hiddenModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
 export const USER_OVERRIDES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.userOverrides`;

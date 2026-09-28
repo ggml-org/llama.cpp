@@ -1,4 +1,5 @@
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODEL_ICON } from './icons.constants';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
@@ -47,8 +48,17 @@ export const DEFAULT_MOBILE_BREAKPOINT = 768;
 /** Orgs whose avatar is dark and needs inverting in dark mode. */
 export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 
-/** Icon used for the model selector and the `/model` slash command. */
-export const MODEL_SELECTOR_ICON = Package;
+/**
+ * Model rows mounted before the list is scrolled. A local catalog can hold
+ * hundreds of models and mounting them all costs seconds on open.
+ */
+export const MODEL_ROW_WINDOW = 50;
+
+/** Models of one family shown before the rest fold behind a "show more" row. */
+export const FAMILY_ROW_WINDOW = 6;
+
+/** Recently used models kept per browser, most recent first. */
+export const RECENT_MODEL_LIMIT = 20;
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
@@ -64,6 +74,11 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		tooltip: 'New chat'
 	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
+	{
+		action: SidebarAction.MANAGE_MODELS,
+		icon: MODEL_ICON,
+		tooltip: 'Models'
+	},
 	{
 		action: SidebarAction.SETTINGS,
 		icon: Settings,

@@ -127,6 +127,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
+				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Only available in router mode.',
+				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
+				label: 'Enable Discover Models',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Conversation title',
@@ -294,6 +301,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Display the current build version in the bottom-right corner of the interface.',
 				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
 				label: 'Show build version information',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Group models into families (e.g. "Qwen") in the model picker and the models manager. Turn it off to list every model on its own.',
+				key: SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY,
+				label: 'Group models by family',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
