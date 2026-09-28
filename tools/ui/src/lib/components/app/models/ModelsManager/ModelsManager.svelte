@@ -4,6 +4,7 @@
 	import {
 		downloadGroups,
 		groupModelQuants,
+		isCustomized,
 		loadExtraArgs,
 		loadOverrides,
 		modelCapability,
@@ -381,11 +382,14 @@
 			{#if shownOption}
 				{#key shownId}
 					<ModelsManagerModelConfiguration
+						isCustomized={isCustomized(overrides[shownOption.id])}
 						onClose={() => (selectedId = null)}
+						onSave={(override) => saveOverride(shownOption, override)}
 						onToggleLoad={() => void toggleLoad(shownOption)}
 						onUseInChat={() => void useInChat(shownOption)}
 						onUseInNewChat={() => void useInNewChat(shownOption)}
 						option={shownOption}
+						override={overrides[shownOption.id]}
 					/>
 				{/key}
 			{/if}
