@@ -1147,6 +1147,35 @@ static void handle_media(
     }
 }
 
+// parses an OAI-format content array (type/image_url/text parts) into a prompt + media buffers; used to enable multimodal support in /v1/embeddings endpoint
+server_tokens tokenize_oai_content_array(mtmd_context * mctx, const std::string & media_path, const json & content, const mtmd_helper_init_opt & init_opt) {
+    if (!content.is_array()) {
+        throw std::invalid_argument("Expected 'content' to be an array");
+    }
+
+    std::string prompt;
+    std::vector<raw_buffer> files;
+
+    for (const auto & p : content) {
+        const std::string type = json_value(p, "type", std::string());
+        if (type == "text") {
+            prompt += json_value(p, "text", std::string());
+        } else if (type == "image_url") {
+            if (mctx == nullptr) {
+                throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
+            }
+            const json image_url = json_value(p, "image_url", json::object());
+            const std::string url = json_value(image_url, "url", std::string());
+            handle_media(files, url, media_path);
+            prompt += get_media_marker();
+        } else {
+            throw std::invalid_argument("unsupported content[].type: " + type);
+        }
+    }
+
+    return process_mtmd_prompt(mctx, prompt, files, init_opt);
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */

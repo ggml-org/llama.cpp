@@ -276,8 +276,8 @@ server_tokens process_mtmd_prompt(
                                         mtmd_context * mctx,
                                         const std::string & prompt,
                                         const std::vector<raw_buffer> & files,
-                                        const mtmd_helper_init_opt & init_opt,
-                                        bool is_placeholder = false);
+                                         const mtmd_helper_init_opt & init_opt,
+                                         bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -299,6 +299,20 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool add_special,
                                         bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
+
+/**
+ * expand one OpenAI-style content array (text + image_url parts) into embedding tokens:
+ * text parts are appended verbatim, each image_url part is decoded and replaced by the media
+ * marker; the result is spliced via process_mtmd_prompt(). returns server_tokens with has_mtmd set.
+ * example input shape:
+ * [ { "type": "text", "text": "Describe this" },
+ *   { "type": "image_url", "image_url": { "url": "data:image/png;base64,..." } } ]
+ */
+server_tokens tokenize_oai_content_array(
+                                        mtmd_context * mctx,
+                                        const std::string & media_path,
+                                        const json & content,
+                                         const mtmd_helper_init_opt & init_opt);
 
 //
 // OAI utils
