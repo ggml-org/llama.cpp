@@ -1332,6 +1332,12 @@ vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, 
     FaCodePath path = device->coopmat2 ? FA_COOPMAT2 :
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
+    // flash_attn_cm2.comp has no turbo decode (unknown K/V types read as zero), so turbo K/V takes
+    // the coopmat1 or scalar shaders, which fuse the turbo dequant; the checks below still apply
+    if (path == FA_COOPMAT2 && (ggml_type_is_turbo(k_type) || ggml_type_is_turbo(v_type))) {
+        path = device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
+    }
+
     if (path == FA_COOPMAT2 && k_type == GGML_TYPE_BF16 && !device->coopmat2_bf16_support) {
         path = FA_COOPMAT1;
     }
@@ -15748,7 +15754,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if ((op->src[1]->type == GGML_TYPE_BF16) != (op->src[2]->type == GGML_TYPE_BF16)) {
                     return false;
                 }
-                if (!coopmat2 && !(device->subgroup_shuffle && device->subgroup_vote)) {
+                // turbo K/V never takes the coopmat2 path (see get_fa_tuning_params)
+                const bool turbo_kv = ggml_type_is_turbo(op->src[1]->type) || ggml_type_is_turbo(op->src[2]->type);
+                if ((!coopmat2 || turbo_kv) && !(device->subgroup_shuffle && device->subgroup_vote)) {
                     // scalar/coopmat1 FA uses subgroupShuffle/subgroupAll
                     return false;
                 }
