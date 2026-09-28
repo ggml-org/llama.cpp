@@ -12,19 +12,15 @@ import {
 	BACKEND_ID_PREFIX,
 	BACKEND_PRESETS,
 	BACKEND_PROTOCOLS,
+	BackendProtocol,
 	DEFAULT_BACKEND_CHAT_PATH,
 	DEFAULT_BACKEND_MODELS_PATH,
 	FAVICON_SERVICE_URL,
 	LOCAL_BACKEND_ID,
+	MaxTokensField,
 	MODEL_CONTEXT_LENGTH_FIELDS
 } from '$lib/constants';
-import type {
-	Backend,
-	BackendCapabilities,
-	BackendCompat,
-	BackendPreset,
-	BackendProtocol
-} from '$lib/types';
+import type { Backend, BackendCapabilities, BackendCompat, BackendPreset } from '$lib/types';
 
 /** Absolute chat completions URL for a backend. */
 export function backendChatUrl(backend: Backend): string {
@@ -84,12 +80,18 @@ function normalizeBaseUrl(url: string): string | null {
  * (unknown model, early startup) gets the plain compatible defaults.
  */
 export function getBackendCapabilities(backend?: Backend): BackendCapabilities {
-	return BACKEND_CAPABILITIES[backend?.protocol ?? 'openai'] ?? BACKEND_CAPABILITIES.openai;
+	return (
+		BACKEND_CAPABILITIES[backend?.protocol ?? BackendProtocol.OPENAI] ??
+		BACKEND_CAPABILITIES[BackendProtocol.OPENAI]
+	);
 }
 
 /** Wire quirks for a backend: protocol defaults overridden by the backend. */
 export function getBackendCompat(backend: Backend): BackendCompat {
-	return { ...(BACKEND_COMPAT[backend.protocol] ?? BACKEND_COMPAT.openai), ...backend.compat };
+	return {
+		...(BACKEND_COMPAT[backend.protocol] ?? BACKEND_COMPAT[BackendProtocol.OPENAI]),
+		...backend.compat
+	};
 }
 
 /** The built-in backend pointing at the server that serves this UI. */
@@ -100,7 +102,7 @@ export function createLocalBackend(apiKey?: string, enabled = true): Backend {
 		enabled,
 		id: LOCAL_BACKEND_ID,
 		name: 'Local',
-		protocol: 'llama.cpp'
+		protocol: BackendProtocol.COMPAT
 	};
 }
 
@@ -155,7 +157,7 @@ function parseBackendEntry(entry: unknown, index: number): Backend | null {
 
 	const protocol = BACKEND_PROTOCOLS.includes(raw.protocol as BackendProtocol)
 		? (raw.protocol as BackendProtocol)
-		: 'openai';
+		: BackendProtocol.OPENAI;
 	const id =
 		typeof raw.id === 'string' && raw.id.trim()
 			? raw.id.trim()
@@ -190,7 +192,10 @@ function parseBackendCompat(
 	const defaults = BACKEND_COMPAT[protocol] ?? BACKEND_COMPAT.openai;
 	const overrides: Partial<BackendCompat> = {};
 
-	if (entry.maxTokensField === 'max_tokens' || entry.maxTokensField === 'max_completion_tokens') {
+	if (
+		entry.maxTokensField === MaxTokensField.COMPLETION ||
+		entry.maxTokensField === MaxTokensField.CHAT_COMPLETION
+	) {
 		overrides.maxTokensField = entry.maxTokensField;
 	}
 

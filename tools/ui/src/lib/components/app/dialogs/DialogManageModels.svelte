@@ -5,7 +5,7 @@
 	import ModelsManagerModelProviders from '$lib/components/app/models/ModelsManager/ModelsManagerModelProviders.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { MODEL_ICON } from '$lib/constants';
+	import { MODEL_ICON, MODELS_DIALOG_VIEW, type ModelsDialogView } from '$lib/constants';
 	import { uiStore } from '$lib/stores';
 	import { untrack } from 'svelte';
 
@@ -16,15 +16,13 @@
 
 	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
-	type View = 'discover' | 'manage' | 'providers';
-
 	/** How long a view takes to fade out before the next one fades in. */
 	const VIEW_FADE_MS = 150;
 
 	// what the user asked for, and what is actually rendered: a view change fades the
 	// current one out, swaps, then fades the next one in
-	let view = $state<View>('manage');
-	let shownView = $state<View>('manage');
+	let view = $state<ModelsDialogView>(MODELS_DIALOG_VIEW.MANAGE);
+	let shownView = $state<ModelsDialogView>(MODELS_DIALOG_VIEW.MANAGE);
 	let isSwapping = $state(false);
 
 	$effect(() => {
@@ -52,7 +50,11 @@
 	});
 
 	let title = $derived(
-		view === 'discover' ? 'Discover' : view === 'providers' ? 'Providers' : 'Models'
+		view === MODELS_DIALOG_VIEW.DISCOVER
+			? 'Discover'
+			: view === MODELS_DIALOG_VIEW.PROVIDERS
+				? 'Providers'
+				: 'Models'
 	);
 
 	// the sidebar's Discover entry opens this dialog on its Discover view
@@ -61,7 +63,7 @@
 
 		untrack(() => {
 			uiStore.discoverModelsOpen = false;
-			view = 'discover';
+			view = MODELS_DIALOG_VIEW.DISCOVER;
 			handleOpenChange(true);
 		});
 	});
@@ -86,10 +88,10 @@
 			<Button
 				aria-label="Back to models"
 				class="absolute top-1/2 left-1 h-7 w-7 -translate-y-1/2 transition-[opacity,visibility] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {view ===
-				'manage'
+				MODELS_DIALOG_VIEW.MANAGE
 					? 'invisible opacity-0'
 					: 'visible opacity-100'}"
-				onclick={() => (view = 'manage')}
+				onclick={() => (view = MODELS_DIALOG_VIEW.MANAGE)}
 				size="icon"
 				variant="ghost"
 			>
@@ -98,7 +100,7 @@
 
 			<Dialog.Title
 				class="flex min-h-7 items-center gap-2 transition-transform duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] {view ===
-				'manage'
+				MODELS_DIALOG_VIEW.MANAGE
 					? 'translate-x-0'
 					: 'translate-x-8'}"
 			>
@@ -106,21 +108,21 @@
 				<span class="grid h-5 w-5 shrink-0 place-items-center">
 					<MODEL_ICON
 						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
-						'manage'
+						MODELS_DIALOG_VIEW.MANAGE
 							? 'opacity-100'
 							: 'opacity-0'}"
 					/>
 
 					<Compass
 						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
-						'discover'
+						MODELS_DIALOG_VIEW.DISCOVER
 							? 'opacity-100'
 							: 'opacity-0'}"
 					/>
 
 					<Server
 						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
-						'providers'
+						MODELS_DIALOG_VIEW.PROVIDERS
 							? 'opacity-100'
 							: 'opacity-0'}"
 					/>
@@ -135,12 +137,12 @@
 		</Dialog.Header>
 
 		<div class="dialog-view min-h-0 flex-1" data-visible={!isSwapping}>
-			{#if shownView === 'manage'}
+			{#if shownView === MODELS_DIALOG_VIEW.MANAGE}
 				<ModelsManager class="h-full">
 					{#snippet toolbarEnd()}
 						<Button
 							class="gap-1.5"
-							onclick={() => (view = 'discover')}
+							onclick={() => (view = MODELS_DIALOG_VIEW.DISCOVER)}
 							size="sm"
 							variant="tertiary"
 						>
@@ -151,7 +153,7 @@
 
 						<Button
 							class="gap-1.5"
-							onclick={() => (view = 'providers')}
+							onclick={() => (view = MODELS_DIALOG_VIEW.PROVIDERS)}
 							size="sm"
 							variant="tertiary"
 						>
@@ -161,7 +163,7 @@
 						</Button>
 					{/snippet}
 				</ModelsManager>
-			{:else if shownView === 'discover'}
+			{:else if shownView === MODELS_DIALOG_VIEW.DISCOVER}
 				<div class="grid h-full overflow-hidden" style="grid-template-columns: auto 1fr;">
 					<ModelsDiscover />
 				</div>
