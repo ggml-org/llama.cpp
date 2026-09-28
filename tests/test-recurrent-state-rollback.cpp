@@ -127,7 +127,9 @@ static double nmse(const float * a, const float * b, int n) {
 // ubatches while its rollback restore is still pending. Compared against a
 // reference context that never advanced past the rollback point and decodes
 // the identical replay batch.
-static bool test_multi_seq_split_replay(const common_params & params, llama_model * model, const int n_vocab, uint8_t fill) {
+static test_status test_multi_seq_split_replay(const common_params & params, llama_model * model, uint8_t fill) {
+    const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
     constexpr uint32_t  n_seqs     = 2;
     constexpr uint32_t  n_ubatch   = 16;
     constexpr uint32_t  n_prompt   = 19;
@@ -150,12 +152,12 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     llama_context_ptr ctx_ref  = make_ctx_multi();
     if (!ctx_roll || !ctx_ref) {
         LOG_ERR("%s: failed to init multi-seq contexts\n", __func__);
-        return false;
+        return test_status::FAIL;
     }
 
     if (llama_n_rs_seq(ctx_roll.get()) < n_rollback) {
         LOG_INF("%s: skipping because n_rs_seq is too small\n", __func__);
-        return true;
+        return test_status::SKIP;
     }
 
     const auto tok = [&](uint32_t seq, llama_pos pos) {
@@ -188,7 +190,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     }
     if (!ok) {
         LOG_ERR("%s: multi-seq prefill/rollback failed\n", __func__);
-        return false;
+        return test_status::FAIL;
     }
 
     llama_batch batch = llama_batch_init(n_seqs*n_replay, 0, 1);
@@ -203,7 +205,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     llama_batch_free(batch);
     if (!ok) {
         LOG_ERR("%s: multi-seq replay decode failed\n", __func__);
-        return false;
+        return test_status::FAIL;
     }
 
     // identical ubatch shapes should produce identical states, but the larger
@@ -220,7 +222,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
         const float * l_ref  = llama_get_logits_ith(ctx_ref.get(),  i);
         if (l_roll == nullptr || l_ref == nullptr) {
             LOG_ERR("%s: missing multi-seq logits at index %u\n", __func__, i);
-            return false;
+            return test_status::FAIL;
         }
         for (int t = 0; t < n_vocab; ++t) {
             const float r = l_roll[t];
@@ -246,7 +248,7 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     if (nmse_val > nmse_eps) {
         LOG_ERR("%s: multi-seq split replay logits mismatch (max diff %g, nmse %g, first at seq %u pos %d)\n",
                 __func__, (double) diff_max, nmse_val, seq_first, pos_first);
-        return false;
+        return test_status::FAIL;
     }
 
     LOG_INF("%s: multi-seq split replay matched (max diff %g, nmse %g)\n", __func__, (double) diff_max, nmse_val);
@@ -301,13 +303,15 @@ static bool test_multi_seq_split_replay(const common_params & params, llama_mode
     if (!ok || nmse_tail > nmse_eps) {
         LOG_ERR("%s: seq-1-only decode leaked seq 0 state (ok=%d, max diff %g, nmse %g)\n",
                 __func__, ok ? 1 : 0, (double) diff_tail, nmse_tail);
-        return false;
+        return test_status::FAIL;
     }
 
     LOG_INF("%s: seq-1-only decode independent of seq 0 (max diff %g, nmse %g)\n", __func__, (double) diff_tail, nmse_tail);
-    return true;
+    return test_status::PASS;
 }
 
+// Save a rolled-back single-seq state, restore it into fresh and dirty
+// contexts, and verify exact logit matches on replay.
 static test_status test_rollback(const common_params & params, llama_model * model, uint8_t fill) {
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int           n_vocab = llama_vocab_n_tokens(vocab);
@@ -472,17 +476,43 @@ static test_status test_rollback(const common_params & params, llama_model * mod
     }
 
     LOG_INF("%s: recurrent rollback checkpoint restored successfully\n", __func__);
-
-    if (!test_multi_seq_split_replay(params, model, n_vocab, fill)) {
-        return test_status::FAIL;
-    }
-
     return test_status::PASS;
 }
 
-// Run the rollback tests for a single model.
-// Returns the per-model status.
-static test_status run_rollback_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+static test_status merge_status(test_status a, test_status b) {
+    if (a == test_status::FAIL || b == test_status::FAIL) {
+        return test_status::FAIL;
+    }
+    if (a == test_status::PASS || b == test_status::PASS) {
+        return test_status::PASS;
+    }
+    return test_status::SKIP;
+}
+
+struct test_results {
+    test_status rollback = test_status::SKIP;
+    test_status replay   = test_status::SKIP;
+};
+
+// Run every test for an initialized model over both cache fills.
+static test_results run_tests(const common_params & params, llama_model * model) {
+    test_results res;
+    for (uint8_t fill : { 0, 0x3e }) {
+        LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
+        const test_status rb = test_rollback(params, model, fill);
+        const test_status rp = test_multi_seq_split_replay(params, model, fill);
+        res.rollback = merge_status(res.rollback, rb);
+        res.replay   = merge_status(res.replay,   rp);
+        if (rb == test_status::FAIL || rp == test_status::FAIL) {
+            break;
+        }
+    }
+    return res;
+}
+
+// Run the tests for a single model file.
+// Returns the per-test statuses.
+static test_results run_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
     struct common_params params = base_params;
     params.model.path = model_path;
 
@@ -491,27 +521,15 @@ static test_status run_rollback_tests_for_model(const std::string & model_path, 
 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
-        return test_status::SKIP;
+        return {};
     }
 
     if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
         LOG_INF("%s: skipping for non-recurrent model\n", __func__);
-        return test_status::SKIP;
+        return {};
     }
 
-    test_status status = test_status::SKIP;
-    for (uint8_t fill : { 0, 0x3e }) {
-        LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
-        const test_status fill_status = test_rollback(params, model, fill);
-        if (fill_status == test_status::FAIL) {
-            return test_status::FAIL;
-        }
-        if (fill_status == test_status::PASS) {
-            status = test_status::PASS;
-        }
-    }
-
-    return status;
+    return run_tests(params, model);
 }
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -562,7 +580,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
 
     if (!models_dir.empty()) {
-        // run the rollback tests over every dummy model in the directory
+        // run every test over each dummy model in the directory
         if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
             LOG_ERR("%s: models directory '%s' does not exist\n", __func__, models_dir.c_str());
             return 1;
@@ -589,36 +607,44 @@ int main(int argc, char ** argv) {
         // silence everything but the table itself (LOG has verbosity LOG_LEVEL_OUTPUT = 0)
         common_log_set_verbosity_thold(0);
 
-        LOG("%-*s  %s\n", (int) name_width, "Model", "rollback");
+        LOG("%-*s  %-8s  %s\n", (int) name_width, "Model", "rollback", "split replay");
         common_log_flush(common_log_main());
 
-        size_t n_pass = 0;
-        size_t n_skip = 0;
-        size_t n_fail = 0;
+        size_t n_pass[2] = { 0, 0 };
+        size_t n_skip[2] = { 0, 0 };
+        size_t n_fail[2] = { 0, 0 };
         for (const auto & model_path : models) {
             const auto name = std::filesystem::path(model_path).filename().string();
 
             LOG("%-*s", (int) name_width, name.c_str());
 
-            const test_status status = run_rollback_tests_for_model(model_path, params);
-            LOG("  %s", test_status_str(status));
+            const test_results res = run_tests_for_model(model_path, params);
+
+            // all status strings have the same raw length, so the columns line up;
+            // pad the first status to the width of the "rollback" header + separator
+            LOG("  %s      %s", test_status_str(res.rollback), test_status_str(res.replay));
             LOG("\n");
             common_log_flush(common_log_main());
 
-            switch (status) {
-                case test_status::PASS: n_pass++; break;
-                case test_status::FAIL: n_fail++; break;
-                case test_status::SKIP: n_skip++; break;
+            const test_status all[2] = { res.rollback, res.replay };
+            for (int t = 0; t < 2; ++t) {
+                switch (all[t]) {
+                    case test_status::PASS: n_pass[t]++; break;
+                    case test_status::FAIL: n_fail[t]++; break;
+                    case test_status::SKIP: n_skip[t]++; break;
+                }
             }
         }
 
         common_log_set_verbosity_thold(LOG_DEFAULT_LLAMA);
         common_log_flush(common_log_main());
 
-        LOG_INF("%s: summary: %zu passed, %zu skipped, %zu failed (of %zu)\n",
-                __func__, n_pass, n_skip, n_fail, models.size());
+        LOG_INF("%s: rollback:     %zu passed, %zu skipped, %zu failed (of %zu)\n",
+                __func__, n_pass[0], n_skip[0], n_fail[0], models.size());
+        LOG_INF("%s: split replay: %zu passed, %zu skipped, %zu failed (of %zu)\n",
+                __func__, n_pass[1], n_skip[1], n_fail[1], models.size());
 
-        return n_fail == 0 ? 0 : 1;
+        return (n_fail[0] + n_fail[1]) == 0 ? 0 : 1;
     }
 
     // single-model mode
@@ -634,12 +660,7 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
-    for (uint8_t fill : { 0, 0x3e }) {
-        LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
-        if (test_rollback(params, model, fill) == test_status::FAIL) {
-            return 1;
-        }
-    }
+    const test_results res = run_tests(params, model);
 
-    return 0;
+    return (res.rollback == test_status::FAIL || res.replay == test_status::FAIL) ? 1 : 0;
 }
