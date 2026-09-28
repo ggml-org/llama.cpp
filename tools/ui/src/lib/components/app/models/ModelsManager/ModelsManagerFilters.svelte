@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { ModalityKey } from './utils';
 	import { Check, ChevronDown, Image, Lightbulb, Mic, Server, Video, Wrench } from '@lucide/svelte';
-	import { Logo } from '$lib/components/app';
+	import { Logo, ScrollCarousel } from '$lib/components/app';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
@@ -45,17 +45,33 @@
 		{ label: '256K or more', value: 262_144 },
 		{ label: '1M or more', value: 1_048_576 }
 	];
-	const CAPABILITIES: { icon: typeof Wrench; label: string; value: ModelCapability }[] = [
-		{ icon: Wrench, label: 'Tool use', value: ModelCapability.TOOL_USE },
-		{ icon: Lightbulb, label: 'Reasoning', value: ModelCapability.REASONING }
-	];
-	const MODALITIES: { icon: typeof Image; key: ModalityKey; label: string }[] = [
-		{ icon: Image, key: 'vision', label: 'Vision' },
-		{ icon: Video, key: 'video', label: 'Video' },
-		{ icon: Mic, key: 'audio', label: 'Audio' }
+	// one group for everything a model either has or does not: what it can do, and
+	// what it can accept
+	const TOGGLES: {
+		group: 'capability' | 'modality';
+		icon: typeof Wrench;
+		label: string;
+		value: string;
+	}[] = [
+		{ group: 'capability', icon: Wrench, label: 'Tool use', value: ModelCapability.TOOL_USE },
+		{ group: 'capability', icon: Lightbulb, label: 'Reasoning', value: ModelCapability.REASONING },
+		{ group: 'modality', icon: Image, label: 'Vision', value: 'vision' },
+		{ group: 'modality', icon: Video, label: 'Video', value: 'video' },
+		{ group: 'modality', icon: Mic, label: 'Audio', value: 'audio' }
 	];
 
-	const TOGGLE_ITEM_CLASS = 'bg-transparent! border-border/30! dark:border-border/20!';
+	// the group holds one flat list, so a change splits back into the two filters
+	function setToggles(values: string[]): void {
+		capabilities = values.filter(
+			(value) => TOGGLES.find((entry) => entry.value === value)?.group === 'capability'
+		) as ModelCapability[];
+		modalities = values.filter(
+			(value) => TOGGLES.find((entry) => entry.value === value)?.group === 'modality'
+		) as ModalityKey[];
+	}
+
+	const TOGGLE_ITEM_CLASS =
+		'bg-transparent! border-border/30! dark:border-border/20! data-[state=on]:bg-muted! data-[state=on]:text-foreground!';
 
 	// none selected means every provider, so the label names the selection
 	let providerLabel = $derived(
@@ -86,7 +102,7 @@
 	{/if}
 {/snippet}
 
-<div class="flex flex-wrap items-center gap-2">
+<ScrollCarousel alwaysShowArrows class="min-w-0 flex-1" gapSize="2" innerClass="items-center">
 	{#if backends.length > 1}
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger>
@@ -152,24 +168,6 @@
 		</Select.Content>
 	</Select.Root>
 
-	<ToggleGroup.Root
-		bind:value={capabilities}
-		class="bg-muted/60 dark:bg-muted/75"
-		type="multiple"
-		variant="outline"
-	>
-		{#each CAPABILITIES as capability (capability.value)}
-			<ToggleGroup.Item
-				aria-label={capability.label}
-				class={TOGGLE_ITEM_CLASS}
-				title={capability.label}
-				value={capability.value}
-			>
-				<capability.icon class="h-3.5 w-3.5" />
-			</ToggleGroup.Item>
-		{/each}
-	</ToggleGroup.Root>
-
 	<!-- a checkbox chip: the whole pill is the control, the box is its indicator -->
 	<Toggle
 		bind:pressed={draft}
@@ -179,7 +177,7 @@
 		<span
 			aria-hidden="true"
 			class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-shadow {draft
-				? 'border-primary bg-primary text-primary-foreground'
+				? 'border-border/30 bg-muted text-foreground dark:border-border/20 dark:bg-muted/75'
 				: 'border-input bg-background dark:bg-input/30'}"
 		>
 			{#if draft}
@@ -191,20 +189,21 @@
 	</Toggle>
 
 	<ToggleGroup.Root
-		bind:value={modalities}
 		class="bg-muted/60 dark:bg-muted/75"
+		onValueChange={setToggles}
 		type="multiple"
+		value={[...capabilities, ...modalities]}
 		variant="outline"
 	>
-		{#each MODALITIES as modality (modality.key)}
+		{#each TOGGLES as toggle (toggle.value)}
 			<ToggleGroup.Item
-				aria-label={modality.label}
+				aria-label={toggle.label}
 				class={TOGGLE_ITEM_CLASS}
-				title={modality.label}
-				value={modality.key}
+				title={toggle.label}
+				value={toggle.value}
 			>
-				<modality.icon class="h-3.5 w-3.5" />
+				<toggle.icon class="h-3.5 w-3.5" />
 			</ToggleGroup.Item>
 		{/each}
 	</ToggleGroup.Root>
-</div>
+</ScrollCarousel>
