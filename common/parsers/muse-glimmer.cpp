@@ -76,7 +76,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            auto string_value = p.until(p.tool_arg_string_value(p.until("</atem:parameter>")),
+            auto string_value = p.through(p.tool_arg_string_value(p.until("</atem:parameter>")),
                                         p.tool_arg_close(p.literal("</atem:parameter>")));
 
             auto tool_choice = p.choice();
