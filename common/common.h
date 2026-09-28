@@ -809,7 +809,9 @@ static std::vector<T> string_split(const std::string & str, char delim) {
     while (std::getline(str_stream, token, delim)) {
         T value;
         std::istringstream token_stream(token);
-        token_stream >> value;
+        if (!(token_stream >> value)) {
+            throw std::invalid_argument("invalid value: \"" + token + "\"");
+        }
         values.push_back(value);
     }
     return values;
@@ -901,6 +903,9 @@ std::string fs_path_to_utf8(const std::filesystem::path & path);
 // and setting an empty value unsets the variable
 std::string common_get_env(const std::string & name);
 void        common_set_env(const std::string & name, const std::string & value);
+
+// reads a path from the environment, an unset variable gives an empty path
+std::filesystem::path common_get_path_from_env(const std::string & name);
 
 //
 // Filesystem utils
