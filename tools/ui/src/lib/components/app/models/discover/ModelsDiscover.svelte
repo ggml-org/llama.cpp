@@ -6,7 +6,7 @@
 	} from '$lib/components/app/models/discover';
 	import { Button } from '$lib/components/ui/button';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsDiscoverStore } from '$lib/stores';
+	import { modelsDiscoverStore, uiStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types';
 
 	let selectedId = $state<string | null>(null);
@@ -33,6 +33,16 @@
 		if (!selectedId && first) {
 			selectedId = first.id;
 		}
+	});
+
+	// a caller can ask for one repo to be opened, the manager's rows do
+	$effect(() => {
+		const focus = uiStore.discoverModelFocus;
+
+		if (!focus) return;
+
+		selectedId = focus;
+		uiStore.discoverModelFocus = null;
 	});
 
 	function handleSearchInput(value: string) {
