@@ -537,3 +537,38 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
+/**
+ * **DialogConfirmation** - Generic confirmation dialog
+ *
+ * Reusable confirmation dialog with customizable title, description,
+ * and action buttons. Supports destructive action styling and custom icons.
+ * Used for delete confirmations, irreversible actions, and important decisions.
+ *
+ * **Architecture:**
+ * - Uses ShadCN AlertDialog
+ * - Supports variant styling (default, destructive)
+ * - Customizable button labels and callbacks
+ *
+ * **Features:**
+ * - Customizable title and description text
+ * - Destructive variant with red styling for dangerous actions
+ * - Custom icon support in header
+ * - Cancel and confirm button callbacks
+ * - Keyboard accessible (Escape to cancel, Enter to confirm)
+ *
+ * @example
+ * ```svelte
+ * <DialogConfirmation
+ *   bind:open={showDelete}
+ *   title="Delete conversation?"
+ *   description="This action cannot be undone."
+ *   variant="destructive"
+ *   onConfirm={handleDelete}
+ *   onCancel={() => showDelete = false}
+ * />
+ * ```
+ */
+/**
+ * **DialogManageModels** - shell for model management, still to be designed.
+ */
+export { default as DialogManageModels } from './DialogManageModels.svelte';

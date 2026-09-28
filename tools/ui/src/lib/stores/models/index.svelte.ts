@@ -7,23 +7,106 @@
  * {@link ModelsStore.status}; tracks which conversations use which models.
  */
 
-import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
+import { browser } from '$app/environment';
+import {
+	FAVORITE_MODELS_LOCALSTORAGE_KEY,
+	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+	MODEL_ROW_WINDOW,
+	RECENT_MODEL_LIMIT,
+	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
+	RECENT_MODELS_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
+import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getConversationModel } from '$lib/utils/conversation-utils';
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
+
+/** Last use timestamp per backend-qualified model id. */
+function loadRecentModelUsage(): Record<string, number> {
+	if (!browser) return {};
+
+	try {
+		const raw = localStorage.getItem(RECENT_MODEL_USAGE_LOCALSTORAGE_KEY);
+
+		if (!raw) return {};
+
+		const parsed = JSON.parse(raw) as unknown;
+
+		return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Models kept out of the selector. */
+function loadHiddenModels(): Set<string> {
+	if (!browser) return new SvelteSet<string>();
+
+	try {
+		const raw = localStorage.getItem(HIDDEN_MODELS_LOCALSTORAGE_KEY);
+
+		return raw ? new SvelteSet(JSON.parse(raw) as string[]) : new SvelteSet<string>();
+	} catch {
+		return new SvelteSet<string>();
+	}
+}
+
+/** Open state the user set for a section or family of the model lists. */
+function loadGroupOpenState(): SvelteMap<string, boolean> {
+	if (!browser) return new SvelteMap<string, boolean>();
+
+	try {
+		const raw = localStorage.getItem(MODEL_GROUP_OPEN_LOCALSTORAGE_KEY);
+		const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+		const entries =
+			parsed && typeof parsed === 'object' ? Object.entries(parsed as Record<string, unknown>) : [];
+
+		return new SvelteMap(
+			entries.filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean')
+		);
+	} catch {
+		return new SvelteMap<string, boolean>();
+	}
+}
+
+/** Recently used backend-qualified ids, most recent first. */
+function loadRecentModels(): string[] {
+	if (!browser) return [];
+
+	try {
+		const raw = localStorage.getItem(RECENT_MODELS_LOCALSTORAGE_KEY);
+
+		if (!raw) return [];
+
+		const parsed = JSON.parse(raw) as unknown;
+
+		return Array.isArray(parsed)
+			? parsed.filter((id): id is string => typeof id === 'string').slice(0, RECENT_MODEL_LIMIT)
+			: [];
+	} catch {
+		return [];
+	}
+}
 
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+	groupOpenState = $state<SvelteMap<string, boolean>>(loadGroupOpenState());
+	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
 	models = $state<ModelOption[]>([]);
+	recentModelIds = $state<string[]>(loadRecentModels());
+	recentModelUsage = $state<Record<string, number>>(loadRecentModelUsage());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
@@ -119,6 +202,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.selectedModelName = null;
 	}
 
+	/** Family keys folded away under one section, for a list that restores them. */
+	collapsedGroupsUnder(prefix: string): string[] {
+		const head = `${prefix}-`;
+
+		return [...this.groupOpenState]
+			.filter(([id, open]) => !open && id.startsWith(head))
+			.map(([id]) => id.slice(head.length));
+	}
+
 	/**
 	 * Auto-selects the first available model if none is selected.
 	 * Prioritizes:
@@ -162,11 +254,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return;
 		}
 
-		// Try loading a favorite model
+		// Try a favorite model, but only one that exists on this backend: favorites
+		// are shared across backends, so a stored id may belong to another one
 		const favorite = this.favoriteModelIds.values().next()?.value;
+		const favoriteOption = favorite
+			? availableModels.find((m) => m.id === favorite || m.model === favorite)
+			: undefined;
 
-		if (favorite) {
-			await this.selectModelById(favorite);
+		if (favoriteOption) {
+			await this.selectModelById(favoriteOption.id);
 
 			return;
 		}
@@ -207,6 +303,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
 			this.models = this.buildModelOptions(response);
+			this.warmHubDetails();
 			await this.props.fetchModalitiesForLoadedModels();
 
 			const visible = this.getVisibleModels();
@@ -254,7 +351,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	getModelStatus(modelId: string): ServerModelStatus | null {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
-		return model?.status.value ?? null;
+		return (model?.status?.value as ServerModelStatus) ?? null;
 	}
 
 	hasModel(modelName: string): boolean {
@@ -265,19 +362,32 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.favoriteModelIds.has(modelId);
 	}
 
-	isModelLoaded(modelId: string): boolean {
-		const model = this.routerModels.find((m) => m.id === modelId);
-
-		return (
-			model?.status.value === ServerModelStatus.LOADED ||
-			model?.status.value === ServerModelStatus.SLEEPING
-		);
+	isGroupOpen(id: string, fallbackOpen: boolean): boolean {
+		return this.groupOpenState.get(id) ?? fallbackOpen;
 	}
 
-	async selectModelById(modelId: string): Promise<void> {
+	isHidden(modelId: string): boolean {
+		return this.hiddenModelIds.has(modelId);
+	}
+
+	isModelLoaded(modelId: string): boolean {
+		const status = this.getModelStatus(modelId);
+
+		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
+	}
+
+	/**
+	 * Select a model. `recordRecent` marks a pick the user made in the selector, so
+	 * automatic picks (startup default, conversation sync) stay out of the recency list.
+	 */
+	async selectModelById(modelId: string, options?: { recordRecent?: boolean }): Promise<void> {
 		if (!modelId || this.updating) return;
 
-		if (this.selectedModelId === modelId) return;
+		if (this.selectedModelId === modelId) {
+			if (options?.recordRecent) this.recordRecentModel(modelId);
+
+			return;
+		}
 
 		const option = this.models.find((model) => model.id === modelId);
 
@@ -289,6 +399,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		try {
 			this.selectedModelId = option.id;
 			this.selectedModelName = option.model;
+
+			if (options?.recordRecent) this.recordRecentModel(modelId);
 		} finally {
 			this.updating = false;
 		}
@@ -301,8 +413,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const option = this.models.find((model) => model.model === modelName);
 
 		if (option) {
-			this.selectedModelId = option.id;
-			this.selectedModelName = option.model;
+			void this.selectModelById(option.id);
 		}
 	}
 
@@ -331,20 +442,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	toDisplayName(id: string): string {
-		const segments = id.split(/\\|\//);
-		const candidate = segments.pop();
-
-		return candidate && candidate.trim().length > 0 ? candidate : id;
-	}
-
-	toggleFavorite(modelId: string): void {
+	/** Add or remove several models at once, e.g. every quant of a family. */
+	setFavorites(modelIds: string[], favorite: boolean): void {
 		const next = new SvelteSet(this.favoriteModelIds);
 
-		if (next.has(modelId)) {
-			next.delete(modelId);
-		} else {
-			next.add(modelId);
+		for (const modelId of modelIds) {
+			if (favorite) {
+				next.add(modelId);
+			} else {
+				next.delete(modelId);
+			}
 		}
 
 		this.favoriteModelIds = next;
@@ -353,6 +460,75 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			localStorage.setItem(FAVORITE_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
 		} catch {
 			toast.error('Failed to save favorite models to local storage');
+		}
+	}
+
+	setGroupOpen(id: string, open: boolean): void {
+		const next = new SvelteMap(this.groupOpenState);
+
+		next.set(id, open);
+		this.groupOpenState = next;
+
+		try {
+			localStorage.setItem(
+				MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
+				JSON.stringify(Object.fromEntries(next))
+			);
+		} catch {
+			toast.error('Failed to save the model list state to local storage');
+		}
+	}
+
+	toDisplayName(id: string): string {
+		const segments = id.split(/\\|\//);
+		const candidate = segments.pop();
+
+		return candidate && candidate.trim().length > 0 ? candidate : id;
+	}
+
+	toggleFavorite(modelId: string): void {
+		this.setFavorites([modelId], !this.favoriteModelIds.has(modelId));
+	}
+
+	/** Models hidden from the selector stay in the manager, flagged and unhideable. */
+	toggleHidden(modelId: string): void {
+		const next = new SvelteSet(this.hiddenModelIds);
+
+		if (next.has(modelId)) {
+			next.delete(modelId);
+		} else {
+			next.add(modelId);
+		}
+
+		this.hiddenModelIds = next;
+
+		try {
+			localStorage.setItem(HIDDEN_MODELS_LOCALSTORAGE_KEY, JSON.stringify([...next]));
+		} catch {
+			toast.error('Failed to save hidden models to local storage');
+		}
+	}
+
+	/**
+	 * Warm the Hub record for the local repos, so a list can read the context and the
+	 * size the server only reports once a model is loaded. Best effort, and only for
+	 * installs that opted into the Hub.
+	 */
+	warmHubDetails(): void {
+		if (!settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]) return;
+
+		const repos: string[] = [];
+
+		for (const option of this.models) {
+			const repo = option.model.split(':')[0];
+
+			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
+		}
+
+		// a large catalog would fire one request per repo on every load, so this warms
+		// the ones the lists mount first and lets the rest arrive on demand
+		for (const repo of repos.slice(0, MODEL_ROW_WINDOW)) {
+			void HuggingFaceService.getDetails(repo).catch(() => {});
 		}
 	}
 
@@ -372,8 +548,13 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return (
 			entries
-				// sidecar entries mark downloaded sidecar files, not loadable models
-				.filter(({ item }) => !ModelsService.isSidecarEntry(item.id))
+				// sidecar entries mark downloaded sidecar files, not loadable models;
+				// the router also lists projector files by filename, which carry the
+				// sidecar token inside the id rather than after a colon
+				.filter(
+					({ item }) =>
+						!ModelsService.isSidecarEntry(item.id) && !ModelsService.parseModelId(item.id).sidecar
+				)
 				// in-flight downloads are not usable models yet; the selector tracks
 				// them in its "Download in progress" section instead
 				.filter(({ item }) => item.status?.value !== ServerModelStatus.DOWNLOADING)
@@ -424,6 +605,27 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			toast.error('Failed to load favorite models from local storage');
 
 			return new Set();
+		}
+	}
+
+	/** Move a model to the front of the recently used list. */
+	private recordRecentModel(qualifiedId: string): void {
+		this.recentModelIds = [
+			qualifiedId,
+			...this.recentModelIds.filter((id) => id !== qualifiedId)
+		].slice(0, RECENT_MODEL_LIMIT);
+		this.recentModelUsage = { ...this.recentModelUsage, [qualifiedId]: Date.now() };
+
+		if (!browser) return;
+
+		try {
+			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
+			localStorage.setItem(
+				RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
+				JSON.stringify(this.recentModelUsage)
+			);
+		} catch {
+			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}
 	}
 
