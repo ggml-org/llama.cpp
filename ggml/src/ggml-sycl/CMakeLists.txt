@@ -4,6 +4,117 @@ if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL)$")
     message(FATAL_ERROR "GGML_SYCL_TARGET: Invalid target, the supported options are [INTEL]")
 endif()
 
+# CMake build tree wants and can work with only one C++ compiler, but
+# - ggml-sycl wants -fsycl capable compiler
+# - ggml-hip wants hipcc
+# thanks ggml backends talking only through C API, we can freely build one backend with it's own compiler
+# so this branch does exactly that: we build this backend as externalproject, an existing pattern from hexagon backend
+if (GGML_SYCL_SEPARATE_BUILD)
+    if (CMAKE_GENERATOR MATCHES "^Visual Studio")
+        # the nested project inherits the Visual Studio generator and its MSVC toolset, and
+        # CMAKE_CXX_COMPILER does not select a toolset there; use Ninja (docs/backend/SYCL.md),
+        # or the non-separate build, which already switches ggml-sycl to the Intel toolset
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD does not support Visual Studio generators, use -G Ninja")
+    endif()
+    if (NOT GGML_BACKEND_DL)
+        # only tested with shared libraries
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD requires GGML_BACKEND_DL")
+    endif()
+    unset(GGML_SYCL_SEPARATE_BUILD_CXX_PATH CACHE)
+    find_program(GGML_SYCL_SEPARATE_BUILD_CXX_PATH ${GGML_SYCL_SEPARATE_BUILD_CXX})
+    if (NOT GGML_SYCL_SEPARATE_BUILD_CXX_PATH)
+        message(FATAL_ERROR "GGML_SYCL_SEPARATE_BUILD_CXX: ${GGML_SYCL_SEPARATE_BUILD_CXX} not found")
+    endif()
+
+    # select the minimal possible build because we only need one backend
+    set(sycl_args
+        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+        -DCMAKE_CXX_COMPILER=${GGML_SYCL_SEPARATE_BUILD_CXX_PATH}
+        -DCMAKE_SKIP_BUILD_RPATH=ON
+        -DBUILD_SHARED_LIBS=ON
+        -DGGML_BACKEND_DL=ON
+        -DGGML_CPU=OFF
+        -DGGML_BUILD_TESTS=OFF
+        -DGGML_BUILD_EXAMPLES=OFF
+        -DGGML_CCACHE=OFF)
+    # no compiler cache in front of the nested icpx build: an sccache launcher has replaced icpx with
+    # the host c++ on this fork (AGENTS.md, build gotchas). Empty launchers alone are not enough,
+    # because GGML_CCACHE then installs ccache or sccache as a global rule launcher, so it is OFF too.
+    list(APPEND sycl_args -DCMAKE_C_COMPILER_LAUNCHER= -DCMAKE_CXX_COMPILER_LAUNCHER=)
+
+    # append everything starting with GGML_SYCL to the flags
+    get_cmake_property(cache_vars CACHE_VARIABLES)
+    foreach (var ${cache_vars})
+        if (var MATCHES "^GGML_SYCL" AND NOT var MATCHES "^GGML_SYCL_SEPARATE_BUILD")
+            list(APPEND sycl_args -D${var}=${${var}})
+        endif()
+    endforeach()
+
+    # package discovery and install RPATH settings do not reach the nested configure on their own;
+    # this fork's documented recipe supplies them as cache variables (packaging/arch/PKGBUILD).
+    # list values are joined with | and split again by LIST_SEPARATOR below
+    set(sycl_forward_vars MKL_DIR TBB_DIR IntelSYCL_DIR DNNL_DIR DNNL_GPU_VENDOR CMAKE_PREFIX_PATH
+                          CMAKE_INSTALL_RPATH CMAKE_BUILD_WITH_INSTALL_RPATH CMAKE_MAKE_PROGRAM)
+    get_property(sycl_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (sycl_multi_config)
+        # custom configurations (e.g. Profile) must exist in the nested project too
+        list(APPEND sycl_forward_vars CMAKE_CONFIGURATION_TYPES)
+    endif()
+    foreach (var ${sycl_forward_vars})
+        if (DEFINED ${var})
+            string(REPLACE ";" "|" sycl_arg_value "${${var}}")
+            list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
+        endif()
+    endforeach()
+    # anything else the nested configure needs (list values use | for ;)
+    list(APPEND sycl_args ${GGML_SYCL_SEPARATE_BUILD_ARGS})
+
+    # multi-config generators put the module under a per-configuration directory and need
+    # --config on the nested build; single-config generators leave both empty
+    if (sycl_multi_config)
+        set(sycl_cfg_arg --config $<CONFIG>)
+        set(sycl_cfg_dir $<CONFIG>/)
+    endif()
+    set(sycl_lib ${CMAKE_SHARED_MODULE_PREFIX}ggml-sycl${CMAKE_SHARED_MODULE_SUFFIX})
+    set(sycl_out ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/${sycl_cfg_dir}${sycl_lib})
+    # generator expressions in BYPRODUCTS need CMake 3.20; nothing consumes the module as a build
+    # input, so older CMake with a multi-config generator only loses it from the clean target
+    set(sycl_byproducts ${sycl_out})
+    if (sycl_multi_config AND CMAKE_VERSION VERSION_LESS 3.20)
+        set(sycl_byproducts "")
+    endif()
+
+    # ggml is not built standalone here, so use a wrapper project
+    set(sycl_src ${CMAKE_CURRENT_BINARY_DIR}/nested-src)
+    file(WRITE ${sycl_src}/CMakeLists.txt
+        "cmake_minimum_required(VERSION ${CMAKE_VERSION})\n"
+        "project(ggml-sycl-nested C CXX)\n"
+        "add_subdirectory(\"${CMAKE_CURRENT_SOURCE_DIR}/../..\" ggml)\n")
+
+    include(ExternalProject)
+    ExternalProject_Add(ggml-sycl
+        SOURCE_DIR ${sycl_src}
+        BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/nested
+        LIST_SEPARATOR |
+        CMAKE_ARGS ${sycl_args}
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${sycl_cfg_arg} --target ggml-sycl
+        BUILD_ALWAYS ON
+        BUILD_BYPRODUCTS ${sycl_byproducts}
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_if_different <BINARY_DIR>/bin/${sycl_cfg_dir}${sycl_lib} ${sycl_out})
+    add_dependencies(ggml ggml-sycl)
+
+    if (GGML_BACKEND_DIR)
+        install(PROGRAMS ${sycl_out} DESTINATION ${GGML_BACKEND_DIR})
+    else()
+        install(PROGRAMS ${sycl_out} DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+    return()
+endif()
+
+# icpx links temporary objects that are deleted afterwards, so the linker depfile makes ggml-sycl always out of date
+set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
+
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
 if (DEFINED ENV{ONEAPI_ROOT})

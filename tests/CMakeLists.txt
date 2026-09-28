@@ -519,7 +519,7 @@ endif()
 llama_build(test-turbo-innerq-runtime.cpp)
 llama_test(test-turbo-innerq-runtime)
 
-if (GGML_SYCL)
+if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     add_executable(test-sycl-turbo test-sycl-turbo.cpp)
     target_link_libraries(test-sycl-turbo PRIVATE llama-common ggml-sycl)
     add_test(NAME test-sycl-turbo COMMAND test-sycl-turbo)
