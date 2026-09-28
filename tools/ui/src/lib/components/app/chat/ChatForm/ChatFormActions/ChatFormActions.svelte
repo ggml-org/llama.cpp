@@ -30,7 +30,6 @@
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
 	}
@@ -44,7 +43,6 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -135,10 +133,6 @@
 		},
 		get onFileUpload() {
 			return onFileUpload;
-		},
-
-		get onMcpSettingsClick() {
-			return onMcpSettingsClick;
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;

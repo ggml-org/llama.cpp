@@ -26,6 +26,7 @@
 		onSearchDeactivated?: () => void;
 		onSearchClick?: () => void;
 		onManageModelsClick?: () => void;
+		onMcpClick?: () => void;
 		onNewChat?: () => void;
 		onSettingsClick?: () => void;
 	}
@@ -35,6 +36,7 @@
 		isExpandedMode = false,
 		isSearchModeActive = $bindable(false),
 		onManageModelsClick,
+		onMcpClick,
 		onNewChat,
 		onSearchClick,
 		onSearchDeactivated,
@@ -123,16 +125,18 @@
 						}
 					: item.action === SidebarAction.MANAGE_MODELS
 						? () => onManageModelsClick?.()
-						: item.action === SidebarAction.SETTINGS
-							? () => onSettingsClick?.()
-							: item.route
-								? () => {
-										onNewChat?.();
-										goto(item.route!);
-									}
-								: isSearchOnMobile
-									? undefined
-									: onSearchClick}
+						: item.action === SidebarAction.MCP
+							? () => onMcpClick?.()
+							: item.action === SidebarAction.SETTINGS
+								? () => onSettingsClick?.()
+								: item.route
+									? () => {
+											onNewChat?.();
+											goto(item.route!);
+										}
+									: isSearchOnMobile
+										? undefined
+										: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -181,16 +185,18 @@
 						}
 					: item.action === SidebarAction.MANAGE_MODELS
 						? () => onManageModelsClick?.()
-						: item.action === SidebarAction.SETTINGS
-							? () => onSettingsClick?.()
-							: item.route
-								? () => {
-										onNewChat?.();
-										goto(item.route!);
-									}
-								: isSearchOnMobile
-									? undefined
-									: onSearchClick}
+						: item.action === SidebarAction.MCP
+							? () => onMcpClick?.()
+							: item.action === SidebarAction.SETTINGS
+								? () => onSettingsClick?.()
+								: item.route
+									? () => {
+											onNewChat?.();
+											goto(item.route!);
+										}
+									: isSearchOnMobile
+										? undefined
+										: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
