@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { ArrowLeft, Compass } from '@lucide/svelte';
+	import { ArrowLeft, Compass, Server } from '@lucide/svelte';
 	import ModelsDiscover from '$lib/components/app/models/discover/ModelsDiscover.svelte';
 	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
+	import ModelsManagerModelProviders from '$lib/components/app/models/ModelsManager/ModelsManagerModelProviders.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { MODEL_ICON } from '$lib/constants';
@@ -15,7 +16,7 @@
 
 	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
-	type View = 'discover' | 'manage';
+	type View = 'discover' | 'manage' | 'providers';
 
 	/** How long a view takes to fade out before the next one fades in. */
 	const VIEW_FADE_MS = 150;
@@ -50,7 +51,9 @@
 		return () => clearTimeout(timer);
 	});
 
-	let title = $derived(view === 'discover' ? 'Discover' : 'Models');
+	let title = $derived(
+		view === 'discover' ? 'Discover' : view === 'providers' ? 'Providers' : 'Models'
+	);
 
 	// the sidebar's Discover entry opens this dialog on its Discover view
 	$effect(() => {
@@ -115,6 +118,13 @@
 							? 'opacity-100'
 							: 'opacity-0'}"
 					/>
+
+					<Server
+						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
+						'providers'
+							? 'opacity-100'
+							: 'opacity-0'}"
+					/>
 				</span>
 
 				<span>{title}</span>
@@ -135,11 +145,26 @@
 
 							Discover Models
 						</Button>
+
+						<Button
+							class="gap-1.5"
+							onclick={() => (view = 'providers')}
+							size="sm"
+							variant="tertiary"
+						>
+							<Server class="h-3.5 w-3.5" />
+
+							Manage Providers
+						</Button>
 					{/snippet}
 				</ModelsManager>
-			{:else}
+			{:else if shownView === 'discover'}
 				<div class="grid h-full overflow-hidden" style="grid-template-columns: auto 1fr;">
 					<ModelsDiscover />
+				</div>
+			{:else}
+				<div class="h-full overflow-y-auto">
+					<ModelsManagerModelProviders />
 				</div>
 			{/if}
 		</div>
