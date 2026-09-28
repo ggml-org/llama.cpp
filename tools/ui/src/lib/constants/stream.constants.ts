@@ -2,6 +2,10 @@
 // while the tab was hidden. covers brief background pauses without thrashing live streams
 export const STREAM_VISIBILITY_KICK_MS = 3000;
 
+// minimum gap between synthesized live timing updates for backends that do not
+// stream their own, keeps the per-chunk state updates cheap
+export const STREAM_LIVE_TIMINGS_INTERVAL_MS = 500;
+
 // separator joining a conversation id and its per-model stream identity
 // suffix (conv::model) used by the server side replay buffer
 export const CONVERSATION_ID_SEPARATOR = '::';
