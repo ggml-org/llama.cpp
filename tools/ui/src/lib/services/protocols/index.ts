@@ -8,11 +8,12 @@
 
 import { openaiAdapter } from './openai';
 import type { ChatProtocolAdapter } from './types';
-import type { Backend, BackendProtocol } from '$lib/types';
+import { BackendProtocol } from '$lib/constants';
+import type { Backend } from '$lib/types';
 
 const ADAPTERS: Record<BackendProtocol, ChatProtocolAdapter> = {
-	'llama.cpp': openaiAdapter,
-	openai: openaiAdapter
+	[BackendProtocol.COMPAT]: openaiAdapter,
+	[BackendProtocol.OPENAI]: openaiAdapter
 };
 
 export function getProtocolAdapter(backend?: Backend): ChatProtocolAdapter {

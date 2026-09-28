@@ -9,6 +9,7 @@
 
 import { browser } from '$app/environment';
 import {
+	BackendProtocol,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	LOCAL_BACKEND_ID,
@@ -648,7 +649,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		// local props describe the server the UI is served from; keep them while
 		// an external backend is active instead of dropping and refetching
-		if (backend.protocol === 'llama.cpp') {
+		if (backend.protocol === BackendProtocol.COMPAT) {
 			serverStore.restoreLocalState();
 		} else {
 			serverStore.cacheLocalState();
@@ -664,7 +665,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return;
 		}
 
-		if (backend.protocol === 'llama.cpp' && !serverStore.props) {
+		if (backend.protocol === BackendProtocol.COMPAT && !serverStore.props) {
 			// first visit to the local tab in this session
 			await serverStore.fetch({ background: true });
 		}
@@ -674,7 +675,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		// the local router rows carry the load statuses; the startup prefetch
 		// already returned them, so a tab switch rebuilds the list from memory
-		if (backend.protocol === 'llama.cpp' && this.routerModels.length === 0 && cached.raw) {
+		if (
+			backend.protocol === BackendProtocol.COMPAT &&
+			this.routerModels.length === 0 &&
+			cached.raw
+		) {
 			this.routerModels = cached.raw.data;
 			this.activeModels = this.buildModelOptions(cached.raw);
 		}

@@ -33,7 +33,8 @@ function groups(): GroupedModelOptions {
 		available: [
 			{ items: [row('org/a'), row('org/b'), row('org/c')], orgName: 'org' },
 			{ items: [row('other/d')], orgName: 'other' }
-		]
+		],
+		providers: []
 	};
 }
 

@@ -1,10 +1,14 @@
 <script lang="ts">
 	import { ActionIcon } from '$lib/components/app';
+	import { BackendIcon } from '$lib/components/app/backends';
 	import { ICON_CLASS_DEFAULT, MODEL_LOAD_ICONS } from '$lib/constants';
-	import { modelsStore } from '$lib/stores';
+	import { backendsModelsStore, modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
 
 	interface Props {
+		/** Backend can load and unload models, llama-compat servers only. */
+		canLoad: boolean;
 		class?: string;
 		isFailed?: boolean;
 		isLoaded: boolean;
@@ -15,9 +19,14 @@
 		revealOnHover?: boolean;
 		/** Renders the state alone, for a caller that moves load and unload elsewhere. */
 		showAction?: boolean;
+		/** Non-loadable rows show the provider mark, which identifies them in a flat list. */
+		showBackendMark?: boolean;
+		/** Table rows mark a remote provider, which this UI cannot load or unload. */
+		showRemoteMark?: boolean;
 	}
 
 	let {
+		canLoad,
 		class: className = '',
 		isFailed = false,
 		isLoaded,
@@ -25,12 +34,35 @@
 		isSleeping = false,
 		option,
 		revealOnHover = true,
-		showAction = true
+		showAction = true,
+		showBackendMark = false,
+		showRemoteMark = false
 	}: Props = $props();
+
+	let backendName = $derived(getBackend(option.backendId)?.name ?? 'Remote provider');
+	/** The provider's listing failed, so nothing it serves is selectable right now. */
+	let isBackendFailed = $derived(
+		Boolean(option.backendId && backendsModelsStore.get(option.backendId).error)
+	);
 </script>
 
 <div class={['flex w-5 shrink-0 items-center justify-center', className]}>
-	{#if isLoading}
+	{#if !canLoad}
+		{#if showBackendMark}
+			<BackendIcon backend={getBackend(option.backendId)} class="h-3.5 w-3.5" />
+		{:else if showRemoteMark}
+			<span
+				class="flex items-center gap-1 {isBackendFailed ? 'opacity-50 grayscale' : ''}"
+				title={isBackendFailed ? `${backendName} is unavailable` : backendName}
+			>
+				<BackendIcon backend={getBackend(option.backendId)} class="h-3.5 w-3.5" />
+
+				{#if isBackendFailed}
+					<MODEL_LOAD_ICONS.failed class="h-3 w-3 text-destructive" />
+				{/if}
+			</span>
+		{/if}
+	{:else if isLoading}
 		<MODEL_LOAD_ICONS.loading class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 	{:else}
 		<!-- the state dot is what the row shows at rest; the action takes its place on hover -->

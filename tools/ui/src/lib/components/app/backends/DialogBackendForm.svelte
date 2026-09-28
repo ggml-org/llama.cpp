@@ -8,13 +8,14 @@
 	import {
 		BACKEND_ID_PREFIX,
 		BACKEND_PRESETS,
+		BackendProtocol,
 		DISMISSED_RECOMMENDED_BACKENDS_LOCALSTORAGE_KEY
 	} from '$lib/constants';
 	import { BooleanString } from '$lib/enums';
 	import { BackendsService } from '$lib/services';
 	import type { BackendTestResult } from '$lib/services/backends.service';
 	import { backendsStore } from '$lib/stores';
-	import type { Backend, BackendPreset, BackendProtocol } from '$lib/types';
+	import type { Backend, BackendPreset } from '$lib/types';
 	import { findBackendPreset, uuid } from '$lib/utils';
 	import { untrack } from 'svelte';
 
@@ -28,7 +29,7 @@
 
 	let {
 		backend = null,
-		defaultProtocol = 'openai',
+		defaultProtocol = BackendProtocol.OPENAI,
 		onOpenChange,
 		onSaved,
 		open = $bindable(false)

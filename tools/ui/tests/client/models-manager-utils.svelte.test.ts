@@ -15,7 +15,7 @@ import type { ApiModelDataEntry, ModelOption } from '$lib/types';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function option(model: string, id = model): ModelOption {
-	return { capabilities: [], id, model, name: model };
+	return { backendId: LOCAL_BACKEND_ID, capabilities: [], id, model, name: model };
 }
 
 function routerEntry(id: string, status: ServerModelStatus): ApiModelDataEntry {
@@ -43,8 +43,8 @@ describe('groupModelQuants', () => {
 		]);
 
 		expect(groups.map((group) => [group.key, group.kind, group.quants.length])).toEqual([
-			['org/Qwen3-8B', ModelGroupKind.QUANTS, 2],
-			['org/Llama-3-8B', ModelGroupKind.QUANTS, 1]
+			[`${LOCAL_BACKEND_ID}::org/Qwen3-8B`, ModelGroupKind.QUANTS, 2],
+			[`${LOCAL_BACKEND_ID}::org/Llama-3-8B`, ModelGroupKind.QUANTS, 1]
 		]);
 	});
 
@@ -61,8 +61,8 @@ describe('groupModelQuants', () => {
 		]);
 
 		expect(groups.map((group) => [group.key, group.kind])).toEqual([
-			['org/Qwen3-8B::first', ModelGroupKind.VARIANTS],
-			['org/Qwen3-8B::second', ModelGroupKind.VARIANTS]
+			[`${LOCAL_BACKEND_ID}::org/Qwen3-8B::first`, ModelGroupKind.VARIANTS],
+			[`${LOCAL_BACKEND_ID}::org/Qwen3-8B::second`, ModelGroupKind.VARIANTS]
 		]);
 	});
 });
