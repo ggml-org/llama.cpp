@@ -10,6 +10,8 @@ class UiStore {
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
 
+	discoverModelsOpen = $state(false);
+
 	/** Whether the desktop sidebar is expanded (open). */
 	isSidebarExpanded = $state(false);
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
@@ -23,6 +25,10 @@ class UiStore {
 		this.composerFocusRequested = false;
 
 		return requested;
+	}
+
+	openDiscoverModels(): void {
+		this.discoverModelsOpen = true;
 	}
 
 	/** Open the models manager, optionally focused on one model. */
