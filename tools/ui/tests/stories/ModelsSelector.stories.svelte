@@ -1,8 +1,8 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsSelectorList from '$lib/components/app/models/ModelsSelectorList.svelte';
-	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelectorOption.svelte';
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/models/utils';
+	import ModelsSelectorList from '$lib/components/app/models/ModelsSelector/ModelsSelectorList.svelte';
+	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelector/ModelsSelectorOption.svelte';
+	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores/models/index.svelte';
 
@@ -103,8 +103,8 @@
 				orgName: 'intel'
 			}
 		],
-		favorites: favoriteModels,
-		loaded: loadedModels
+		loaded: loadedModels,
+		providers: []
 	};
 
 	function handleSelect(modelId: string) {
@@ -124,8 +124,8 @@
 		<ModelsSelectorList
 			{activeId}
 			currentModel={selectedModel}
+			favorites={favoriteModels}
 			groups={groupedOptions}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -138,10 +138,9 @@
 			currentModel={null}
 			groups={{
 				available: [],
-				favorites: [],
-				loaded: [loadedModels[0]]
+				loaded: [loadedModels[0]],
+				providers: []
 			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>
@@ -152,12 +151,12 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
+			favorites={favoriteModels}
 			groups={{
 				available: [],
-				favorites: favoriteModels,
-				loaded: []
+				loaded: [],
+				providers: []
 			}}
-			onInfoClick={(modelName) => console.log('Info clicked:', modelName)}
 			onSelect={handleSelect}
 		/>
 	</div>

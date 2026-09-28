@@ -59,6 +59,7 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  * `class` and `style` props and inherits color via `currentColor`.
  */
 export { default as Logo } from './Logo.svelte';
+
 /**
  * **CollapsibleSection** - Section with a trigger that expands in place
  *
