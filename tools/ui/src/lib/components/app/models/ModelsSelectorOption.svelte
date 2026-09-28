@@ -87,6 +87,7 @@
 	<ModelId
 		aliases={option.aliases}
 		class="flex-1"
+		draftSidecars={option.draftSidecars}
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
