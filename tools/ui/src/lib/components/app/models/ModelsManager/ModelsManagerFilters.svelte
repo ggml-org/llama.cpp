@@ -1,12 +1,17 @@
 <script lang="ts">
-	import { ScrollCarousel } from '$lib/components/app';
+	import { Check, ChevronDown, Server } from '@lucide/svelte';
+	import { Logo, ScrollCarousel } from '$lib/components/app';
+	import { BackendIcon } from '$lib/components/app/backends';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Select from '$lib/components/ui/select';
+	import { Toggle } from '$lib/components/ui/toggle';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,
 		FILTER_TOGGLE_ITEM_CLASS,
 		FILTER_TRIGGER_CLASS,
+		LOCAL_BACKEND_ID,
 		MODALITY_FLAG_KEYS,
 		MODALITY_ICONS,
 		MODALITY_KEYS,
@@ -16,21 +21,33 @@
 	} from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
+	import type { Backend } from '$lib/types/backend';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
+		backends: Backend[];
 		/** Capabilities a model must have every one of. */
 		capabilities?: ModelCapability[];
 		/** Smallest context a model must support; 0 keeps every model. */
 		contextLimit?: number;
+		/** Keep only models that have a draft sidecar to speculate with. */
+		draft?: boolean;
 		/** Modalities a model must support at least one of. */
 		modalities?: ModalityKey[];
+		/** Backend ids to keep; empty keeps every provider. */
+		providers?: string[];
+		/** Repos each provider contributes to the current search, shown in the menu. */
+		providerCounts?: Record<string, number>;
 	}
 
 	let {
+		backends,
 		capabilities = $bindable<ModelCapability[]>([]),
 		contextLimit = $bindable(0),
-		modalities = $bindable<ModalityKey[]>([])
+		draft = $bindable(false),
+		modalities = $bindable<ModalityKey[]>([]),
+		providerCounts = {},
+		providers = $bindable<string[]>([])
 	}: Props = $props();
 
 	const CONTEXT_STEPS: { label: string; value: number }[] = [
@@ -83,10 +100,34 @@
 		modalities = values.filter((value): value is ModalityKey => MODALITY_VALUES.has(value));
 	}
 
+	// none selected means every provider, so the label names the selection
+	let providerLabel = $derived(
+		providers.length === 0
+			? 'All providers'
+			: providers.length === 1
+				? (backends.find((backend) => backend.id === providers[0])?.name ?? '1 provider')
+				: `${providers.length} providers`
+	);
 	let contextLabel = $derived(
 		CONTEXT_STEPS.find((step) => step.value === contextLimit)?.label ?? CONTEXT_STEPS[0].label
 	);
+
+	function toggleProvider(id: string, checked: boolean | 'indeterminate'): void {
+		providers = checked === true ? [...providers, id] : providers.filter((entry) => entry !== id);
+	}
 </script>
+
+{#snippet providerMark(backend: Backend)}
+	{#if backend.id === LOCAL_BACKEND_ID}
+		<BackendIcon {backend} class="h-3.5 w-3.5">
+			{#snippet fallback()}
+				<Logo class="shrink-0" style="--size: 0.875rem" />
+			{/snippet}
+		</BackendIcon>
+	{:else}
+		<BackendIcon {backend} class="h-3.5 w-3.5" />
+	{/if}
+{/snippet}
 
 <!-- below md the carousel keeps a row of its own: a toolbar that also holds a call to
      action would otherwise squeeze the filters out of sight -->
@@ -96,6 +137,53 @@
 	gapSize="2"
 	innerClass="items-center"
 >
+	{#if backends.length > 1}
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger>
+				{#snippet child({ props })}
+					<button
+						{...props}
+						class="inline-flex items-center whitespace-nowrap {FILTER_TRIGGER_CLASS}"
+						type="button"
+					>
+						<Server class="h-3.5 w-3.5" />
+
+						{providerLabel}
+
+						<ChevronDown class="h-3.5 w-3.5 opacity-60" />
+					</button>
+				{/snippet}
+			</DropdownMenu.Trigger>
+
+			<DropdownMenu.Content align="start" class="min-w-48">
+				<DropdownMenu.Group>
+					<DropdownMenu.GroupHeading>Providers</DropdownMenu.GroupHeading>
+
+					{#each backends as backend (backend.id)}
+						<DropdownMenu.CheckboxItem
+							checked={providers.includes(backend.id)}
+							onCheckedChange={(checked) => toggleProvider(backend.id, checked)}
+						>
+							{@render providerMark(backend)}
+
+							{backend.name}
+
+							<DropdownMenu.Shortcut>{providerCounts[backend.id] ?? 0}</DropdownMenu.Shortcut>
+						</DropdownMenu.CheckboxItem>
+					{/each}
+				</DropdownMenu.Group>
+
+				{#if providers.length > 0}
+					<DropdownMenu.Separator />
+
+					<DropdownMenu.Item onSelect={() => (providers = [])}
+						>Show every provider</DropdownMenu.Item
+					>
+				{/if}
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+	{/if}
+
 	<Select.Root
 		onValueChange={(value) => (contextLimit = Number(value))}
 		type="single"
@@ -113,6 +201,26 @@
 			{/each}
 		</Select.Content>
 	</Select.Root>
+
+	<!-- a checkbox chip: the whole pill is the control, the box is its indicator -->
+	<Toggle
+		bind:pressed={draft}
+		class="inline-flex items-center whitespace-nowrap {FILTER_TRIGGER_CLASS} px-2!"
+		variant="outline"
+	>
+		<span
+			aria-hidden="true"
+			class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border transition-shadow {draft
+				? 'border-border/30 bg-muted-foreground/15 text-foreground dark:border-border/20 dark:bg-muted-foreground/25'
+				: 'border-input bg-background dark:bg-input/30'}"
+		>
+			{#if draft}
+				<Check class="size-3" />
+			{/if}
+		</span>
+
+		Has draft sidecar
+	</Toggle>
 
 	<ToggleGroup.Root
 		class="border border-border/30 bg-muted/60 shadow-sm dark:border-border/20 dark:bg-muted/75"

@@ -3,6 +3,7 @@
 // can be hidden and selected at the same time.
 
 import ModelsSelectorHookHarness from './components/ModelsSelectorHookHarness.svelte';
+import { LOCAL_BACKEND_ID } from '$lib/constants';
 import { ServerModelStatus, ServerRole } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -11,7 +12,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 function option(model: string): ModelOption {
-	return { capabilities: [], id: model, model, name: model };
+	return { backendId: LOCAL_BACKEND_ID, capabilities: [], id: model, model, name: model };
 }
 
 function routerEntry(id: string, status: ServerModelStatus): ApiModelDataEntry {

@@ -5,7 +5,12 @@ import {
 	SETTINGS_KEYS,
 	SPEC_TYPE
 } from '$lib/constants';
-import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
+import {
+	ModelCapability,
+	ModelGroupKind,
+	ModelsTableGroupKind,
+	ModelsTableProviderKind
+} from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { backendsModelsStore, modelsStore, settingsStore } from '$lib/stores';
 import type {
@@ -13,6 +18,7 @@ import type {
 	ModelDownloadProgress,
 	ModelLoadProgress,
 	ModelOption,
+	ModelSidecarBadge,
 	ModelSidecarFile
 } from '$lib/types/models';
 import { detectThinkingSupport, detectToolUseSupport, repoOf } from '$lib/utils';
@@ -109,29 +115,9 @@ export interface ModelsTableGroup {
 	isLocal?: boolean;
 	key: string;
 	/** Manager sections use the kind constants, provider blocks their own kinds. */
-	kind: ModelsTableGroupKind | 'compat' | 'provider';
+	kind: ModelsTableGroupKind | ModelsTableProviderKind;
 	label: string;
 }
-
-/** Values the load form falls back to when the server reports nothing. */
-export const LOAD_DEFAULTS = {
-	batchSize: 2048,
-	contextLength: 8192,
-	cpuThreads: 13,
-	gpuOffload: 42,
-	speculativeDecoding: 'off',
-	ubatchSize: 512
-};
-
-export const SAMPLING_DEFAULTS = {
-	minP: 0.05,
-	repeatPenalty: 1.1,
-	temperature: 1,
-	topK: 64,
-	topP: 0.95
-};
-
-export const SPECULATIVE_OPTIONS = ['off', 'draft-model'];
 
 /** True when the user saved anything for this model. */
 export function isCustomized(override?: ModelOverride): boolean {
@@ -297,14 +283,31 @@ export function modelDrafts(
 	return drafts;
 }
 
-/** Context the model runs with: what a loaded model reports. */
-export function configuredContext(option: ModelOption): number | null {
-	return modelsStore.isModelRunning(option.model)
-		? modelsStore.props.getModelContextSize(option.model)
-		: null;
+/**
+ * Draft sidecars of a model, as ModelId badges them: what the store's listing reports
+ * plus the drafts a load would use, one kind/quant pair per sidecar.
+ */
+export function modelDraftBadges(
+	option: ModelOption,
+	settingValue?: string | null
+): ModelSidecarBadge[] {
+	const badges = [...(option.draftSidecars ?? [])];
+
+	for (const draft of modelDraftsFor(option, settingValue)) {
+		if (!draft.kind) continue;
+
+		if (badges.some((badge) => badge.kind === draft.kind && badge.quant === draft.quant)) continue;
+
+		badges.push({
+			kind: draft.kind,
+			quant: draft.quant,
+			repo: draft.model ?? repoOf(option.model) ?? ''
+		});
+	}
+
+	return badges;
 }
 
-/**
 /**
  * Capability a model reports: true or false once its listing or its chat template
  * answers, null while the Hub record that carries the template is not read yet. A
@@ -323,6 +326,27 @@ export function modelCapability(option: ModelOption, capability: ModelCapability
 	return capability === ModelCapability.TOOL_USE
 		? detectToolUseSupport(template)
 		: detectThinkingSupport(template);
+}
+
+/** Context the model runs with: the stored override, else what a loaded local model reports. */
+export function configuredContext(
+	option: ModelOption,
+	overrides?: Record<string, ModelOverride>
+): number | null {
+	const override = overrides?.[option.id]?.load?.contextLength;
+
+	if (override) return override;
+
+	if (!isLocalOption(option)) return null;
+
+	return modelsStore.isModelRunning(option.model)
+		? modelsStore.props.getModelContextSize(option.model)
+		: null;
+}
+
+/** True when the backend that serves the model can load and unload it. */
+export function canLoadOption(option: ModelOption): boolean {
+	return getBackendCapabilities(getBackend(option.backendId)).loadUnload;
 }
 
 export function servedByLabel(option: ModelOption): string {

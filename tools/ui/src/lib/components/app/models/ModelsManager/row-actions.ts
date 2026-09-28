@@ -1,19 +1,36 @@
-import { Compass, Eye, EyeOff, Heart, HeartOff, Trash2 } from '@lucide/svelte';
+import { Compass, Eye, EyeOff, Heart, HeartOff, Trash2, Zap } from '@lucide/svelte';
 import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
 import { ModelRowDownloadState } from '$lib/enums';
 import { modelsStore, uiStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 import { repoOf } from '$lib/utils';
 
-/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
-export function modelRowActions(
-	option: ModelOption,
-	favorite: boolean,
-	isHidden: boolean,
-	onDelete: (option: ModelOption) => void,
+/** Model the configuration pane has open, which a row can be set as the draft of. */
+export interface ModelRowDraftTarget {
+	id: string;
+	label: string;
+}
+
+interface RowState {
+	/** Backend can load and unload the model. */
+	canLoad: boolean;
 	/** Download state, when the row stands for a tracked download. */
-	download?: ModelRowDownloadState | null
-) {
+	download?: ModelRowDownloadState | null;
+	/** Model the pane has open, when one is selected. */
+	draftTarget?: ModelRowDraftTarget | null;
+	favorite: boolean;
+	isHidden: boolean;
+}
+
+interface RowHandlers {
+	onDelete: (option: ModelOption) => void;
+	onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
+}
+
+/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
+export function modelRowActions(option: ModelOption, state: RowState, handlers: RowHandlers) {
+	const { canLoad, download, draftTarget, favorite, isHidden } = state;
+	const canBeDraft = canLoad && !!draftTarget && draftTarget.id !== option.id;
 	const viewInDiscover = {
 		icon: Compass,
 		label: 'View in Discover',
@@ -40,7 +57,7 @@ export function modelRowActions(
 			{
 				icon: Trash2,
 				label: 'Delete from disk',
-				onclick: () => onDelete(option),
+				onclick: () => handlers.onDelete(option),
 				separator: true,
 				variant: 'destructive' as const
 			},
@@ -49,18 +66,32 @@ export function modelRowActions(
 	}
 
 	return [
+		...(canBeDraft
+			? [
+					{
+						icon: Zap,
+						label: `Use as draft for ${draftTarget.label}`,
+						onclick: () => handlers.onUseAsDraft?.(option, draftTarget.id),
+						separator: true
+					}
+				]
+			: []),
 		{
 			icon: favorite ? HeartOff : Heart,
 			label: favorite ? 'Remove from favorites' : 'Add to favorites',
 			onclick: () => modelsStore.toggleFavorite(option.model)
 		},
-		{
-			icon: Trash2,
-			label: 'Delete from disk',
-			onclick: () => onDelete(option),
-			separator: true,
-			variant: 'destructive' as const
-		},
+		...(canLoad
+			? [
+					{
+						icon: Trash2,
+						label: 'Delete from disk',
+						onclick: () => handlers.onDelete(option),
+						separator: true,
+						variant: 'destructive' as const
+					}
+				]
+			: []),
 		{
 			icon: isHidden ? Eye : EyeOff,
 			label: isHidden ? 'Unhide model' : 'Hide model',

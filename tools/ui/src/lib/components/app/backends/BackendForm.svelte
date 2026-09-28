@@ -3,12 +3,16 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import { DEFAULT_BACKEND_CHAT_PATH, DEFAULT_BACKEND_MODELS_PATH } from '$lib/constants';
-	import type { Backend, BackendProtocol } from '$lib/types';
+	import {
+		BackendProtocol,
+		DEFAULT_BACKEND_CHAT_PATH,
+		DEFAULT_BACKEND_MODELS_PATH
+	} from '$lib/constants';
+	import type { Backend } from '$lib/types';
 
 	const PROTOCOL_OPTIONS: Array<{ label: string; value: BackendProtocol }> = [
-		{ label: 'OpenAI-compatible', value: 'openai' },
-		{ label: 'Llama-compatible (llama-server)', value: 'llama.cpp' }
+		{ label: 'OpenAI-compatible', value: BackendProtocol.OPENAI },
+		{ label: 'Llama-compatible (llama-server)', value: BackendProtocol.COMPAT }
 	];
 
 	interface Props {
@@ -41,13 +45,13 @@
 	let detectionLabel = $derived.by(() => {
 		if (detecting) return 'Checking what the endpoint speaks...';
 
-		if (detected === 'llama.cpp') {
+		if (detected === BackendProtocol.COMPAT) {
 			return apiKeyRequired
 				? 'llama.cpp server detected. It asks for an API key.'
 				: 'llama.cpp server detected.';
 		}
 
-		if (detected === 'openai') return 'OpenAI-compatible endpoint detected.';
+		if (detected === BackendProtocol.OPENAI) return 'OpenAI-compatible endpoint detected.';
 
 		return null;
 	});

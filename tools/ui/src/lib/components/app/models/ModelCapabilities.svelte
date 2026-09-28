@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
+	import { isLocalOption } from './ModelsManager/utils';
 	import { MODEL_ID } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
@@ -23,7 +24,7 @@
 	$effect(() => {
 		template = '';
 
-		if (!isNearViewport) return;
+		if (!isNearViewport || !isLocalOption(option)) return;
 
 		// only the chat template says whether tools and reasoning work, and the Hub
 		// carries it for a local GGUF whether the model is loaded or not
