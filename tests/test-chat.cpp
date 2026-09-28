@@ -1527,6 +1527,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & chat_template_kwargs(const std::map<std::string, std::string> & kwargs) {
+        tc_.params.chat_template_kwargs = kwargs;
+        return *this;
+    }
+
     peg_test_builder & is_partial(bool val) {
         tc_.is_partial = val;
         return *this;
@@ -4859,6 +4864,57 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         auto tst = peg_tester("models/templates/IFM-K2-Horizon-7B.jinja", detailed_debug);
 
+        const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer","const":42}},"required":["answer"],"additionalProperties":false})";
+        tst.test("Let me calculate.</ifm|think>\n{\"answer\":42}<|ifm|im_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(answer_schema)
+            .expect_reasoning("Let me calculate.")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("Let me calculate.</ifm|think>{\"answer\":42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        // Prefill advances the grammar through both reasoning and partial final content.
+        tst.test("42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(answer_schema)
+            .messages({ message_user, simple_assist_msg("{\"answer\":", "Calculated.") })
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("Calculated.")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        common_chat_templates_inputs schema_inputs;
+        schema_inputs.messages = { message_user };
+        schema_inputs.add_generation_prompt = true;
+        schema_inputs.json_schema = answer_schema;
+        schema_inputs.tools = { get_time_tool };
+        auto schema_params = common_chat_templates_apply(tmpls.get(), schema_inputs);
+        GGML_ASSERT(!schema_params.grammar.empty());
+        GGML_ASSERT(!schema_params.grammar_lazy);
+        GGML_ASSERT(schema_params.grammar_triggers.empty());
+        for (const std::string output : {
+                "</ifm|think>{\"answer\":42}",
+                "</ifm|think>```json\n{\"answer\":42}\n```",
+                "</ifm|think>{\"answer\":\"42\"}",
+                "</ifm|think>{\"answer\":41}",
+                "</ifm|think>{\"wrong\":42}",
+                "</ifm|think>{\"answer\":42,\"extra\":1}",
+                "</ifm|think>{\"answer\":42} trailing text",
+                "Still thinking", "</ifm|think>" }) {
+            auto grammar = build_grammar(schema_params.grammar);
+            GGML_ASSERT(match_string(schema_params.generation_prompt + output, grammar.get()) ==
+                        (output == "</ifm|think>{\"answer\":42}"));
+        }
+        // A stop marker inside reasoning must be rejected, not accepted as an incomplete answer.
+        auto stop_grammar = build_grammar(schema_params.grammar);
+        auto stop_match = match_string_detailed(schema_params.generation_prompt + "<|ifm|im_end|>", stop_grammar.get());
+        GGML_ASSERT(!stop_match.success && !stop_match.incomplete);
+
         const std::string get_time_call =
             "<ifm|tool_calls>\n"
             "<ifm|tool_call>get_time\n"
@@ -4866,6 +4922,91 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             "<ifm|arg_value>Paris</ifm|arg_value>\n"
             "</ifm|tool_call>\n"
             "</ifm|tool_calls>";
+
+        // JSON envelopes allow whitespace and either field order, including during streaming.
+        for (const std::string payload : {
+                R"({"name":"get_time","arguments":{"city":"Paris"}})",
+                R"({ "arguments" : {"city":"Paris"}, "name" : "get_time" })",
+                "{\n\t\"name\" : \"get_time\",\n\"arguments\" : {\"city\":\"Paris\"}\n}" }) {
+            tst.test("</ifm|think><ifm|tool_calls><ifm|tool_call>" + payload + "</ifm|tool_call></ifm|tool_calls>")
+                .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+                .tools({ get_time_tool })
+                .chat_template_kwargs({ { "tool_call_format", R"("json")" } })
+                .expect_tool_calls({ { "get_time", R"({"city":"Paris"})", "" } })
+                .run();
+        }
+
+        // Do not emit the shorter name while a longer name is still being streamed.
+        auto longer_name_tool = get_time_tool;
+        longer_name_tool.name += "_extended";
+        tst.test("</ifm|think><ifm|tool_calls><ifm|tool_call>"
+                 "{\"name\":\"get_time_extended\",\"arguments\":{\"city\":\"Paris\"}}"
+                 "</ifm|tool_call></ifm|tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool, longer_name_tool })
+            .chat_template_kwargs({ { "tool_call_format", R"("json")" } })
+            .expect_tool_calls({ { "get_time_extended", R"({"city":"Paris"})", "" } })
+            .run();
+
+        const std::string typed_call =
+            "<ifm|tool_calls><ifm|tool_call>get_time"
+            "<ifm|arg_key>city</ifm|arg_key><ifm|arg_type>string</ifm|arg_type>"
+            "<ifm|arg_value>Paris</ifm|arg_value></ifm|tool_call></ifm|tool_calls>";
+        tst.test("</ifm|think>" + typed_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .chat_template_kwargs({ { "tool_call_format", R"("xml_typed")" } })
+            .expect_tool_calls({ { "get_time", R"({"city":"Paris"})", "" } })
+            .run();
+
+        // Wrong XML dialects are not complete calls and cannot be generated by the grammar.
+        for (const std::string format : { "xml", "xml_typed" }) {
+            common_chat_templates_inputs inputs;
+            inputs.messages = { message_user };
+            inputs.tools = { get_time_tool };
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            inputs.chat_template_kwargs["tool_call_format"] = json(format).dump();
+            auto parser = make_peg_parser(tmpls.get(), inputs);
+            const auto & invalid = format == "xml" ? typed_call : get_time_call;
+            GGML_ASSERT(parser.parse("</ifm|think>" + invalid, false).tool_calls.empty());
+            auto grammar = build_grammar(parser.params_.grammar);
+            GGML_ASSERT(!match_string(invalid, grammar.get()));
+
+            const std::string arg_prefix = "<ifm|tool_calls><ifm|tool_call>get_time<ifm|arg_key>city</ifm|arg_key>";
+            const std::string unfinished = arg_prefix + (format == "xml" ? "<ifm|arg_value>Paris" : "<ifm|arg_type>string");
+            auto stop_grammar = build_grammar(parser.params_.grammar);
+            auto stop_match = match_string_detailed(unfinished + "<|ifm|im_end|>", stop_grammar.get());
+            GGML_ASSERT(!stop_match.success && !stop_match.incomplete);
+            if (format == "xml_typed") {
+                auto type_grammar = build_grammar(parser.params_.grammar);
+                auto type_match = match_string_detailed(arg_prefix + "<ifm|arg_type>17", type_grammar.get());
+                GGML_ASSERT(!type_match.success && !type_match.incomplete);
+            }
+        }
+
+        for (const std::string effort : { "high", "medium", "low" }) {
+            const auto tag = effort == "high" ? "ifm|think" : effort == "medium" ? "ifm|think_fast" : "ifm|think_faster";
+            for (const std::string close : { "</ifm|think>", "</ifm|think_fast>", "</ifm|think_faster>" }) {
+                tst.test("<" + std::string(tag) + ">Plan." + close + "42")
+                    .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+                    .chat_template_kwargs({ { "reasoning_effort", json(effort).dump() } })
+                    .expect_reasoning("Plan.")
+                    .expect_content("42")
+                    .run();
+                tst.test("Plan." + close + "{\"answer\":42}")
+                    .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+                    .chat_template_kwargs({ { "reasoning_effort", json(effort).dump() } })
+                    .json_schema(answer_schema)
+                    .expect_reasoning("Plan.")
+                    .expect_content(R"({"answer":42})")
+                    .run();
+            }
+        }
+
+        tst.test("Still thinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect_reasoning("Still thinking")
+            .run();
 
         // The generation prompt pre-opens <ifm|think>, so the model output starts inside it.
         tst.test("Simple sum.\n</ifm|think>\n51")

@@ -3,11 +3,11 @@
 // K2 Horizon - reasoning effort picks one of three think tag pairs, tool calls are tagged:
 //   assistant := <ifm|think[_fast|_faster]> ... </ifm|think[_fast|_faster]> [content]
 //                [<ifm|tool_calls> {<ifm|tool_call>CALL</ifm|tool_call>} </ifm|tool_calls>]
-//   CALL (tool_call_format=xml, default) := name {<ifm|arg_key>k</ifm|arg_key> [<ifm|arg_type>t</ifm|arg_type>]
-//                                                 <ifm|arg_value>v</ifm|arg_value>}
+//   CALL (tool_call_format=xml, default) := name {<ifm|arg_key>k</ifm|arg_key> <ifm|arg_value>v</ifm|arg_value>}
+//   CALL (tool_call_format=xml_typed) adds a required <ifm|arg_type>t</ifm|arg_type> before each value.
 //   CALL (tool_call_format=json)          := {"name": name, "arguments": {...}}
-// The generation prompt pre-opens the think block, so the model never emits the
-// opening tag. Reasoning ends at the close tag or at a tool call section start.
+// The generation prompt pre-opens the think block; repeated opening tags are accepted.
+// Reasoning ends at any think close tag or at a tool call section start.
 common_chat_params common_chat_params_init_k2_horizon(const common_chat_template &          tmpl,
                                                       const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -52,12 +52,19 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
     const std::string THINK_END   = "</" + think + ">";
 
     data.preserved_tokens = {
-        THINK_START, THINK_END, SECTION_START, SECTION_END, CALL_START, CALL_END,
+        "<ifm|think>", "</ifm|think>", "<ifm|think_fast>", "</ifm|think_fast>",
+        "<ifm|think_faster>", "</ifm|think_faster>", SECTION_START, SECTION_END, CALL_START, CALL_END,
         ARG_KEY, ARG_KEY_END, ARG_TYPE, ARG_TYPE_END, ARG_VAL, ARG_VAL_END, TURN_END,
     };
 
     data.thinking_start_tag = THINK_START;
-    data.thinking_end_tags  = { THINK_END, SECTION_START };
+    data.thinking_end_tags  = { THINK_END };
+    for (const std::string tag : { "</ifm|think>", "</ifm|think_fast>", "</ifm|think_faster>" }) {
+        if (tag != THINK_END) {
+            data.thinking_end_tags.push_back(tag);
+        }
+    }
+    data.thinking_end_tags.push_back(SECTION_START);
 
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|ifm|im_start|>assistant" },
@@ -92,9 +99,10 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
         call_format = inputs.extra_context.at("tool_call_format");
     }
 
-    auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
-    auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+    auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
+    auto has_response_format = inputs.json_schema.is_object() && !inputs.json_schema.empty();
+    auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+    auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto end = p.end();
@@ -102,11 +110,30 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
         // the effective parse input is generation_prompt + model output
         auto opener = p.optional(p.literal(ROLE) + p.optional(p.space()));
 
-        auto body_end   = think_open ? p.until_one_of({ THINK_END, SECTION_START }) : p.until(THINK_END);
+        auto think_ends = data.thinking_end_tags;
+        think_ends.pop_back();
+        auto think_close = p.choice();
+        for (const auto & tag : think_ends) {
+            think_close |= p.literal(tag);
+        }
+        auto body_ends = think_open ? data.thinking_end_tags : think_ends;
+        body_ends.push_back(TURN_END);
+        auto body_end   = p.until_one_of(body_ends);
         auto think_body = extract_reasoning ? p.reasoning(body_end) : p.content(body_end);
         // the template writes "<tag>\n" and "</tag>\n"; those newlines are markup, not text
-        auto nl         = p.optional(p.literal("\n"));
-        auto reasoning  = p.optional(p.optional(p.literal(THINK_START) + nl) + think_body + p.optional(p.literal(THINK_END) + nl));
+        auto nl          = p.optional(p.literal("\n"));
+        auto think_start = p.one_or_more(p.literal(THINK_START) + nl);
+        auto reasoning   = p.optional(p.optional(think_start) + think_body + p.optional(think_close + nl));
+
+        if (has_response_format) {
+            // The final answer must follow a closed reasoning block, including when the prompt pre-opens it.
+            // Do not inline reasoning into schema-constrained content when extraction is disabled.
+            auto schema_reasoning = extract_reasoning ? p.reasoning(body_end) : body_end;
+            auto closed_reasoning = p.optional(think_start + schema_reasoning + think_close + nl);
+            return opener + closed_reasoning + p.space() +
+                   p.content(p.schema(p.json(), "k2h-response", inputs.json_schema)) +
+                   p.space() + p.optional(p.literal(TURN_END)) + end;
+        }
 
         auto content = p.optional(p.content(p.until_one_of({ SECTION_START, TURN_END })));
         auto tail    = p.optional(p.content(p.until(TURN_END))) + p.optional(p.literal(TURN_END));
@@ -117,8 +144,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
 
         auto tool_choices = p.choice();
         auto arg_close    = p.tool_arg_close(p.literal(ARG_VAL_END));
-        auto arg_string   = p.rule("k2h-arg-string", p.tool_arg_string_value(p.until(ARG_VAL_END)) + arg_close);
-        auto arg_type     = p.optional(p.optional(p.space()) + p.literal(ARG_TYPE) + p.until(ARG_TYPE_END) + p.literal(ARG_TYPE_END));
+        auto arg_string   = p.rule("k2h-arg-string", p.tool_arg_string_value(p.until_one_of({ ARG_VAL_END, TURN_END })) + arg_close);
 
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
@@ -126,10 +152,14 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
 
             if (call_format == "json") {
                 auto schema = common_chat_tool_parameters(function);
-                auto call   = p.tool(p.tool_open(p.literal(CALL_START) + p.literal("{\"name\": \"") + p.tool_name(p.literal(name)) +
-                                                 p.literal("\", \"arguments\": ")) +
-                                     p.tool_args(p.schema(p.json(), "k2h-tool-" + name + "-schema", schema)) +
-                                     p.tool_close(p.literal("}") + p.literal(CALL_END)));
+                auto name_field = p.atomic(p.literal("\"name\"") + p.space() + p.literal(":") + p.space() +
+                                          p.literal("\"") + p.tool_name(p.literal(name)) + p.literal("\"")) + p.space();
+                auto args_field = p.literal("\"arguments\"") + p.space() + p.literal(":") + p.space() +
+                                  p.tool_args(p.schema(p.json(), "k2h-tool-" + name + "-schema", schema)) + p.space();
+                auto comma = p.literal(",") + p.space();
+                auto call = p.tool(p.tool_open(p.literal(CALL_START) + p.space() + p.literal("{") + p.space()) +
+                                   ((name_field + comma + args_field) | (args_field + comma + name_field)) +
+                                   p.tool_close(p.literal("}") + p.space() + p.literal(CALL_END)));
                 tool_choices |= p.rule("k2h-tool-" + name, call);
                 return;
             }
@@ -141,6 +171,22 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
                 auto rule_name = "k2h-arg-" + name + "-" + param.name;
                 auto types     = param.schema->value_types();
                 auto json_val  = p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", doc, *param.schema)) + arg_close;
+
+                auto arg_type = p.eps();
+                if (call_format == "xml_typed") {
+                    std::string type_grammar;
+                    for (auto type : { common_chat_schema::TYPE_NULL, common_chat_schema::TYPE_BOOLEAN,
+                            common_chat_schema::TYPE_NUMBER, common_chat_schema::TYPE_INTEGER,
+                            common_chat_schema::TYPE_STRING, common_chat_schema::TYPE_ARRAY, common_chat_schema::TYPE_OBJECT }) {
+                        if (types.has(type)) {
+                            type_grammar += (type_grammar.empty() ? "" : " | ") + gbnf_format_literal(common_chat_schema::type_name(type));
+                        }
+                    }
+                    // Parse compound labels too, but generate a schema type, never an argument value or markup.
+                    auto type_text = p.chars("[^ \\t\\r\\n<]", 1, 1) + p.chars("[^<]", 0);
+                    arg_type = p.space() + p.literal(ARG_TYPE) + p.space() +
+                               p.gbnf(type_text, "(" + type_grammar + ")") + p.space() + p.literal(ARG_TYPE_END);
+                }
 
                 auto arg_value = types.is_only(common_chat_schema::TYPE_STRING) ? arg_string :
                                  !types.has(common_chat_schema::TYPE_STRING)    ? json_val :
@@ -181,14 +227,16 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
     data.parser = parser.save();
 
     if (include_grammar) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = !has_response_format && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
-        data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, SECTION_START },
-        };
+        if (data.grammar_lazy) {
+            data.grammar_triggers = {
+                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, SECTION_START },
+            };
+        }
     }
 
     return data;

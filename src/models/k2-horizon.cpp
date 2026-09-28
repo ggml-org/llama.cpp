@@ -6,6 +6,8 @@
 #include "models.h"
 
 void llama_model_k2_horizon::load_arch_hparams(llama_model_loader & ml) {
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, hparams.yarn_beta_fast, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW, hparams.yarn_beta_slow, false);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_GROUPNORM_GROUPS,  hparams.n_norm_groups, false);
     if (hparams.n_norm_groups == 0) {
