@@ -6,6 +6,7 @@
 		ActionIcon,
 		DialogConversationRename,
 		DialogManageModels,
+		DialogMcpServers,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -94,6 +95,7 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
+	let mcpDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -391,6 +393,7 @@
 				class="px-2"
 				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
 				onManageModelsClick={() => uiStore.openModelsManager()}
+				onMcpClick={() => (mcpDialogOpen = true)}
 				onNewChat={() => {
 					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
@@ -453,6 +456,8 @@
 />
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
+
+<DialogMcpServers bind:open={mcpDialogOpen} />
 
 <DialogManageModels bind:open={uiStore.manageModelsOpen} />
 
