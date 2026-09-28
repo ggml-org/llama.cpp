@@ -208,9 +208,9 @@ static test_status test_multi_seq_split_replay(const common_params & params, lla
         return test_status::FAIL;
     }
 
-    // identical ubatch shapes should produce identical states, but the larger
-    // stdev makes the model sensitive to backend scheduling/rounding noise
-    constexpr float nmse_eps = 1e-5f;
+    // both contexts decode identical batches, so the logits should match;
+    // random dummy models can still drift up to ~1.7e-5, so the bound is 1e-4
+    constexpr float nmse_eps = 1e-4f;
 
     float    diff_max  = 0.0f;
     uint32_t seq_first = 0;
