@@ -290,6 +290,10 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
                 mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
                 // the restore rewrites the cells behind the pool layout's back
                 mem_idx_stale_set(seq_id, 0);
+                // it can also change which cells are shared; re-derive sharing for every sequence, as seq_rm does
+                if (kpool_layout_shared()) {
+                    mem_idx_stale_set(-1, 0);
+                }
             }
         }
 
@@ -316,6 +320,10 @@ void llama_memory_hybrid_idx::state_drop(llama_seq_id seq_id) {
     if (mem_idx) {
         mem_idx->state_clear(seq_id);
         mem_idx_stale_set(seq_id, 0);
+        // clearing this sequence can end a sharing the survivor would otherwise keep flagged (see seq_rm)
+        if (kpool_layout_shared()) {
+            mem_idx_stale_set(-1, 0);
+        }
     }
 }
 
@@ -760,8 +768,9 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             n_kept     = 0;
         }
 
-        // sharing starts with a seq_cp; it ends with an edit or a seq_rm that frees the shared cells, both of
-        // which stale the sequence and force the rebuild above, so once set it holds and the rescan can be skipped
+        // sharing starts with a seq_cp; it ends with an edit, or a seq_rm/state_drop/state_read that frees the
+        // shared cells - each stales every sequence so the rebuild above re-derives it, so once set it holds
+        // until then and the rescan can be skipped
         if (unified && !sq.shared) {
             for (size_t j = n_kept; j < sq.cells.size(); ++j) {
                 if (cells.seq_count(sq.cells[j].second) > 1) {
