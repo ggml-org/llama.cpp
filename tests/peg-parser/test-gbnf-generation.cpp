@@ -398,7 +398,8 @@ void test_gbnf_generation(testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
             auto ab = p.literal("ab");
             auto cd = p.literal("cd");
-            return p.until(ab | cd) + (p.trigger_rule("one", ab, p.literal("x")) | p.trigger_rule("two", cd, p.literal("y")));
+            auto scan = p.until(ab | cd);
+            return scan + (p.trigger_rule("one", ab, p.literal("x")) | p.trigger_rule("two", cd, p.literal("y")));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
@@ -420,7 +421,8 @@ void test_gbnf_generation(testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
             auto ab = p.literal("ab");
             auto cd = p.literal("cd");
-            return p.until(ab | cd) + (p.trigger_rule("one", ab, p.literal("x")) | p.trigger_rule("two", cd, p.literal("y")));
+            auto scan = p.until(ab | cd);
+            return scan + (p.trigger_rule("one", ab, p.literal("x")) | p.trigger_rule("two", cd, p.literal("y")));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
