@@ -1155,12 +1155,10 @@ struct mtmd_tokenizer {
         auto parts_str = split_text(input_text, ctx->media_marker);
         size_t i_bm = 0;
         for (const auto & part : parts_str) {
-            if (part == ctx->media_marker) {
-                if (i_bm >= bitmaps.size()) {
-                    throw std::runtime_error(string_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
-                }
+            if (part == ctx->media_marker && i_bm < bitmaps.size()) {
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
+                // unmatched media markers (e.g. leaked into text by a client) are kept as plain text
                 parts.push_back({std::move(part), nullptr, parse_special});
             }
         }

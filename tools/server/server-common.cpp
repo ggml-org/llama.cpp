@@ -143,6 +143,26 @@ const char * get_media_marker() {
     return marker.c_str();
 }
 
+// strip literal media markers from user text (e.g. leaked by a /props dump)
+// so only the markers the server injected for media parts reach the tokenizer
+static bool strip_media_marker_in_text(std::string & text) {
+    const std::string marker = get_media_marker();
+    if (text.find(marker) == std::string::npos) {
+        return false;
+    }
+    std::string out;
+    out.reserve(text.size());
+    size_t start = 0;
+    size_t pos = 0;
+    while ((pos = text.find(marker, start)) != std::string::npos) {
+        out.append(text, start, pos - start);
+        start = pos + marker.length();
+    }
+    out.append(text, start, std::string::npos);
+    text = std::move(out);
+    return true;
+}
+
 //
 // lora utils
 //
@@ -1226,6 +1246,12 @@ json oaicompat_chat_params_parse(
         }
         json & content = msg.at("content");
         if (content.is_string() || content.is_null()) {
+            if (content.is_string()) {
+                std::string s = content.get<std::string>();
+                if (strip_media_marker_in_text(s)) {
+                    content = std::move(s);
+                }
+            }
             continue;
         }
 
@@ -1281,6 +1307,18 @@ json oaicompat_chat_params_parse(
 
             } else if (type != "text") {
                 throw std::invalid_argument("unsupported content[].type");
+            } else if (p.contains("text") && p["text"].is_string()) {
+                std::string s = p["text"].get<std::string>();
+                if (strip_media_marker_in_text(s)) {
+                    p["text"] = std::move(s);
+                }
+            }
+        }
+
+        if (msg.contains("reasoning_content") && msg["reasoning_content"].is_string()) {
+            std::string s = msg["reasoning_content"].get<std::string>();
+            if (strip_media_marker_in_text(s)) {
+                msg["reasoning_content"] = std::move(s);
             }
         }
     }

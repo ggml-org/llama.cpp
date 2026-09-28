@@ -179,3 +179,49 @@ def test_vision_embeddings(prompt, image_data, success):
         assert content[0]['embedding'] != content[2]['embedding']
     else:
         assert res.status_code != 200
+
+
+def test_vision_chat_completion_stray_media_marker():
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": "what is <__media__> ?"},
+        ],
+    })
+    # a stray marker in the text without a matching image used to fail tokenization
+    assert res.status_code == 200
+    assert "assistant" == res.body["choices"][0]["message"]["role"]
+
+
+def test_vision_chat_completion_stray_media_marker_with_image():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is this: <__media__>\n"},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_0"),
+                }},
+            ]},
+        ],
+    })
+    # a stray marker must not break the request when a real image is present
+    assert res.status_code == 200
+    assert "assistant" == res.body["choices"][0]["message"]["role"]
+
+
+def test_vision_completion_overflow_media_marker():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completions", data={
+        "prompt": {
+            JSON_PROMPT_STRING_KEY: "What is this: <__media__>\n<__media__>",
+            JSON_MULTIMODAL_KEY: [ get_img_url("IMG_BASE64_0") ],
+        },
+    })
+    # an unmatched (overflowing) media marker is tokenized as regular text
+    assert res.status_code == 200
