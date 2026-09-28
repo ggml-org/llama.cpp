@@ -56,7 +56,7 @@
 	});
 </script>
 
-<span class="relative mt-0.5 inline-flex shrink-0 {className}">
+<span class="relative inline-flex shrink-0 {className}">
 	{#if orgAvatarFailed}
 		<span
 			aria-hidden="true"
