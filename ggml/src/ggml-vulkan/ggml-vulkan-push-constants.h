@@ -205,6 +205,10 @@ struct vk_op_dsv4_hc_post_push_constants {
     uint32_t p_offset;
     uint32_t c_offset;
     uint32_t d_offset;
+
+    uint32_t gate;
+    float    gate_scale_in;
+    float    gate_scale_out;
 };
 
 struct vk_op_count_experts_push_constants {
