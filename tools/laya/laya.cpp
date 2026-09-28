@@ -86,6 +86,16 @@ struct laya_model {
     };
     std::unordered_map<std::string, int32_t> token_to_id;
     std::unordered_map<std::pair<std::string, std::string>, uint32_t, pair_hash> merge_rank;
+
+    // added tokens (HF fast-tokenizer AddedVocabulary): matched on the raw text
+    // before the Metaspace normalizer, each match breaking the word boundary.
+    // Identified from tokenizer.ggml.token_type (CONTROL / USER_DEFINED).
+    struct added_token {
+        std::string s;
+        int32_t     id  = 0;
+        bool        lstrip = false; // consume preceding whitespace on match
+    };
+    std::vector<added_token> added_tokens; // sorted by s.length() descending (longest match)
     int32_t bos_id  = 2;
     int32_t eos_id  = 1;
     int32_t sep_id  = 1;
@@ -227,7 +237,10 @@ laya_model * laya_model_load_from_file(const char * fname) {
     hp.n_head_layers   = (int32_t) gguf_get_u32(ctx_gguf, "laya.head_layers", 2);
     hp.n_swa           = (int32_t) gguf_get_u32(ctx_gguf, "laya.attention.sliding_window", 0);
     hp.swa_pattern     = (int32_t) gguf_get_u32(ctx_gguf, "laya.attention.sliding_window_pattern", 0);
+    // the encoder uses RMSNorm (rms epsilon), the decision head / scorer use
+    // LayerNorm (layer-norm epsilon); they can differ across checkpoints.
     hp.norm_eps        = gguf_get_f32(ctx_gguf, "laya.attention.layer_norm_rms_epsilon", 1e-5f);
+    hp.norm_eps_layer  = gguf_get_f32(ctx_gguf, "laya.attention.layer_norm_epsilon", hp.norm_eps);
     hp.rope_freq_base    = gguf_get_f32(ctx_gguf, "laya.rope.freq_base", 10000.0f);
     hp.rope_freq_base_swa = gguf_get_f32(ctx_gguf, "laya.rope.freq_base_swa", hp.rope_freq_base);
 
@@ -267,7 +280,7 @@ laya_model * laya_model_load_from_file(const char * fname) {
             throw std::runtime_error("missing tokenizer.ggml.tokens in GGUF");
         }
         model->token_to_id.reserve(gguf_get_arr_n(ctx_gguf, tid));
-        for (int64_t i = 0; i < gguf_get_arr_n(ctx_gguf, tid); ++i) {
+        for (int64_t i = 0; i < (int64_t) gguf_get_arr_n(ctx_gguf, tid); ++i) {
             model->token_to_id.emplace(gguf_get_arr_str(ctx_gguf, tid, i), (int32_t) i);
         }
 
@@ -283,6 +296,44 @@ laya_model * laya_model_load_from_file(const char * fname) {
                 }
                 model->merge_rank.emplace(
                         std::make_pair(word.substr(0, pos), word.substr(pos + 1)), (uint32_t) i);
+            }
+        }
+
+        // added-token table: tokens typed CONTROL (3) or USER_DEFINED (4) are the
+        // HF AddedVocabulary entries (newline runs, tab runs, HTML tags, <unusedN>,
+        // <mask>, ...). They are matched on the raw text before Metaspace.
+        const int64_t tid_type = gguf_find_key(ctx_gguf, "tokenizer.ggml.token_type");
+        if (tid_type >= 0) {
+            const int64_t n_tt = gguf_get_arr_n(ctx_gguf, tid_type);
+            const uint32_t * tt = (const uint32_t *) gguf_get_arr_data(ctx_gguf, tid_type);
+            if (tt && n_tt > 0) {
+                for (int64_t i = 0; i < n_tt && i < (int64_t) gguf_get_arr_n(ctx_gguf, tid); ++i) {
+                    const uint32_t type = tt[i];
+                    if (type == 3 /* CONTROL */ || type == 4 /* USER_DEFINED */) {
+                        laya_model::added_token at;
+                        std::string tok = gguf_get_arr_str(ctx_gguf, tid, i);
+                        if (type == 4 /* USER_DEFINED */) {
+                            // the converter pre-normalizes user-defined tokens
+                            // (U+2581 -> ' '), so restore U+2581 to match HF on
+                            // the raw text.
+                            std::string restored;
+                            restored.reserve(tok.size() + 3);
+                            for (char c : tok) {
+                                if (c == ' ') restored += "\xe2\x96\x81"; else restored += c;
+                            }
+                            tok = std::move(restored);
+                        }
+                        at.s   = tok;
+                        at.id  = (int32_t) i;
+                        at.lstrip = at.s == "<mask>"; // the only added token with lstrip in this family
+                        model->added_tokens.push_back(std::move(at));
+                    }
+                }
+                std::sort(model->added_tokens.begin(), model->added_tokens.end(),
+                          [](const laya_model::added_token & a, const laya_model::added_token & b) {
+                              if (a.s.size() != b.s.size()) return a.s.size() > b.s.size();
+                              return a.s < b.s;
+                          });
             }
         }
     }
@@ -446,6 +497,15 @@ int32_t laya_vocab_bos (const laya_model * model) { return model->bos_id; }
 int32_t laya_vocab_sep (const laya_model * model) { return model->sep_id; }
 int32_t laya_vocab_mask(const laya_model * model) { return model->mask_id; }
 
+std::string laya_vocab_mask_token(const laya_model * model) {
+    for (const auto & at : model->added_tokens) {
+        if (at.id == model->mask_id) {
+            return at.s;
+        }
+    }
+    return "<mask>";
+}
+
 // ---- self-contained tokenizer (HF fast tokenizer port) ----
 // The reference checkpoint's tokenizer is a Metaspace pre-tokenizer
 // (replacement U+2581, prepend_scheme="always") on top of a byte-level BPE
@@ -475,7 +535,7 @@ static void laya_bpe_encode(const laya_model * model, const std::string & word, 
     size_t i = 0;
     while (i < word.size()) {
         size_t len = 0;
-        const uint32_t cpt = laya_cpt_from_utf8(word.c_str() + i, word.size() - i, len);
+        laya_cpt_from_utf8(word.c_str() + i, word.size() - i, len);
         const std::string ch = word.substr(i, len);
         i += len;
 
@@ -531,15 +591,15 @@ static void laya_bpe_encode(const laya_model * model, const std::string & word, 
     }
 }
 
-std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text) {
-    std::vector<int32_t> out;
+// Tokenize one Metaspace segment (the text between two added-token matches):
+// normalize ' ' -> U+2581, prepend U+2581 if not already present, split on the
+// marker and run greedy byte-level BPE per word. prepend_scheme is "always", so
+// every segment is treated as an independent word boundary.
+static void laya_tokenize_segment(const laya_model * model, const std::string & text, std::vector<int32_t> & out) {
     if (text.empty()) {
-        return out;
+        return;
     }
 
-    // 1. normalizer: Replace(" ", "\u2581")
-    // 2. Metaspace: prepend "\u2581" if not already present
-    // 3. split on "\u2581"; every piece after a marker is a word (leading marker kept)
     std::string norm;
     norm.reserve(text.size() + 3);
     for (char c : text) {
@@ -564,7 +624,67 @@ std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string &
         laya_bpe_encode(model, word, out);
         pos = next;
     }
+}
 
+// Longest added-token match at text[pos]; returns { id, consumed_bytes } or
+// { -1, 0 } when no added token starts at pos.
+static std::pair<int32_t, size_t> laya_match_added(const laya_model * model, const std::string & text, size_t pos) {
+    for (const auto & at : model->added_tokens) {
+        const size_t len = at.s.size();
+        if (pos + len > text.size()) {
+            continue;
+        }
+        if (text.compare(pos, len, at.s) != 0) {
+            continue;
+        }
+        size_t consumed = len;
+        if (at.lstrip) {
+            // consume the whitespace run preceding the match (HF lstrip=True)
+            size_t b = pos;
+            while (b > 0 && text[b - 1] == ' ') {
+                --b;
+            }
+            consumed += pos - b;
+        }
+        return { at.id, consumed };
+    }
+    return { -1, 0 };
+}
+
+std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string & text) {
+    std::vector<int32_t> out;
+    if (text.empty()) {
+        return out;
+    }
+
+    // 1. split the raw text at added tokens (HF AddedVocabulary, before the
+    //    Metaspace normalizer). Every gap re-opens a word boundary, so the
+    //    following segment is re-prefixed with U+2581.
+    // 2. each non-added segment goes through Metaspace (replace ' ', prepend
+    //    U+2581) then greedy byte-level BPE, matching the reference.
+    if (!model->added_tokens.empty()) {
+        size_t seg_start = 0;
+        size_t i = 0;
+        while (i < text.size()) {
+            auto [tid, consumed] = laya_match_added(model, text, i);
+            if (tid < 0) {
+                ++i;
+                continue;
+            }
+            if (i > seg_start) {
+                laya_tokenize_segment(model, text.substr(seg_start, i - seg_start), out);
+            }
+            out.push_back(tid);
+            i += consumed;
+            seg_start = i;
+        }
+        if (seg_start < text.size()) {
+            laya_tokenize_segment(model, text.substr(seg_start, text.size() - seg_start), out);
+        }
+        return out;
+    }
+
+    laya_tokenize_segment(model, text, out);
     return out;
 }
 
@@ -692,7 +812,7 @@ static void laya_build_masks(const laya_batch & batch, int32_t n_swa,
     mask.assign((size_t) n * n, -INFINITY);
     mask_swa.assign((size_t) n * n, -INFINITY);
 
-    const int32_t half = n_swa / 2 + 1; // reference: config.sliding_window = local_attention//2; +1 inclusive
+    const int32_t half = n_swa / 2; // reference: config.sliding_window = local_attention//2 (HF mask: |p_q-p_k| <= half)
 
     for (int64_t i1 = 0; i1 < n; ++i1) {
         const int32_t s1 = batch.seq_id[i1];
@@ -838,7 +958,7 @@ static laya_graph laya_graph_build(const laya_model * model, const laya_batch & 
         const auto & layer = model->head_layers[il];
 
         // attn pre-norm
-        cur = laya_norm(ctx0, inpL, layer.attn_norm, layer.attn_norm_b, hp.norm_eps);
+        cur = laya_norm(ctx0, inpL, layer.attn_norm, layer.attn_norm_b, hp.norm_eps_layer);
 
         ggml_tensor * qkv_full = ggml_mul_mat(ctx0, layer.wqkv, cur);
         if (layer.wqkv_b) {
@@ -856,7 +976,7 @@ static laya_graph laya_graph_build(const laya_model * model, const laya_batch & 
         ggml_tensor * res_inp = ggml_add(ctx0, cur, inpL);
 
         // ffn pre-norm + FFN (ReLU, like nn.TransformerEncoderLayer default)
-        cur = laya_norm(ctx0, res_inp, layer.ffn_norm, layer.ffn_norm_b, hp.norm_eps);
+        cur = laya_norm(ctx0, res_inp, layer.ffn_norm, layer.ffn_norm_b, hp.norm_eps_layer);
         cur = ggml_mul_mat(ctx0, layer.ffn_up, cur);      // [4*d, n_tokens]
         if (layer.ffn_up_b) {
             cur = ggml_add(ctx0, cur, layer.ffn_up_b);
@@ -882,7 +1002,7 @@ static laya_graph laya_graph_build(const laya_model * model, const laya_batch & 
     ggml_set_name(markers, "markers");
 
     // ---- scorer: LayerNorm -> Linear -> GELU -> Linear(1) ----
-    cur = laya_norm(ctx0, markers, model->scorer_0, model->scorer_0_b, hp.norm_eps);
+    cur = laya_norm(ctx0, markers, model->scorer_0, model->scorer_0_b, hp.norm_eps_layer);
     cur = ggml_mul_mat(ctx0, model->scorer_1, cur);
     if (model->scorer_1_b) {
         cur = ggml_add(ctx0, cur, model->scorer_1_b);

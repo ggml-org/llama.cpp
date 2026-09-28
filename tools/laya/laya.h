@@ -19,8 +19,9 @@
 #include <vector>
 
 // number of marker (option) slots per sequence; must be >= max options per
-// question. The reference collates marker_pos / marker_mask to this width.
-#define LAYA_MAX_MARKERS 16
+// question (the Julia family allows 20). The reference collates marker_pos /
+// marker_mask to this width dynamically, so keep this at least that high.
+#define LAYA_MAX_MARKERS 20
 
 struct laya_hparams {
     int32_t n_embd            = 0;   // hidden size (768)
@@ -37,7 +38,8 @@ struct laya_hparams {
     int32_t n_head_layers     = 0;   // decision head transformer layers
     int32_t n_swa             = 0;   // encoder sliding window (128)
     int32_t swa_pattern       = 0;   // global_attn_every_n_layers (3)
-    float   norm_eps          = 1e-5f;
+    float   norm_eps          = 1e-5f;   // encoder RMSNorm epsilon
+    float   norm_eps_layer    = 1e-5f;   // decision-head / scorer LayerNorm epsilon
     float   rope_freq_base    = 10000.0f;
     float   rope_freq_base_swa = 10000.0f;
     std::vector<float> temperature;  // per-qtype temperature (padded to n_qtype)
@@ -92,6 +94,10 @@ std::vector<int32_t> laya_tokenize(const laya_model * model, const std::string &
 int32_t laya_vocab_bos (const laya_model * model);
 int32_t laya_vocab_sep (const laya_model * model);
 int32_t laya_vocab_mask(const laya_model * model);
+
+// the tokenizer string of the mask token (e.g. "<mask>"); the reference
+// build_sequence replaces this literal string with a space in the inputs
+std::string laya_vocab_mask_token(const laya_model * model);
 
 laya_context * laya_init(const laya_model * model, int n_threads);
 

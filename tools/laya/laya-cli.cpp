@@ -68,6 +68,85 @@ static std::string json_escape(const std::string & s) {
     return out;
 }
 
+// Python json.dumps prints the shortest round-trip repr of a float, preferring
+// fixed notation for 1e-4 <= |x| < 1e16 and ".0" for integral values, with a
+// two-digit exponent in scientific form. C's "%.17g" prints the full 17-digit
+// expansion (763.4 -> "763.39999999999998"), which diverges from the reference,
+// so reproduce Python's algorithm here.
+static std::string python_float_repr(double d) {
+    if (std::isnan(d)) return "NaN";
+    if (std::isinf(d)) return d > 0 ? "Infinity" : "-Infinity";
+
+    const bool neg = std::signbit(d);
+    if (neg) d = -d;
+
+    // shortest significant digits + decimal exponent (like Python repr)
+    char buf[64];
+    int  prec = 0;
+    for (; prec <= 17; ++prec) {
+        snprintf(buf, sizeof(buf), "%.*e", prec, d);
+        if (std::strtod(buf, nullptr) == d) {
+            break;
+        }
+    }
+    // parse "d.dddde±XX" (optional sign, mantissa, exponent)
+    const char * p = buf;
+    if (*p == '-') ++p;
+    std::string digits(1, *p++);       // first mantissa digit
+    if (*p == '.') {
+        for (++p; *p != 'e' && *p != 'E' && *p != '\0'; ++p) {
+            digits += *p;
+        }
+    }
+    int exp = 0;
+    bool exp_neg = false;
+    if (*p == 'e' || *p == 'E') {
+        ++p;
+        if (*p == '-') { exp_neg = true; ++p; }
+        else if (*p == '+') ++p;
+        for (; *p >= '0' && *p <= '9'; ++p) {
+            exp = exp * 10 + (*p - '0');
+        }
+    }
+    if (exp_neg) exp = -exp;
+    // strip trailing zeros (e.g. "1.0e+05" -> "1")
+    while (digits.size() > 1 && digits.back() == '0') {
+        digits.pop_back();
+    }
+
+    std::string out;
+    if (neg) out += '-';
+    const int decpos = exp + 1; // decimal point goes after `decpos` significant digits
+    if (exp >= -4 && exp <= 15) {
+        // fixed notation (Python: 1e-4..1e15 fixed, 1e-5 and 1e16 scientific)
+        if (decpos <= 0) {
+            out += "0.";
+            for (int i = 0; i < -decpos; ++i) out += '0';
+            out += digits;
+        } else if ((int) digits.size() <= decpos) {
+            out += digits;
+            out.append(decpos - (int) digits.size(), '0');
+            out += ".0";
+        } else {
+            out += digits.substr(0, decpos);
+            out += '.';
+            out += digits.substr(decpos);
+        }
+    } else {
+        // scientific: d.ddd e±XX (>= 2 exponent digits)
+        out += digits[0];
+        if (digits.size() > 1) {
+            out += '.';
+            out += digits.substr(1);
+        }
+        out += 'e';
+        char e[16];
+        snprintf(e, sizeof(e), "%+03d", exp);
+        out += e;
+    }
+    return out;
+}
+
 static std::string python_dump(const common_json & v) {
     if (v.is_string()) {
         return "\"" + json_escape((std::string) v) + "\"";
@@ -104,9 +183,7 @@ static std::string python_dump(const common_json & v) {
         return std::to_string(v.get<long long>());
     }
     if (v.is_number_float()) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%.17g", v.get<double>());
-        return buf;
+        return python_float_repr(v.get<double>());
     }
     return "null";
 }
@@ -125,26 +202,43 @@ static std::string render_criterion(const common_json & value) {
     return python_dump(value);
 }
 
+// "raw_options": true requests the legacy plain-option protocol: render the
+// bare option strings (descriptions only; literal false/true for noul) instead
+// of the "key: desc" / "level i: desc" / "false: ..." form. This matches the
+// reference used by the Julia family of models.
 static std::vector<std::string> render_options(const common_json & q) {
     std::vector<std::string> opts;
     const std::string t = q["type"];
+    const bool raw = q.contains("raw_options") && q["raw_options"].get<bool>();
     const common_json crit = q.contains("criteria") ? q["criteria"] : common_json::object();
     if (t == "choice") {
         for (auto it = crit.begin(); it != crit.end(); ++it) {
             const std::string k = it.key();
             const std::string v = render_criterion(it.value());
-            opts.push_back(v.empty() ? k : k + ": " + v);
+            if (raw) {
+                opts.push_back(v.empty() || it.value().is_null() ? k : v);
+            } else {
+                opts.push_back(v.empty() || it.value().is_null() ? k : k + ": " + v);
+            }
         }
     } else if (t == "score") {
         int32_t i = 0;
         for (auto it = crit.begin(); it != crit.end(); ++it, ++i) {
-            opts.push_back("level " + std::to_string(i) + ": " + render_criterion(it.value()));
+            opts.push_back(raw ? render_criterion(it.value())
+                               : "level " + std::to_string(i) + ": " + render_criterion(it.value()));
         }
     } else { // noul
-        const std::string fc = crit.contains("false") ? render_criterion(crit["false"]) : "";
-        const std::string tc = crit.contains("true")  ? render_criterion(crit["true"])  : "";
-        opts.push_back("false: " + (fc.empty() ? "no, the statement does not hold" : fc));
-        opts.push_back("true: "  + (tc.empty() ? "yes, the statement holds"          : tc));
+        if (raw) {
+            opts.push_back("false");
+            opts.push_back("true");
+        } else {
+            const common_json & fc = crit.contains("false") ? crit["false"] : common_json();
+            const common_json & tc = crit.contains("true")  ? crit["true"]  : common_json();
+            const std::string fcs = fc.is_null() ? "" : render_criterion(fc);
+            const std::string tcs = tc.is_null() ? "" : render_criterion(tc);
+            opts.push_back("false: " + (fcs.empty() ? "no, the statement does not hold" : fcs));
+            opts.push_back("true: "  + (tcs.empty() ? "yes, the statement holds"          : tcs));
+        }
     }
     return opts;
 }
@@ -176,7 +270,8 @@ static Seq build_sequence(
         int32_t max_len,
         int32_t head_max_len) {
     const std::string t    = q["type"];
-    const std::string ins  = replace_all((std::string) q["instructions"], "[MASK]", " ");
+    const std::string mask_str = laya_vocab_mask_token(model);
+    const std::string ins  = replace_all((std::string) q["instructions"], mask_str, " ");
 
     std::vector<std::string> opts = render_options(q);
 
@@ -191,7 +286,7 @@ static Seq build_sequence(
     std::vector<std::vector<llama_token>> opt_ids;
     for (const auto & opt : opts) {
         std::vector<llama_token> o = { mask_token_id };
-        std::vector<llama_token> tok = tokenize(" " + replace_all(opt, "[MASK]", " "));
+        std::vector<llama_token> tok = tokenize(" " + replace_all(opt, mask_str, " "));
         if (tok.size() > 48) {
             tok.resize(48);
         }
@@ -229,7 +324,7 @@ static Seq build_sequence(
     ids.push_back(sep_token_id);
 
     const int32_t room = std::max(0, max_len - (int32_t) ids.size() - 1);
-    std::vector<llama_token> st = tokenize(replace_all(serialize_state(state), "[MASK]", " "));
+    std::vector<llama_token> st = tokenize(replace_all(serialize_state(state), mask_str, " "));
     if ((int32_t) st.size() > room) {
         st.resize(room);
     }
@@ -324,22 +419,10 @@ int main(int argc, char ** argv) {
     }
     const laya_hparams & hp = laya_model_hparams(model);
 
-    // borrow the vocabulary from libllama (no inference / graph / batch API)
-    llama_model_params mparams = llama_model_default_params();
-    mparams.vocab_only = true; // only the tokenizer is needed, skip the weights
-    llama_model * vmodel = llama_model_load_from_file(model_path.c_str(), mparams);
-    if (!vmodel) {
-        fprintf(stderr, "laya: failed to load vocab from '%s'\n", model_path.c_str());
-        laya_model_free(model);
-        return 1;
-    }
-    const struct llama_vocab * vocab = llama_model_get_vocab(vmodel);
-
     // read input JSON
     FILE * fin = fopen(input_path.c_str(), "rb");
     if (!fin) {
         fprintf(stderr, "laya: failed to open input file '%s'\n", input_path.c_str());
-        llama_model_free(vmodel);
         laya_model_free(model);
         return 1;
     }
@@ -356,7 +439,6 @@ int main(int argc, char ** argv) {
         input = common_json::parse(text);
     } catch (const std::exception & e) {
         fprintf(stderr, "laya: failed to parse JSON: %s\n", e.what());
-        llama_model_free(vmodel);
         laya_model_free(model);
         return 1;
     }
@@ -378,8 +460,8 @@ int main(int argc, char ** argv) {
                 qtype = i;
             }
         }
-        Seq seq = build_sequence(model, llama_vocab_bos(vocab), llama_vocab_sep(vocab),
-                                 llama_vocab_mask(vocab), state, q, max_len, head_max_len);
+        Seq seq = build_sequence(model, laya_vocab_bos(model), laya_vocab_sep(model),
+                                 laya_vocab_mask(model), state, q, max_len, head_max_len);
         seq.qtype = qtype;
         seqs.push_back(std::move(seq));
     }
@@ -387,7 +469,6 @@ int main(int argc, char ** argv) {
     const int32_t n_seqs = (int32_t) seqs.size();
     if (n_seqs == 0) {
         fprintf(stderr, "laya: no questions in input\n");
-        llama_model_free(vmodel);
         laya_model_free(model);
         return 1;
     }
@@ -396,7 +477,6 @@ int main(int argc, char ** argv) {
         if ((int32_t) seqs[s].markers.size() > LAYA_MAX_MARKERS) {
             fprintf(stderr, "laya: question %d has %d options > LAYA_MAX_MARKERS=%d\n",
                     s, (int) seqs[s].markers.size(), LAYA_MAX_MARKERS);
-            llama_model_free(vmodel);
             laya_model_free(model);
             return 1;
         }
@@ -453,7 +533,6 @@ int main(int argc, char ** argv) {
         ctx = laya_init(model, n_threads);
     } catch (const std::exception & e) {
         fprintf(stderr, "laya: failed to init context: %s\n", e.what());
-        llama_model_free(vmodel);
         laya_model_free(model);
         return 1;
     }
@@ -468,7 +547,6 @@ int main(int argc, char ** argv) {
         if (laya_encode(ctx, batch, result) != 0) {
             fprintf(stderr, "laya: forward pass failed\n");
             laya_free(ctx);
-            llama_model_free(vmodel);
             laya_model_free(model);
             return 1;
         }
@@ -659,7 +737,6 @@ int main(int argc, char ** argv) {
     printf("%s\n", out.dump(2).c_str());
 
     laya_free(ctx);
-    llama_model_free(vmodel);
     laya_model_free(model);
     return 0;
 }
