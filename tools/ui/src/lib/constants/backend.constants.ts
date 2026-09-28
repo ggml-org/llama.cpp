@@ -1,4 +1,9 @@
-import type { BackendCapabilities, BackendCompat, BackendProtocol } from '$lib/types';
+import type {
+	BackendCapabilities,
+	BackendCompat,
+	BackendPreset,
+	BackendProtocol
+} from '$lib/types';
 
 /** Prefix for generated ids of user-added backends. */
 export const BACKEND_ID_PREFIX = 'backend';
@@ -64,3 +69,31 @@ export const MODEL_CONTEXT_LENGTH_FIELDS = [
 
 /** Favicon extract keyed by domain, for backends with no bundled mark. */
 export const FAVICON_SERVICE_URL = 'https://www.google.com/s2/favicons?domain=';
+
+/**
+ * Ready-made endpoints offered when adding a backend.
+ *
+ * TODO: pair a llama.cpp server by scanning its QR code (WebRTC transport, so a
+ * hosted PWA can reach a server on the user's network), see
+ * ggml-org/llama.cpp#24577.
+ */
+export const BACKEND_PRESETS: readonly BackendPreset[] = [
+	{
+		baseUrl: 'https://router.huggingface.co',
+		description: 'Open models from the Hub, served by inference providers.',
+		iconUrl: '/backend-presets/huggingface.svg',
+		id: 'huggingface',
+		name: 'Hugging Face',
+		protocol: 'openai'
+	},
+	{
+		baseUrl: 'https://openrouter.ai/api',
+		description: 'Models from many providers behind a single API.',
+		// v2 brand: purple on light, lime on dark
+		iconUrlDark: '/backend-presets/openrouter-dark.svg',
+		iconUrlLight: '/backend-presets/openrouter-light.svg',
+		id: 'openrouter',
+		name: 'OpenRouter',
+		protocol: 'openai'
+	}
+];
