@@ -1085,6 +1085,16 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
     }));
 }
 
+common_memory_info common_memory_get_info(const struct llama_context * ctx) {
+    common_memory_info info;
+    auto memory_breakdown = llama_get_memory_breakdown(ctx);
+    for (const auto & [buft, data] : memory_breakdown) {
+        info.model_bytes   += data.model;
+        info.kv_cache_bytes += data.context;
+    }
+    return info;
+}
+
 void common_fit_print(
         const char * path_model,
         llama_model_params * mparams,

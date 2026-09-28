@@ -3963,6 +3963,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_timestamps(common_log_main(), value);
         }
     ).set_env("LLAMA_ARG_LOG_TIMESTAMPS"));
+    add_opt(common_arg(
+        {"--meminfo"},
+        "Show memory usage info per request, suppress other log output",
+        [](common_params & params) {
+            params.meminfo = true;
+            common_log_set_verbosity_thold(1);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     //
     // speculative parameters
