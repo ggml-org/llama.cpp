@@ -970,7 +970,7 @@ server_tokens process_mtmd_prompt(
 }
 
 /**
- * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * tokenize a single input "prompt" object
  * use tokenize_input_prompts() if the input could be an array.
  * this supports these cases:
  * - "prompt": "string"
@@ -978,7 +978,7 @@ server_tokens process_mtmd_prompt(
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -1147,6 +1147,79 @@ static void handle_media(
     }
 }
 
+// load media files from an OAI content array, then replace each media part with a media marker text part
+static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
+    for (auto & p : content) {
+        std::string type = json_value(p, "type", std::string());
+        if (type == "image_url") {
+            if (!opt.allow_image) {
+                throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            json image_url = json_value(p, "image_url", json::object());
+            std::string url = json_value(image_url, "url", std::string());
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("image_url");
+
+        } else if (type == "input_audio") {
+            if (!opt.allow_audio) {
+                throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // note: don't need to validate "format", it's redundant
+            json input_audio = json_value(p, "input_audio", json::object());
+            std::string url  = json_value(input_audio, "data",
+                                    json_value(input_audio, "url", std::string()));
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_audio");
+
+        } else if (type == "input_video" || type == "video_url") {
+            if (!opt.allow_video) {
+                throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // accept the OpenAI-style "video_url" key as an alias of "input_video"
+            json input_video = json_value(p, type, json::object());
+            std::string url  = json_value(input_video, "data",
+                                    json_value(input_video, "url", std::string()));
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_video");
+            p.erase("video_url");
+
+        } else if (type != "text") {
+            throw std::invalid_argument("unsupported content[].type");
+        }
+    }
+}
+
+server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context * mctx, const server_chat_params & opt, json content, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+    if (!content.is_array()) {
+        throw std::invalid_argument("\"content\" must be an array");
+    }
+
+    std::vector<raw_buffer> files;
+    oaicompat_content_load_media(content, opt, files);
+
+    std::string prompt;
+    for (const auto & p : content) {
+        prompt += json_value(p, "text", std::string());
+    }
+
+    if (files.empty()) {
+        return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
+    }
+    return process_mtmd_prompt(mctx, prompt, files, init_opt);
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
@@ -1233,56 +1306,7 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
-        for (auto & p : content) {
-            std::string type = json_value(p, "type", std::string());
-            if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json image_url = json_value(p, "image_url", json::object());
-                std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("image_url");
-
-            } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                // note: don't need to validate "format", it's redundant
-                json input_audio = json_value(p, "input_audio", json::object());
-                std::string url  = json_value(input_audio, "data",
-                                        json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("input_audio");
-
-            } else if (type == "input_video" || type == "video_url") {
-                if (!opt.allow_video) {
-                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                // accept the OpenAI-style "video_url" key as an alias of "input_video"
-                json input_video = json_value(p, type, json::object());
-                std::string url  = json_value(input_video, "data",
-                                        json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("input_video");
-                p.erase("video_url");
-
-            } else if (type != "text") {
-                throw std::invalid_argument("unsupported content[].type");
-            }
-        }
+        oaicompat_content_load_media(content, opt, out_files);
     }
 
     auto caps = common_chat_templates_get_caps(opt.tmpls.get());

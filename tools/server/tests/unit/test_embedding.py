@@ -83,6 +83,10 @@ def test_embedding_multiple_with_fa():
         (["string1", [12, 34, 56]], True),
         ([[12, 34, 56], [12, 34, 56]], True),
         ([[12, 34, 56], [12, "string", 34, 56]], True),
+        # object entries
+        ({"prompt_string": "string"}, False),
+        ({"content": [{"type": "text", "text": "string"}]}, False),
+        (["string1", {"prompt_string": "string2"}, {"content": [{"type": "text", "text": "string3"}]}], True),
     ]
 )
 def test_embedding_mixed_input(input, is_multi_prompt: bool):
@@ -99,6 +103,40 @@ def test_embedding_mixed_input(input, is_multi_prompt: bool):
     else:
         assert 'embedding' in data[0]
         assert len(data[0]['embedding']) > 1
+
+
+def test_embedding_content_text_same_as_string():
+    global server
+    server.pooling = 'last'
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={
+        "input": [
+            "hello world",
+            {"content": [{"type": "text", "text": "hello "}, {"type": "text", "text": "world"}]},
+        ],
+    })
+    assert res.status_code == 200
+    data = res.body['data']
+    assert data[0]['embedding'] == data[1]['embedding']
+
+
+@pytest.mark.parametrize(
+    "input",
+    [
+        [],
+        {"content": "string"},
+        {"content": [{"type": "unknown"}]},
+        # model is not multimodal
+        {"content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]},
+        {"content": [{"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}]},
+        {"content": [{"type": "input_video", "input_video": {"url": "data:video/mp4;base64,AAAA"}}]},
+    ]
+)
+def test_embedding_invalid_input(input):
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/embeddings", data={"input": input})
+    assert res.status_code != 200
 
 
 def test_embedding_pooling_mean():
