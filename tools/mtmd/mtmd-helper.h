@@ -92,9 +92,9 @@ MTMD_API llama_pos mtmd_helper_get_n_pos(const mtmd_input_chunks * chunks);
 MTMD_API void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * image, llama_pos pos_0, struct mtmd_decoder_pos * out_pos);
 
 // helper function that automatically:
-// 1. run llama_decode() on text chunks
-// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then llama_decode()
-// if any of the mtmd_encode_chunk() or llama_decode() calls return non-zero, stop and forward the error
+// 1. decode text chunks
+// 2. run mtmd_encode_chunk() on image chunks, then mtmd_get_output_embd() and then decode the embeddings
+// if any of the mtmd_encode_chunk() or decode calls return non-zero, stop and forward the error
 // otherwise, returns 0 on success
 // this function is NOT thread-safe
 MTMD_API int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
@@ -117,7 +117,17 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                bool logits_last,
                                                llama_pos * new_n_past);
 
-typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
+// one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
+struct mtmd_helper_embd_batch {
+    int32_t n_tokens;
+    const float     * embd;   // [n_tokens, n_embd]
+    int32_t           n_embd;
+    const llama_pos * pos;    // [n_pos, n_tokens], section-major
+    int32_t           n_pos;  // 4 for M-RoPE models, 1 otherwise
+    llama_seq_id      seq_id;
+};
+
+typedef int32_t (*mtmd_helper_post_decode_callback)(const struct mtmd_helper_embd_batch * batch, void * user_data);
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)

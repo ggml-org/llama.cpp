@@ -6,6 +6,7 @@
 
 #include "ggml.h"
 #include "llama.h"
+#include "llama-cpp.h"
 #include "mtmd.h"
 
 #include <cstdarg>
@@ -73,112 +74,99 @@ inline mtmd_helper_logger g_logger;
 struct decode_embd_batch {
     int n_pos_per_embd;
     int n_mmproj_embd;
-    std::vector<llama_pos>      pos;
-    std::vector<llama_pos>      pos_view; // used by mrope
-    std::vector<int32_t>        n_seq_id;
-    std::vector<llama_seq_id>   seq_id_0;
-    std::vector<llama_seq_id *> seq_ids;
-    std::vector<int8_t>         logits;
-    llama_batch batch;
-    decode_embd_batch(float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd) : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd) {
+    int32_t n_tokens;
+    const float * embd;              // [n_tokens, n_mmproj_embd], not owned
+    std::vector<llama_pos> pos;      // [n_pos_per_embd, n_tokens], section-major
+    std::vector<llama_pos> pos_view; // sliced positions of the last get_view()
+    std::vector<int8_t>    logits;
+    llama_seq_id seq_id = 0;
+
+    llama_batch_ext_ptr batch; // rendered sub-batch, see render()
+
+    decode_embd_batch(const float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd)
+            : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd), n_tokens(n_tokens), embd(embd) {
         GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
-        pos     .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
-        n_seq_id.resize(n_tokens);
-        seq_ids .resize(n_tokens + 1);
-        logits  .resize(n_tokens);
-        seq_id_0.resize(1);
-        seq_ids [n_tokens] = nullptr;
-        batch = {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ embd,
-            /*pos            =*/ pos.data(),
-            /*n_seq_id       =*/ n_seq_id.data(),
-            /*seq_id         =*/ seq_ids.data(),
-            /*logits         =*/ logits.data(),
-        };
+        pos   .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
+        logits.resize(n_tokens, 0);
     }
 
     void set_position_normal(llama_pos pos_0, llama_seq_id seq_id) {
-        seq_id_0[0] = seq_id;
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.pos     [i] = pos_0 + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+        this->seq_id = seq_id;
+        for (int i = 0; i < n_tokens; i++) {
+            pos[i] = pos_0 + i;
         }
     }
 
     // M-RoPE for image
     void set_position_mrope_2d(const std::vector<mtmd_decoder_pos> & rel_pos, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
-        GGML_ASSERT(!rel_pos.empty() && (int32_t)rel_pos.size() == batch.n_tokens);
-        seq_id_0[0] = seq_id;
-        for (int32_t i = 0; i < batch.n_tokens; i++) {
+        GGML_ASSERT(!rel_pos.empty() && (int32_t)rel_pos.size() == n_tokens);
+        this->seq_id = seq_id;
+        for (int32_t i = 0; i < n_tokens; i++) {
             const size_t idx = (size_t) i;
-            const size_t n_tokens = (size_t) batch.n_tokens;
-            pos[idx                    ] = rel_pos[i].t;
-            pos[idx + n_tokens         ] = rel_pos[i].y;
-            pos[idx + n_tokens * 2     ] = rel_pos[i].x;
-            pos[idx + n_tokens * 3     ] = rel_pos[i].z;
-        }
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+            const size_t n   = (size_t) n_tokens;
+            pos[idx        ] = rel_pos[i].t;
+            pos[idx + n    ] = rel_pos[i].y;
+            pos[idx + n * 2] = rel_pos[i].x;
+            pos[idx + n * 3] = rel_pos[i].z;
         }
     }
 
     // M-RoPE for audio
     void set_position_mrope_1d(llama_pos pos_0, llama_seq_id seq_id) {
         GGML_ASSERT(n_pos_per_embd == 4);
-        seq_id_0[0] = seq_id;
-        for (int i = 0; i < batch.n_tokens; i++) {
+        this->seq_id = seq_id;
+        for (int i = 0; i < n_tokens; i++) {
             const size_t idx = (size_t) i;
-            const size_t n_tokens = (size_t) batch.n_tokens;
-            pos[idx                    ] = pos_0 + i;
-            pos[idx + n_tokens         ] = pos_0 + i;
-            pos[idx + n_tokens * 2     ] = pos_0 + i;
-            pos[idx + n_tokens * 3     ] = pos_0 + i;
-        }
-        for (int i = 0; i < batch.n_tokens; i++) {
-            batch.n_seq_id[i] = 1;
-            batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+            const size_t n   = (size_t) n_tokens;
+            pos[idx        ] = pos_0 + i;
+            pos[idx + n    ] = pos_0 + i;
+            pos[idx + n * 2] = pos_0 + i;
+            pos[idx + n * 3] = pos_0 + i;
         }
     }
 
-    llama_batch get_view(int offset, int n_tokens) {
-        GGML_ASSERT(offset >= 0 && n_tokens > 0 && offset + n_tokens <= batch.n_tokens);
-        llama_pos * pos_ptr;
+    // describe the entries [offset, offset + n) with section-major positions
+    mtmd_helper_embd_batch get_view(int offset, int n) {
+        GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
         pos_view.clear();
-        pos_view.reserve((size_t) n_tokens * (size_t) n_pos_per_embd);
-        if (n_pos_per_embd > 1) {
-            // mrope
-            // for example, with layout of src: 1234...1234...1234...1234...
-            //       offset 2 will give us dst: 34...34...34...34...
-            for (int i = 0; i < n_pos_per_embd; i++) {
-                // assume n_tokens is less than or equal to batch.n_tokens
-                // batch.n_tokens is number of **total** tokens
-                // n_tokens is number of viewed token
-                size_t src_idx = (size_t) i * (size_t) batch.n_tokens + (size_t) offset;
-                pos_view.insert(pos_view.end(),
-                    pos.data() + src_idx,
-                    pos.data() + src_idx + n_tokens);
-            }
-            pos_ptr = pos_view.data();
-        } else {
-            // normal
-            pos_ptr = pos.data() + offset;
+        pos_view.reserve((size_t) n * (size_t) n_pos_per_embd);
+        for (int j = 0; j < n_pos_per_embd; j++) {
+            const size_t src = (size_t) j * (size_t) n_tokens + (size_t) offset;
+            pos_view.insert(pos_view.end(), pos.data() + src, pos.data() + src + n);
         }
         return {
-            /*n_tokens       =*/ n_tokens,
-            /*tokens         =*/ nullptr,
-            /*embd           =*/ batch.embd     + offset * n_mmproj_embd,
-            /*pos            =*/ pos_ptr,
-            /*n_seq_id       =*/ batch.n_seq_id + offset,
-            /*seq_id         =*/ batch.seq_id   + offset,
-            /*logits         =*/ batch.logits   + offset,
+            /*n_tokens =*/ n,
+            /*embd     =*/ embd + (size_t) offset * n_mmproj_embd,
+            /*n_embd   =*/ n_mmproj_embd,
+            /*pos      =*/ pos_view.data(),
+            /*n_pos    =*/ n_pos_per_embd,
+            /*seq_id   =*/ seq_id,
         };
+    }
+
+    // render the entries [offset, offset + n) into a batch owned by this object, ready for llama_process()
+    llama_batch_ext * render(llama_context * lctx, int offset, int n) {
+        GGML_ASSERT(offset >= 0 && n > 0 && offset + n <= n_tokens);
+        if (!batch) {
+            batch.reset(llama_batch_ext_init(lctx));
+        }
+        llama_batch_ext_clear(batch.get());
+        for (int i = offset; i < offset + n; i++) {
+            const llama_embd e = { embd + (size_t) i * n_mmproj_embd, 1, (size_t) n_mmproj_embd };
+            const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, e);
+            GGML_ASSERT(idx >= 0);
+
+            llama_pos p[GGML_MROPE_SECTIONS] = { 0, 0, 0, 0 };
+            for (int j = 0; j < n_pos_per_embd; j++) {
+                p[j] = pos[(size_t) j * (size_t) n_tokens + (size_t) i];
+            }
+            llama_batch_ext_set_pos(batch.get(), idx, p);
+
+            if (logits[i]) {
+                llama_batch_ext_set_output_logits(batch.get(), idx, true);
+            }
+        }
+        return batch.get();
     }
 };
