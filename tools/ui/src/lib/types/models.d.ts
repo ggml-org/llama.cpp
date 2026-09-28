@@ -18,6 +18,10 @@ export interface ModelOption {
 	model: string;
 	description?: string;
 	capabilities: string[];
+	/** Context size reported by the provider's model listing, when it reports one. */
+	contextLength?: number;
+	/** Draft sidecars downloaded alongside the model, e.g. `mtp` or `dflash`. */
+	draftSidecars?: ModelSidecarBadge[];
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
@@ -58,9 +62,37 @@ export interface ParsedModelId {
 	tags: string[];
 }
 
+/**
+ * Draft sidecar available for a model, with the quantization its file ships
+ * as and the repo it was pulled from, e.g. `mtp` at `Q8_0` of the model's own
+ * repo. Shown as a badge pair next to the model id.
+ */
+export interface ModelSidecarBadge {
+	kind: ModelSidecar;
+	/** Quantization of the sidecar file itself; null when the name carries none. */
+	quant: string | null;
+	/** Repo the sidecar file belongs to, which may differ from the model's. */
+	repo: string;
+}
+
 /** Modality capabilities for file validation. */
 export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
 	hasVideo: boolean;
+}
+
+/**
+ * A draft sidecar file a model listing reports as its own entry. The router lists a
+ * downloaded sidecar as a model, so this is what pairs it back with its model.
+ */
+export interface ModelSidecarFile {
+	id: string;
+	kind: ModelSidecar;
+	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
+	model: string;
+	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
+	params: string | null;
+	/** Quantization of the sidecar file, e.g. `Q4_0`. */
+	quant: string | null;
 }

@@ -23,6 +23,31 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
 
+/** Filter controls above the model table: one box, one height, one fill. */
+export const FILTER_TRIGGER_CLASS = `
+    h-8
+    gap-1.5
+    rounded-md
+    px-3
+    text-sm
+    font-medium
+    transition-colors
+    hover:bg-muted/80 dark:hover:bg-muted
+    ${INPUT_CLASSES}
+`;
+
+/** Column grid shared by every row of the models manager table. */
+export const MODEL_ROW_GRID_CLASS =
+	'grid grid-cols-[minmax(0,1fr)_11rem_3rem_4.5rem] items-center gap-4';
+
+/** Neutral model badge: params, quantization, tags. */
+export const MODEL_BADGE_CLASS =
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
+
+/** Emphasis model badge: draft sidecars and other markers that must stand out. */
+export const MODEL_VARIANT_BADGE_CLASS =
+	'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
+
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
 export const ICON_CLASS_DEFAULT = 'h-4 w-4';
 
