@@ -1,32 +1,43 @@
 <script lang="ts">
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelItem } from './utils';
-	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
-		ChatFormActionAddReasoningSubmenu,
-		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
-		ModelsSelectorOption
+		ModelsSelectorOption,
+		ModelsSelectorTriggerIcon
 	} from '$lib/components/app';
+	import { DialogBackendForm } from '$lib/components/app/backends';
+	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_ID, MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
+		MODEL_ID,
+		MODEL_ICON,
+		SETTINGS_KEYS
+	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { ModelsService } from '$lib/services/models.service';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
 	import { modelLoadFraction } from '$lib/utils';
+	import { rawModelId } from '$lib/utils/model-option-id';
 
 	interface Props {
 		class?: string;
 		currentModel?: string | null;
 		disabled?: boolean;
+		/** The provider behind this selector is unreachable. */
+		error?: boolean;
 		forceForegroundText?: boolean;
-		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
+		onModelChange?: (
+			modelId: string,
+			modelName: string,
+			backendId?: string
+		) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
 
@@ -34,6 +45,7 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
+		error = false,
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
@@ -41,9 +53,7 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
-	// The model submenu opens together with the menu so the list and its search
-	// box are immediately available, as before the submenu was introduced
-	let modelSubOpen = $state(false);
+	let showAddBackend = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -51,22 +61,15 @@
 		onOpenChange: (open) => {
 			isOpen = open;
 			highlightedId = null;
-
-			if (open) {
-				// Defer submenu open so the Sub component is mounted first;
-				// setting bind:open synchronously can be lost if the Sub hasn't
-				// rendered yet.
-				queueMicrotask(() => {
-					if (isOpen) modelSubOpen = true;
-				});
-			} else {
-				modelSubOpen = false;
-			}
 		},
 		useGlobalSelection: () => useGlobalSelection
 	});
 
-	const reasoning = useReasoningMenu();
+	const selectedOption = $derived(ms.getDisplayOption());
+	const triggerModel = $derived(selectedOption?.model ?? null);
+
+	// one setting for every model id in the selector: the trigger and the rows
+	const showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
 
 	/** Draft sidecar as it reads in the trigger tooltip, with its own quant. */
 	function draftSidecarLabel(baseModel: string, badge: ModelSidecarBadge): string {
@@ -89,38 +92,44 @@
 		return [option.model, ...drafts].join(' + ');
 	}
 
-	const showOrgNameInTrigger = $derived(
-		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
-	);
-
 	$effect(() => {
 		void ms.searchTerm;
 		highlightedId = null;
 	});
 
-	// Focus the model submenu's search box without scrolling the page. bits-ui
-	// auto-focuses the opened content by default, which can yank the page
-	// scroll; we prevent that on the Content and refocus the search here.
+	// The search input takes focus as soon as it is mounted. bits-ui auto-focuses
+	// the opened content by default, which can yank the page scroll, so the content
+	// prevents that and this waits for the input instead.
 	$effect(() => {
-		if (!isOpen || !modelSubOpen) return;
+		if (!isOpen) return;
 
-		requestAnimationFrame(() => {
-			const search = document.querySelector<HTMLElement>(
-				'[data-slot="dropdown-menu-sub-content"] input'
-			);
+		let frames = 0;
+		let handle = requestAnimationFrame(function focusSearch() {
+			const input = document.querySelector<HTMLElement>(DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR);
 
-			search?.focus({ preventScroll: true });
+			if (input) {
+				input.focus({ preventScroll: true });
+
+				return;
+			}
+
+			if (frames++ < 20) handle = requestAnimationFrame(focusSearch);
 		});
+
+		return () => cancelAnimationFrame(handle);
 	});
 
 	// Keyboard navigation follows the on-screen row order, not the flat option list order.
 	let visualOrder = $derived.by(() => {
 		const order: string[] = [];
 
+		for (const item of ms.favoriteItems) order.push(item.option.id);
 		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
-		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
+		}
+		for (const provider of ms.groupedFilteredOptions.providers) {
+			for (const item of provider.items) order.push(item.option.id);
 		}
 
 		return order;
@@ -148,6 +157,20 @@
 		highlightedId = visualOrder[index];
 	}
 
+	function handleManageModels() {
+		isOpen = false;
+
+		// let the menu finish closing before the dialog takes focus
+		setTimeout(() => uiStore.openModelsManager(), 0);
+	}
+
+	function handleAddBackend() {
+		isOpen = false;
+
+		// let the menu finish closing before the dialog takes focus
+		setTimeout(() => (showAddBackend = true), 0);
+	}
+
 	// Alt+Enter only unloads and keeps the dropdown open.
 	async function handleModelKeyAction(modelId: string, unload: boolean) {
 		if (!unload) {
@@ -156,12 +179,13 @@
 			return;
 		}
 
-		const model = modelsStore.routerModels.find((m) => m.id === modelId);
+		const rawId = rawModelId(modelId);
+		const model = modelsStore.routerModels.find((m) => m.id === rawId);
 		const status = model?.status?.value as ServerModelStatus | undefined;
 
 		if (status === ServerModelStatus.LOADING) return;
 
-		await modelsStore.status.unload(modelId);
+		await modelsStore.status.unload(rawId);
 	}
 
 	export function open() {
@@ -190,29 +214,33 @@
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
-	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
+	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
 
 			Loading models…
 		</div>
-	{:else if ms.options.length === 0 && ms.isRouter}
+	{:else if ms.options.length === 0 && ms.isMultiModel}
 		{#if currentModel}
 			<span
 				class={[
 					'inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground',
 					className
 				]}
-				style="max-width: min(calc(100cqw - 10rem), 20rem)"
+				style="max-width: min(calc(100cqw - 10rem), 48rem)"
 			>
-				<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
+				<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
-			<p class="text-xs text-muted-foreground">No models available.</p>
+			<button
+				class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+				onclick={handleAddBackend}
+				type="button"
+			>
+				No models yet. Add a backend to get started.
+			</button>
 		{/if}
 	{:else}
-		{@const selectedOption = ms.getDisplayOption()}
-		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
 			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
@@ -224,7 +252,7 @@
 			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
-		{#if ms.isRouter}
+		{#if ms.isMultiModel}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
 				<Tooltip.Root>
 					<Tooltip.Trigger>
@@ -234,34 +262,35 @@
 								{...props}
 								class={[
 									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-									!ms.isCurrentModelInCache
-										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-										: forceForegroundText
-											? 'text-foreground'
-											: ms.isHighlightedCurrentModelActive
+									error
+										? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
+										: !ms.isCurrentModelInCache
+											? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+											: forceForegroundText
 												? 'text-foreground'
-												: 'text-foreground',
+												: ms.isHighlightedCurrentModelActive
+													? 'text-foreground'
+													: 'text-foreground',
 									isOpen && 'text-foreground',
 									'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
 								]}
 								disabled={disabled || ms.updating}
 							>
-								<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
+								<ModelsSelectorTriggerIcon
+									class="size-3.5 shrink-0 mr-0.375"
+									option={selectedOption}
+								/>
 
-								<span class="flex min-w-0 items-center gap-1">
+								<span class="flex min-w-0 items-center gap-0.5">
 									{#if selectedOption}
 										<ModelId
 											class="min-w-0 overflow-hidden"
 											draftSidecars={selectedOption.draftSidecars}
-											hideOrgName={!showOrgNameInTrigger}
+											hideOrgName={!showOrgName}
 											modelId={selectedOption.model}
 										/>
 									{:else}
 										<span class="min-w-0 font-medium">Select model</span>
-									{/if}
-
-									{#if reasoning.isReasoningActive}
-										<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
 									{/if}
 								</span>
 
@@ -287,94 +316,98 @@
 
 				<DropdownMenu.Content
 					align="end"
-					class="w-full md:min-w-64 md:max-w-80 max-w-[calc(100vw-2rem)]"
+					class="w-full md:min-w-80 md:w-112 max-w-[calc(100vw-2rem)] p-0! max-h-[min(40rem,calc(var(--bits-dropdown-menu-content-available-height)-1rem))]"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
-					<DropdownMenu.Sub bind:open={modelSubOpen}>
-						<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-							<MODEL_SELECTOR_ICON class="h-4 w-4" />
-
-							{#if selectedOption}
-								<ModelId
-									class="min-w-0 flex-1 overflow-hidden"
-									draftSidecars={selectedOption.draftSidecars}
-									hideOrgName={!showOrgNameInTrigger}
-									modelId={selectedOption.model}
-								/>
-							{:else}
-								<span class="min-w-0 flex-1 truncate text-muted-foreground">No model</span>
-							{/if}
-						</DropdownMenu.SubTrigger>
-
-						<DropdownMenu.SubContent class="w-100 max-w-[calc(100vw-2rem)] pt-0">
-							<DropdownMenuSearchable
-								emptyMessage="No models found."
-								isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
-								onSearchChange={(v) => ms.setSearchTerm(v)}
-								onSearchKeyDown={handleSearchKeyDown}
-								placeholder="Search models..."
-								searchValue={ms.searchTerm}
-							>
-								<div class="models-list">
-									{#if !ms.isCurrentModelInCache && currentModel}
-										<!-- Show unavailable model as first option (disabled) -->
-										<button
-											aria-disabled="true"
-											aria-selected="true"
-											class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
-											disabled
-											role="option"
-											type="button"
-										>
-											<ModelId class="flex-1" hideQuantization modelId={currentModel} />
-
-											<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-										</button>
-									{/if}
-
-									{#if ms.filteredOptions.length === 0}
-										<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
-									{/if}
-
-									{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
-										{@const { option } = item}
-										{@const isSelected = currentModel === option.model || ms.activeId === option.id}
-										{@const isHighlighted = option.id === highlightedId}
-										{@const isFav = ms.isFavorite(option.model)}
-
-										<ModelsSelectorOption
-											{hideOrgName}
-											{isFav}
-											{isHighlighted}
-											{isSelected}
-											onInfoClick={ms.handleInfoClick}
-											onKeyDown={(event) => {
-												if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
-													event.preventDefault();
-													void handleModelKeyAction(option.id, event.altKey);
-												}
-											}}
-											onMouseEnter={() => (highlightedId = option.id)}
-											onSelect={ms.handleSelect}
-											{option}
-										/>
-									{/snippet}
-
-									<ModelsSelectorList
-										activeId={ms.activeId}
-										{currentModel}
-										groups={ms.groupedFilteredOptions}
-										onInfoClick={ms.handleInfoClick}
-										onSelect={ms.handleSelect}
-										renderOption={modelOption}
-										sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+					<DropdownMenuSearchable
+						emptyMessage={ms.emptyMessage}
+						isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
+						onSearchChange={(v) => ms.setSearchTerm(v)}
+						onSearchKeyDown={handleSearchKeyDown}
+						placeholder="Search models..."
+						searchClass="bg-transparent"
+						searchValue={ms.searchTerm}
+					>
+						<!-- Option list; the search header sticks to the top and the actions
+						     footer to the bottom of the content scrollport. -->
+						<div class="models-list px-1.5">
+							{#if !ms.isCurrentModelInCache && currentModel}
+								<!-- Show unavailable model as first option (disabled) -->
+								<button
+									aria-disabled="true"
+									aria-selected="true"
+									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+									disabled
+									role="option"
+									type="button"
+								>
+									<ModelId
+										class="flex-1"
+										hideOrgName={!showOrgName}
+										hideQuantization
+										modelId={currentModel}
 									/>
-								</div>
-							</DropdownMenuSearchable>
-						</DropdownMenu.SubContent>
-					</DropdownMenu.Sub>
 
-					<ChatFormActionAddReasoningSubmenu />
+									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+								</button>
+							{/if}
+
+							{#if ms.isEmpty}
+								<p class="px-4 py-3 text-sm text-muted-foreground">{ms.emptyMessage}</p>
+							{/if}
+
+							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
+								{@const { option } = item}
+								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
+								{@const isHighlighted = option.id === highlightedId}
+								{@const isFav = ms.isFavorite(option.model)}
+
+								<ModelsSelectorOption
+									{hideOrgName}
+									{isFav}
+									{isHighlighted}
+									{isSelected}
+									onKeyDown={(event) => {
+										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
+											event.preventDefault();
+											void handleModelKeyAction(option.id, event.altKey);
+										}
+									}}
+									onMouseEnter={() => (highlightedId = option.id)}
+									onSelect={ms.handleSelect}
+									{option}
+									showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
+									showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+								/>
+							{/snippet}
+
+							<ModelsSelectorList
+								activeId={ms.activeId}
+								{currentModel}
+								favorites={ms.favoriteItems}
+								groups={ms.groupedFilteredOptions}
+								loaded={ms.loadedItems}
+								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
+								onProviderOpen={ms.openProvider}
+								onSelect={ms.handleSelect}
+								renderOption={modelOption}
+								sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
+								{showOrgName}
+							/>
+						</div>
+
+						{#snippet footer()}
+							<!-- Sticky action footer: it sticks to the bottom of the content
+							     scrollport, past the option list. -->
+							<DropdownMenu.Group class="px-2">
+								<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+									<MODEL_ICON class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+
+									Manage models
+								</DropdownMenu.Item>
+							</DropdownMenu.Group>
+						{/snippet}
+					</DropdownMenuSearchable>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
@@ -387,7 +420,7 @@
 							class={[
 								`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 								!ms.isCurrentModelInCache
-									? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+									? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
 									: forceForegroundText
 										? 'text-foreground'
 										: ms.isHighlightedCurrentModelActive
@@ -399,19 +432,18 @@
 							onclick={() => ms.handleOpenChange(true)}
 							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 						>
-							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
+							<ModelsSelectorTriggerIcon
+								class="size-3.5 shrink-0 mr-0.375"
+								option={selectedOption}
+							/>
 
 							{#if selectedOption}
 								<ModelId
 									class="min-w-0 overflow-hidden"
 									draftSidecars={selectedOption.draftSidecars}
-									hideOrgName={!showOrgNameInTrigger}
+									hideOrgName={!showOrgName}
 									modelId={selectedOption.model}
 								/>
-							{/if}
-
-							{#if reasoning.isReasoningActive}
-								<Lightbulb class="h-3.5 w-3.5 shrink-0 text-amber-400" />
 							{/if}
 
 							{#if ms.updating}
@@ -423,18 +455,15 @@
 
 				{#if selectedOption}
 					<Tooltip.Content>
-						<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
-					</Tooltip.Content>
+							<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
+						</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
 		{/if}
 	{/if}
 </div>
 
-{#if ms.showModelDialog}
-	<DialogModelInformation
-		modelId={ms.infoModelId}
-		onOpenChange={(v) => ms.setShowModelDialog(v)}
-		open={ms.showModelDialog}
-	/>
-{/if}
+<DialogBackendForm
+	bind:open={showAddBackend}
+	onSaved={(backend) => void ms.showBackendModels(backend.id)}
+/>
