@@ -19,7 +19,7 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ * **DialogMcpServers** - MCP servers dialog shown from the sidebar
  *
  * Shows the same MCP server list as the `/mcp-servers` route inside a modal
  * dialog.
@@ -106,6 +106,9 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * />
  * ```
  */
+/** **DialogManageModels** - shell for the models manager. */
+export { default as DialogManageModels } from './DialogManageModels.svelte';
+
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
@@ -499,6 +502,3 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
-
-/** **DialogManageModels** - shell for the models manager. */
-export { default as DialogManageModels } from './DialogManageModels.svelte';
