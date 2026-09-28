@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelAvatar from '../ModelAvatar.svelte';
-	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { MODEL_ICON } from '$lib/constants';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -15,9 +15,9 @@
 {#if option}
 	<ModelAvatar class={className} {option} showQuantBadge={false} showRepoOrgAvatar size={className}>
 		{#snippet fallback()}
-			<MODEL_SELECTOR_ICON class={className} />
+			<MODEL_ICON class={className} />
 		{/snippet}
 	</ModelAvatar>
 {:else}
-	<MODEL_SELECTOR_ICON class={className} />
+	<MODEL_ICON class={className} />
 {/if}

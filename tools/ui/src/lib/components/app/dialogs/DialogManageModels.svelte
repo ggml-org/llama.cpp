@@ -1,10 +1,11 @@
 <script lang="ts">
-	import { ArrowLeft, Box, Compass, Server } from '@lucide/svelte';
+	import { ArrowLeft, Compass, Server } from '@lucide/svelte';
 	import ModelsDiscover from '$lib/components/app/models/discover/ModelsDiscover.svelte';
 	import ModelsManager from '$lib/components/app/models/ModelsManager/ModelsManager.svelte';
 	import ModelsManagerModelProviders from '$lib/components/app/models/ModelsManager/ModelsManagerModelProviders.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { MODEL_ICON } from '$lib/constants';
 	import { uiStore } from '$lib/stores';
 	import { untrack } from 'svelte';
 
@@ -104,7 +105,7 @@
 			>
 				<!-- the marks cross-fade in one grid cell, so the title never shifts -->
 				<span class="grid h-5 w-5 shrink-0 place-items-center">
-					<Box
+					<MODEL_ICON
 						class="col-start-1 row-start-1 h-5 w-5 transition-opacity duration-150 {view ===
 						'manage'
 							? 'opacity-100'

@@ -1,4 +1,5 @@
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODEL_ICON } from './icons.constants';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
@@ -48,9 +49,6 @@ export const DEFAULT_MOBILE_BREAKPOINT = 768;
 /** Orgs whose avatar is dark and needs inverting in dark mode. */
 export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 
-/** Icon used for the model selector and the `/model` slash command. */
-export const MODEL_SELECTOR_ICON = Package;
-
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 
@@ -84,7 +82,7 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
 		action: SidebarAction.MANAGE_MODELS,
-		icon: MODEL_SELECTOR_ICON,
+		icon: MODEL_ICON,
 		tooltip: 'Models'
 	},
 	{

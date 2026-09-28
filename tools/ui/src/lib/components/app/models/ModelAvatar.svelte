@@ -2,7 +2,7 @@
 	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
 	import { BackendIcon } from '$lib/components/app/backends';
 	import { Logo } from '$lib/components/app/misc';
-	import { HF_BASE_MODEL_TAG_REGEX, LOCAL_BACKEND_ID, MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { HF_BASE_MODEL_TAG_REGEX, LOCAL_BACKEND_ID, MODEL_ICON } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { orgOf } from '$lib/utils';
@@ -118,7 +118,7 @@
 				{#if isLocal}
 					<Logo class={size} style="--size: 100%" />
 				{:else}
-					<MODEL_SELECTOR_ICON class={size} />
+					<MODEL_ICON class={size} />
 				{/if}
 			{/snippet}
 		</BackendIcon>

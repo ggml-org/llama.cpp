@@ -13,7 +13,6 @@
 	import {
 		ArrowDown,
 		ArrowUp,
-		Boxes,
 		ChevronDown,
 		ChevronUp,
 		Download,
@@ -44,7 +43,7 @@
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
+	import { FAMILY_ROW_WINDOW, MODEL_ICON, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import {
 		backendsModelsStore,
@@ -719,7 +718,7 @@
 					{:else if group.kind === 'local' || group.key === 'llama-compat'}
 						<Logo class="shrink-0" style="--size: 0.875rem" />
 					{:else if group.kind === 'compat'}
-						<Boxes class="h-3.5 w-3.5 shrink-0" />
+						<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 				{/snippet}
 

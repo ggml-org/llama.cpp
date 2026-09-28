@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { Box, ChevronDown, Loader2 } from '@lucide/svelte';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
 		ModelsSelectorList,
@@ -9,7 +9,7 @@
 	} from '$lib/components/app';
 	import { DialogBackendForm } from '$lib/components/app/backends';
 	import * as Sheet from '$lib/components/ui/sheet';
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
@@ -215,7 +215,7 @@
 								onclick={handleManageModels}
 								type="button"
 							>
-								<Box class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+								<MODEL_ICON class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 
 								Manage models
 							</button>

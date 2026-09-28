@@ -5,7 +5,7 @@
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
-	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { MODEL_ICON } from '$lib/constants';
 	import { ChatFormCommandAction } from '$lib/enums';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { ChatFormCommand } from '$lib/types';
@@ -28,7 +28,7 @@
 
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
 		[ChatFormCommandAction.CWD]: FolderOpen,
-		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
+		[ChatFormCommandAction.MODEL]: MODEL_ICON,
 		[ChatFormCommandAction.PROMPT]: Sparkles
 	};
 
