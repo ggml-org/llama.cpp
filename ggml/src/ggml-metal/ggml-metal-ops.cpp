@@ -2994,13 +2994,22 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool
     const int64_t dk = op->src[1]->ne[0];
     const int64_t dv = op->src[2]->ne[0];
 
-    if (dk != dv || (dk != 64 && dk != 128 && dk != 256)) {
+    const bool dk_dv_ok = (dk == 64  && dv == 64)  ||
+                          (dk == 128 && dv == 128) ||
+                          (dk == 256 && dv == 256) ||
+                          (dk == 512 && dv == 512) ||
+                          (dk == 576 && dv == 512);
+
+    if (!dk_dv_ok) {
         return false;
     }
 
+    // large heads use fewer queries per threadgroup, so that the queries fit in threadgroup memory
+    const int64_t nqptg = dk >= 512 ? OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE : OP_FLASH_ATTN_EXT_TENSOR_NQPSG;
+
     // few heads and small batches do not fill the GPU - the half8x8 kernel is faster there
     // TODO: tune per device
-    if (((ne01 + OP_FLASH_ATTN_EXT_TENSOR_NQPSG - 1)/OP_FLASH_ATTN_EXT_TENSOR_NQPSG)*ne02*ne03*dk < 8192) {
+    if (((ne01 + nqptg - 1)/nqptg)*ne02*ne03*dk < 8192) {
         return false;
     }
 
@@ -3459,7 +3468,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     if (!use_sparse && ggml_metal_op_flash_attn_ext_use_tensor(op, props_dev->has_tensor)) {
         // tensor API kernel
-        const int nqptg = OP_FLASH_ATTN_EXT_TENSOR_NQPSG; // queries per threadgroup
+        const int nqptg = ne00 >= 512 ? OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE : OP_FLASH_ATTN_EXT_TENSOR_NQPSG; // queries per threadgroup
         const int ncpsg = OP_FLASH_ATTN_EXT_TENSOR_NCPSG; // cache values per threadgroup
         const int nsg   = OP_FLASH_ATTN_EXT_TENSOR_NSG;
 

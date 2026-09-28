@@ -102,7 +102,6 @@ kernel void kernel_flash_attn_ext_tensor(
     constexpr short NQ = Q/NSG;
     constexpr short NC = C/NW; // columns per thread
 
-    static_assert(DK == DV,     "DK must be equal to DV");
     static_assert(DK % 4 == 0,  "DK must be divisible by 4");
     static_assert(Q % NSG == 0, "Q must be divisible by NSG");
     static_assert(C % NW == 0,  "C must be divisible by NW");
@@ -320,5 +319,7 @@ typedef decltype(kernel_flash_attn_ext_tensor<64, 64>) flash_attn_ext_tensor_t;
 template [[host_name("kernel_flash_attn_ext_tensor_f16_dk64_dv64"  )]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<64,  64>;
 template [[host_name("kernel_flash_attn_ext_tensor_f16_dk128_dv128")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<128, 128>;
 template [[host_name("kernel_flash_attn_ext_tensor_f16_dk256_dv256")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<256, 256>;
+template [[host_name("kernel_flash_attn_ext_tensor_f16_dk512_dv512")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<512, 512, OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE>;
+template [[host_name("kernel_flash_attn_ext_tensor_f16_dk576_dv512")]] kernel flash_attn_ext_tensor_t kernel_flash_attn_ext_tensor<576, 512, OP_FLASH_ATTN_EXT_TENSOR_NQPSG_LARGE>;
 
 #endif // GGML_METAL_HAS_TENSOR
