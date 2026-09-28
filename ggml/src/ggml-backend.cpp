@@ -1044,6 +1044,9 @@ struct ggml_backend_sched {
     ggml_backend_event_t  prefetch_ready[GGML_SCHED_MAX_PREFETCH_SLOTS];
     ggml_backend_event_t  prefetch_free [GGML_SCHED_MAX_PREFETCH_SLOTS];
     bool prefetch_used[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    // high-water mark of real bytes ever staged in this slot; a later, smaller tensor
+    // reusing the slot needs everything past its own size re-zeroed up to this mark
+    size_t prefetch_slot_bytes[GGML_SCHED_MAX_PREFETCH_SLOTS];
     int prefetch_cur;
 
     char * context_buffer;
@@ -1937,6 +1940,7 @@ static void ggml_backend_sched_prefetch_disable(ggml_backend_sched_t sched, ggml
         ggml_backend_event_free(sched->prefetch_free[i]);
         sched->prefetch_free[i] = NULL;
         sched->prefetch_used[i] = false;
+        sched->prefetch_slot_bytes[i] = 0;
     }
     ggml_backend_free(sched->prefetch_backend);
     sched->prefetch_backend = NULL;
@@ -1968,13 +1972,34 @@ static size_t ggml_backend_sched_prefetch_max_size(ggml_backend_sched_t sched, g
 static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_backend_t split_backend, size_t size) {
     ggml_backend_dev_t dev = split_backend->device;
 
-    // Prefetch resources (the second backend instance, its events, the staging
-    // buffers) are all tied to one device. A later split targeting a different
-    // device must not reuse them - torn down here and rebuilt below for the new
-    // device, rather than risk handing GPU B a slot/event that belongs to GPU A.
+    // SYCL's queue-per-device model means a second backend instance on the same device
+    // shares the same in-order default queue as the first (ggml_backend_sycl_context::
+    // stream() always resolves to dpct::get_device(device).default_queue(), a per-device
+    // singleton, not something private to one context). The prefetch upload and the split's
+    // own compute would therefore serialize on one queue instead of overlapping, defeating
+    // this feature's purpose while still paying for a full-tensor H2D copy instead of the
+    // routed-experts-only copy it replaces. Gate it out until SYCL can hand back an
+    // independent stream.
+    const char * backend_name = ggml_backend_name(split_backend);
+    if (backend_name != NULL && strncmp(backend_name, "SYCL", 4) == 0) {
+        GGML_LOG_WARN("%s: --prefetch-experts-slots has no effect on the SYCL backend "
+                      "(no independent stream for the prefetch upload); disabling it\n", __func__);
+        sched->prefetch_experts = false;
+        return false;
+    }
+
+    // Prefetch resources (the second backend instance, its events, the staging buffers) are
+    // all tied to one device, and switching them to a second device mid-run is not safe: a
+    // still-pending lookahead entry primed for an earlier, not-yet-consumed split on the
+    // first device would be left holding a slot/event that tearing down for the switch just
+    // freed, and the first device's own compute may still be reading that slot when the
+    // teardown's synchronize call - which only waits on split_backend (the *new* device) and
+    // the prefetch backend - runs. Simplest correct rule: never switch devices within one
+    // scheduler run. A graph that alternates devices for its MUL_MAT_ID splits (mixed
+    // CPU/GPU via --n-cpu-moe, or multiple GPUs) only gets prefetch on whichever device
+    // claims it first; every other device falls back to the ordinary copy path.
     if (sched->prefetch_backend != NULL && sched->prefetch_dev != dev) {
-        ggml_backend_sched_prefetch_disable(sched, split_backend);
-        sched->prefetch_experts = true; // disable() turns the feature off; this call means "try this device"
+        return false;
     }
 
     if (sched->prefetch_backend == NULL) {
@@ -2018,13 +2043,16 @@ static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_ba
                 ggml_backend_sched_prefetch_disable(sched, split_backend);
                 return false;
             }
-            // zero the whole slot once: covers both the backend's own alignment
-            // padding past the largest tensor's real bytes (avoids NaNs, matching
-            // ggml_backend_buffer_init_tensor's convention for quantized types) and
-            // any stale bytes left over from a smaller tensor previously staged here
-            if (ggml_backend_buffer_get_base(new_buf)) {
-                memset(ggml_backend_buffer_get_base(new_buf), 0, ggml_backend_buffer_get_size(new_buf));
-            }
+            // Zero the whole slot once: covers the backend's own alignment padding past the
+            // largest tensor's real bytes (avoids NaNs, matching
+            // ggml_backend_buffer_init_tensor's convention for quantized types). Goes through
+            // the backend API rather than a host memset: the default buffer type for a
+            // discrete-GPU backend (SYCL, Vulkan) is commonly device-local memory whose base
+            // pointer is not host-dereferenceable, so a raw memset here can fault on the very
+            // first slot allocation. Stale bytes from a *later* smaller tensor reusing this
+            // slot are handled per-upload in ggml_backend_sched_prefetch_stage(), since this
+            // one-time clear can't see tensors that don't exist yet.
+            ggml_backend_buffer_clear(new_buf, 0);
             if (sched->prefetch_slots[i] != NULL) {
                 ggml_backend_synchronize(split_backend);
                 ggml_backend_synchronize(sched->prefetch_backend);
@@ -2032,9 +2060,40 @@ static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_ba
             }
             sched->prefetch_slots[i] = new_buf;
             sched->prefetch_used[i] = false;
+            sched->prefetch_slot_bytes[i] = 0;
         }
     }
     return true;
+}
+
+// Repoints input_cpy at the slot, re-zeroing any stale padding a smaller tensor would
+// otherwise inherit from a larger one that previously used this slot (the one-time clear in
+// ggml_backend_sched_prefetch_init() only covers the buffer's initial state), then fires the
+// async H2D upload and records its ready event. Shared by both prefetch call sites (lookahead
+// and inline) so they can't drift out of sync on this.
+static void ggml_backend_sched_prefetch_stage(
+        ggml_backend_sched_t sched, int slot, ggml_tensor * input, ggml_tensor * input_cpy) {
+    const size_t nbytes = ggml_nbytes(input);
+    if (nbytes < sched->prefetch_slot_bytes[slot]) {
+        // The caller's own event_wait() on prefetch_free[slot] is queue-side and returns on
+        // the host immediately; it does not mean the previous consumer's compute is actually
+        // done reading this slot yet. A host-side clear here needs a real host-blocking wait
+        // first, or it can race ahead and hand that still-running kernel zeros mid-read.
+        if (sched->prefetch_used[slot]) {
+            ggml_backend_event_synchronize(sched->prefetch_free[slot]);
+        }
+        ggml_backend_buffer_clear(sched->prefetch_slots[slot], 0);
+    }
+    // Either branch leaves everything past nbytes zero (never touched since the initial
+    // clear, or just re-cleared above), so nbytes - not a running max - is what the next
+    // upload needs to compare against; keeping a stale max would re-clear (and re-sync)
+    // every smaller upload after the first shrink for no reason.
+    sched->prefetch_slot_bytes[slot] = nbytes;
+    input_cpy->buffer = sched->prefetch_slots[slot];
+    input_cpy->data   = ggml_backend_buffer_get_base(sched->prefetch_slots[slot]);
+    GGML_LOG_DEBUG("%s: staging %s (%zu bytes) into prefetch slot %d\n", __func__, input->name, nbytes, slot);
+    ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, input->data, 0, nbytes);
+    ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
 }
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
@@ -2120,6 +2179,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         if (ids->ne[0]*ids->ne[1] < 2*n_expert) return;
 
         ggml_backend_t s_backend = sched->backends[s->backend_id];
+        // prefetch_init() declines (does not tear anything down) if this split's device
+        // differs from whichever device prefetch is already committed to for this run
         if (!ggml_backend_sched_prefetch_init(sched, s_backend, ggml_nbytes(input))) return;
 
         const int slot = sched->prefetch_cur;
@@ -2131,10 +2192,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         lookahead[target_id].input_cpy = input_cpy;
         lookahead[target_id].saved_buffer = input_cpy->buffer;
         lookahead[target_id].saved_data = input_cpy->data;
-        input_cpy->buffer = sched->prefetch_slots[slot];
-        input_cpy->data = ggml_backend_buffer_get_base(sched->prefetch_slots[slot]);
-        ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, input->data, 0, ggml_nbytes(input));
-        ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
+        ggml_backend_sched_prefetch_stage(sched, slot, input, input_cpy);
     };
 
     // Prime the pipeline: fire prefetch for splits [0, LOOKAHEAD]
@@ -2230,10 +2288,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                             prefetch_input_cpy    = input_cpy;
                             prefetch_saved_buffer = input_cpy->buffer;
                             prefetch_saved_data   = input_cpy->data;
-                            input_cpy->buffer = sched->prefetch_slots[slot];
-                            input_cpy->data   = ggml_backend_buffer_get_base(sched->prefetch_slots[slot]);
-                            ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, input->data, 0, ggml_nbytes(input));
-                            ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
+                            ggml_backend_sched_prefetch_stage(sched, slot, input, input_cpy);
                             // NOTE: no event_wait here - prefetch runs on separate stream and
                             // overlaps with compute. The consumer side has its own event
                             // synchronization right before graph launch to ensure data is ready.
