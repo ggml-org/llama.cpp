@@ -1243,6 +1243,7 @@ class tensor_traits_common : public tensor_traits_base {
 static const tensor_traits<block_q4_0, 32, 16>  q4_0_16x32_q8_0;
 static const tensor_traits<block_q4_1, 32, 16>  q4_1_16x32_q8_0;
 static const tensor_traits<block_q4_K, 32, 16>  q4_k_16x32_q8_0;
+static const tensor_traits<block_q8_0, 32, 16>  q8_0_16x32_q8_0;
 // Impl By IME2
 static const tensor_traits<block_q2_K, 256, 32> q2_k_32x256_q8_0;
 static const tensor_traits<block_q3_K, 256, 32> q3_k_32x256_q8_0;
@@ -1253,7 +1254,6 @@ static const tensor_traits<block_q4_1, 256, 32> q4_1_32x256_q8_0;
 static const tensor_traits<block_q4_K, 32, 32>  q4_k_32x32_q8_0;
 static const tensor_traits<block_q6_K, 32, 32>  q6_k_32x32_q8_0;
 static const tensor_traits<block_q8_0, 32, 32>  q8_0_32x32_q8_0;
-static const tensor_traits<block_q8_0, 32, 16>  q8_0_16x32_q8_0;
 static const tensor_traits<block_mxfp4, 32, 32> mxfp4_32x32_q8_0;
 static const tensor_traits<block_q5_K, 32, 32>  q5_k_32x32_q8_0;
 static const tensor_traits<block_q5_1, 32, 32>  q5_1_32x32_q8_0;
