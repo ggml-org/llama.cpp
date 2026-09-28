@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { deviceStore, uiStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -33,6 +33,15 @@
 	}: Props = $props();
 
 	let chatFormRef: ChatForm | undefined = $state(undefined);
+
+	// a dialog that closed onto the chat asks for the composer to take focus
+	$effect(() => {
+		if (!uiStore.consumeComposerFocus()) return;
+
+		const frame = requestAnimationFrame(() => chatFormRef?.focus());
+
+		return () => cancelAnimationFrame(frame);
+	});
 	let formWrapperEl: HTMLDivElement | undefined = $state();
 	let chatId = $derived(page.params.id as string | undefined);
 
