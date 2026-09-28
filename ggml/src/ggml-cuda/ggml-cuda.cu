@@ -1839,6 +1839,12 @@ static bool ggml_cuda_mul_mat_q_fusion_matches(
         return false;
     }
 
+    // The fused write-back applies SWIGLU_OAI with the default alpha and limit of ggml_cuda_op_swiglu_oai_single.
+    if (ggml_get_glu_op(glu) == GGML_GLU_OP_SWIGLU_OAI &&
+            (ggml_get_op_params_f32(glu, 2) != 1.702f || ggml_get_op_params_f32(glu, 3) != 7.0f)) {
+        return false;
+    }
+
     const int cc = ggml_cuda_info().devices[device].cc;
     return (turing_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) &&
         !ggml_cuda_should_use_mmvq(x_up->type, cc, y->ne[1]) && ggml_cuda_should_use_mmq(x_up->type, cc, y->ne[1], 0);
