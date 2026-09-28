@@ -514,7 +514,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         tm = time_mappers[dev]
         e['ts_ns'] = tm.cycle_to_ns(e['start_cyc'])
         dur_ns = tm.dur_cycles_to_ns(e['start_cyc'], e['end_cyc'] - e['start_cyc'])
-        e['dur_ns'] = max(dur_ns, 100)
+        e['dur_ns'] = max(dur_ns, 1)
 
     # Allocate slots (sub-tracks) to prevent overlaps on same virtual track
     active_slots = defaultdict(list)
