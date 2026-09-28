@@ -913,7 +913,7 @@ int main(int argc, char ** argv) {
         params.n_predict = 16;
     }
 
-    ggml_backend_load_all();
+    llama_backend_init();
 
     if (!models_dir.empty()) {
         // run the suite over every dummy model in the directory

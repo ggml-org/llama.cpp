@@ -482,14 +482,13 @@ extern "C" {
     LLAMA_API struct llama_model_quantize_params llama_model_quantize_default_params(void);
 
     // Initialize the llama + ggml backend
-    // If numa is true, use NUMA optimizations
     // Call once at the start of the program
     LLAMA_API void llama_backend_init(void);
 
     // Call once at the end of the program - currently only used for MPI
     LLAMA_API void llama_backend_free(void);
 
-    //optional:
+    // Optional: enable numa optimizations
     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
 
     // Optional: an auto threadpool gets created in ggml if not passed explicitly
