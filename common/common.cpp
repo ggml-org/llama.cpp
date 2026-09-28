@@ -1289,6 +1289,23 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    // --cpu-mtp: native MTP - the model already carries its own MTP block (blk.<n_layer>..), and
+    // its graph shares the trunk's token_embd / output (no duplicated heads, no sidecar file needed).
+    // --cpu-mtp places that block in host RAM so the MTP computation runs on the CPU while the
+    // shared embedding and LM head stay on the GPU. Mirror into the speculative draft slot so the
+    // MTP impl can enforce the mandatory ring-stash prefill catch-up for a CPU-hosted MTP block.
+    {
+        const bool spec_mtp_tgt = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        if (spec_mtp_tgt && params.cpu_mtp) {
+            params.speculative.draft.mtp_host = true;
+            // --cpu-mtp-context: only applied with --cpu-mtp. Unspecified -> 2048, the ring-stash's
+            // natural bound (0 would mean the full context and disable the ring).
+            params.speculative.draft.mtp_window = params.cpu_mtp_context >= 0 ? params.cpu_mtp_context : 2048;
+            COM_INF("%s: native MTP block -> host memory (CPU compute), shared trunk heads stay on device\n", __func__);
+        }
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1712,6 +1729,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
     mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    mparams.mtp_host                    = params.cpu_mtp;
 
     return mparams;
 }

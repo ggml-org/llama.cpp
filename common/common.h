@@ -326,6 +326,21 @@ struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
+    // --cpu-mtp-context: bound the MTP draft head's attention to the last N positions.
+    // Stays 0 (inert) unless --cpu-mtp is set, so the window trim and the ring-stash are dead code
+    // on the legacy GPU-MTP path (backward compatible). Under --cpu-mtp, no --cpu-mtp-context
+    // resolves to 2048 (the ring-stash's natural bound); an explicit 0 means the entire main-model
+    // context and disables the ring-stash (per-ubatch catch-up).
+    // The draft's input already carries the target's global hidden state, so its own attention only
+    // needs local context; unbounded it costs O(context) per draft token on the CPU, which dominates
+    // throughput at depth and makes the prefill catch-up O(n^2).
+    int32_t mtp_window = 0;
+
+    // true when the model's NATIVE MTP block has been placed in host RAM (mirrors
+    // common_params::cpu_mtp, set when --cpu-mtp is used). The MTP implementation uses this to
+    // enforce the ring-stash prefill catch-up, which is mandatory for a CPU-hosted MTP block.
+    bool mtp_host = false;
+
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
@@ -501,6 +516,9 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;
+
+    bool     cpu_mtp = false;      // --cpu-mtp: run the model's NATIVE MTP block on the CPU (its tensors go to host RAM)
+    int32_t  cpu_mtp_context = -1; // --cpu-mtp-context: MTP draft context/attention window (-1 = unspecified -> 2048; 0 = full main-model context, disables the ring-stash)
 
     struct common_params_model model;
 
