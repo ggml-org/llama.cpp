@@ -85,8 +85,13 @@ smaller than first stated, and still not fully explained by bytes alone.
   `sycl-a770-round2-decode-candidates-2026-07-25.md` section C0 was never
   implemented; the 2026-08-13 probe that confirmed its premise is the last
   word on it.
-- **SYCL graph capture rejects a segment containing MUL_MAT_ID unless
-  `ext_oneapi_async_memory_alloc` is available** (lazy reorder allocates USM).
+- **SYCL graph capture accepts a MUL_MAT_ID node only on the fused
+  single-token decode path** (`check_graph_compatibility` mirrors that path's
+  dispatch checks), so a graph with an n>1 MUL_MAT_ID (prefill, speculative
+  verify) is not captured. When ID reordering applies (optimization on and
+  Q4_K/Q5_K/Q6_K experts, which covers Ornith's), capture also needs async USM
+  allocation, which is on with graphs enabled when the device reports
+  `ext_oneapi_async_memory_alloc` (the A770 does).
   Whether Ornith's segments replay at all is unknown: results.md shows graphs
   on vs off at +2%, and `GGML_SYCL_GRAPH_PROFILE` prints only in a destructor
   at process exit, so it has never been captured for this model.
@@ -135,8 +140,10 @@ Readings:
   ~4 ms per token across ~23 GPU layers). They halve under batched submission.
 - Anything with n>1 falls into the per-expert loop. At ub=512 one layer costs
   ~150 ms on the GPU; 23 layers is ~3.5 s of the observed 4.07 s pp512. This is
-  the prefill bottleneck. Going to n=2048 costs only 15% more per matrix, so
-  the per-token cost drops ~3.5x with `-ub 2048`.
+  the prefill bottleneck. For the measured Q4_K matrix, going to n=2048 costs
+  only 15% more, so its per-token cost drops ~3.5x with `-ub 2048`; the
+  whole-layer figure is an estimate, since the Q6_K down projections were not
+  measured at n=2048.
 - The CPU at 12 threads beats the GPU's default loop for prefill (80 ms vs
   150 ms per layer at ub=512). If op-offload is engaging for the CPU layers
   today, it is a net loss until the GPU loop is fixed.

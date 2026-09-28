@@ -128,7 +128,7 @@ Recommendations, ordered from most conservative to most aggressive:
 |---|---|---|---|---|
 | **1. Safest start** | `f16` | `turbo4` | First contact with any new model | K untouched, V at the lightest turbo tier. If output isn't faithful at this step, the model is unusually quant-sensitive -- stop and investigate before escalating. |
 | **2. Conservative** | `q8_0` | `turbo4` | Verified safe at step 1, want a memory win without much risk | Light on both sides. Typically near-indistinguishable from `f16`/`f16` outputs. |
-| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models when KV memory is the constraint | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6x compressed V. Total KV ~3-4x smaller than `f16`/`f16`. On SYCL any turbo K/V pins flash attention to the VEC route, which costs prefill throughput at long context (see [Performance notes](#performance-notes-sycl-on-arc-a770)). |
+| **3. Recommended default** | `q8_0` | `turbo3` | Most dense models when KV memory is the constraint | The "asymmetric turbo" sweet spot from the [asymmetric-kv-compression](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/asymmetric-kv-compression.md) paper. Near-lossless K, ~4.6x compressed V. Total KV ~3-4x smaller than `f16`/`f16`. On SYCL this mixed pair runs flash attention on the VEC route (the opt-in XMX route needs the same turbo type on K and V), which costs prefill throughput at long context (see [Performance notes](#performance-notes-sycl-on-arc-a770)). |
 | **4. Aggressive V** | `q8_0` | `turbo2` | Memory-bound long context, after validating quality at step 3 | Boundary V auto-engages and protects sensitive layers. Expect <2% PPL loss on dense models outside the protected layers. |
 | **5. MoE-aware aggressive** | `q8_0` | `turbo2` | Large MoE models (DeepSeek, Qwen3.6, Mixtral-style) | Same flags; Boundary V's per-expert-boundary protection is what makes this work on MoE. See [moe-v-compression-frontier](https://github.com/TheTom/turboquant_plus/blob/main/docs/papers/moe-v-compression-frontier.md). |
 | **6. Discouraged: symmetric K compression** | any `turbo*` | any `turbo*` | Only with model-specific quality validation in hand | Compressing K is where models break. The asymmetric paper documents the failure modes. Not a starting point. |
@@ -176,8 +176,9 @@ High-level reading of the measurements in `docs/research/`. Numbers are from thi
 labelled as a paired campaign as order-of-magnitude.
 
 - **Turbo KV is a capacity feature, not a speed feature.** It buys more context or a bigger model in the same VRAM. Do
-  not expect `f16` / `q8_0` decode parity, and on SYCL any turbo K or V pins flash attention to the VEC kernel (no TILE,
-  no oneMKL prefill route). On Ornith-1.5-35B-A3B at 8k context, `q8_0` K + `turbo4` V cost 33% of prefill throughput
+  not expect `f16` / `q8_0` decode parity, and on SYCL turbo K or V takes the VEC kernel by default (no TILE,
+  no oneMKL prefill route); `GGML_SYCL_FA_XMX=1` can route the same turbo type on K and V at head size 128 or 256 to
+  the opt-in XMX kernel. On Ornith-1.5-35B-A3B at 8k context, `q8_0` K + `turbo4` V cost 33% of prefill throughput
   for a 0.07% PPL change, so `q8_0`/`q8_0` was kept there. Reach for turbo when memory, not throughput, is the limit.
 - **Decode on this GPU is launch-bound, not purely bandwidth-bound.** A hybrid MoE step (Ornith: 40 layers, ~1500
   kernels) reads about 1.9 GiB of weights per token (routed experts plus the non-expert weights every layer reads
