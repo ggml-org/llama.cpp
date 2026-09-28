@@ -51,6 +51,8 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 
 #include <cmath>
 
+#include <functional>
+
 #include <iomanip>
 
 #include <iostream>
