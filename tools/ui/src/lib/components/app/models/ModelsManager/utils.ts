@@ -312,8 +312,23 @@ export function isModelRunning(option: ModelOption): boolean {
 }
 
 /** Context the model runs with: what a loaded model reports. */
-export function configuredContext(option: ModelOption): number | null {
+/** Context the model runs with: the stored override, else what a loaded local model reports. */
+export function configuredContext(
+	option: ModelOption,
+	overrides?: Record<string, ModelOverride>
+): number | null {
+	const override = overrides?.[option.id]?.load?.contextLength;
+
+	if (override) return override;
+
+	if (!isLocalOption(option)) return null;
+
 	return isModelRunning(option) ? modelsStore.props.getModelContextSize(option.model) : null;
+}
+
+/** True when the backend that serves the model can load and unload it. */
+export function canLoadOption(option: ModelOption): boolean {
+	return getBackendCapabilities(getBackend(option.backendId)).loadUnload;
 }
 
 export function modelSupports(option: ModelOption, capability: ModelCapability): boolean {

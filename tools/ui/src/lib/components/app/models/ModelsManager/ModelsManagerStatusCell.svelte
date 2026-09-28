@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadControl from '../ModelLoadControl.svelte';
+	import { canLoadOption } from './utils';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -20,10 +21,12 @@
 </script>
 
 <ModelLoadControl
+	canLoad={canLoadOption(option)}
 	class="justify-self-center {className}"
 	isFailed={status === ServerModelStatus.FAILED}
 	{isLoaded}
 	isLoading={status === ServerModelStatus.LOADING || isOperationInProgress}
 	isSleeping={status === ServerModelStatus.SLEEPING}
 	{option}
+	showRemoteMark
 />

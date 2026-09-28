@@ -3,10 +3,12 @@
 	import ModelsManagerQuantRow from './ModelsManagerQuantRow.svelte';
 	import ModelsManagerRepoRow from './ModelsManagerRepoRow.svelte';
 	import ModelsManagerTableToolbar from './ModelsManagerTableToolbar.svelte';
+	import { type ModelRowDraftTarget } from './row-actions';
 	import {
 		isModelRunning,
 		type ModalityKey,
 		modelContextLength,
+		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup,
 		ModelsTableGroupKind,
@@ -33,7 +35,7 @@
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_GRID_CLASS, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { backendsModelsStore, modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import type { Snippet } from 'svelte';
@@ -44,12 +46,22 @@
 		capabilities?: ModelCapability[];
 		/** Smallest context a model must support; 0 keeps every model. */
 		contextLimit?: number;
+		/** Keep only models that have a draft sidecar to speculate with. */
+		draft?: boolean;
 		filter?: string;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
 		/** Modalities a model must support at least one of. */
 		modalities?: ModalityKey[];
+		/** Per-model load and inference overrides, keyed by backend-qualified id. */
+		overrides: Record<string, ModelOverride>;
+		/** Backend ids to keep; empty keeps every provider. */
+		providers?: string[];
+		/** Repos each provider contributes to the current search, for the filter menu. */
+		providerCounts?: Record<string, number>;
+		/** Called when a row is set as the draft of the selected model. */
+		onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
 		selectedId: string | null;
 		/** Rendered at the toolbar's right end, past the filters. */
 		toolbarEnd?: Snippet;
@@ -58,17 +70,35 @@
 	let {
 		capabilities = $bindable<ModelCapability[]>([]),
 		contextLimit = $bindable(0),
+		draft = $bindable(false),
 		filter = $bindable(''),
 		groups,
 		isFavorite,
 		modalities = $bindable<ModalityKey[]>([]),
 		onSelect,
+		onUseAsDraft,
+		overrides,
+		providerCounts = {},
+		providers = $bindable<string[]>([]),
 		selectedId,
 		toolbarEnd
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
+	let hasFilters = $derived(
+		providers.length > 0 ||
+			contextLimit > 0 ||
+			modalities.length > 0 ||
+			capabilities.length > 0 ||
+			draft
+	);
+
+	/** Model the configuration pane has open, when a row can be set as its draft. */
+	let draftTarget = $derived.by<ModelRowDraftTarget | null>(() => {
+		const selected = modelsStore.models.find((option) => option.id === selectedId);
+
+		return selected ? { id: selected.id, label: selected.name } : null;
+	});
 
 	/** In-flight and paused downloads, tracked by the status feed. */
 	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
@@ -216,27 +246,35 @@
 			expanded={!collapsedQuants.has(entry.key)}
 			{indent}
 			onToggle={() => toggleQuants(entry.key)}
+			{overrides}
 		/>
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
 				<ModelsManagerQuantRow
+					{draftTarget}
 					indent={indent + 24}
 					{isFavorite}
 					onDelete={requestDelete}
 					{onSelect}
+					{onUseAsDraft}
 					option={quant}
+					{overrides}
 					selected={selectedId === quant.id}
+					showProvider={entry.kind === 'providers'}
 				/>
 			{/each}
 		{/if}
 	{:else}
 		<ModelsManagerModelRow
+			{draftTarget}
 			{indent}
 			{isFavorite}
 			onDelete={requestDelete}
 			{onSelect}
+			{onUseAsDraft}
 			option={entry.base}
+			{overrides}
 			selected={selectedId === entry.base.id}
 		/>
 	{/if}
@@ -333,8 +371,11 @@
 	<ModelsManagerTableToolbar
 		bind:capabilities
 		bind:contextLimit
+		bind:draft
 		bind:filter
 		bind:modalities
+		bind:providers
+		{providerCounts}
 		{toolbarEnd}
 	/>
 
@@ -381,12 +422,17 @@
 					{/if}
 				{/snippet}
 
+				{@const backendState = group.backendId ? backendsModelsStore.get(group.backendId) : null}
+
 				<ModelsSection
+					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					chevronClass="mr-7"
 					count={group.items.length}
 					defaultOpen={group.kind !== ModelsTableGroupKind.HIDDEN}
-					icon={groupIcon}
+					error={Boolean(backendState?.error)}
+					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					loading={Boolean(backendState?.loading)}
 					persistKey={group.key}
 					revealChevronOnHover
 					sticky
