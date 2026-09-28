@@ -3017,17 +3017,7 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const ggml_tensor * op, bool
         return false;
     }
 
-    if (op->src[1]->ne[1] % OP_FLASH_ATTN_EXT_TENSOR_NCPSG != 0 || op->src[4] != nullptr) {
-        return false;
-    }
-
-    float max_bias;
-    float logit_softcap;
-
-    memcpy(&max_bias,      ((const int32_t *) op->op_params) + 1, sizeof(max_bias));
-    memcpy(&logit_softcap, ((const int32_t *) op->op_params) + 2, sizeof(logit_softcap));
-
-    return max_bias == 0.0f && logit_softcap == 0.0f;
+    return op->src[1]->ne[1] % OP_FLASH_ATTN_EXT_TENSOR_NCPSG == 0;
 }
 
 // returns the n_kv_max hint if the sparse path is available for this op, or 0 otherwise
@@ -3542,7 +3532,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         // shared memory layout: queries (half), scores (float), probabilities (half), row scale (float), rescale flag (int)
         const size_t smem = GGML_PAD(nqptg*ne00*sizeof(ggml_fp16_t) + nqptg*ncpsg*(sizeof(float) + sizeof(ggml_fp16_t)) + nqptg*sizeof(float) + sizeof(int32_t), 16);
 
-        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_tensor(lib, op, has_mask);
+        auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_tensor(lib, op, has_mask, has_sinks, has_bias, has_scap);
 
         GGML_ASSERT(nsg*32 <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
         GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
@@ -3553,8 +3543,9 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer  (enc, bid_k,    2);
         ggml_metal_encoder_set_buffer  (enc, bid_v,    3);
         ggml_metal_encoder_set_buffer  (enc, bid_src3, 4);
-        ggml_metal_encoder_set_buffer  (enc, bid_blk,  5);
-        ggml_metal_encoder_set_buffer  (enc, bid_dst,  6);
+        ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
+        ggml_metal_encoder_set_buffer  (enc, bid_blk,  6);
+        ggml_metal_encoder_set_buffer  (enc, bid_dst,  7);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 

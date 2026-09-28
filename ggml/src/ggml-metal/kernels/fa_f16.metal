@@ -76,7 +76,10 @@ template [[host_name("kernel_flash_attn_ext_bf16_dk576_dv512")]] kernel flash_at
 
 #ifdef GGML_METAL_HAS_TENSOR
 
-constant bool FC_flash_attn_ext_tensor_has_mask [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 0)]];
+constant bool FC_flash_attn_ext_tensor_has_mask  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 0)]];
+constant bool FC_flash_attn_ext_tensor_has_sinks [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 1)]];
+constant bool FC_flash_attn_ext_tensor_has_bias  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 2)]];
+constant bool FC_flash_attn_ext_tensor_has_scap  [[function_constant(FC_FLASH_ATTN_EXT_TENSOR + 3)]];
 
 // ref: https://arxiv.org/pdf/2307.08691.pdf
 template<
@@ -91,6 +94,7 @@ kernel void kernel_flash_attn_ext_tensor(
         device const char * k,
         device const char * v,
         device const char * mask,
+        device const char * sinks,
         device const char * blk,
         device       char * dst,
         threadgroup  char * shmem [[threadgroup(0)]],
@@ -128,6 +132,9 @@ kernel void kernel_flash_attn_ext_tensor(
         v += ikv2*args.nb22 + ikv3*args.nb23;
     }
 
+    // with softcap the scale is small (scale/softcap), so it is applied to the scores to keep the precision of Q
+    const float qscale = FC_flash_attn_ext_tensor_has_scap ? 1.0f : args.scale;
+
     // load the queries, with the scale folded in
     for (int i = tiitg; i < Q*DK/4; i += NT) {
         const int j = i/(DK/4);
@@ -137,7 +144,7 @@ kernel void kernel_flash_attn_ext_tensor(
             q4 = ((device const float4 *) (q + j*args.nb01))[i%(DK/4)];
         }
 
-        ((threadgroup half4 *) sq)[i] = (half4) (q4*args.scale);
+        ((threadgroup half4 *) sq)[i] = (half4) (q4*qscale);
     }
 
     device const half * pm[NQ];
@@ -161,6 +168,18 @@ kernel void kernel_flash_attn_ext_tensor(
     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
         M[jj] = -FLT_MAX/2;
         S[jj] = 0.0f;
+    }
+
+    float slope = 1.0f;
+
+    // ALiBi
+    if (FC_flash_attn_ext_tensor_has_bias) {
+        const short h = iq2;
+
+        const float base = h < args.n_head_log2 ? args.m0 : args.m1;
+        const short exph = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
+
+        slope = pow(base, exph);
     }
 
     const int sk = args.ns10;
@@ -226,9 +245,15 @@ kernel void kernel_flash_attn_ext_tensor(
                 s[ii] = ss[j*C + ii*NW + tiisg];
             }
 
+            if (FC_flash_attn_ext_tensor_has_scap) {
+                FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
+                    s[ii] = args.logit_softcap*precise::tanh(s[ii]*args.scale);
+                }
+            }
+
             if (FC_flash_attn_ext_tensor_has_mask && blk_cur != 2 && iq1 + j < args.ne31) {
                 FOR_UNROLL (short ii = 0; ii < NC; ++ii) {
-                    s[ii] += (float) pm[jj][ic + ii*NW + tiisg];
+                    s[ii] += slope*(float) pm[jj][ic + ii*NW + tiisg];
                 }
             }
 
@@ -293,8 +318,20 @@ kernel void kernel_flash_attn_ext_tensor(
     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
         const short j = jj*NSG + sgitg;
 
+        // the sink only adds to the denominator - its rescale of O is folded into the final scale
+        float ms = 1.0f;
+
+        if (FC_flash_attn_ext_tensor_has_sinks) {
+            const float s = ((device const float *) sinks)[iq2];
+            const float m = max(M[jj], s);
+
+            ms = exp(M[jj] - m);
+
+            S[jj] = S[jj]*ms + exp(s - m);
+        }
+
         if (tiisg == 0) {
-            sr[j] = S[jj] == 0.0f ? 0.0f : 1.0f/S[jj];
+            sr[j] = S[jj] == 0.0f ? 0.0f : ms/S[jj];
         }
     }
 
