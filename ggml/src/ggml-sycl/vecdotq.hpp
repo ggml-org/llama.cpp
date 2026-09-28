@@ -13,6 +13,8 @@
 #ifndef GGML_SYCL_VECDOTQ_HPP
 #define GGML_SYCL_VECDOTQ_HPP
 
+#include <cstring>
+
 #include "dpct/helper.hpp"
 #include "ggml.h"
 #include "type.hpp"
@@ -439,8 +441,10 @@ struct reorder_vec_dot_q8_0_wide {
         const int8_t *  qs   = reinterpret_cast<const int8_t *>(base + ibx_offset.first);
         const ggml_half d    = *reinterpret_cast<const ggml_half *>(base + d_offset.first);
 
-        const sycl::int4 v = *reinterpret_cast<const sycl::int4 *>(qs + sizeof(int) * iqs);
-        const sycl::int4 u = *reinterpret_cast<const sycl::int4 *>(q8_1_quant_ptr + sizeof(int) * iqs);
+        sycl::int4 v;
+        std::memcpy(&v, qs + sizeof(int) * iqs, sizeof(sycl::int4));
+        sycl::int4 u;
+        std::memcpy(&u, q8_1_quant_ptr + sizeof(int) * iqs, sizeof(sycl::int4));
 
         int sumi = 0;
 #pragma unroll

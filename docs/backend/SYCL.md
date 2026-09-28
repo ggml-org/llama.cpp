@@ -821,7 +821,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_FFN_FUSION_DEBUG | Unset (default) or set | Log tensor shape and layout details for the first fused FFN launch attempt. |
 | GGML_SYCL_FFN_FUSION_PROFILE | 0 (default) or 1 | Report fused FFN graph eligibility and rejection counters at process exit. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
-| GGML_SYCL_MMVQ_WIDE | 0 or 1 (default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
+| GGML_SYCL_MMVQ_WIDE | 0 or 1 (1 default) | Use the wide-load variant of the reordered Q8_0 mat-vec kernel, which reads four contiguous dwords per operand instead of one value at a time. Set to 0 to fall back to the per-value loads. Only affects Q8_0 weights in the reordered layout. |
 | GGML_SYCL_SPARSE_FA | 0 (default) or 1 | Enable Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_DEBUG | 0 (default) or 1 | Enable to debug for Sparse Flash-attention.|
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|

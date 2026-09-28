@@ -2288,8 +2288,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 #ifdef GGML_SYCL_DMMV_HAS_ESIMD
     // The ESIMD Q8_0 kernel reads F32 activations.
     const bool q8_0_esimd = src0->type == GGML_TYPE_Q8_0 && g_ggml_sycl_enable_esimd &&
-                            ((ggml_tensor_extra_gpu *) dst->src[0]->extra) &&
-                            ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder;
+                            ((ggml_tensor_extra_gpu *) src0->extra) &&
+                            ((ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder;
 #else
     const bool q8_0_esimd = false;
 #endif
