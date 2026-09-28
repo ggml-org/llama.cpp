@@ -11,22 +11,28 @@ import { browser } from '$app/environment';
 import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
+	LOCAL_BACKEND_ID,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
-	RECENT_MODELS_LOCALSTORAGE_KEY
+	RECENT_MODELS_LOCALSTORAGE_KEY,
+	SELECTED_MODEL_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { backendsStore } from '$lib/stores/backends.svelte';
+import { backendsModelsStore } from '$lib/stores/backendsModels.svelte';
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
+import { getBackendCapabilities, readModelContextLength } from '$lib/utils/backend';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { repoOf } from '$lib/utils/model-names';
+import { backendIdFromModelId, qualifyModelId, rawModelId } from '$lib/utils/model-option-id';
 import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
@@ -51,6 +57,27 @@ function mergedDraftSidecars(
 
 	return merged;
 }
+
+/** Selection kept from the last session, so a reload does not drop the picked model. */
+function loadStoredSelection(): { id: string; model: string | null } | null {
+	if (!browser) return null;
+
+	try {
+		const raw = localStorage.getItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
+
+		if (!raw) return null;
+
+		const parsed = JSON.parse(raw) as { id?: unknown; model?: unknown };
+
+		if (typeof parsed?.id !== 'string' || !parsed.id) return null;
+
+		return { id: parsed.id, model: typeof parsed.model === 'string' ? parsed.model : null };
+	} catch {
+		return null;
+	}
+}
+
+const storedSelection = loadStoredSelection();
 
 /** Models kept out of the selector. */
 function loadHiddenModels(): Set<string> {
@@ -103,16 +130,59 @@ function loadRecentModels(): string[] {
 }
 
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
+	activeModels = $state<ModelOption[]>([]);
 	error = $state<string | null>(null);
 	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 	groupOpenState = $state<SvelteMap<string, boolean>>(loadGroupOpenState());
 	hiddenModelIds = $state<Set<string>>(loadHiddenModels());
 	loading = $state(false);
-	models = $state<ModelOption[]>([]);
+	/**
+	 * Every selectable model across enabled backends. The active backend's
+	 * models come from {@link activeModels}; the rest come from the background
+	 * prefetch cache. Ids are backend-qualified so the same model name on two
+	 * backends stays distinct.
+	 */
+	/**
+	 * Computed once per state change. Rows reach this through per-model props
+	 * lookups, so a getter that rebuilt the list on every read made opening the
+	 * selector quadratic in the size of the catalog.
+	 */
+	models = $derived.by((): ModelOption[] => {
+		const activeBackendId = backendsStore.active.id;
+		const merged: ModelOption[] = [];
+		const seen = new SvelteSet<string>();
+		const push = (option: ModelOption, backendId: string) => {
+			const id = qualifyModelId(backendId, rawModelId(option.id));
+
+			// a backend can be listed twice while a switch is in flight: the rows
+			// of the previous backend are still in activeModels
+			if (seen.has(id)) return;
+
+			seen.add(id);
+			merged.push({ ...option, backendId, id });
+		};
+
+		for (const option of this.activeModels) {
+			// keep the backend an option was built for: rows from the previous
+			// backend must not be relabelled while a switch is in flight
+			push(option, option.backendId ?? activeBackendId);
+		}
+
+		for (const backend of backendsStore.enabled) {
+			if (backend.id === activeBackendId) continue;
+
+			for (const option of backendsModelsStore.get(backend.id).models) {
+				push(option, option.backendId ?? backend.id);
+			}
+		}
+
+		return merged;
+	});
 	recentModelIds = $state<string[]>(loadRecentModels());
 	routerModels = $state<ApiModelDataEntry[]>([]);
-	selectedModelId = $state<string | null>(null);
-	selectedModelName = $state<string | null>(null);
+	selectedModelId = $state<string | null>(storedSelection?.id ?? null);
+
+	selectedModelName = $state<string | null>(storedSelection?.model ?? null);
 
 	updating = $state(false);
 
@@ -126,6 +196,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
 	private inflightFetch: Promise<void> | null = null;
 
+	/** A restored selection loses to the active conversation's model, a fresh pick does not. */
+	private selectionFromStorage = storedSelection !== null;
+
 	/**
 	 * Model the active conversation view resolves to. Router mode: the user's
 	 * selection first, then the conversation's own model. Otherwise the single
@@ -133,14 +206,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 */
 	get activeModelId(): string | null {
 		if (!serverStore.isRouterMode) {
+			// external backends expose a selectable list; prefer the user's pick
+			const selected = this.selectedModelId
+				? this.models.find((m) => m.id === this.selectedModelId)
+				: undefined;
+
+			if (selected) return selected.model;
+
 			return this.models.length > 0 ? this.models[0].model : this.singleModelName;
 		}
 
-		if (this.selectedModelId) {
-			const selected = this.models.find((m) => m.id === this.selectedModelId);
+		const picked = this.selectedModelId && !this.selectionFromStorage ? this.selectedModelId : null;
+		const selected = picked ? this.models.find((m) => m.id === picked) : undefined;
 
-			if (selected) return selected.model;
-		}
+		if (selected) return selected.model;
 
 		const conversationModel = getConversationModel(conversationsStore.activeMessages);
 
@@ -150,7 +229,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			if (model) return model.model;
 		}
 
-		return null;
+		const restored = this.selectedModelId
+			? this.models.find((m) => m.id === this.selectedModelId)
+			: undefined;
+
+		return restored?.model ?? null;
 	}
 
 	get loadedModelIds(): string[] {
@@ -203,6 +286,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	clearSelection(): void {
 		this.selectedModelId = null;
 		this.selectedModelName = null;
+		this.persistSelection();
 	}
 
 	/** Family keys folded away under one section, for a list that restores them. */
@@ -274,13 +358,26 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
+	 * Make the backend serving `modelName` active when it is not already.
+	 * A conversation keeps the model that generated it, which can belong to a
+	 * backend other than the active one.
+	 */
+	async ensureModelBackend(modelName: string): Promise<void> {
+		const option = this.models.find((model) => model.model === modelName);
+
+		if (!option?.backendId || option.backendId === backendsStore.active.id) return;
+
+		await this.selectModelById(option.id);
+	}
+
+	/**
 	 * Fetch list of models from server and detect server role.
 	 * Also fetches modalities for MODEL mode (single model).
 	 */
 	async fetch(force = false): Promise<void> {
 		if (this.inflightFetch) return this.inflightFetch;
 
-		if (this.models.length > 0 && !force) return;
+		if (this.activeModels.length > 0 && !force) return;
 
 		this.inflightFetch = this.runFetch();
 		try {
@@ -307,7 +404,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			this._status.syncPausedDownloads();
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
-			this.models = this.buildModelOptions(response);
+			this.activeModels = this.buildModelOptions(response);
 			this.warmHubDetails();
 			await this.props.fetchModalitiesForLoadedModels();
 
@@ -353,7 +450,19 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return null;
 	}
 
+	/**
+	 * Load state a model's own backend reports. Only the local server has a status
+	 * feed, so an external backend answers from its own model listing.
+	 */
 	getModelStatus(modelId: string): ServerModelStatus | null {
+		const backendId = this.models.find((model) => model.model === modelId)?.backendId;
+
+		if (backendId && backendId !== LOCAL_BACKEND_ID) {
+			const option = backendsModelsStore.get(backendId).models.find((m) => m.model === modelId);
+
+			return (option?.status?.value as ServerModelStatus) ?? null;
+		}
+
 		const model = this.routerModels.find((m) => m.id === modelId);
 
 		return (model?.status?.value as ServerModelStatus) ?? null;
@@ -392,13 +501,26 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	async selectModelById(modelId: string, options?: { recordRecent?: boolean }): Promise<void> {
 		if (!modelId || this.updating) return;
 
-		if (this.selectedModelId === modelId) {
-			if (options?.recordRecent) this.recordRecentModel(modelId);
+		const backendId = backendIdFromModelId(modelId) ?? backendsStore.active.id;
+		const rawId = rawModelId(modelId);
+		// the selection is stored backend-qualified, matching the aggregated
+		// model list, no matter which form the caller passed
+		const qualifiedId = qualifyModelId(backendId, rawId);
+
+		// a model from another backend makes that backend active first
+		if (backendId !== backendsStore.active.id) {
+			backendsStore.setActive(backendId);
+			await backendsModelsStore.ensureLoaded(backendId);
+			await this.switchBackend();
+		}
+
+		if (this.selectedModelId === qualifiedId) {
+			if (options?.recordRecent) this.recordRecentModel(qualifiedId);
 
 			return;
 		}
 
-		const option = this.models.find((model) => model.id === modelId);
+		const option = this.activeModels.find((model) => model.id === rawId);
 
 		if (!option) throw new Error('Selected model is not available');
 
@@ -406,10 +528,12 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		this.error = null;
 
 		try {
-			this.selectedModelId = option.id;
+			this.selectedModelId = qualifiedId;
 			this.selectedModelName = option.model;
+			this.selectionFromStorage = false;
+			this.persistSelection();
 
-			if (options?.recordRecent) this.recordRecentModel(modelId);
+			if (options?.recordRecent) this.recordRecentModel(qualifiedId);
 		} finally {
 			this.updating = false;
 		}
@@ -506,6 +630,53 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
+	/**
+	 * Activate a backend for the selector tabs. Everything comes from memory:
+	 * the model list and router rows are prefetched at startup and the local
+	 * server state is kept while an external backend is active. The selection
+	 * is left alone, switching tabs must not pick a model.
+	 */
+	async switchBackend(): Promise<void> {
+		this.error = null;
+
+		const backend = backendsStore.active;
+
+		// local props describe the server the UI is served from; keep them while
+		// an external backend is active instead of dropping and refetching
+		if (backend.protocol === 'llama.cpp') {
+			serverStore.restoreLocalState();
+		} else {
+			serverStore.cacheLocalState();
+			serverStore.clear();
+		}
+
+		const cached = backendsModelsStore.get(backend.id);
+
+		if (!cached.loaded) {
+			// nothing prefetched for this backend (startup prefetch failed): load it once
+			await this.fetch(true);
+
+			return;
+		}
+
+		if (backend.protocol === 'llama.cpp' && !serverStore.props) {
+			// first visit to the local tab in this session
+			await serverStore.fetch({ background: true });
+		}
+
+		this.activeModels = cached.models;
+		this.loading = false;
+
+		// the local router rows carry the load statuses; the startup prefetch
+		// already returned them, so a tab switch rebuilds the list from memory
+		if (backend.protocol === 'llama.cpp' && this.routerModels.length === 0 && cached.raw) {
+			this.routerModels = cached.raw.data;
+			this.activeModels = this.buildModelOptions(cached.raw);
+		}
+
+		this.warmHubDetails();
+	}
+
 	toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);
 		const candidate = segments.pop();
@@ -545,10 +716,14 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		const repos: string[] = [];
 
-		for (const option of this.models) {
-			const repo = repoOf(option.model);
+		for (const backend of backendsStore.enabled) {
+			if (!getBackendCapabilities(backend).props) continue;
 
-			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
+			for (const option of backendsModelsStore.get(backend.id).models) {
+				const repo = repoOf(option.model);
+
+				if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
+			}
 		}
 
 		// a large catalog would fire one request per repo on every load, so warm the ones
@@ -616,9 +791,15 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 					return {
 						aliases: item.aliases ?? [],
+						// stamp the backend here so the option keeps its origin even
+						// after another backend becomes active
+						backendId: backendsStore.active.id,
 						capabilities: rawCapabilities.filter((value: unknown): value is string =>
 							Boolean(value)
 						),
+						// external backends report the context in their listing, so the
+						// gauge keeps working when the list is rebuilt on reload
+						contextLength: readModelContextLength(item),
 						description: details?.description,
 						details: details?.details,
 						draftSidecars: mergedDraftSidecars(
@@ -638,18 +819,20 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				})
 		);
 	}
-
 	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
 	private async fetchModelModeInternal(): Promise<ModelOption[]> {
 		const response = await ModelsService.list();
 
 		return this.buildModelOptions(response);
 	}
+
 	/**
 	 * Filter to models visible in the UI (ui !== false).
 	 */
 	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
+		return this.activeModels.filter(
+			(option) => this.props.getModelProps(option.model)?.ui !== false
+		);
 	}
 
 	private loadFavoritesFromStorage(): Set<string> {
@@ -661,6 +844,23 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			toast.error('Failed to load favorite models from local storage');
 
 			return new Set();
+		}
+	}
+
+	private persistSelection(): void {
+		if (!browser) return;
+
+		try {
+			if (!this.selectedModelId) {
+				localStorage.removeItem(SELECTED_MODEL_LOCALSTORAGE_KEY);
+			} else {
+				localStorage.setItem(
+					SELECTED_MODEL_LOCALSTORAGE_KEY,
+					JSON.stringify({ id: this.selectedModelId, model: this.selectedModelName })
+				);
+			}
+		} catch {
+			console.warn('[ModelsStore] Failed to persist the model selection');
 		}
 	}
 
@@ -695,7 +895,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 				const response = await ModelsService.list();
 
 				this.routerModels = response.data;
-				this.models = this.buildModelOptions(response);
+				this.activeModels = this.buildModelOptions(response);
 
 				await this.props.fetchModalitiesForLoadedModels();
 
@@ -705,10 +905,16 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					this.selectModelById(visible[0].id);
 				}
 			} else {
-				this.models = await this.fetchModelModeInternal();
+				this.activeModels = await this.fetchModelModeInternal();
+
+				// external backends expose a selectable list; pick a default so the
+				// first send and title generation have a model to target
+				if (!serverStore.capabilities.props && !this.selectedModelName) {
+					await this.ensureFirstModelSelected();
+				}
 			}
 		} catch (error) {
-			this.models = [];
+			this.activeModels = [];
 			this.error = error instanceof Error ? error.message : 'Failed to load models';
 
 			throw error;
