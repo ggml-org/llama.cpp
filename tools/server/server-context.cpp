@@ -3225,9 +3225,7 @@ private:
                                 return;
                             }
 
-                            const bool is_stateless_task =
-                                slot.task->type == SERVER_TASK_TYPE_EMBEDDING ||
-                                slot.task->type == SERVER_TASK_TYPE_RERANK;
+                            const bool is_stateless_task = slot.task->type == SERVER_TASK_TYPE_EMBEDDING || slot.task->type == SERVER_TASK_TYPE_RERANK;
 
                             if (slot.task->params.cache_prompt && !is_stateless_task) {
                                 // reuse any previously computed tokens that are common with the new prompt
@@ -5439,9 +5437,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    // multimodal input is a wrapped object: { "content": [ {type:text|image_url, ...}, ... ] }.
-    // each such object is one input (one embedding). every other shape keeps the existing
-    // tokenize_input_prompts() behavior.
+    // multimodal input: { "content": [ { "type": "text"|"image_url", ... } ] }, one embedding per object
     auto is_wrapped_content = [](const json & p) {
         if (!p.is_object() || !p.contains("content")) {
             return false;
@@ -5458,8 +5454,6 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return true;
     };
 
-    // a bare array of typed parts ({type:text|image_url}) is the pre-wrapped shape; reject it so
-    // clients get a clear message instead of a generic tokenize failure.
     auto is_bare_content_array = [](const json & p) {
         if (!p.is_array() || p.empty()) {
             return false;
@@ -5472,9 +5466,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return true;
     };
 
-    // a bare token / mixed array containing numbers ([12, 34, 56] or [12, "string", 56]) is a single
-    // input handled by tokenize_input_prompts(); it must not be iterated as a list of inputs. an
-    // all-string array is a genuine list of prompts and keeps the per-element behavior.
+    // an array with any number ([12, 34, 56] or [12, "string", 56]) is one input, not a list of inputs
     auto is_bare_token_array = [](const json & p) {
         if (!p.is_array() || p.empty()) {
             return false;
@@ -5487,38 +5479,29 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         return false;
     };
 
-    // dispatch to the appropriate tokenizer based on the shape of the input
     std::vector<server_tokens> tokenized_prompts;
     if (is_wrapped_content(prompt)) {
-        // single multimodal input: { "content": [...] }
         tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, prompt.at("content"), ctx_server.init_opt));
     } else if (prompt.is_array() && !is_bare_token_array(prompt)) {
-        // list of inputs: tokenize each element, rejecting malformed multimodal shapes
         for (const auto & p : prompt) {
             if (is_wrapped_content(p)) {
-                // multiple multimodal input(s): { "content": [...] }
                 tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, p.at("content"), ctx_server.init_opt));
             } else if (p.is_object()) {
-                // an object that is not a valid wrapped input: reject with a clear message rather
-                // than falling through to tokenize_input_prompts (which would fail opaquely).
                 res->error(format_error_response("multimodal \"input\" elements must be objects of the form { \"content\": [ { \"type\": \"text\"|\"image_url\", ... } ] }; got: " + safe_json_to_str(p), ERROR_TYPE_INVALID_REQUEST));
                 return res;
             } else if (is_bare_content_array(p)) {
-                res->error(format_error_response("bare content arrays are no longer supported; wrap each input as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
+                res->error(format_error_response("each multimodal input must be wrapped as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
                 return res;
             } else {
-                // plain string or token array: one input per element
                 for (auto & t : tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, p, true, true, ctx_server.init_opt)) {
                     tokenized_prompts.push_back(std::move(t));
                 }
             }
         }
     } else if (is_bare_content_array(prompt)) {
-        // a bare array of typed parts ({type:text|image_url}) is the pre-wrapped shape; reject it so
-        res->error(format_error_response("bare content arrays are no longer supported; wrap each input as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
+        res->error(format_error_response("each multimodal input must be wrapped as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
         return res;
     } else {
-        // single prompt or bare token/mixed array: one input via tokenize_input_prompts()
         tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
     }
 

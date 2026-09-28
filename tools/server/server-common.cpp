@@ -1147,7 +1147,7 @@ static void handle_media(
     }
 }
 
-// parses an OAI-format content array (type/image_url/text parts) into a prompt + media buffers; used to enable multimodal support in /v1/embeddings endpoint
+// used by /embeddings endpoint
 server_tokens tokenize_oai_content_array(mtmd_context * mctx, const std::string & media_path, const json & content, const mtmd_helper_init_opt & init_opt) {
     if (!content.is_array()) {
         throw std::invalid_argument("Expected 'content' to be an array");

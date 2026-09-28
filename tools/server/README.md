@@ -1505,23 +1505,15 @@ This endpoint works by converting Responses request into Chat Completions reques
 
 This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
 
-The server must be started with `--embeddings` to enable this endpoint.
-
-A multimodal request requires a model
-loaded with a multimodal projector (`-mm` / `--mmproj`); sending an `image_url` part to a
-non-multimodal model returns an error.
-
 *Options:*
 
 See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
 
-`input` accepts a string, an array of strings, an array of token IDs, or (for vision models) a multimodal content array (see below).
+For multimodal models (loaded with `--mmproj`), each element of `input` can also be an object with a `content` array, using the same parts as `/v1/chat/completions`:
+- `{ "type": "text", "text": "..." }`: text is added to the prompt as-is
+- `{ "type": "image_url", "image_url": { "url": "..." } }`: remote URL, base64 data URI, or local file (`file://`, requires `--media-path`)
 
-An array containing any integer is treated as a **single** sequence of tokens (one embedding), not N inputs - e.g. `[12, 34, 56]` or the mixed form `[12, "string", 56]`. To embed several inputs in one request, pass an array of strings instead (`["a", "b"]` -> 2 embeddings).
-
-The `model` field is optional and ignored - llama.cpp serves a single model per server, so it does not route to a model. It is echoed back in the response for OpenAI compatibility; omit it or set it to any value.
-
-The `encoding_format` field is optional and defaults to `"float"`; set it to `"base64"` to receive each embedding as a base64-encoded string of raw float32 bytes instead of a JSON array.
+Each object gives one embedding. This input shape is not part of the OpenAI Embeddings API; it follows the shape used by providers like OpenRouter for vision embedding models.
 
 *Examples:*
 
@@ -1533,8 +1525,8 @@ The `encoding_format` field is optional and defaults to `"float"`; set it to `"b
   -H "Authorization: Bearer no-key" \
   -d '{
           "input": "hello",
-          "model":"GPT-4", // "model" is optional and ignored for single-model server
-          "encoding_format": "float" // optional; defaults to "float", or use "base64"
+          "model":"GPT-4",
+          "encoding_format": "float"
   }'
   ```
 
@@ -1546,29 +1538,12 @@ The `encoding_format` field is optional and defaults to `"float"`; set it to `"b
   -H "Authorization: Bearer no-key" \
   -d '{
           "input": ["hello", "world"],
-          "model":"GPT-4", // "model" is optional and ignored for single-model server
-          "encoding_format": "float" // optional; defaults to "float", or use "base64"
+          "model":"GPT-4",
+          "encoding_format": "float"
   }'
   ```
 
-
-For multimodal input, we adhere to a stricter API schema for compatability with de-facto standards for serving Multimodal embeddings (see '*Note on multimodal schema*'). Each element of `input` is an object with a `content` array of parts, where
-every part carries a `type` field:
-- If `type == "text"`:
-    - `text` is appended to the prompt verbatim
-- If `type == "image_url"`:
-    - `image_url.url` can be a remote URL, base64 (raw or URI-encoded via `data:image/...;base64`) or path to local file
-    - Accepts formats supported by `stb_image` (jpeg, png, tga, bmp, gif, ...)
-    - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
-
-Each `content` object is one input and maps 1:1 to an entry in the returned `data` array; pass
-several such objects to embed several inputs in one request.
-> ***Note on the multimodal schema:*** *Multimodal embeddings are not part of the official
-> OpenAI Embeddings API - OpenAI's `/v1/embeddings` accepts only text and token arrays. Thus, the
-> multimodal input shape follows the de-facto standard (inspired by OpenAI's /v1/chat/completions schema), used by multi-provider gateways such
-> as OpenRouter to serve vision embedding models (e.g. Qwen3-VL-Embedding), so that OpenAI-SDK-style
-> clients can call them.*
-- `input` as a multimodal content array (text + image)
+- `input` as multimodal content
 
   ```shell
   curl http://localhost:8080/v1/embeddings \
@@ -1576,28 +1551,17 @@ several such objects to embed several inputs in one request.
   -H "Authorization: Bearer no-key" \
   -d '{
           "input": [
-              {
-                  "content": [
-                      { "type": "image_url",
-                        "image_url": { "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..." } },
-                      { "type": "text", "text": "Describe this image" }
-                  ]
-              },
-              {
-                  "content": [
-                      { "type": "text", "text": "This is a second content array you can pass in one request" }
-                  ]
-              }
+              { "content": [
+                  { "type": "image_url", "image_url": { "url": "data:image/jpeg;base64,/9j/4AAQSkZJRg..." } },
+                  { "type": "text", "text": "Describe this image" }
+              ] },
+              { "content": [
+                  { "type": "text", "text": "hello" }
+              ] }
           ],
-          "model": "Qwen3-VL-Embedding", // "model" is optional and ignored for single-model server
-          "encoding_format": "float" // optional; defaults to "float", or use "base64"
+          "encoding_format": "float"
   }'
   ```
-
-  Text parts are concatenated in order and each `image_url` part contributes its image. Multiple
-  images are supported - add one `image_url` part per image. To embed several inputs in one request,
-  pass several `content` objects: `"input": [ { "content": [...] }, { "content": [...] } ]`.
-
 
 ### POST `/v1/responses/input_tokens`: Token Counting
 
