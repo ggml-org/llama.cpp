@@ -41,8 +41,8 @@ struct token_and_piece {
     std::string piece;
 };
 
-// token_piece() encodes a token and its piece as a 0xff marker, the ID in big-endian order, the piece length, and the piece.
-static std::string token_piece(llama_token id, const std::string & piece) {
+// token() encodes a token and its piece as a 0xff marker, the ID in big-endian order, the piece length, and the piece.
+static std::string token(llama_token id, const std::string & piece) {
     return std::string{
         static_cast<char>(0xff),
         static_cast<char>((id >> 24) & 0xff),
@@ -53,9 +53,9 @@ static std::string token_piece(llama_token id, const std::string & piece) {
     } + piece;
 }
 
-// token() encodes a token whose piece is its <[id]> spelling.
+// token() without a piece encodes a token whose piece is its <[id]> spelling.
 static std::string token(llama_token id) {
-    return token_piece(id, "<[" + std::to_string(id) + "]>");
+    return token(id, "<[" + std::to_string(id) + "]>");
 }
 
 // parse_tokens() parses the token encodes above and UTF-8 text.
@@ -551,14 +551,14 @@ static void test_token_rule_utf8() {
             content ::= (!<[11]>)*)""",
         // Passing strings
         {
-            token(10) + token_piece(20, "\xF0") + token_piece(21, "\x9F\xA6\x99") + token(11),
-            token(10) + token_piece(22, "\xE2") + token_piece(23, "\x98\x80") + token(11),
-            token(10) + token_piece(24, "a\xF0") + token_piece(21, "\x9F\xA6\x99") + token(11),
+            token(10) + token(20, "\xF0") + token(21, "\x9F\xA6\x99") + token(11),
+            token(10) + token(22, "\xE2") + token(23, "\x98\x80") + token(11),
+            token(10) + token(24, "a\xF0") + token(21, "\x9F\xA6\x99") + token(11),
         },
         // Failing strings
         {
-            token(10) + token_piece(20, "\xF0"),
-            token(10) + token_piece(20, "\xF0") + token(11),
+            token(10) + token(20, "\xF0"),
+            token(10) + token(20, "\xF0") + token(11),
         }
     );
 
@@ -570,12 +570,12 @@ static void test_token_rule_utf8() {
         // Passing strings
         {
             "a" + token(11),
-            token_piece(12, "a") + token(11),
+            token(12, "a") + token(11),
         },
         // Failing strings
         {
-            token_piece(11, "ab"),
-            token_piece(12, "ab") + token(11),
+            token(11, "ab"),
+            token(12, "ab") + token(11),
         }
     );
 
@@ -587,13 +587,13 @@ static void test_token_rule_utf8() {
         // Passing strings
         {
             "abx",
-            token_piece(12, "abx"),
+            token(12, "abx"),
             "a" + token(5),
         },
         // Failing strings
         {
-            token_piece(5, "aby"),
-            token_piece(5, "ab"),
+            token(5, "aby"),
+            token(5, "ab"),
         }
     );
 }
