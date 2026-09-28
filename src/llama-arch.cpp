@@ -1117,6 +1117,20 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     }
 }
 
+// The RS split (live S row on the device, rollback snapshots in host RAM) is only correct when the
+// arch's graph builder READS the live S state from get_s_live(). Only qwen35 / qwen35moe do; the
+// other rollback-capable archs still read the host tensor directly, so they must keep the whole
+// cache in host RAM.
+bool llm_arch_supports_rs_split(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_GROK:

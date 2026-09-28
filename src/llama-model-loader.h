@@ -83,6 +83,11 @@ struct llama_model_loader {
     bool check_tensors;
     bool no_alloc;
     bool load_mtp;
+    // place the tensors of the MTP layers (layer index >= hparams.n_layer()) in a CPU buffer, so
+    // the native MTP block is computed on the host while the shared trunk embedding/LM head stay
+    // on their device. A plain "nextn" regex override cannot do this: it would only match the
+    // nextn.* trio (eh_proj/enorm/hnorm) and split the block mid-layer.
+    bool mtp_host;
 
     // handle TENSOR_READ_LAZY
     // use case: keep PLE / engrams embd tensors on disk, read them on demand
@@ -182,6 +187,7 @@ struct llama_model_loader {
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
+        bool mtp_host,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 

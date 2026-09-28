@@ -787,3 +787,6 @@ bool llm_arch_is_hybrid         (const llm_arch & arch);
 bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
+// true when this arch's graph builder reads the recurrent S state via get_s_live(), i.e. it handles
+// the RS split (live row on the device, rollback snapshots in host RAM); see llama_memory_recurrent.
+bool llm_arch_supports_rs_split(const llm_arch & arch);

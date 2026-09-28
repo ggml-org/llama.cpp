@@ -753,6 +753,11 @@ struct llama_model {
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
+    // --cpu-mtp: the native MTP block was placed in host RAM (mirrors
+    // llama_model_params::mtp_host). Public so the memory layer can gate the RS host residency
+    // and split on the same single switch.
+    bool mtp_host() const { return params.mtp_host; }
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
