@@ -1029,13 +1029,13 @@ struct ggml_backend_sched {
 
     // mindcontrol-port of --prefetch-experts-slots: full-tensor lookahead prefetch of
     // offloaded MUL_MAT_ID weights (MoE experts resident in CPU/host memory, i.e. ncmoe).
-    // While split[i] computes, a second backend instance on the same device uploads
+    // While split[i] computes, a private-stream backend instance on the same device uploads
     // split[i+1+LOOKAHEAD]'s weight tensor into rotating staging slots; the consuming
     // split waits on the slot's ready event right before launch (per-split wait mode 1,
     // the only mode that preserves tool_choice semantics). Staging cost = n_slots x
     // max_expert_tensor; lazy-allocated at first fire, gracefully disabled on any failure.
     bool prefetch_experts;
-    ggml_backend_t prefetch_backend;   // second backend instance on the same device
+    ggml_backend_t prefetch_backend;   // private-stream backend instance on the same device
     ggml_backend_dev_t prefetch_dev;   // device prefetch_backend/slots/events were built for
     int prefetch_n_slots;
     int prefetch_lookahead;            // 1 = fire split i+2 while split i computes (measured-optimal)
@@ -1047,6 +1047,11 @@ struct ggml_backend_sched {
     // high-water mark of real bytes ever staged in this slot; a later, smaller tensor
     // reusing the slot needs everything past its own size re-zeroed up to this mark
     size_t prefetch_slot_bytes[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    // pinned host bounce per slot for mmap-backed (CPU_Mapped) sources: a driver copy straight
+    // from file-backed pages is staged on the host thread and measured ~3.4x slower than a
+    // memcpy into pinned memory followed by an async copy (see ggml_backend_sched_prefetch_stage)
+    ggml_backend_buffer_t prefetch_host[GGML_SCHED_MAX_PREFETCH_SLOTS];
+    bool prefetch_host_pending[GGML_SCHED_MAX_PREFETCH_SLOTS]; // an async copy may still read it
     int prefetch_cur;
 
     char * context_buffer;
@@ -1921,34 +1926,66 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 }
 
 // ---- mindcontrol-port prefetch helpers (--prefetch-experts-slots) ----
-// Full teardown: frees every prefetch resource (slots, events, the second backend
-// instance) and turns the feature off for the rest of this scheduler's life. Safe to
-// call at any point during setup, including with some resources not yet allocated
-// (ggml_backend_buffer_free / ggml_backend_event_free / ggml_backend_free are all
-// NULL-safe), which is what lets init's partial-failure paths reuse it directly.
-static void ggml_backend_sched_prefetch_disable(ggml_backend_sched_t sched, ggml_backend_t split_backend) {
-    sched->prefetch_experts = false;
-    if (sched->prefetch_backend) {
-        ggml_backend_synchronize(split_backend);
-        ggml_backend_synchronize(sched->prefetch_backend);
+static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void);
+
+// Waits for everything that may touch a prefetch slot: the last consumer kernels of every used
+// slot, through that slot's free event, and the private stream's own uploads. It deliberately
+// does not synchronize sched->backends: llama_context destroys its backends before the
+// scheduler, so they are dangling by the time ggml_backend_sched_free() gets here.
+static void ggml_backend_sched_prefetch_sync(ggml_backend_sched_t sched) {
+    if (sched->prefetch_backend == NULL) {
+        return;
     }
-    for (int i = 0; i < sched->prefetch_n_slots; i++) {
-        ggml_backend_buffer_free(sched->prefetch_slots[i]);
-        sched->prefetch_slots[i] = NULL;
-        ggml_backend_event_free(sched->prefetch_ready[i]);
-        sched->prefetch_ready[i] = NULL;
-        ggml_backend_event_free(sched->prefetch_free[i]);
-        sched->prefetch_free[i] = NULL;
-        sched->prefetch_used[i] = false;
-        sched->prefetch_slot_bytes[i] = 0;
+    for (int i = 0; i < GGML_SCHED_MAX_PREFETCH_SLOTS; i++) {
+        if (sched->prefetch_used[i] && sched->prefetch_free[i] != NULL) {
+            ggml_backend_event_synchronize(sched->prefetch_free[i]);
+        }
+    }
+    ggml_backend_synchronize(sched->prefetch_backend);
+}
+
+// Frees one slot's resources; the caller has synchronized. NULL-safe for entries never allocated.
+static void ggml_backend_sched_prefetch_free_slot(ggml_backend_sched_t sched, int i) {
+    ggml_backend_buffer_free(sched->prefetch_slots[i]);
+    sched->prefetch_slots[i] = NULL;
+    ggml_backend_buffer_free(sched->prefetch_host[i]);
+    sched->prefetch_host[i] = NULL;
+    ggml_backend_event_free(sched->prefetch_ready[i]);
+    sched->prefetch_ready[i] = NULL;
+    ggml_backend_event_free(sched->prefetch_free[i]);
+    sched->prefetch_free[i] = NULL;
+    sched->prefetch_used[i] = false;
+    sched->prefetch_host_pending[i] = false;
+    sched->prefetch_slot_bytes[i] = 0;
+}
+
+// Frees every prefetch resource (slots, host bounces, events, the private-stream backend) and
+// resets the slot cursor. Walks every array entry rather than prefetch_n_slots, so entries left
+// behind by a lowered slot count are freed too. The feature stays configured; the next fire
+// rebuilds.
+static void ggml_backend_sched_prefetch_free(ggml_backend_sched_t sched) {
+    ggml_backend_sched_prefetch_sync(sched);
+    for (int i = 0; i < GGML_SCHED_MAX_PREFETCH_SLOTS; i++) {
+        ggml_backend_sched_prefetch_free_slot(sched, i);
     }
     ggml_backend_free(sched->prefetch_backend);
     sched->prefetch_backend = NULL;
     sched->prefetch_dev     = NULL;
+    sched->prefetch_cur     = 0;
 }
 
-static size_t ggml_backend_sched_prefetch_max_size(ggml_backend_sched_t sched, ggml_backend_buffer_type_t buft) {
+// Full teardown that also turns the feature off for the rest of this scheduler's life.
+static void ggml_backend_sched_prefetch_disable(ggml_backend_sched_t sched) {
+    sched->prefetch_experts = false;
+    ggml_backend_sched_prefetch_free(sched);
+}
+
+// Largest slot needed for this graph's prefetchable weights, in the destination buffer type's
+// allocation size. *host_size receives the largest ggml_nbytes() among mmap-backed sources
+// (0 if none), which is what the pinned host bounce has to hold.
+static size_t ggml_backend_sched_prefetch_max_size(ggml_backend_sched_t sched, ggml_backend_buffer_type_t buft, size_t * host_size) {
     size_t max_size = 0;
+    *host_size = 0;
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &sched->splits[split_id];
         if (split->graph.n_nodes == 0 || split->graph.nodes[0]->op != GGML_OP_MUL_MAT_ID) {
@@ -1963,54 +2000,52 @@ static size_t ggml_backend_sched_prefetch_max_size(ggml_backend_sched_t sched, g
                 // than ggml_nbytes() to satisfy block/row alignment; undersizing the
                 // staging slot lets MUL_MAT_ID kernels read past the allocation.
                 max_size = std::max(max_size, ggml_backend_buft_get_alloc_size(buft, input));
+                if (input->buffer->buft == ggml_backend_cpu_buffer_from_ptr_type()) {
+                    *host_size = std::max(*host_size, ggml_nbytes(input));
+                }
             }
         }
     }
     return max_size;
 }
 
-static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_backend_t split_backend, size_t size) {
+static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, int backend_id, size_t size) {
+    ggml_backend_t split_backend = sched->backends[backend_id];
     ggml_backend_dev_t dev = split_backend->device;
 
-    // SYCL's queue-per-device model means a second backend instance on the same device
-    // shares the same in-order default queue as the first (ggml_backend_sycl_context::
-    // stream() always resolves to dpct::get_device(device).default_queue(), a per-device
-    // singleton, not something private to one context). The prefetch upload and the split's
-    // own compute would therefore serialize on one queue instead of overlapping, defeating
-    // this feature's purpose while still paying for a full-tensor H2D copy instead of the
-    // routed-experts-only copy it replaces. Gate it out until SYCL can hand back an
-    // independent stream.
-    const char * backend_name = ggml_backend_name(split_backend);
-    if (backend_name != NULL && strncmp(backend_name, "SYCL", 4) == 0) {
-        GGML_LOG_WARN("%s: --prefetch-experts-slots has no effect on the SYCL backend "
-                      "(no independent stream for the prefetch upload); disabling it\n", __func__);
-        sched->prefetch_experts = false;
-        return false;
-    }
-
-    // Prefetch resources (the second backend instance, its events, the staging buffers) are
+    // Prefetch resources (the private-stream backend, its events, the staging buffers) are
     // all tied to one device, and switching them to a second device mid-run is not safe: a
     // still-pending lookahead entry primed for an earlier, not-yet-consumed split on the
     // first device would be left holding a slot/event that tearing down for the switch just
-    // freed, and the first device's own compute may still be reading that slot when the
-    // teardown's synchronize call - which only waits on split_backend (the *new* device) and
-    // the prefetch backend - runs. Simplest correct rule: never switch devices within one
-    // scheduler run. A graph that alternates devices for its MUL_MAT_ID splits (mixed
-    // CPU/GPU via --n-cpu-moe, or multiple GPUs) only gets prefetch on whichever device
-    // claims it first; every other device falls back to the ordinary copy path.
+    // freed. Simplest correct rule: never switch devices within one scheduler run. A graph
+    // that alternates devices for its MUL_MAT_ID splits (mixed CPU/GPU via --n-cpu-moe, or
+    // multiple GPUs) only gets prefetch on whichever device claims it first; every other
+    // device falls back to the ordinary copy path.
     if (sched->prefetch_backend != NULL && sched->prefetch_dev != dev) {
         return false;
     }
 
     if (sched->prefetch_backend == NULL) {
+        // The upload only overlaps compute if it runs on a stream of its own. A plain second
+        // backend instance does not guarantee that (SYCL and Vulkan hand every instance on a
+        // device the same queue), and a serialized upload is a pure loss: a full-tensor copy
+        // instead of the routed-experts-only copy it replaces. So require a backend that can
+        // create a private-stream instance.
         ggml_backend_dev_props props;
         ggml_backend_dev_get_props(dev, &props);
-        if (!props.caps.async || !props.caps.events) {
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        ggml_backend_init_private_stream_t init_private_stream = reg == NULL ? NULL :
+            (ggml_backend_init_private_stream_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_init_private_stream");
+        if (!props.caps.async || !props.caps.events || init_private_stream == NULL) {
+            GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: %s cannot run the prefetch upload on its own stream\n",
+                          __func__, ggml_backend_dev_name(dev));
             sched->prefetch_experts = false;
             return false;
         }
-        sched->prefetch_backend = ggml_backend_dev_init(dev, NULL);
+        sched->prefetch_backend = init_private_stream(dev);
         if (sched->prefetch_backend == NULL) {
+            GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: no private stream on %s\n",
+                          __func__, ggml_backend_dev_name(dev));
             sched->prefetch_experts = false;
             return false;
         }
@@ -2019,16 +2054,25 @@ static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_ba
             sched->prefetch_ready[i] = ggml_backend_event_new(dev);
             sched->prefetch_free[i]  = ggml_backend_event_new(dev);
             if (sched->prefetch_ready[i] == NULL || sched->prefetch_free[i] == NULL) {
-                // partial allocation: disable() cleans up whatever slots 0..i managed
-                // to get before failing, plus the backend itself
-                ggml_backend_sched_prefetch_disable(sched, split_backend);
+                ggml_backend_sched_prefetch_disable(sched);
                 return false;
             }
         }
     }
 
-    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(split_backend);
-    size = std::max(size, ggml_backend_sched_prefetch_max_size(sched, buft));
+    // A slot stands in for the tensor copy the scheduler allocated from its own buffer type for
+    // this backend, so it must come from that buffer type, and the private-stream backend must
+    // be able to upload into it.
+    ggml_backend_buffer_type_t buft = sched->bufts[backend_id];
+    if (buft != ggml_backend_get_default_buffer_type(sched->prefetch_backend)) {
+        GGML_LOG_WARN("%s: --prefetch-experts-slots disabled: scheduler buffer type %s is not the default of %s\n",
+                      __func__, ggml_backend_buft_name(buft), ggml_backend_dev_name(dev));
+        ggml_backend_sched_prefetch_disable(sched);
+        return false;
+    }
+    size_t host_size = 0;
+    size = std::max(size, ggml_backend_sched_prefetch_max_size(sched, buft, &host_size));
+    ggml_backend_buffer_type_t host_buft = host_size > 0 ? ggml_backend_dev_host_buffer_type(dev) : NULL;
 
     for (int i = 0; i < sched->prefetch_n_slots; i++) {
         if (sched->prefetch_slots[i] == NULL || ggml_backend_buffer_get_size(sched->prefetch_slots[i]) < size) {
@@ -2036,31 +2080,43 @@ static bool ggml_backend_sched_prefetch_init(ggml_backend_sched_t sched, ggml_ba
             if (new_buf == NULL) {
                 if (i >= 2 && sched->prefetch_slots[0] != NULL &&
                     ggml_backend_buffer_get_size(sched->prefetch_slots[0]) >= size) {
+                    // keep the first i slots and free the rest now, rather than holding their
+                    // device memory under the pressure that just failed this allocation
+                    ggml_backend_sched_prefetch_sync(sched);
+                    for (int j = i; j < sched->prefetch_n_slots; j++) {
+                        ggml_backend_sched_prefetch_free_slot(sched, j);
+                    }
                     sched->prefetch_n_slots = i;
                     sched->prefetch_cur = 0;
                     return true;
                 }
-                ggml_backend_sched_prefetch_disable(sched, split_backend);
+                ggml_backend_sched_prefetch_disable(sched);
                 return false;
             }
             // Zero the whole slot once: covers the backend's own alignment padding past the
             // largest tensor's real bytes (avoids NaNs, matching
             // ggml_backend_buffer_init_tensor's convention for quantized types). Goes through
-            // the backend API rather than a host memset: the default buffer type for a
-            // discrete-GPU backend (SYCL, Vulkan) is commonly device-local memory whose base
-            // pointer is not host-dereferenceable, so a raw memset here can fault on the very
-            // first slot allocation. Stale bytes from a *later* smaller tensor reusing this
-            // slot are handled per-upload in ggml_backend_sched_prefetch_stage(), since this
-            // one-time clear can't see tensors that don't exist yet.
+            // the backend API rather than a host memset, since device-local memory is not
+            // host-dereferenceable. Stale bytes from a later smaller tensor reusing this slot
+            // are handled per-upload in ggml_backend_sched_prefetch_stage().
             ggml_backend_buffer_clear(new_buf, 0);
             if (sched->prefetch_slots[i] != NULL) {
-                ggml_backend_synchronize(split_backend);
-                ggml_backend_synchronize(sched->prefetch_backend);
+                ggml_backend_sched_prefetch_sync(sched);
                 ggml_backend_buffer_free(sched->prefetch_slots[i]);
             }
             sched->prefetch_slots[i] = new_buf;
             sched->prefetch_used[i] = false;
             sched->prefetch_slot_bytes[i] = 0;
+        }
+        // optional: a missing host buffer type or a failed allocation keeps the direct copy
+        if (host_buft != NULL &&
+            (sched->prefetch_host[i] == NULL || ggml_backend_buffer_get_size(sched->prefetch_host[i]) < host_size)) {
+            if (sched->prefetch_host[i] != NULL) {
+                ggml_backend_sched_prefetch_sync(sched);
+                ggml_backend_buffer_free(sched->prefetch_host[i]);
+                sched->prefetch_host_pending[i] = false;
+            }
+            sched->prefetch_host[i] = ggml_backend_buft_alloc_buffer(host_buft, host_size);
         }
     }
     return true;
@@ -2089,10 +2145,29 @@ static void ggml_backend_sched_prefetch_stage(
     // upload needs to compare against; keeping a stale max would re-clear (and re-sync)
     // every smaller upload after the first shrink for no reason.
     sched->prefetch_slot_bytes[slot] = nbytes;
+
+    // An async copy straight from mmap-backed (file) pages is staged by the driver on this
+    // thread; on Arc A770 / SYCL that measured ~120 ms per 512 MiB against ~35 ms for a memcpy
+    // into pinned memory plus a ~0.02 ms async submit from there. Anonymous (--no-mmap) memory
+    // is left to the driver, which handled it faster than a memcpy (5-14 ms per 512 MiB).
+    const void * src = input->data;
+    ggml_backend_buffer_t host = sched->prefetch_host[slot];
+    if (host != NULL && input->buffer->buft == ggml_backend_cpu_buffer_from_ptr_type() &&
+        ggml_backend_buffer_get_size(host) >= nbytes) {
+        if (sched->prefetch_host_pending[slot]) {
+            // the previous async copy out of this bounce must finish before it is overwritten
+            ggml_backend_event_synchronize(sched->prefetch_ready[slot]);
+        }
+        memcpy(ggml_backend_buffer_get_base(host), input->data, nbytes);
+        src = ggml_backend_buffer_get_base(host);
+        sched->prefetch_host_pending[slot] = true;
+    }
+
     input_cpy->buffer = sched->prefetch_slots[slot];
     input_cpy->data   = ggml_backend_buffer_get_base(sched->prefetch_slots[slot]);
-    GGML_LOG_DEBUG("%s: staging %s (%zu bytes) into prefetch slot %d\n", __func__, input->name, nbytes, slot);
-    ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, input->data, 0, nbytes);
+    GGML_LOG_DEBUG("%s: staging %s (%zu bytes%s) into prefetch slot %d\n", __func__, input->name, nbytes,
+                   src != input->data ? ", via pinned bounce" : "", slot);
+    ggml_backend_tensor_set_async(sched->prefetch_backend, input_cpy, src, 0, nbytes);
     ggml_backend_event_record(sched->prefetch_ready[slot], sched->prefetch_backend);
 }
 
@@ -2178,10 +2253,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         const int64_t n_expert = input->ne[2];
         if (ids->ne[0]*ids->ne[1] < 2*n_expert) return;
 
-        ggml_backend_t s_backend = sched->backends[s->backend_id];
         // prefetch_init() declines (does not tear anything down) if this split's device
         // differs from whichever device prefetch is already committed to for this run
-        if (!ggml_backend_sched_prefetch_init(sched, s_backend, ggml_nbytes(input))) return;
+        if (!ggml_backend_sched_prefetch_init(sched, s->backend_id, ggml_nbytes(input))) return;
 
         const int slot = sched->prefetch_cur;
         sched->prefetch_cur = (sched->prefetch_cur + 1) % sched->prefetch_n_slots;
@@ -2260,12 +2334,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     ggml_backend_synchronize(split_backend);
                 }
 
-                // mindcontrol-port: full-tensor prefetch for MoE expert weights during prefill.
+                // mindcontrol-port: full-tensor prefetch for MoE expert weights in large batches.
                 // Only when NOT already handled by a lookahead fire for this split, and never in
-                // callback_eval mode (decode). With large batches virtually every expert is used,
-                // so the routing ids are not worth waiting for; uploads run through a second
-                // backend instance on the same device so they overlap compute, alternating
-                // between two staging slots.
+                // callback_eval mode. With large batches virtually every expert is used, so the
+                // routing ids are not worth waiting for; uploads run through a private-stream
+                // backend instance on the same device so they overlap compute, rotating through
+                // the staging slots.
                 if (sched->prefetch_experts && !sched->callback_eval && split_prefetch_slot == -1 && split->graph.n_nodes > 0) {
                     ggml_tensor * node = split->graph.nodes[0];
                     if (input->buffer &&
@@ -2275,7 +2349,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         const ggml_tensor * ids = node->src[2];
                         const int64_t n_expert = input->ne[2];
                         if (ids->ne[0]*ids->ne[1] >= 2*n_expert &&
-                            ggml_backend_sched_prefetch_init(sched, split_backend, ggml_nbytes(input))) {
+                            ggml_backend_sched_prefetch_init(sched, split_backend_id, ggml_nbytes(input))) {
                             const int slot = sched->prefetch_cur;
                             sched->prefetch_cur = (sched->prefetch_cur + 1) % sched->prefetch_n_slots;
                             // wait for the previous user of this slot to finish computing
@@ -2649,43 +2723,27 @@ void ggml_backend_sched_set_moe_cache(
 void ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, int slots) {
     if (sched == NULL) { return; }
     if (slots > GGML_SCHED_MAX_PREFETCH_SLOTS) { slots = GGML_SCHED_MAX_PREFETCH_SLOTS; }
-    const int new_n_slots = slots < 2 ? sched->prefetch_n_slots : slots;
+    // 0 (off) and 1 (cannot pipeline) both mean disabled
+    const int new_n_slots = slots < 2 ? 0 : slots;
 
-    // A caller invoking this on an already-initialized scheduler (normal llama.cpp
-    // usage never does - it's set once right after ggml_backend_sched_new/create -
-    // but this is an exported API another embedder could call again) with a
-    // different slot count would otherwise leave prefetch_backend non-NULL while
-    // ggml_backend_sched_prefetch_init's "already initialized" branch skips
-    // creating events for the added slots, or leaves freed slots' events outside
-    // the free/cleanup loops' new bound. Tear down and let the next fire rebuild
-    // cleanly for the new count. No split_backend is in scope here (no split is
-    // active at configuration time), so only prefetch_backend's own outstanding
-    // work needs synchronizing, not a consuming split's.
+    // Normal llama.cpp usage sets this once right after ggml_backend_sched_new, but it is an
+    // exported API an embedder can call again, possibly right after an async graph compute.
+    // Disabling, or changing the slot count, tears everything down (waiting first for the last
+    // kernels that read each slot and for in-flight uploads) and lets the next fire rebuild for the new
+    // count, so no stale slot, event or cursor survives a reconfiguration.
     if (sched->prefetch_backend != NULL && new_n_slots != sched->prefetch_n_slots) {
-        ggml_backend_synchronize(sched->prefetch_backend);
-        for (int i = 0; i < sched->prefetch_n_slots; i++) {
-            ggml_backend_buffer_free(sched->prefetch_slots[i]);
-            sched->prefetch_slots[i] = NULL;
-            ggml_backend_event_free(sched->prefetch_ready[i]);
-            sched->prefetch_ready[i] = NULL;
-            ggml_backend_event_free(sched->prefetch_free[i]);
-            sched->prefetch_free[i] = NULL;
-            sched->prefetch_used[i] = false;
-        }
-        ggml_backend_free(sched->prefetch_backend);
-        sched->prefetch_backend = NULL;
-        sched->prefetch_dev     = NULL;
+        ggml_backend_sched_prefetch_free(sched);
     }
+    sched->prefetch_cur = 0;
 
-    if (slots < 2) {
-        // 0 (off) or 1 (cannot pipeline) -> fully disabled
+    if (new_n_slots == 0) {
         sched->prefetch_experts   = false;
         sched->prefetch_lookahead = 0;
         sched->prefetch_wait_mode = 0;
         return;
     }
     sched->prefetch_experts   = true;
-    sched->prefetch_n_slots   = slots;
+    sched->prefetch_n_slots   = new_n_slots;
     sched->prefetch_lookahead = 1; // measured-optimal (mindcontrol prefetch-wait A/B verdict)
     sched->prefetch_wait_mode = 1; // per-split wait: only mode that preserves tool_calls
 }
@@ -2703,19 +2761,9 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
             ggml_backend_event_free(sched->events[b][c]);
         }
     }
-    if (sched->prefetch_backend) {
-        // outstanding H2D uploads may still be in flight on this stream; freeing its
-        // events/buffers out from under them is a use-after-free / potential GPU hang
-        ggml_backend_synchronize(sched->prefetch_backend);
-    }
-    for (int i = 0; i < sched->prefetch_n_slots; i++) {
-        if (sched->prefetch_slots[i]) { ggml_backend_buffer_free(sched->prefetch_slots[i]); }
-        if (sched->prefetch_ready[i]) { ggml_backend_event_free(sched->prefetch_ready[i]); }
-        if (sched->prefetch_free[i])  { ggml_backend_event_free(sched->prefetch_free[i]); }
-    }
-    if (sched->prefetch_backend) {
-        ggml_backend_free(sched->prefetch_backend);
-    }
+    // uploads may still be in flight on the private stream and kernels may still read a slot;
+    // the teardown synchronizes both before freeing
+    ggml_backend_sched_prefetch_free(sched);
     ggml_gallocr_free(sched->galloc);
     ggml_free(sched->ctx);
     ggml_hash_set_free(&sched->hash_set);

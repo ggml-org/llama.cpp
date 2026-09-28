@@ -6201,6 +6201,13 @@ static const char * ggml_backend_sycl_get_name(ggml_backend_t backend) {
 static void ggml_backend_sycl_free(ggml_backend_t backend) {
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
 
+    if (sycl_ctx->private_queue) {
+        try {
+            sycl_ctx->private_queue->wait_and_throw();
+        } catch (sycl::exception const & exc) {
+            GGML_LOG_ERROR("%s: SYCL private queue wait failed: %s\n", __func__, exc.what());
+        }
+    }
     delete sycl_ctx;
     delete backend;
 }
@@ -7431,11 +7438,18 @@ static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_
 static void ggml_backend_sycl_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
- 
+
     try {
         sycl::event * sycl_event = static_cast<sycl::event *>(event->context);
- 
-        if (ggml_backend_is_sycl(backend)) {
+
+        if (ggml_backend_is_sycl(backend) && event->device == backend->device) {
+            // same device: make the queue wait on the device instead of blocking the host, so
+            // a private-stream backend's copy can overlap this queue's work (the equivalent of
+            // cudaStreamWaitEvent)
+            ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *) backend->context;
+            const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->ext_oneapi_submit_barrier({ *sycl_event })));
+        } else if (ggml_backend_is_sycl(backend)) {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl_event->wait()));
         } else {
             GGML_ABORT("fatal error");
@@ -8484,11 +8498,59 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
 catch (const sycl::exception &) { return false; }
 catch (...)                     { return false; }
 
+// Backend whose copies run on a private in-order queue instead of the device-wide default
+// queue. Probed on Arc A770 (oneAPI 2026.1, compute-runtime 26.35): with the Level Zero v1
+// adapter a memcpy on a second queue runs on the copy engine concurrently with kernels on the
+// default queue. The v2 adapter and a disabled copy engine both serialize the two queues, so
+// those configurations get no private-stream backend (NULL: callers fall back or disable).
+static ggml_backend_t ggml_backend_sycl_init_private_stream(ggml_backend_dev_t dev) {
+    ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) dev->context;
+    try {
+        sycl::queue & dq = dpct::get_device(dev_ctx->device).default_queue();
+        const std::string platform = dq.get_device().get_platform().get_info<sycl::info::platform::name>();
+        // runtime (not ggml) variables with string values: "0" disables, while "lower:upper"
+        // selects an engine range, so an integer parse would misread e.g. "0:0"
+        auto env_is_zero = [](const char * name) {
+            const char * v = getenv(name);
+            return v != nullptr && strcmp(v, "0") == 0;
+        };
+        const char * reason = nullptr;
+        if (dq.get_backend() != sycl::backend::ext_oneapi_level_zero) {
+            reason = "not a Level Zero device";
+        } else if (platform.find("Level-Zero V2") != std::string::npos) {
+            reason = "the Level Zero v2 adapter serializes queues (unset SYCL_UR_USE_LEVEL_ZERO_V2)";
+        } else if (env_is_zero("UR_L0_USE_COPY_ENGINE") || env_is_zero("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE") ||
+                   env_is_zero("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE") ||
+                   env_is_zero("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE")) {
+            reason = "copies are routed to the compute engine";
+        }
+        if (reason != nullptr) {
+            GGML_LOG_WARN("%s: no private stream on SYCL%d: %s\n", __func__, dev_ctx->device, reason);
+            return nullptr;
+        }
+
+        sycl::queue pq(dq.get_context(), dq.get_device(), dpct::exception_handler,
+                       sycl::property_list{ sycl::property::queue::in_order() });
+        ggml_backend_t backend = ggml_backend_sycl_init(dev_ctx->device);
+        if (backend == nullptr) {
+            return nullptr;
+        }
+        ((ggml_backend_sycl_context *) backend->context)->use_private_queue(std::move(pq));
+        return backend;
+    } catch (sycl::exception const & exc) {
+        GGML_LOG_ERROR("%s: failed to create a private queue: %s\n", __func__, exc.what());
+        return nullptr;
+    }
+}
+
 static void *ggml_backend_sycl_reg_get_proc_address(ggml_backend_reg_t reg, const char *name) {
     GGML_UNUSED(reg);
 
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
         return (void *)ggml_backend_sycl_split_buffer_type;
+    }
+    if (strcmp(name, "ggml_backend_init_private_stream") == 0) {
+        return (void *)ggml_backend_sycl_init_private_stream;
     }
 
     // Tensor parallelism (--split-mode tensor) entry points.

@@ -431,8 +431,10 @@ extern "C" {
 
         // mindcontrol-port of --prefetch-experts-slots: MoE expert H2D staging slots.
         // 0 = off (no memory overhead); >=2 enables full-tensor lookahead prefetch of
-        // host-resident (ncmoe) expert weights during prefill (GPU staging cost = slots
-        // * max expert tensor). Decode is unaffected.
+        // host-resident (ncmoe) expert weights for batches routing >= 2*n_expert ids (prefill,
+        // or large batched decode; not single-sequence decode). GPU staging cost = slots * max
+        // expert tensor (plus the same in pinned host memory for mmap-backed weights). Needs a
+        // backend with a private stream (SYCL on Level Zero v1); elsewhere it stays off.
         int prefetch_experts_slots;  // set via llama_context_default_params() / llama_context_from_params
 
         // [EXPERIMENTAL]

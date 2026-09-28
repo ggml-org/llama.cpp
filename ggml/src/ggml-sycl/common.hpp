@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -423,10 +424,22 @@ struct ggml_backend_sycl_context {
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
+    // Set only for a backend created through ggml_backend_init_private_stream: an in-order
+    // queue on the device's shared context (USM pointers stay valid) that replaces the
+    // device-wide default queue for this context, so its copies overlap other contexts' work.
+    std::unique_ptr<sycl::queue> private_queue;
+
     explicit ggml_backend_sycl_context(int device) :
         device(device),
         name(GGML_SYCL_NAME + std::to_string(device)) {
         opt_feature = ggml_sycl_info().devices[device].opt_feature;
+    }
+
+    void use_private_queue(sycl::queue q) {
+        private_queue = std::make_unique<sycl::queue>(std::move(q));
+        for (int s = 0; s < GGML_SYCL_MAX_STREAMS; ++s) {
+            qptrs[device][s] = private_queue.get();
+        }
     }
 
     queue_ptr stream(int device, int stream) {

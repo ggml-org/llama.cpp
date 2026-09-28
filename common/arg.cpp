@@ -1874,7 +1874,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
         {"--prefetch-experts-slots"}, "N",
-        "MoE expert H2D staging slots (default 0 = off; N>=2 enables full-tensor prefetch with 1-deep lookahead for host-resident/ncmoe-offloaded expert weights during prefill; recommended 3; capped at 4). GPU memory cost = N x max_expert_tensor.",
+        "MoE expert H2D staging slots (default 0 = off; N>=2 enables full-tensor prefetch with 1-deep lookahead for host-resident/ncmoe-offloaded expert weights in batches routing >= 2*n_expert ids, i.e. prefill or large batched decode; recommended 3; capped at 4). GPU memory cost = N x max_expert_tensor, plus the same in pinned host memory for mmap-backed weights. Needs a backend with a private copy stream (SYCL on Level Zero v1); otherwise it warns and stays off.",
         [](common_params & params, const std::string & value) {
             params.prefetch_experts_slots = std::stoi(value);
         }

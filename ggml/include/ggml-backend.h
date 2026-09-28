@@ -223,6 +223,10 @@ extern "C" {
         const char * value;
     };
     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
+    // Create a backend on the device whose work runs on its own stream/queue, so it can overlap
+    // with other instances on the same device ("ggml_backend_init_private_stream", used by the
+    // scheduler's expert prefetch). Returns NULL if the device cannot provide one.
+    typedef ggml_backend_t               (*ggml_backend_init_private_stream_t)(ggml_backend_dev_t device);
 
     //
     // Backend registry
@@ -355,11 +359,14 @@ extern "C" {
 
     // Configure full-tensor MoE expert prefetch on a scheduler (mindcontrol port of
     // --prefetch-experts-slots). Only engages for splits whose MUL_MAT_ID weights are
-    // host-resident (GGML_BACKEND_BUFFER_USAGE_WEIGHTS, e.g. --n-cpu-moe) during large
-    // prefill batches; decode is unaffected (batch ids < 2*n_expert).
+    // host-resident (GGML_BACKEND_BUFFER_USAGE_WEIGHTS, e.g. --n-cpu-moe) when the batch routes
+    // at least 2*n_expert ids (prefill, or batched decode with that many tokens per ubatch;
+    // single-sequence decode never does), and only on devices whose backend exports
+    // "ggml_backend_init_private_stream" (otherwise it logs a warning and stays off).
     //   slots == 0  -> prefetch disabled (no memory overhead)
     //   slots >= 2  -> prefetch enabled with 1-deep lookahead and per-split cross-stream wait;
-    //                  GPU staging cost = slots * max_expert_tensor. Capped at GGML_SCHED_MAX_PREFETCH_SLOTS.
+    //                  GPU staging cost = slots * max_expert_tensor, plus the same in pinned host
+    //                  memory when the weights are mmap-backed. Capped at GGML_SCHED_MAX_PREFETCH_SLOTS.
     GGML_API void                 ggml_backend_sched_set_prefetch_experts_slots(ggml_backend_sched_t sched, int slots);
 
     //
