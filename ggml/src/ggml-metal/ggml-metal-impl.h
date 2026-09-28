@@ -120,6 +120,7 @@
 #define FC_TOPK_MOE                    1800
 #define FC_MOE_REDUCE                  1900
 #define FC_DSV4_HC                     2000
+#define FC_PAD                         2100
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -1120,6 +1121,10 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
+    int32_t  lp0;
+    int32_t  lp1;
+    int32_t  lp2;
+    int32_t  lp3;
 } ggml_metal_kargs_pad;
 
 typedef struct {
