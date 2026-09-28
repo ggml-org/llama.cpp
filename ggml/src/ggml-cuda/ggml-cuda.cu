@@ -4564,7 +4564,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
         // TODO: consolidate fusion paths in graph_optimize and graph_compute
         for (int i = 0; i < cgraph->n_nodes; ++i) {
-            // Keep the activation alive until the GLU node, otherwise the allocator may alias it with the fused output.
+            // The fused kernel reads the activation and both weights while writing the GLU output: keep them alive
+            // until the GLU node so the allocator cannot alias them (under op offload the weights are buffer copies).
             if (i + 2 < cgraph->n_nodes && cgraph->nodes[i + 2]->op == GGML_OP_GLU) {
                 ggml_tensor * glu  = cgraph->nodes[i + 2];
                 ggml_tensor * gate = glu->src[0];
@@ -4572,7 +4573,9 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 const bool ok = (gate == cgraph->nodes[i] && up == cgraph->nodes[i + 1]) ||
                                 (gate == cgraph->nodes[i + 1] && up == cgraph->nodes[i]);
                 if (ok && ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, cuda_ctx->device)) {
-                    params->add_alloc_dep(params->user_data, up->src[1], glu);
+                    params->add_alloc_dep(params->user_data, up->src[1],   glu);
+                    params->add_alloc_dep(params->user_data, up->src[0],   glu);
+                    params->add_alloc_dep(params->user_data, gate->src[0], glu);
                     i += 2;
                     continue;
                 }
