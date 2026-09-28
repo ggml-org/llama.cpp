@@ -226,20 +226,20 @@
 							</div>
 						</Collapsible.Content>
 					</Collapsible.Root>
+
+					<button
+						class={sheetItemClass}
+						onclick={() => {
+							sheetOpen = false;
+							chatFormActions.onMcpSettingsClick?.();
+						}}
+						type="button"
+					>
+						<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
+
+						<span>MCP Servers</span>
+					</button>
 				{/if}
-
-				<button
-					class={sheetItemClass}
-					onclick={() => {
-						sheetOpen = false;
-						chatFormActions.onMcpSettingsClick?.();
-					}}
-					type="button"
-				>
-					<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
-
-					<span>MCP Servers</span>
-				</button>
 			</div>
 		</Sheet.Content>
 	</Sheet.Root>

@@ -3,6 +3,7 @@
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
+		ChatFormActionReasoning,
 		ChatFormActionRecord,
 		ChatFormActionsAdd,
 		ChatFormActionSubmit,
@@ -29,9 +30,9 @@
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
+		onMcpSettingsClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -135,6 +136,7 @@
 		get onFileUpload() {
 			return onFileUpload;
 		},
+
 		get onMcpSettingsClick() {
 			return onMcpSettingsClick;
 		},
@@ -160,6 +162,8 @@
 		{/if}
 
 		{#if showModelSelector}
+			<ChatFormActionReasoning />
+
 			<ChatFormActionModels
 				bind:hasAudioModality
 				bind:hasModelSelected
