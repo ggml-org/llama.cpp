@@ -5,6 +5,7 @@
 #include "llama-io.h"
 #include "llama-batch.h"
 #include "llama-model.h"
+#include "llama-arch.h"
 
 #include <algorithm>
 #include <cassert>
@@ -73,7 +74,10 @@ llama_memory_recurrent::llama_memory_recurrent(
     r_l.resize(n_layer);
     s_l.resize(n_layer);
     p_l.resize(n_layer);
+    s_live.resize(n_layer, nullptr);
 
+    // RS split (--cpu-mtp): live S row stays on the device, rollback snapshots go to host.
+    // R is small (~4% of state bytes) and stays fully in host.
     for (int i = 0; i < n_layer; i++) {
         if (filter && !filter(i)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, i);
@@ -83,12 +87,37 @@ llama_memory_recurrent::llama_memory_recurrent(
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        ggml_backend_dev_t live_dev = nullptr;
+        bool placed_host = false;
 
         if (offload) {
             auto * dev = model.dev_layer(i);
             buft = ggml_backend_dev_buffer_type(dev);
+            live_dev = dev;
 
             dev_name = ggml_backend_dev_name(dev);
+
+            // Under --cpu-mtp with rollback planes, place RS in the device's host-visible buffer
+            // (pinned, device-addressable). Ops still run on the accel backend, no staging copies.
+            if (model.mtp_host() && n_rs_seq > 0) {
+                ggml_backend_buffer_type_t host_buft = nullptr;
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                if (reg != nullptr) {
+                    auto get_rs_buft = (ggml_backend_buffer_type_t (*)(void))
+                            ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_rs_host_buffer_type");
+                    if (get_rs_buft != nullptr) {
+                        host_buft = get_rs_buft();
+                    }
+                }
+                if (host_buft == nullptr) {
+                    host_buft = ggml_backend_dev_host_buffer_type(dev);
+                }
+                if (host_buft != nullptr) {
+                    buft        = host_buft;
+                    dev_name    = ggml_backend_buft_name(host_buft);
+                    placed_host = true;
+                }
+            }
         }
 
         LLAMA_LOG_DEBUG("%s, layer %3d: dev = %s\n", __func__, i, dev_name);
@@ -98,13 +127,37 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
-        ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
+        // Split is valid only with one recurrent cell per sequence (mem_size == 1) and an arch
+        // whose graph reads the live S row via get_s_live(). Otherwise the whole cache stays in host.
+        const bool rs_split_ok = llm_arch_supports_rs_split(model.arch);
+        const bool lsplit = placed_host && n_rs_seq > 0 && mem_size == 1 && rs_split_ok;
+        if (placed_host && n_rs_seq > 0 && rs_split_ok && mem_size != 1) {
+            LLAMA_LOG_WARN("%s: RS split skipped: it needs one recurrent cell per sequence "
+                    "(mem_size=%u, n_seq_max=%u); the whole cache stays in host RAM\n",
+                    __func__, mem_size, n_seq_max);
+        }
+
+        // R keeps all rows; S keeps only the snapshots when split (live row is a device tensor below).
+        const uint32_t n_rows_r = mem_size * (1 + n_rs_seq);
+        const uint32_t n_rows   = lsplit ? n_rs_seq : n_rows_r;
+
+        ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows_r);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
         ggml_format_name(s, "cache_s_l%d", i);
         r_l[i] = r;
         s_l[i] = s;
+
+        if (lsplit) {
+            ggml_backend_buffer_type_t live_buft = ggml_backend_dev_buffer_type(live_dev);
+            ggml_context * live_ctx = ctx_for_buft(live_buft);
+            if (!live_ctx) {
+                throw std::runtime_error("failed to create ggml context for the live rs state");
+            }
+            s_live[i] = ggml_new_tensor_2d(live_ctx, type_s, hparams.n_embd_s(), mem_size);
+            ggml_format_name(s_live[i], "cache_s_live_l%d", i);
+            this->split = true;
+        }
 
         // the PLE history needs its own row: Meta must mirror it while the delta-net conv state next door stays split
         if (hparams.ple_conv_state() > 0 && hparams.is_ple(i)) {
@@ -950,10 +1003,23 @@ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::
 
             // Write each logical cell row range. With pending recurrent rollback,
             // the logical current state may live in a rollback snapshot plane.
-            for (const auto & range : cell_ranges) {
-                const size_t range_size = range.second - range.first;
-                const size_t buf_size = range_size * s_size_row;
-                io.write_tensor(s_l[il], range.first * s_size_row, buf_size);
+            if (split) {
+                // RS split: host S holds only the snapshots (local row r-1 == logical row r);
+                // logical row 0 is the device live state
+                GGML_ASSERT(s_live[il] != nullptr);
+                for (const auto & range : cell_ranges) {
+                    for (uint32_t row = range.first; row < range.second; ++row) {
+                        ggml_tensor * src = (row == 0) ? s_live[il] : s_l[il];
+                        const size_t off = (row == 0) ? 0 : (size_t) (row - 1) * s_size_row;
+                        io.write_tensor(src, off, s_size_row);
+                    }
+                }
+            } else {
+                for (const auto & range : cell_ranges) {
+                    const size_t range_size = range.second - range.first;
+                    const size_t buf_size = range_size * s_size_row;
+                    io.write_tensor(s_l[il], range.first * s_size_row, buf_size);
+                }
             }
         }
     } else {
@@ -1177,8 +1243,19 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
             }
 
             if (cell_count) {
-                // Read and set the values for the whole cell range
-                io.read_tensor(s_l[il], head * s_size_row, cell_count * s_size_row);
+                if (split) {
+                    // RS split: mirror state_write_data
+                    GGML_ASSERT(s_live[il] != nullptr);
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        const uint32_t row = head + i;
+                        ggml_tensor * dst = (row == 0) ? s_live[il] : s_l[il];
+                        const size_t off = (row == 0) ? 0 : (size_t) (row - 1) * s_size_row;
+                        io.read_tensor(dst, off, s_size_row);
+                    }
+                } else {
+                    // Read and set the values for the whole cell range
+                    io.read_tensor(s_l[il], head * s_size_row, cell_count * s_size_row);
+                }
             }
         }
     } else {
@@ -1343,6 +1420,26 @@ ggml_tensor * llama_memory_recurrent_context::get_p_l(int32_t il) const {
     return mem->p_l[il];
 }
 
+// RS split: copy rollback snapshot `row` back into row 0 (the state the graph reads).
+void llama_memory_recurrent::s_restore_live(uint32_t row) {
+    if (row == 0 || row > n_rs_seq) {
+        return;
+    }
+    for (size_t il = 0; il < s_live.size(); ++il) {
+        if (s_live[il] == nullptr) {
+            continue;
+        }
+        ggml_tensor * r = r_l[il];
+        if (r != nullptr && r->data != nullptr && (int64_t) row < r->ne[1]) {
+            memcpy(r->data, (const char *) r->data + (size_t) row * r->nb[1], r->nb[1]);
+        }
+        ggml_tensor * s = s_l[il];
+        if (s != nullptr && s->data != nullptr && (int64_t) (row - 1) < s->ne[1]) {
+            ggml_backend_tensor_set(s_live[il], (const char *) s->data + (size_t) (row - 1) * s->nb[1], 0, s_live[il]->nb[1]);
+        }
+    }
+}
+
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;
@@ -1360,5 +1457,14 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
             mem->rs_idx[seq] = 0;
         }
     }
+
+    if (mem->split) {
+        // apply a pending rollback once, into the device live row
+        if (idx > 0) {
+            mem->s_restore_live(idx);
+        }
+        return src0;
+    }
+
     return (int32_t)(idx * mem->size) + src0;
 }
