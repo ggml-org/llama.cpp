@@ -15756,6 +15756,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
                 // turbo K/V never takes the coopmat2 path (see get_fa_tuning_params)
                 const bool turbo_kv = ggml_type_is_turbo(op->src[1]->type) || ggml_type_is_turbo(op->src[2]->type);
+                // Q1_0 decodes only on the coopmat2 path, turbo only on scalar/coopmat1: no path serves a mix
+                if (turbo_kv && (op->src[1]->type == GGML_TYPE_Q1_0 || op->src[2]->type == GGML_TYPE_Q1_0)) {
+                    return false;
+                }
                 if ((!coopmat2 || turbo_kv) && !(device->subgroup_shuffle && device->subgroup_vote)) {
                     // scalar/coopmat1 FA uses subgroupShuffle/subgroupAll
                     return false;
