@@ -731,11 +731,17 @@ class DFlashModel(Qwen3Model):
         if causal is not None:
             self.gguf_writer.add_causal_attention(bool(causal))
 
-        # M-RoPE target: the draft ropes on the temporal dim only, so write
-        # degenerate sections [n_rot/2, 0, 0, 0]
+        head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         if self._target_uses_mrope():
-            head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+            # M-RoPE target: the draft ropes on the temporal dim only, so write degenerate sections [n_rot/2, 0, 0, 0]
             self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
+        elif (prf := self.hparams.get("partial_rotary_factor")) is not None:
+            # partial rotary (e.g. MiMo V2 DFlash): only a fraction of the head dims rotate
+            self.gguf_writer.add_rope_dimension_count(int(head_dim * float(prf)))
+
+        # attention value scale (e.g. MiMo V2 DFlash): applied on the attention output
+        if (v_scale := dflash_config.get("attention_value_scale", self.hparams.get("attention_value_scale"))) is not None:
+            self.gguf_writer.add_attn_value_scale(float(v_scale))
 
     def _target_uses_mrope(self) -> bool:
         if self.target_model_dir is None:
@@ -745,6 +751,66 @@ class DFlashModel(Qwen3Model):
         cfg = cfg.get("text_config", cfg)
         rope = cfg.get("rope_parameters") or cfg.get("rope_scaling") or {}
         return "mrope_section" in rope
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # The target's embedding row for the mask token may be untrained (all zeros), but the
+        # drafter was trained with a separate learned vector (mask_embedding.pt). Synthesize the
+        # draft's own token_embd from the target's table with that row replaced; a runtime that
+        # embeds mask slots through the target's table would otherwise feed the drafter zeros.
+        # ref: https://huggingface.co/TrevorJS/Xiaomi-MiMo-V2.6-Flash-RL-DFlash
+        dflash_config = self.hparams.get("dflash_config", {})
+        mask_token_id = dflash_config.get("mask_token_id", self.hparams.get("mask_token_id"))
+        mask_emb_file = self.dir_model / "mask_embedding.pt"
+        has_own_embd = any(k.endswith("embed_tokens.weight") for k in self.model_tensors)
+        if (self.target_model_dir is not None and mask_token_id is not None
+                and mask_emb_file.is_file() and not has_own_embd):
+            target_embd = self._load_target_embed_tokens()
+            if target_embd is None:
+                logger.warning("DFlash: could not load the target token_embd to patch the mask embedding")
+            else:
+                embd = target_embd.detach().clone()
+                mask = torch.load(str(mask_emb_file), map_location="cpu", weights_only=True)
+                mask = torch.as_tensor(mask).reshape(-1)
+                if mask.numel() != embd.shape[1]:
+                    logger.warning(f"DFlash: mask embedding width {mask.numel()} != token_embd width {embd.shape[1]}, skipping")
+                elif not (0 <= int(mask_token_id) < embd.shape[0]):
+                    logger.warning(f"DFlash: mask_token_id {mask_token_id} out of range for vocab size {embd.shape[0]}, skipping")
+                else:
+                    embd[int(mask_token_id)] = mask.to(embd.dtype)
+                    logger.info(f"DFlash: synthesized token_embd with mask row {mask_token_id} from {mask_emb_file.name}")
+                    yield "model.embed_tokens.weight", embd
+        yield from super().generate_extra_tensors()
+
+    def _load_target_embed_tokens(self) -> Tensor | None:
+        """Load the target model's token embedding table from target_model_dir."""
+        from safetensors import safe_open
+        target_dir = self.target_model_dir
+        index_file = target_dir / "model.safetensors.index.json"
+        embed_name: str | None = None
+        shard: str | None = None
+        if index_file.is_file():
+            with open(index_file, "r", encoding="utf-8") as f:
+                weight_map = json.load(f).get("weight_map", {})
+            for cand in ("model.embed_tokens.weight", "model.language_model.embed_tokens.weight", "embed_tokens.weight"):
+                if cand in weight_map:
+                    embed_name, shard = cand, weight_map[cand]
+                    break
+            if embed_name is None:
+                for k in sorted(weight_map):
+                    if k.endswith("embed_tokens.weight"):
+                        embed_name, shard = k, weight_map[k]
+                        break
+        else:
+            single = target_dir / "model.safetensors"
+            if not single.is_file():
+                return None
+            embed_name, shard = "model.embed_tokens.weight", "model.safetensors"
+        if embed_name is None or shard is None:
+            return None
+        with safe_open(target_dir / shard, framework="pt") as f:
+            if embed_name not in f.keys():
+                return None
+            return f.get_tensor(embed_name)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
