@@ -21,15 +21,16 @@ typedef struct {
 } worker_context_t;
 
 struct work_queue_task_s {
-    work_queue_func_t func;
-    void *            data;
-    unsigned int      n_threads;
-    atomic_uint       barrier;
+    _Atomic(work_queue_func_t) func;
+    _Atomic(void *)           data;
+    atomic_uint               n_threads;
+    atomic_uint               barrier;
 };
 
 // internal structure kept in thread-local storage per instance of work queue
 struct work_queue_s {
     atomic_uint        seqn;      // seqno used to detect new jobs
+    atomic_uint        n_pub;     // task publication count, separate from wakeups
     atomic_uint        idx_read;  // Updated by producer (pop/reclaim)
     unsigned int       idx_write; // Updated by producer (push)
     uint32_t           idx_mask;
@@ -55,6 +56,7 @@ static void work_queue_thread(void * context) {
     FARF(HIGH, "work-queue: thread %u started", me->id);
 
     unsigned int prev_seqn = 0;
+    unsigned int last_pub  = 0;  // number of the last task this worker has handled
 
     while (!atomic_load_explicit(&q->killed, memory_order_relaxed)) {
         unsigned int seqn = atomic_load_explicit(&q->seqn, memory_order_acquire);
@@ -69,26 +71,32 @@ static void work_queue_thread(void * context) {
 
         prev_seqn = seqn;
 
-        // Process all active tasks in the queue
-        unsigned int ir = atomic_load_explicit(&q->idx_read, memory_order_relaxed);
-        unsigned int iw = q->idx_write;
+        // Tasks finish before the next is published, so only the latest task can need this worker.
+        // Track publications separately from wakeups to avoid executing a task twice.
+        unsigned int pub = atomic_load_explicit(&q->n_pub, memory_order_acquire);
+        if (pub == last_pub) {
+            continue;
+        }
 
-        while (ir != iw) {
-            struct work_queue_task_s * task = &q->queue[ir];
+        struct work_queue_task_s * task = &q->queue[(pub - 1) & q->idx_mask];
 
-            unsigned int n = task->n_threads;
-            unsigned int i = me->id;
-            if (i < n) {
-                task->func(n, i, task->data);
+        work_queue_func_t func = atomic_load_explicit(&task->func, memory_order_relaxed);
+        void *            data = atomic_load_explicit(&task->data, memory_order_relaxed);
+        unsigned int      n    = atomic_load_explicit(&task->n_threads, memory_order_relaxed);
 
-                atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
-            } else {
-                while (atomic_load_explicit(&task->barrier, memory_order_relaxed) > 0) {
-                    hex_pause();
-                }
-            }
+        // A nonparticipating worker may race with slot reuse. Retry if this snapshot became stale.
+        atomic_thread_fence(memory_order_acquire);
+        if (atomic_load_explicit(&q->n_pub, memory_order_relaxed) != pub) {
+            continue;
+        }
 
-            ir = (ir + 1) & q->idx_mask;
+        last_pub = pub;
+
+        unsigned int i = me->id;
+        if (i < n) {
+            func(n, i, data);
+
+            atomic_fetch_sub_explicit(&task->barrier, 1, memory_order_release);
         }
     }
 
@@ -109,15 +117,24 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
         return false;
     }
 
-    struct work_queue_task_s * task = &q->queue[iw];
-    task->func      = func;
-    task->data      = data;
-    task->n_threads = n;
-    atomic_store_explicit(&task->barrier, n, memory_order_relaxed);
+    // task number pub lives in queue[(pub - 1) & idx_mask] == queue[iw] (both counters advance once per task)
+    unsigned int pub = atomic_load_explicit(&q->n_pub, memory_order_relaxed) + 1;
+
+    struct work_queue_task_s * task = &q->queue[(pub - 1) & q->idx_mask];
+
+    // Order the previous publication before reusing a slot so a reader of rewritten fields detects it when rechecking n_pub.
+    atomic_thread_fence(memory_order_release);
+    atomic_store_explicit(&task->func,      func, memory_order_relaxed);
+    atomic_store_explicit(&task->data,      data, memory_order_relaxed);
+    atomic_store_explicit(&task->n_threads, n,    memory_order_relaxed);
+    atomic_store_explicit(&task->barrier,   n,    memory_order_relaxed);
 
     q->idx_write = (iw + 1) & q->idx_mask;
 
-    // publish job to workers (already awake and polling)
+    // publish the task (release: its fields and barrier are visible to a worker that reads this n_pub)
+    atomic_store_explicit(&q->n_pub, pub, memory_order_release);
+
+    // wake up polling workers
     atomic_fetch_add_explicit(&q->seqn, 1, memory_order_release);
 
     // main thread runs job #0
@@ -171,14 +188,15 @@ work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, 
     atomic_init(&q->idx_read, 0);
     atomic_init(&q->seqn,     0);
     atomic_init(&q->active,   false);
+    atomic_init(&q->n_pub,    0);
     q->idx_write = 0;
     q->idx_mask  = capacity - 1;
     q->killed    = 0;
     for (int i = 0; i < (int) capacity; i++) {
-        atomic_init(&q->queue[i].barrier, 0);
-        q->queue[i].func      = NULL;
-        q->queue[i].data      = NULL;
-        q->queue[i].n_threads = 0;
+        atomic_init(&q->queue[i].barrier,   0);
+        atomic_init(&q->queue[i].func,      NULL);
+        atomic_init(&q->queue[i].data,      NULL);
+        atomic_init(&q->queue[i].n_threads, 0);
     }
 
     // launch the workers
