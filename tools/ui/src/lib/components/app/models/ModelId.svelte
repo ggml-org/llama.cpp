@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
 	import ModelDraftSidecars from './ModelDraftSidecars.svelte';
+	import type { ModelDraft } from './ModelsManager/utils';
 	import { Database, ScrollText } from '@lucide/svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -39,6 +40,8 @@
 		sizeRange?: { min: number; max: number } | null;
 		/** Draft sidecars available for the model, badged with their own quant. */
 		draftSidecars?: ModelSidecarBadge[];
+		/** Drafts a load would use, rendered as `+ [KIND] [QUANT]` next to the id. */
+		drafts?: ModelDraft[];
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
 		class?: string;
@@ -48,6 +51,7 @@
 		aliases,
 		class: className = '',
 		contextLength,
+		drafts = [],
 		draftSidecars = [],
 		hideCapabilities = false,
 		hideModalities = false,
@@ -90,6 +94,7 @@
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
 	let uniqueDraftSidecars = $derived(draftSidecars.filter((badge) => !isAuxSidecar(badge.kind)));
+	let activeDrafts = $derived(drafts.filter((draft) => draft.active && draft.kind));
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
 	let displayName = $derived(primaryAlias ?? parsed.modelName ?? modelId);
@@ -97,6 +102,7 @@
 	let hasBadges = $derived(
 		parsed.sidecar ||
 			uniqueDraftSidecars.length > 0 ||
+			activeDrafts.length > 0 ||
 			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
 			primaryAlias ||
@@ -138,6 +144,18 @@
 						{parsed.quantization}
 					</span>
 				{/if}
+
+				{#each activeDrafts as draft (draft.kind ?? 'draft')}
+					<span class="flex shrink-0 items-center gap-1">
+						<span class="text-[10px] text-muted-foreground">+</span>
+
+						<span class={variantBadgeClass} title="Speculative draft in use">{draft.kind}</span>
+
+						{#if draft.quant}
+							<span class={badgeClass}>{draft.quant}</span>
+						{/if}
+					</span>
+				{/each}
 
 				<ModelDraftSidecars {draftSidecars} />
 

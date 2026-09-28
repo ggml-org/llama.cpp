@@ -358,7 +358,9 @@ export interface ApiChatCompletionStreamChunk {
 		metadata?: { model?: string };
 		delta: {
 			content?: string;
+			reasoning?: string;
 			reasoning_content?: string;
+			reasoning_text?: string;
 			model?: string;
 			tool_calls?: ApiChatCompletionToolCallDelta[];
 		};
@@ -372,6 +374,17 @@ export interface ApiChatCompletionStreamChunk {
 		cache_n?: number;
 	};
 	prompt_progress?: ChatMessagePromptProgress;
+	/** Token counts, sent by OpenAI-compatible servers on the final chunk. */
+	usage?: ApiChatCompletionUsage;
+}
+
+export interface ApiChatCompletionUsage {
+	cached_tokens?: number;
+	completion_tokens?: number;
+	prompt_cache_hit_tokens?: number;
+	prompt_tokens?: number;
+	prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+	total_tokens?: number;
 }
 
 export interface ApiChatCompletionResponse {
