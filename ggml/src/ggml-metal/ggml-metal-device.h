@@ -194,6 +194,11 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         int32_t nqptg,
         int32_t ncpsg);
 
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_tensor(
+        ggml_metal_library_t lib,
+        const struct ggml_tensor * op,
+        bool has_mask);
+
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,
