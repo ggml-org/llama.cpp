@@ -1401,6 +1401,7 @@ bool server_models::remove(const std::string & name) {
     // remove from disk (best-effort: cancelled downloads may have no cached files)
     bool ok = common_download_remove(name);
     mapping.erase(name);
+
     if (!ok) {
         SRV_WRN("removing model name=%s from disk returned false (no cached files?)\n", name.c_str());
     }
