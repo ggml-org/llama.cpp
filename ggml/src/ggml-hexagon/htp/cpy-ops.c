@@ -17,6 +17,7 @@
 #include "hvx-utils.h"
 #include "htp-tensor.h"
 #include "htp-fence.h"
+#include "hvx-gather-rows.h"
 
 struct htp_copy_context {
     struct htp_ops_context * octx;
@@ -582,6 +583,14 @@ static int exec_cpy(struct htp_ops_context * octx, bool * use_dma) {
         if (octx->ctx->mdev.count <= 1 && dst_is_contiguous && src_is_contiguous) {
             *use_dma = true;
             cpy_dma_sametype_reshape_contig(octx->ctx->dma[0], dst->data, src0->data, total_elems * ct.dst_type_size);
+            return HTP_STATUS_OK;
+        }
+
+        // short f32 source rows into a contiguous dst (conv state view): per-row copies wait on memory for every row
+        if (octx->ctx->mdev.count <= 1 && src0->type == HTP_TYPE_F32 && dst_is_contiguous && nb00 == 4 && ne00 <= 16 && ne02 == 1 && ne03 == 1 &&
+            !htp_tensor_is_extended(src0) && !htp_tensor_is_extended(dst) &&
+            hvx_gather_rows_run(octx, src0, ne00, NULL, 0, dst->data, ne01)) {
+            *use_dma = true;
             return HTP_STATUS_OK;
         }
 

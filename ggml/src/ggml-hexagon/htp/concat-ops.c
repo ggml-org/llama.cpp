@@ -10,6 +10,7 @@
 #include "htp-vtcm.h"
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
+#include "hvx-gather-rows.h"
 #include <string.h>
 
 struct htp_concat_context {
@@ -352,6 +353,16 @@ int op_concat(struct htp_ops_context * octx) {
     bool is_src0_transposed  = (src0->nb[0] > src0->nb[1]);
 
     if (concat_dim1_contiguous_dma(octx, dim, type_size)) {
+        return HTP_STATUS_OK;
+    }
+
+    // dim 0 with short rows (conv state + one token): the paths below move a few elements per row and wait on every transfer
+    if (dim == 0 && octx->ctx->mdev.count <= 1 && dst->type == HTP_TYPE_F32 && src0->type == HTP_TYPE_F32 && src1->type == HTP_TYPE_F32 &&
+        dst->ne[0] <= 16 && dst->nb[0] == 4 && dst->nb[1] == dst->ne[0] * 4 && src0->nb[0] == 4 &&
+        src0->ne[1] == dst->ne[1] && src1->ne[1] == dst->ne[1] &&
+        dst->ne[2] == 1 && dst->ne[3] == 1 && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        !htp_tensor_is_extended(src0) && !htp_tensor_is_extended(src1) && !htp_tensor_is_extended(dst) &&
+        hvx_gather_rows_run(octx, src0, src0->ne[0], src1, src1->ne[0], dst->data, dst->ne[1])) {
         return HTP_STATUS_OK;
     }
 
