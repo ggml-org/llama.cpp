@@ -4,9 +4,13 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ReasoningEffort } from '$lib/enums';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 
 	const reasoning = useReasoningMenu();
+
+	// "Default" is the resting state, where the bulb alone carries the meaning
+	let isDefault = $derived(reasoning.currentEffort === ReasoningEffort.DEFAULT);
 </script>
 
 <!-- Reasoning effort sits beside the model selector: the level belongs to the chat, not
@@ -17,7 +21,7 @@
 			<Button
 				{...props}
 				aria-label="Reasoning effort"
-				class="h-auto gap-1 rounded-sm px-1.75! py-1 text-xs"
+				class="h-auto gap-1 rounded-sm {isDefault ? 'px-1' : 'px-1.75!'} py-1 text-xs"
 				variant="ghost"
 			>
 				<span class="flex items-center gap-0.75 {reasoning.isOff ? 'text-muted-foreground' : ''}">
@@ -27,7 +31,9 @@
 						<Lightbulb class="size-3 shrink-0" />
 					{/if}
 
-					<span class="capitalize">{reasoning.currentEffort}</span>
+					{#if !isDefault}
+						<span class="capitalize">{reasoning.currentEffort}</span>
+					{/if}
 				</span>
 			</Button>
 		{/snippet}
