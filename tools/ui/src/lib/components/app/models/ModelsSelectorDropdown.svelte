@@ -12,11 +12,13 @@
 	} from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import { MODEL_ID, MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
+	import { ModelsService } from '$lib/services/models.service';
 	import { modelsStore, settingsStore } from '$lib/stores';
+	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -65,6 +67,27 @@
 	});
 
 	const reasoning = useReasoningMenu();
+
+	/** Draft sidecar as it reads in the trigger tooltip, with its own quant. */
+	function draftSidecarLabel(baseModel: string, badge: ModelSidecarBadge): string {
+		const baseRepo = baseModel.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+
+		// a sidecar of the model's own repo reads as a bare tag, a foreign one keeps its id
+		if (badge.repo === baseRepo) {
+			return `${badge.kind.toUpperCase()}${badge.quant ? `:${badge.quant}` : ''}`;
+		}
+
+		return ModelsService.buildDownloadTag(badge.repo, badge.quant, badge.kind);
+	}
+
+	/** Raw id of the selected model, plus every draft sidecar it pulls. */
+	function triggerTooltipLabel(option: ModelOption): string {
+		const drafts = (option.draftSidecars ?? []).map((badge) =>
+			draftSidecarLabel(option.model, badge)
+		);
+
+		return [option.model, ...drafts].join(' + ');
+	}
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -229,8 +252,8 @@
 									{#if selectedOption}
 										<ModelId
 											class="min-w-0 overflow-hidden"
+											draftSidecars={selectedOption.draftSidecars}
 											hideOrgName={!showOrgNameInTrigger}
-											hideQuantization
 											modelId={selectedOption.model}
 										/>
 									{:else}
@@ -257,7 +280,7 @@
 
 					{#if selectedOption}
 						<Tooltip.Content>
-							<p class="font-mono">{selectedOption.model}</p>
+							<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
 						</Tooltip.Content>
 					{/if}
 				</Tooltip.Root>
@@ -274,8 +297,8 @@
 							{#if selectedOption}
 								<ModelId
 									class="min-w-0 flex-1 overflow-hidden"
+									draftSidecars={selectedOption.draftSidecars}
 									hideOrgName={!showOrgNameInTrigger}
-									hideQuantization
 									modelId={selectedOption.model}
 								/>
 							{:else}
@@ -381,8 +404,8 @@
 							{#if selectedOption}
 								<ModelId
 									class="min-w-0 overflow-hidden"
+									draftSidecars={selectedOption.draftSidecars}
 									hideOrgName={!showOrgNameInTrigger}
-									hideQuantization
 									modelId={selectedOption.model}
 								/>
 							{/if}
@@ -400,7 +423,7 @@
 
 				{#if selectedOption}
 					<Tooltip.Content>
-						<p class="font-mono">{selectedOption.model}</p>
+						<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
