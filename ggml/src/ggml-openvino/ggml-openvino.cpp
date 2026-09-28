@@ -9,6 +9,7 @@
 #include "ggml-quants.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -960,6 +961,24 @@ static bool has_view_op_input(const ggml_tensor * op) {
     return false;
 }
 
+// OV slices whole elements per axis, so each stride must be a multiple of the next smaller one
+// (e.g. a batch stride of m*nb[1] + pad bytes cannot be expressed and would be read wrongly).
+static bool has_strides_on_element_grid(const ggml_tensor * t) {
+    std::vector<size_t> strides;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (t->ne[i] > 1) {
+            strides.push_back(t->nb[i]);
+        }
+    }
+    std::sort(strides.begin(), strides.end());
+    for (size_t i = 1; i < strides.size(); i++) {
+        if (strides[i - 1] == 0 || strides[i] % strides[i - 1] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool has_non_contiguous_view_input(const ggml_tensor * op) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (op->src[i] == nullptr) {
@@ -1539,6 +1558,9 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         }
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
+        }
+        if (!has_strides_on_element_grid(src)) {
+            return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }
         const bool is_supported_3d_moe_expert =
             op->op == GGML_OP_MUL_MAT_ID && i == 0 && (src->type == GGML_TYPE_MXFP4 || src->ne[3] == 1);
