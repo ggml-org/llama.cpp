@@ -63,12 +63,7 @@ static fs::path get_cache_directory() {
 }
 
 std::string get_cache_path() {
-#if defined(__cpp_lib_char8_t)
-    const std::u8string u8str = get_cache_directory().u8string();
-    return std::string(reinterpret_cast<const char *>(u8str.data()), u8str.size());
-#else
-    return get_cache_directory().u8string();
-#endif
+    return fs_path_to_utf8(get_cache_directory());
 }
 
 static std::string folder_name_to_repo(const std::string & folder) {
