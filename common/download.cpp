@@ -4,6 +4,7 @@
 #include "common.h"
 #include "log.h"
 #include "download.h"
+#include "file-lock.h"
 #include "hf-cache.h"
 #include "json.h"
 
@@ -111,6 +112,18 @@ std::pair<std::string, std::string> common_download_split_repo_tag(const std::st
     return {hf_repo, tag};
 }
 
+// file name from url, without the query string
+static std::string url_get_filename(const std::string & url) {
+    std::string filename = url;
+    if (auto pos = filename.rfind('/'); pos != std::string::npos) {
+        filename = filename.substr(pos + 1);
+    }
+    if (auto pos = filename.find('?'); pos != std::string::npos) {
+        filename = filename.substr(0, pos);
+    }
+    return filename;
+}
+
 class ProgressBar : public common_download_callback {
     static inline std::mutex mutex;
     static inline std::map<const ProgressBar *, int> lines;
@@ -138,14 +151,8 @@ public:
     ProgressBar() = default;
 
     void on_start(const common_download_progress & p) override {
-        filename = p.url;
+        filename = url_get_filename(p.url);
 
-        if (auto pos = filename.rfind('/'); pos != std::string::npos) {
-            filename = filename.substr(pos + 1);
-        }
-        if (auto pos = filename.find('?'); pos != std::string::npos) {
-            filename = filename.substr(0, pos);
-        }
         for (size_t i = 0; i < filename.size(); ++i) {
             if ((filename[i] & 0xC0) != 0x80) {
                 if (len++ == 39) {
@@ -282,15 +289,61 @@ static bool common_pull_file(httplib::Client & cli,
 static int common_download_file_single_online(const std::string & url,
                                               const std::string & path,
                                               const common_download_opts & opts,
-                                              bool skip_etag) {
+                                              bool skip_etag,
+                                              const std::string & lock_path,
+                                              const std::string & alt_path) {
     static const int max_attempts        = 3;
     static const int retry_delay_seconds = 2;
 
-    const bool file_exists = std::filesystem::exists(path);
+    const std::string path_temporary = path + ".downloadInProgress";
+    const std::string path_lock = lock_path.empty() ? path + ".lock" : lock_path;
+
+    common_download_progress p;
+    p.url = url;
+
+    if (opts.callback) {
+        opts.callback->on_start(p);
+    }
+
+    // the completion callback may itself take the same lock (the HF cache
+    // finalizes blobs under it), so every exit goes through finish()
+    common_file_lock lock(path_lock);
+    auto finish = [&](int status) {
+        lock.close();
+        if (opts.callback) {
+            opts.callback->on_done(p, is_http_status_ok(status));
+        }
+        return status;
+    };
+
+    // alt_path is the HF snapshot: the blob may have been moved there when symlinks are unavailable
+    auto cache_hit = [&] {
+        return std::filesystem::exists(path) || (!alt_path.empty() && std::filesystem::exists(alt_path));
+    };
+
+    if (skip_etag && cache_hit()) {
+        LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
+        return finish(304); // 304 Not Modified - fake cached response
+    }
+
+    // take the lock before touching the cache, so two processes cannot race on the same file
+    bool waited = false;
+    if (!lock.acquire([&] {
+            if (!waited) {
+                LOG_INF("%s: file '%s' is being downloaded by another process, waiting...\n", __func__, url_get_filename(url).c_str());
+                waited = true;
+            }
+            return !(opts.callback && opts.callback->is_cancelled());
+        })) {
+        return finish(-1);
+    }
+
+    // under the lock: another process may have finished while we waited
+    bool file_exists = cache_hit();
 
     if (file_exists && skip_etag) {
         LOG_DBG("%s: using cached file: %s\n", __func__, path.c_str());
-        return 304; // 304 Not Modified - fake cached response
+        return finish(304); // 304 Not Modified - fake cached response
     }
 
     auto [cli, parts] = common_http_client(url);
@@ -319,9 +372,9 @@ static int common_download_file_single_online(const std::string & url,
         LOG_TRC("%s: HEAD failed, status: %d\n", __func__, head ? head->status : -1);
         if (file_exists) {
             LOG_TRC("%s: using cached file (HEAD failed): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
-        return head ? head->status : -1;
+        return finish(head ? head->status : -1);
     }
 
     std::string etag;
@@ -329,8 +382,6 @@ static int common_download_file_single_online(const std::string & url,
         etag = head->get_header_value("ETag");
     }
 
-    common_download_progress p;
-    p.url = url;
     if (head->has_header("Content-Length")) {
         try {
             p.total = std::stoull(head->get_header_value("Content-Length"));
@@ -347,16 +398,16 @@ static int common_download_file_single_online(const std::string & url,
     if (file_exists) {
         if (etag.empty()) {
             LOG_DBG("%s: using cached file (no server etag): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
         if (!last_etag.empty() && last_etag == etag) {
             LOG_DBG("%s: using cached file (same etag): %s\n", __func__, path.c_str());
-            return 304; // 304 Not Modified - fake cached response
+            return finish(304); // 304 Not Modified - fake cached response
         }
         // pass this point, the file exists but is different from the server version, so we need to redownload it
         if (remove(path.c_str()) != 0) {
             LOG_ERR("%s: unable to delete file: %s\n", __func__, path.c_str());
-            return -1;
+            return finish(-1);
         }
     }
 
@@ -366,12 +417,7 @@ static int common_download_file_single_online(const std::string & url,
     }
 
     bool success = false;
-    const std::string path_temporary = path + ".downloadInProgress";
     int delay = retry_delay_seconds;
-
-    if (opts.callback) {
-        opts.callback->on_start(p);
-    }
 
     for (int i = 0; i < max_attempts; ++i) {
         if (opts.callback && opts.callback->is_cancelled()) {
@@ -413,21 +459,18 @@ static int common_download_file_single_online(const std::string & url,
         }
     }
 
-    if (opts.callback) {
-        opts.callback->on_done(p, success);
-    }
     if (opts.callback && opts.callback->is_cancelled() &&
         std::filesystem::exists(path_temporary)) {
         if (remove(path_temporary.c_str()) != 0) {
             LOG_ERR("%s: unable to delete temporary file: %s\n", __func__, path_temporary.c_str());
         }
     }
+
     if (!success) {
         LOG_ERR("%s: download failed after %d attempts\n", __func__, max_attempts);
-        return -1; // max attempts reached
     }
 
-    return head->status;
+    return finish(success ? head->status : -1);
 }
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
@@ -467,14 +510,16 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string  
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const common_download_opts & opts,
-                                bool skip_etag) {
+                                bool skip_etag,
+                                const std::string & lock_path,
+                                const std::string & alt_path) {
     if (!opts.offline) {
         ProgressBar tty_cb;
         common_download_opts online_opts = opts;
         if (!online_opts.callback) {
             online_opts.callback = &tty_cb;
         }
-        return common_download_file_single_online(url, path, online_opts, skip_etag);
+        return common_download_file_single_online(url, path, online_opts, skip_etag, lock_path, alt_path);
     }
 
     if (!std::filesystem::exists(path)) {
@@ -808,7 +853,7 @@ void common_download_run_tasks(const std::vector<common_download_task> & tasks) 
     for (const auto & task : tasks) {
         futures.push_back(std::async(std::launch::async,
             [&task]() {
-                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf);
+                return common_download_file_single(task.url, task.local_path, task.opts, task.is_hf, task.lock_path, task.alt_path);
             }
         ));
     }

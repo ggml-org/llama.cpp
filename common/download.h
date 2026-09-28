@@ -69,12 +69,15 @@ struct common_download_task {
     std::string local_path;
     std::function<void()> on_done;
     bool is_hf = false;
+    std::string lock_path;
+    std::string alt_path; // HF snapshot path, also treated as cached (the blob may be moved there)
 
     common_download_task() = default;
     common_download_task(hf_cache::hf_file f,
             const common_download_opts & opts,
             std::function<void()> on_done = nullptr)
-        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true) {}
+        : opts(opts), url(f.url), local_path(f.local_path), on_done(on_done), is_hf(true),
+          lock_path(hf_cache::get_lock_path(f.repo_id, f.oid)), alt_path(f.final_path) {}
 };
 
 void common_download_run_tasks(const std::vector<common_download_task> & tasks);
@@ -92,10 +95,14 @@ std::string common_download_resolve_path(const std::string & hf_repo_with_tag, c
 // download single file from url to local path
 // returns status code or -1 on error
 // skip_etag: if true, don't read/write .etag files (for HF cache where filename is the hash)
+// lock_path: lock file used to serialize downloads of the same file; when empty, "<path>.lock" is used
+// alt_path: additional path treated as present in cache (see cache_hit in download.cpp)
 int common_download_file_single(const std::string & url,
                                 const std::string & path,
                                 const common_download_opts & opts = {},
-                                bool skip_etag = false);
+                                bool skip_etag = false,
+                                const std::string & lock_path = "",
+                                const std::string & alt_path = "");
 
 // resolve and download model from Docker registry
 // return local path to downloaded model file
