@@ -912,6 +912,7 @@ std::filesystem::path common_get_path_from_env(const std::string & name);
 //
 
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs = false);
+bool fs_validate_path_in_directory(const std::string & filename, const std::string & base_directory);
 bool fs_create_directory_with_parents(const std::string & path);
 bool fs_is_directory(const std::string & path);
 
