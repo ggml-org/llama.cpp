@@ -314,17 +314,13 @@ struct common_peg_schema_parser {
     bool raw;
 };
 
-// A tool call start the lazy grammar scans for and the parser that follows it
-struct common_peg_trigger {
-    common_peg_parser_id start;
-    common_peg_parser_id rest;
-};
-
 struct common_peg_rule_parser {
     std::string name;
     common_peg_parser_id child;
     bool trigger;
-    std::vector<common_peg_trigger> triggers; // set when the rule was built from triggers
+    // set when the rule was built from a start and rest: the lazy grammar scans for the start
+    common_peg_parser_id start = COMMON_PEG_INVALID_PARSER_ID;
+    common_peg_parser_id rest  = COMMON_PEG_INVALID_PARSER_ID;
 };
 
 struct common_peg_ref_parser {
@@ -607,10 +603,10 @@ class common_peg_parser_builder {
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
 
-    // Creates a trigger rule matching the start and rest of any trigger. A lazy grammar scans for a start
-    // and then only allows its rest. A start may only be a sequence of literals, tokens, and choices of
+    // Creates a trigger rule matching start followed by rest. A lazy grammar scans for the start of any such
+    // rule and then only allows its rest. A start may only be a sequence of literals, tokens, and choices of
     // them, possibly wrapped in tags and atomics.
-    common_peg_parser trigger_rule(const std::string & name, const std::vector<common_peg_trigger> & triggers);
+    common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & start, const common_peg_parser & rest);
 
     // Creates an atomic parser. Atomic parsers do not create an AST node if
     // the child results in a partial parse, i.e. NEEDS_MORE_INPUT. This is

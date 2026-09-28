@@ -128,9 +128,9 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 
             // The recipient prefix is the trigger, so the grammar constrains the name that follows it
             auto to_functions = p.tool_open(p.literal(" to=functions."));
-            auto tool_call    = p.trigger_rule("tool-call", {
-                { start_assistant + to_functions,           in_role    },
-                { start_assistant + channel + to_functions, in_channel },
+            auto tool_call = p.choice({
+                p.trigger_rule("tool-call-in-role", start_assistant + to_functions, in_role),
+                p.trigger_rule("tool-call-in-channel", start_assistant + channel + to_functions, in_channel)
             });
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {

@@ -1075,9 +1075,9 @@ void common_peg_arena::resolve_refs() {
                 }
             } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
                 p.child = resolve_ref(p.child);
-                for (auto & t : p.triggers) {
-                    t.start = resolve_ref(t.start);
-                    t.rest  = resolve_ref(t.rest);
+                if (p.start != COMMON_PEG_INVALID_PARSER_ID) {
+                    p.start = resolve_ref(p.start);
+                    p.rest  = resolve_ref(p.rest);
                 }
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
                 p.child = resolve_ref(p.child);
@@ -1455,21 +1455,14 @@ common_peg_parser common_peg_parser_builder::rule(const std::string & name, cons
     return ref(clean_name);
 }
 
-common_peg_parser common_peg_parser_builder::trigger_rule(const std::string & name, const std::vector<common_peg_trigger> & triggers) {
-    if (triggers.empty()) {
-        throw std::runtime_error("trigger rule requires at least one trigger");
-    }
-    auto alternatives = choice();
-    for (const auto & t : triggers) {
-        for (const auto & d : expand_delimiter(arena_, t.start)) {
-            if (d.symbols.empty()) {
-                throw std::invalid_argument("trigger start must not match the empty string");
-            }
+common_peg_parser common_peg_parser_builder::trigger_rule(const std::string & name, const common_peg_parser & start, const common_peg_parser & rest) {
+    for (const auto & d : expand_delimiter(arena_, start.id())) {
+        if (d.symbols.empty()) {
+            throw std::invalid_argument("trigger start must not match the empty string");
         }
-        alternatives |= sequence(std::vector<common_peg_parser_id>{ t.start, t.rest });
     }
     auto clean_name = rule_name(name);
-    auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, alternatives.id(), true, triggers});
+    auto rule_id = arena_.add_parser(common_peg_rule_parser{clean_name, (start + rest).id(), true, start.id(), rest.id()});
     arena_.add_rule(clean_name, rule_id);
     return ref(clean_name);
 }
@@ -2211,26 +2204,24 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
     std::sort(trigger_rules.begin(), trigger_rules.end(), [](const auto * a, const auto * b) { return a->name < b->name; });
 
-    // A lazy grammar scans for the triggers when the trigger rules were built from them
+    // A lazy grammar scans for the starts when the trigger rules were built from a start and rest
     bool scans = false;
     for (const auto * rule : trigger_rules) {
-        scans = scans || !rule->triggers.empty();
+        scans = scans || rule->start != COMMON_PEG_INVALID_PARSER_ID;
     }
     if (scans) {
         for (const auto * rule : trigger_rules) {
-            if (rule->triggers.empty()) {
-                throw std::runtime_error("trigger rule without triggers in a scanning grammar: " + rule->name);
+            if (rule->start == COMMON_PEG_INVALID_PARSER_ID) {
+                throw std::runtime_error("trigger rule without a start in a scanning grammar: " + rule->name);
             }
         }
     }
 
     if (lazy && scans) {
-        // Collect what the triggers reach
+        // Collect what the starts and rests reach
         for (const auto * rule : trigger_rules) {
-            for (const auto & t : rule->triggers) {
-                collect_reachable(*this, t.start, reachable);
-                collect_reachable(*this, t.rest, reachable);
-            }
+            collect_reachable(*this, rule->start, reachable);
+            collect_reachable(*this, rule->rest, reachable);
         }
     } else if (lazy) {
         // Collect what the trigger rules reach
@@ -2259,15 +2250,12 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         common_trie starts;
         std::vector<std::string> rests;
         for (const auto * rule : trigger_rules) {
-            for (size_t i = 0; i < rule->triggers.size(); i++) {
-                const auto & t = rule->triggers[i];
-                auto rest = builder.add_rule(rule->name + "-rest-" + std::to_string(i), to_gbnf(t.rest));
-                for (const auto & d : expand_delimiter(*this, t.start)) {
-                    if ((size_t) starts.insert(d.symbols) != rests.size()) {
-                        throw std::runtime_error("trigger rules must not share a start: " + d.text);
-                    }
-                    rests.push_back(rest);
+            auto rest = builder.add_rule(rule->name + "-rest", to_gbnf(rule->rest));
+            for (const auto & d : expand_delimiter(*this, rule->start)) {
+                if ((size_t) starts.insert(d.symbols) != rests.size()) {
+                    throw std::runtime_error("trigger rules must not share a start: " + d.text);
                 }
+                rests.push_back(rest);
             }
         }
         builder.add_rule("root", gbnf_including_grammar(builder, "trigger", starts, reachable.tokens, rests, /* optional = */ true));
@@ -2364,12 +2352,9 @@ static common_json serialize_parser_variant(const common_peg_parser_variant & va
                 {"child", p.child},
                 {"trigger", p.trigger}
             };
-            if (!p.triggers.empty()) {
-                auto triggers = json::array();
-                for (const auto & t : p.triggers) {
-                    triggers.push_back({{"start", t.start}, {"rest", t.rest}});
-                }
-                j["triggers"] = std::move(triggers);
+            if (p.start != COMMON_PEG_INVALID_PARSER_ID) {
+                j["start"] = p.start;
+                j["rest"]  = p.rest;
             }
             return j;
         } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
@@ -2558,10 +2543,9 @@ static common_peg_parser_variant deserialize_parser_variant(const common_json & 
             j["child"].get<common_peg_parser_id>(),
             j["trigger"].get<bool>()
         };
-        if (j.contains("triggers")) {
-            for (const auto & t : j["triggers"]) {
-                parser.triggers.push_back({ t.at("start").get<common_peg_parser_id>(), t.at("rest").get<common_peg_parser_id>() });
-            }
+        if (j.contains("start")) {
+            parser.start = j["start"].get<common_peg_parser_id>();
+            parser.rest  = j.at("rest").get<common_peg_parser_id>();
         }
         return parser;
     }

@@ -81,11 +81,11 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             auto arg_string = p.rule("xml-arg-string",
                 p.until(p.tool_arg_string_value(p.until("\n</parameter>\n")), arg_close));
 
-            struct function_parsers {
-                common_peg_parser opener;
-                common_peg_parser body;
-            };
-            std::vector<function_parsers> functions;
+            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+
+            auto more       = inputs.parallel_tool_calls ? p.zero_or_more(p.ref("tool-call")) : p.eps();
+            auto starts     = p.token("<tool_call>");
+            auto tool_calls = p.choice();
 
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
@@ -145,29 +145,20 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 auto body   = p.literal("\n") + p.tool_args(args) + p.tool_close(p.literal("</function>\n"));
 
                 tool_choice |= p.rule("tool-" + name, p.tool(opener + body));
-                functions.push_back({ opener, body });
+
+                if (is_qwen3_coder) {
+                    // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
+                    // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
+                    // constraining on <function which may occur in valid content generation, e.g. #include <functional>
+                    tool_calls |= p.trigger_rule("tool-calls-" + name, opener, body + p.token("</tool_call>") + p.space() + more);
+                    starts     |= opener;
+                }
             });
 
-            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-
             auto tool_call_body = tool_choice + p.token("</tool_call>") + p.space();
-            auto tool_call      = p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
-            auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
+            p.rule("tool-call", p.token("<tool_call>") + p.literal("\n") + tool_call_body);
 
-            auto starts = p.token("<tool_call>");
-            std::vector<common_peg_trigger> triggers = { { starts, p.literal("\n") + tool_call_body + more } };
-
-            if (is_qwen3_coder) {
-                // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
-                // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
-                // constraining on <function which may occur in valid content generation, e.g. #include <functional>
-                for (const auto & f : functions) {
-                    triggers.push_back({ f.opener, f.body + p.token("</tool_call>") + p.space() + more });
-                    starts |= f.opener;
-                }
-            }
-
-            auto tool_calls = p.trigger_rule("tool-calls", triggers);
+            tool_calls |= p.trigger_rule("tool-calls", p.token("<tool_call>"), p.literal("\n") + tool_call_body + more);
 
             return generation_prompt + (reasoning << p.content(p.until(starts)) << p.repeat(tool_calls, min_calls, 1));
         }
