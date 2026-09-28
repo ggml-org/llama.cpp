@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
+	import { isLocalOption } from './ModelsManager/utils';
 	import { ModelCapability } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
@@ -20,7 +21,7 @@
 	$effect(() => {
 		template = '';
 
-		if (!isNearViewport) return;
+		if (!isNearViewport || !isLocalOption(option)) return;
 
 		// the listing says nothing about tools and reasoning; only the model's chat
 		// template does, and the Hub carries that template for a local GGUF whether
