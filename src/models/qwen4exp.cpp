@@ -1,5 +1,6 @@
 #include "models.h"
 #include "llama-impl.h"
+#include "llama-mmap.h"
 #include "llama-memory-hybrid-idx.h"
 #include "llama-memory-recurrent.h"
 
@@ -1122,6 +1123,8 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
             }
         }
     }
+
+    llama_prefetch_rows(pmodel.per_layer_tok_embd, idx.data(), idx.size());
 
     ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
 }
