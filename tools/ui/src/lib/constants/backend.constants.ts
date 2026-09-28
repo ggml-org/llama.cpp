@@ -1,15 +1,29 @@
-import type {
-	BackendCapabilities,
-	BackendCompat,
-	BackendPreset,
-	BackendProtocol
-} from '$lib/types';
+import type { BackendCapabilities, BackendCompat, BackendPreset } from '$lib/types';
+
+/** Request/response shape a backend speaks. */
+export const BackendProtocol = {
+	COMPAT: 'llama.cpp',
+	OPENAI: 'openai'
+} as const;
+
+export type BackendProtocol = (typeof BackendProtocol)[keyof typeof BackendProtocol];
+
+/** Field carrying the output token cap, per OpenAI dialect. */
+export const MaxTokensField = {
+	CHAT_COMPLETION: 'max_completion_tokens',
+	COMPLETION: 'max_tokens'
+} as const;
+
+export type MaxTokensField = (typeof MaxTokensField)[keyof typeof MaxTokensField];
 
 /** Prefix for generated ids of user-added backends. */
 export const BACKEND_ID_PREFIX = 'backend';
 
 /** Protocols a configured backend can speak, in display order. */
-export const BACKEND_PROTOCOLS: readonly BackendProtocol[] = ['llama.cpp', 'openai'];
+export const BACKEND_PROTOCOLS: readonly BackendProtocol[] = [
+	BackendProtocol.COMPAT,
+	BackendProtocol.OPENAI
+];
 
 /** Chat completions path used when a backend does not override it. */
 export const DEFAULT_BACKEND_CHAT_PATH = '/v1/chat/completions';
@@ -45,15 +59,21 @@ const COMPATIBLE_CAPABILITIES: BackendCapabilities = {
 
 /** Capabilities per backend protocol. */
 export const BACKEND_CAPABILITIES: Record<BackendProtocol, BackendCapabilities> = {
-	'llama.cpp': LLAMA_CPP_CAPABILITIES,
-	openai: COMPATIBLE_CAPABILITIES
+	[BackendProtocol.COMPAT]: LLAMA_CPP_CAPABILITIES,
+	[BackendProtocol.OPENAI]: COMPATIBLE_CAPABILITIES
 };
 
 /** Default wire quirks per protocol. */
 export const BACKEND_COMPAT: Record<BackendProtocol, BackendCompat> = {
 	// llama-server reports its own timings, so it needs no usage chunk
-	'llama.cpp': { maxTokensField: 'max_tokens', supportsUsageInStreaming: false },
-	openai: { maxTokensField: 'max_tokens', supportsUsageInStreaming: true }
+	[BackendProtocol.COMPAT]: {
+		maxTokensField: MaxTokensField.COMPLETION,
+		supportsUsageInStreaming: false
+	},
+	[BackendProtocol.OPENAI]: {
+		maxTokensField: MaxTokensField.COMPLETION,
+		supportsUsageInStreaming: true
+	}
 };
 
 /**
@@ -84,7 +104,7 @@ export const BACKEND_PRESETS: readonly BackendPreset[] = [
 		iconUrl: '/backend-presets/huggingface.svg',
 		id: 'huggingface',
 		name: 'Hugging Face',
-		protocol: 'openai'
+		protocol: BackendProtocol.OPENAI
 	},
 	{
 		baseUrl: 'https://openrouter.ai/api',

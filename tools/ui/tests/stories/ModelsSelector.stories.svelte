@@ -101,7 +101,8 @@
 				items: [availableModels[4]],
 				orgName: 'intel'
 			}
-		]
+		],
+		providers: []
 	};
 
 	function handleSelect(modelId: string) {
@@ -133,7 +134,7 @@
 		<ModelsSelectorList
 			activeId={null}
 			currentModel={null}
-			groups={{ available: [] }}
+			groups={{ available: [], providers: [] }}
 			loaded={[loadedModels[0]]}
 			onSelect={handleSelect}
 		/>
@@ -146,7 +147,7 @@
 			activeId={null}
 			currentModel={null}
 			favorites={favoriteModels}
-			groups={{ available: [] }}
+			groups={{ available: [], providers: [] }}
 			onSelect={handleSelect}
 		/>
 	</div>

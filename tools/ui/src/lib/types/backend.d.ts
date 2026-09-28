@@ -7,8 +7,9 @@
  * protocol.
  */
 
-/** Request/response shape a backend speaks. */
-export type BackendProtocol = 'llama.cpp' | 'openai';
+import type { BackendProtocol, MaxTokensField } from '$lib/constants';
+
+export type { BackendProtocol };
 
 /**
  * Wire-level quirks of a backend's protocol. Capabilities gate llama.cpp
@@ -16,7 +17,7 @@ export type BackendProtocol = 'llama.cpp' | 'openai';
  */
 export interface BackendCompat {
 	/** Field carrying the output token cap. */
-	maxTokensField: 'max_completion_tokens' | 'max_tokens';
+	maxTokensField: MaxTokensField;
 	/** Whether the endpoint accepts stream_options.include_usage. */
 	supportsUsageInStreaming: boolean;
 }

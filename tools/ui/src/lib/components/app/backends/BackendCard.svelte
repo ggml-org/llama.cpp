@@ -7,12 +7,13 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Switch } from '$lib/components/ui/switch';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { BackendProtocol } from '$lib/constants';
 	import { backendsModelsStore } from '$lib/stores/backendsModels.svelte';
-	import type { Backend, BackendProtocol } from '$lib/types';
+	import type { Backend } from '$lib/types';
 
 	const PROTOCOL_LABELS: Record<BackendProtocol, string> = {
-		'llama.cpp': 'Llama-compatible',
-		openai: 'OpenAI-compatible'
+		[BackendProtocol.COMPAT]: 'Llama-compatible',
+		[BackendProtocol.OPENAI]: 'OpenAI-compatible'
 	};
 
 	const CARD_ICON_CLASS = 'h-5 w-5';

@@ -6,7 +6,7 @@
  * PropsService for the /props fetch.
  */
 
-import { BACKEND_CAPABILITIES, LOCAL_BACKEND_ID } from '$lib/constants';
+import { BACKEND_CAPABILITIES, BackendProtocol, LOCAL_BACKEND_ID } from '$lib/constants';
 import { ServerRole } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
 import type { BackendCapabilities } from '$lib/types';
@@ -38,7 +38,7 @@ class ServerStore {
 	get capabilities(): BackendCapabilities {
 		const backend = getBackend();
 
-		return backend ? getBackendCapabilities(backend) : BACKEND_CAPABILITIES['llama.cpp'];
+		return backend ? getBackendCapabilities(backend) : BACKEND_CAPABILITIES[BackendProtocol.COMPAT];
 	}
 
 	get contextSize(): number | null {
