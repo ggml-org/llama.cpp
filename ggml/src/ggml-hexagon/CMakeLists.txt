@@ -23,6 +23,7 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG  "ggml-hexagon: enable HTP debug output" OFF)
+set(GGML_HEXAGON_HTP_BUILD_TYPE "Release" CACHE STRING "ggml-hexagon: HTP skel build type (Release, RelWithDebInfo, Debug)")
 set(GGML_HEXAGON_HTP_CERT  "$ENV{HEXAGON_HTP_CERT}" CACHE PATH "ggml-hexagon: enable HTP library signing using certificate")
 
 add_library(htp_iface OBJECT
@@ -64,7 +65,7 @@ function(build_htp_skel V)
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/htp BUILD_ALWAYS ON
         BUILD_BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so
         CMAKE_ARGS
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=${GGML_HEXAGON_HTP_BUILD_TYPE}
             -DCMAKE_TOOLCHAIN_FILE=${CMAKE_CURRENT_SOURCE_DIR}/htp/cmake-toolchain.cmake
             -DCMAKE_INSTALL_LIBDIR=${CMAKE_CURRENT_BINARY_DIR}
             -DHEXAGON_SDK_ROOT=${HEXAGON_SDK_ROOT}

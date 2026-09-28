@@ -297,7 +297,7 @@ struct server_lru_sched {
             return;
         }
         queue.push_back({ model_id, 1, false });
-        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
+        SRV_INF("request for name=%s queued at position %zu\n",
                 model_id.c_str(), queue.size());
     }
 
@@ -483,25 +483,6 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
-#ifdef _WIN32
-static std::string wide_to_utf8(const wchar_t * ws) {
-    if (!ws || !*ws) {
-        return {};
-    }
-
-    const int len = static_cast<int>(std::wcslen(ws));
-    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
-    if (bytes == 0) {
-        return {};
-    }
-
-    std::string utf8(bytes, '\0');
-    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
-
-    return utf8;
-}
-#endif
-
 static std::vector<std::string> get_environment() {
     std::vector<std::string> env;
 
@@ -511,7 +492,7 @@ static std::vector<std::string> get_environment() {
         return env;
     }
     for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
-        env.emplace_back(wide_to_utf8(e));
+        env.emplace_back(wstring_to_utf8(e));
     }
     FreeEnvironmentStringsW(env_block);
 #else
@@ -584,11 +565,15 @@ server_models::server_models(
               base_preset(ctx_preset.load_from_args(argc, argv)),
               sched(std::make_unique<server_lru_sched>(*this)),
               monitor(std::make_unique<server_monitor>(*this)) {
-    // clean up base preset
+    // propagate base params to child
     unset_reserved_args(base_preset, true);
+
+    // do not propagate these options, but allow preset to explicitly set them
+    base_preset.unset_option("LLAMA_ARG_LOG_FILE");
+
     // set binary path
     try {
-        bin_path = get_server_exec_path().string();
+        bin_path = fs_path_to_utf8(get_server_exec_path());
     } catch (const std::exception & e) {
         bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
@@ -733,21 +718,25 @@ void server_models::load_models() {
     std::set<std::string> hidden_models;
     {
         std::set<std::string> preset_paths;
+        auto add_hf_path = [&preset_paths](const common_preset & preset, const char * repo_key, const char * file_key) {
+            std::string hf_repo;
+            if (!preset.get_option(repo_key, hf_repo) || hf_repo.empty()) {
+                return;
+            }
+            std::string hf_file;
+            preset.get_option(file_key, hf_file);
+            std::string path = common_download_resolve_path(hf_repo, hf_file);
+            if (!path.empty()) {
+                preset_paths.insert(path);
+            }
+        };
         for (const auto & [name, preset] : custom_presets) {
             std::string val;
             if (!preset.get_option(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS, val) || !common_arg_utils::is_truthy(val)) {
                 continue;
             }
-            std::string hf_repo;
-            if (!preset.get_option("LLAMA_ARG_HF_REPO", hf_repo) || hf_repo.empty()) {
-                continue;
-            }
-            std::string hf_file;
-            preset.get_option("LLAMA_ARG_HF_FILE", hf_file);
-            std::string path = common_download_resolve_path(hf_repo, hf_file);
-            if (!path.empty()) {
-                preset_paths.insert(path);
-            }
+            add_hf_path(preset, "LLAMA_ARG_HF_REPO", "LLAMA_ARG_HF_FILE");
+            add_hf_path(preset, "LLAMA_ARG_SPEC_DRAFT_HF_REPO", "LLAMA_ARG_SPEC_DRAFT_MODEL");
         }
         if (!preset_paths.empty()) {
             for (const auto & [name, preset] : cached_models) {
@@ -1222,15 +1211,16 @@ void server_models::request_stop(const std::string & name, bool send_exit) {
 void server_models::on_child_exit(const std::string & name, const std::shared_ptr<server_subproc> & proc, server_child_mode mode, int exit_code) {
     {
         std::lock_guard<std::mutex> lk(mutex);
-        stopping_models.erase(name);
         auto it = mapping.find(name);
         if (it == mapping.end() || it->second.subproc != proc) {
+            stopping_models.erase(name);
             return; // entry erased, or a newer instance took the name
         }
     }
     if (mode == SERVER_CHILD_MODE_DOWNLOAD) {
         // instance will be cleaned up on next load_models() call
         std::lock_guard<std::mutex> lk(mutex);
+        stopping_models.erase(name);
         cv.notify_all();
     } else {
         update_status(name, {
@@ -1300,6 +1290,9 @@ void server_models::update_status(const std::string & name, const update_status_
         auto & meta = it->second.meta;
         meta.status      = args.status;
         meta.exit_code   = args.exit_code;
+        if (args.status == SERVER_MODEL_STATUS_UNLOADED) {
+            stopping_models.erase(name);
+        }
         if (!args.loaded_info.is_null()) {
             meta.loaded_info = args.loaded_info;
         }
@@ -1439,10 +1432,15 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
-    if (meta->is_ready()) {
+    bool stopping;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        stopping = stopping_models.count(name) > 0;
+    }
+    if (!stopping && meta->is_ready()) {
         return false; // ready for taking requests
     }
-    if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
+    if (!stopping && meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
 
@@ -1452,17 +1450,10 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
         std::unique_lock<std::mutex> lk(mutex);
         auto it = mapping.find(name);
         if (it != mapping.end() && it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
-            if (sched->has_capacity(lk) && sched->queue_empty(lk)) {
-                lk.unlock();
-                SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-                load(name);
-                did_load = true;
-            } else {
-                // also queue when a slot looks free but others wait already, else they starve
-                sched->join(lk, name);
-                sched->tick(lk);
-                queued = true;
-            }
+            // the queue entry protects the model from eviction until its waiters leave
+            sched->join(lk, name);
+            sched->tick(lk);
+            queued = true;
         }
     }
 
@@ -1482,6 +1473,19 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
             auto it = mapping.find(name);
             if (it == mapping.end()) {
                 break; // removed by another code path, nothing to wait for
+            }
+            if (stopping_models.count(name)) {
+                // a stopping instance takes no new request, the next instance serves it
+                if (!queued) {
+                    sched->join(lk, name);
+                    sched->tick(lk);
+                    queued = true;
+                }
+                if (should_stop && should_stop()) {
+                    throw std::runtime_error("request cancelled while waiting for model name=" + name);
+                }
+                cv.wait_for(lk, std::chrono::milliseconds(200));
+                continue;
             }
             const server_model_status status = it->second.meta.status;
 
