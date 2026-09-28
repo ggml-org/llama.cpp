@@ -73,7 +73,7 @@
 				</span>
 			</div>
 
-			{#if gauge.activeModelId !== null && !gauge.isActiveModelLoaded}
+			{#if gauge.canLoadActiveModel && gauge.activeModelId !== null && !gauge.isActiveModelLoaded}
 				<ContextGaugeLoadModel
 					isLoading={gauge.isActiveModelLoading}
 					modelId={gauge.activeModelId}

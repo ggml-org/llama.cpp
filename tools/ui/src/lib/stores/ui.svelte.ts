@@ -11,7 +11,6 @@ class UiStore {
 	composerFocusRequested = $state(false);
 
 	discoverModelsOpen = $state(false);
-
 	/** Whether the desktop sidebar is expanded (open). */
 	isSidebarExpanded = $state(false);
 	/** Model the manager reveals when it opens, a qualified id or a raw model name. */
