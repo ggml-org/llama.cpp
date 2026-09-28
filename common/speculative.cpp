@@ -1321,6 +1321,157 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     }
 };
 
+// Trim the CPU-hosted MTP draft's KV to the last `mtp_window` positions per seq.
+// The draft's per-token cost is dominated by the number of past K/V rows it attends over
+// (O(context) per token ON THE CPU), so a bounded window keeps draft/prefill latency flat.
+// Positions are NOT shifted: kept rows carry their true absolute positions, so attention is
+// exact within the window and only the draft's proposals are affected (the target verifies
+// them, so output remains exact).
+static void mtp_trim_window(llama_context * ctx_dft, int n_seq, int mtp_window) {
+    if (mtp_window <= 0) {
+        return;
+    }
+    auto * mem = llama_get_memory(ctx_dft);
+    for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+        const llama_pos p_newest = llama_memory_seq_pos_max(mem, seq_id);
+        if (p_newest < 0) {
+            continue;
+        }
+        const llama_pos keep_from = p_newest - (llama_pos) mtp_window + 1;
+        if (keep_from > 0) {
+            llama_memory_seq_rm(mem, seq_id, 0, keep_from);
+        }
+    }
+}
+
+// Ring-stash prefill catch-up: the draft context has its OWN KV and must hold the prompt tail
+// before the first draft, but it cannot compute those rows itself - a draft KV row is a function
+// of the TARGET's hidden state. Replaying them per prefill ubatch re-streams the host-resident
+// MTP block from RAM for every ubatch (~1.4s per 512 tokens), so process() records the last
+// window of (pos, token, h_in) in this ring and begin() replays it ONCE at the end of the prompt.
+// Every row is a pure function of its own inputs, so the replay reproduces exactly the KV the
+// per-ubatch path would have left after mtp_trim_window().
+struct mtp_stash {
+    struct row {
+        llama_pos   pos = -1;
+        llama_token tok = 0;
+    };
+
+    bool    enabled = false;
+    int32_t w       = 0;
+    int32_t n_embd  = 0;
+
+    std::vector<std::vector<row>>   meta;
+    std::vector<std::vector<float>> h;
+    std::vector<int32_t>            head;
+    std::vector<int32_t>            n;
+    std::vector<bool>               fresh;
+    std::vector<bool>               pending;
+
+    void init(bool enabled_, int32_t w_, int32_t n_seq_, int32_t n_embd_) {
+        enabled = enabled_;
+        w       = w_;
+        n_embd  = n_embd_;
+        head.assign(n_seq_, 0);
+        n.assign(n_seq_, 0);
+        fresh.assign(n_seq_, false);
+        pending.assign(n_seq_, false);
+        if (enabled) {
+            meta.assign(n_seq_, std::vector<row>(w));
+            h.assign(n_seq_, std::vector<float>((size_t) w * n_embd, 0.0f));
+        }
+    }
+
+    void reset(int32_t seq_id) {
+        if ((size_t) seq_id < n.size()) {
+            n[seq_id]       = 0;
+            head[seq_id]    = 0;
+            pending[seq_id] = false;
+            fresh[seq_id]   = false;
+        }
+    }
+
+    void push(int32_t seq_id, llama_pos pos, llama_token tok, const float * h_in) {
+        if (!enabled || seq_id < 0 || (size_t) seq_id >= meta.size() || w <= 0) {
+            return;
+        }
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+        int32_t & hd = head[seq_id];
+        meta[seq_id][hd].pos = pos;
+        meta[seq_id][hd].tok = tok;
+        std::memcpy(h[seq_id].data() + (size_t) hd * n_embd, h_in, row_bytes);
+        hd = (hd + 1) % w;
+        if (n[seq_id] < w) {
+            n[seq_id]++;
+        }
+    }
+
+    void catch_up(int32_t seq_id, llama_context * ctx_dft, llama_batch & batch, int32_t n_mtp_layers, bool chain_heads) {
+        if (!enabled || seq_id < 0 || (size_t) seq_id >= meta.size()) {
+            return;
+        }
+        pending[seq_id] = false;
+        fresh[seq_id]   = false;
+
+        const int32_t cnt = n[seq_id];
+        if (cnt <= 0) {
+            return;
+        }
+
+        auto * mem_dft = llama_get_memory(ctx_dft);
+        const size_t row_bytes = (size_t) n_embd * sizeof(float);
+
+        const int32_t hd    = head[seq_id];
+        const int32_t first = ((hd - cnt) % w + w) % w;
+        const llama_pos p0  = meta[seq_id][first].pos;
+
+        const llama_pos p1 = llama_memory_seq_pos_max(mem_dft, seq_id);
+        if (p1 >= p0) {
+            llama_memory_seq_rm(mem_dft, seq_id, p0, p1 + 1);
+        }
+
+        const int32_t n_b = std::max(1, (int32_t) llama_n_batch(ctx_dft));
+
+        for (int head_l = 0; head_l < n_mtp_layers; ++head_l) {
+            if (chain_heads) {
+                llama_memory_seq_rm(mem_dft, seq_id, p0, -1);
+                llama_set_nextn_layer_offset(ctx_dft, head_l);
+            }
+
+            int32_t done = 0;
+            while (done < cnt) {
+                const int32_t chunk = std::min(n_b, cnt - done);
+                common_batch_clear(batch);
+                for (int32_t j = 0; j < chunk; ++j) {
+                    const int32_t idx = (first + done + j) % w;
+                    common_batch_add(batch, meta[seq_id][idx].tok, meta[seq_id][idx].pos, { seq_id }, 0);
+                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd,
+                                h[seq_id].data() + (size_t) idx * n_embd, row_bytes);
+                }
+
+                const int32_t rc = llama_decode(ctx_dft, batch);
+                if (rc != 0) {
+                    SPC_ERR("MTP stash catch-up: llama_decode failed rc=%d (seq=%d chunk=%d/%d)\n",
+                            (int) rc, (int) seq_id, (int) chunk, (int) cnt);
+                    break;
+                }
+                done += chunk;
+            }
+        }
+
+        if (chain_heads) {
+            llama_set_nextn_layer_offset(ctx_dft, 0);
+        }
+
+        mtp_trim_window(ctx_dft, (int) meta.size(), w);
+
+        n[seq_id]    = 0;
+        head[seq_id] = 0;
+
+        common_batch_clear(batch);
+    }
+};
+
 struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
@@ -1356,6 +1507,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
+
+    // ring-stash prefill catch-up state (see mtp_stash for the rationale)
+    mtp_stash stash;
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
@@ -1435,6 +1589,47 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+
+        // MTP init warm-up: reserve draft & verify graphs so the first live request doesn't hit
+        // a first-time allocation. Only for the CPU-hosted MTP path (--cpu-mtp); the legacy
+        // GPU-MTP path is untouched.
+        if (this->params.mtp_host) {
+            common_batch_clear(batch);
+            for (int32_t i = 0; i < 2; ++i) {
+                common_batch_add(batch, 0, i, { 0 }, i == 1 ? 1 : 0);
+                std::memcpy(batch.embd + (size_t) i * n_embd, pending_h[0].data(), (size_t) n_embd * sizeof(float));
+            }
+            int rc_warm = llama_decode(ctx_dft, batch);
+            if (rc_warm != 0) {
+                SPC_WRN("MTP warm-up decode failed rc=%d - the draft graph could not be reserved\n", rc_warm);
+            }
+            llama_synchronize(ctx_dft);
+            llama_memory_clear(llama_get_memory(ctx_dft), true);
+            for (auto & s : smpls) { common_sampler_reset(s.get()); }
+
+            common_batch_clear(batch);
+            const int32_t n_verify = std::max(1, this->params.n_max) + 1;
+            for (int32_t i = 0; i < n_verify; ++i) {
+                common_batch_add(batch, 0, i, { 0 }, i == n_verify - 1 ? 1 : 0);
+            }
+            const int rc_verify = llama_decode(ctx_tgt, batch);
+            if (rc_verify != 0) {
+                SPC_WRN("MTP warm-up verify decode (%d tokens) failed rc=%d\n", (int) n_verify, rc_verify);
+            }
+            llama_synchronize(ctx_tgt);
+            llama_memory_clear(llama_get_memory(ctx_tgt), true);
+            common_batch_clear(batch);
+        }
+
+        {
+            const bool stash_enabled = this->params.mtp_host && !is_mem_shared &&
+                    this->params.mtp_window > 0 && n_seq == 1;
+            stash.init(stash_enabled, this->params.mtp_window, n_seq, n_embd);
+            if (stash_enabled) {
+                SPC_TRC("MTP ring-stash prefill catch-up enabled (window=%d, rows=%d floats)\n",
+                        stash.w, (int) ((size_t) stash.w * n_embd));
+            }
+        }
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -1464,9 +1659,16 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         auto * ctx_dft = this->params.ctx_dft;
+
+        if ((size_t) seq_id < stash.pending.size() && stash.pending[seq_id]) {
+            stash.catch_up(seq_id, ctx_dft, batch, n_mtp_layers, chain_heads);
+        }
+
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
 
-        if (pos_max < N - 1 && !is_mem_shared) {
+        const bool stash_will_fill = (size_t) seq_id < stash.pending.size() &&
+                (stash.pending[seq_id] || stash.fresh[seq_id]);
+        if (pos_max < N - 1 && !is_mem_shared && !stash_will_fill) {
             SPC_WRN("ctx_dft pos_max=%d < N-1=%d - "
                     "process() hook may not have run on every prefill ubatch "
                     "(need_embd / logits=1 on every prompt position?). "
@@ -1504,6 +1706,24 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
+        // Detect fresh prompts and decide whether this ubatch stashes (recording only, no decode)
+        // or falls through to the per-ubatch draft decode.
+        bool stash_this = stash.enabled;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            const int32_t first = i_batch_beg[seq_id];
+            if (first >= 0 && batch_in.pos[first] == 0) {
+                stash.reset(seq_id);
+                stash.fresh[seq_id] = true;
+            }
+            if (first >= 0) {
+                const int32_t n_rows = i_batch_end[seq_id] - first + 1;
+                if (!stash.fresh[seq_id] || (n_rows <= params.n_max + 1 && !stash.pending[seq_id])) {
+                    stash_this = false;
+                }
+            }
+        }
+        stash_this = stash_this && !is_mem_shared;
+
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
 
@@ -1511,6 +1731,23 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
+            if (stash_this) {
+                // ring-stash: no MTP decode here, just record the rows (see mtp_stash)
+                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                    const int32_t first = i_batch_beg[seq_id];
+                    if (first < 0) {
+                        continue;
+                    }
+                    const int32_t n_rows = i_batch_end[seq_id] - first + 1;
+                    stash.pending[seq_id] = true;
+                    for (int32_t i = 0; i < n_rows; ++i) {
+                        const float * h_in = (i == 0)
+                                ? pending_h[seq_id].data()
+                                : llama_get_embeddings_nextn_ith(ctx_tgt, first + i - 1);
+                        stash.push(seq_id, batch_in.pos[first + i], batch_in.token[first + i], h_in);
+                    }
+                }
+            } else {
             common_batch_clear(batch);
 
             for (int k = 0; k < n_tokens; ++k) {
@@ -1570,6 +1807,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             if (!ok) {
                 return false;
             }
+
+            mtp_trim_window(ctx_dft, (int) n_seq, params.mtp_window);
+            }
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1627,6 +1867,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         int i = 0;
 
+        // [draft breakdown] per-cycle decode / sample / handoff timing.
+        const bool dbg = getenv("LLAMA_MTP_DRAFT_DBG") != nullptr;
+        int64_t dbg_dec_us = 0, dbg_smp_us = 0, dbg_emb_us = 0;
+        int     dbg_dec = 0,   dbg_smp = 0,   dbg_emb = 0;
+
         while (n_drafting > 0) {
             // each step decodes under a different head, i.e. a different decoder layer, and
             // KV is per layer. process() filled this layer's KV only for positions < n_past
@@ -1644,7 +1889,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_nextn_layer_offset(ctx_dft, i);
             }
 
+            const int64_t dbg_td = ggml_time_us();
             int ret = llama_decode(ctx_dft, batch);
+            if (dbg) { dbg_dec_us += ggml_time_us() - dbg_td; dbg_dec++; }
+            mtp_trim_window(ctx_dft, (int) n_seq, params.mtp_window);
             if (ret != 0) {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
@@ -1662,8 +1910,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 auto * smpl = smpls[seq_id].get();
 
+                const int64_t dbg_ts = ggml_time_us();
                 common_sampler_sample(smpl, ctx_dft, i_last[seq_id], true);
+                if (dbg) { dbg_smp_us += ggml_time_us() - dbg_ts; dbg_smp++; }
+                const int64_t dbg_te = ggml_time_us();
                 const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
+                if (dbg) { dbg_emb_us += ggml_time_us() - dbg_te; dbg_emb++; }
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1726,6 +1978,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
 
             ++i;
+        }
+
+        if (dbg) {
+            fprintf(stderr, "mtp_draft: decode x%d = %.1f ms (%.2f each) | sample x%d = %.1f ms | handoff x%d = %.1f ms\n",
+                    dbg_dec, dbg_dec_us/1000.0, dbg_dec ? (double) dbg_dec_us/1000.0/dbg_dec : 0.0,
+                    dbg_smp, dbg_smp_us/1000.0, dbg_emb, dbg_emb_us/1000.0);
+            fflush(stderr);
         }
 
         if (chain_heads) {
@@ -2525,12 +2784,35 @@ common_speculative_init_result::common_speculative_init_result(
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
+    // --cpu-mtp: the MTP block is computed on the CPU only under --cpu-mtp (the model's own
+    // NATIVE MTP block placed in host RAM). This is the single hard gate for the CPU-offload
+    // path: with --cpu-mtp off, mtp_block_on_host is false and the draft-KV offload and n_ctx
+    // window cap below are skipped, preserving legacy GPU-MTP behaviour exactly.
+    const bool mtp_block_on_host = params.cpu_mtp;
+
     if (spec_mtp) {
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+
+        // The MTP context allocates its own KV cache, sized like the target's. offload_kqv picks
+        // the KV's device (llama-context uses "offload_kqv ? model.dev_layer(il) : nullptr"),
+        // so clearing it here moves ONLY the MTP context's KV to the host buffer.
+        if (mtp_block_on_host) {
+            cparams.offload_kqv = false;
+        }
     }
 
-    // the draft context holds as many tokens per sequence as the target context
+    // the draft context holds as many tokens per sequence as the target context, except for a
+    // --cpu-mtp-context-bounded CPU-hosted MTP: its attention is trimmed to the last W positions
+    // anyway, so sizing the draft KV to the window shrinks its host KV dramatically.
     cparams.n_ctx = llama_n_ctx(ctx_tgt);
+    if (spec_mtp && params.speculative.draft.mtp_window > 0 && mtp_block_on_host) {
+        const uint32_t n_ctx_win = (uint32_t) params.speculative.draft.mtp_window + cparams.n_batch;
+        if (cparams.n_ctx > n_ctx_win) {
+            LOG_INF("%s: MTP draft n_ctx %u -> %u (--cpu-mtp-context %d + n_batch %u)\n",
+                    __func__, cparams.n_ctx, n_ctx_win, params.speculative.draft.mtp_window, cparams.n_batch);
+            cparams.n_ctx = n_ctx_win;
+        }
+    }
 
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
