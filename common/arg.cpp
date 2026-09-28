@@ -904,6 +904,15 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
              !params.kv_stream_pool_bytes && !params.shared_device_memory_bytes)) {
         throw std::invalid_argument("error: --kv-stream-auxiliary-layers 1 requires a KV stream pool or shared arena\n");
     }
+    if (params.kv_stream_auxiliary_layers == 1 &&
+            std::find(params.speculative.types.begin(),params.speculative.types.end(),
+                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end() &&
+            params.speculative.need_n_rs_seq() > 3) {
+        throw std::invalid_argument("error: attached MTP KV streaming supports at most 3 draft tokens\n");
+    }
+    if (params.no_kv_stream_rs_rollback && params.kv_stream_auxiliary_layers != 1) {
+        throw std::invalid_argument("error: --no-kv-stream-rs-rollback requires an attached MTP KV layer\n");
+    }
     if (params.prompt_cache_all && (params.interactive || params.interactive_first)) {
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
@@ -2454,6 +2463,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.kv_stream_auxiliary_layers = uint32_t(value);
         }
     ));
+    add_opt(common_arg(
+        {"--no-kv-stream-rs-rollback"},
+        "use full target checkpoints instead of default host-spilled recurrent rollback for serial MTP KV streaming",
+        [](common_params & params) { params.no_kv_stream_rs_rollback = true; }
+    ).set_env("LLAMA_ARG_NO_KV_STREAM_RS_ROLLBACK"));
     add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},

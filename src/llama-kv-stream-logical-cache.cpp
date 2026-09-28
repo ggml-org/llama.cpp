@@ -178,11 +178,11 @@ bool llama_kv_stream_logical_cache::finish() {
     return true;
 }
 
-bool llama_kv_stream_logical_cache::reset_frontier(size_t tokens) {
+bool llama_kv_stream_logical_cache::reset_frontier(size_t tokens, bool suffix) {
     if (pending.pending() || authoritative->generation() == UINT64_MAX) return false;
     auto replacement = llama_kv_stream_publications::create({
         tokens, backing->config().context_tokens, authoritative->generation() + 1, 1, true});
-    if (!replacement || !authoritative->invalidate()) return false;
+    if (!replacement || !(suffix ? authoritative->invalidate_suffix(tokens) : authoritative->invalidate())) return false;
     expected_generation = authoritative->generation();
     publications = std::move(replacement);
     committed = tokens;
@@ -214,7 +214,7 @@ bool llama_kv_stream_logical_cache::cancel() {
 bool llama_kv_stream_logical_cache::truncate(size_t tokens) {
     if (failed || pending.pending() || tokens > committed ||
             authoritative->generation() != expected_generation) return false;
-    return tokens == committed || reset_frontier(tokens);
+    return tokens == committed || reset_frontier(tokens,true);
 }
 
 bool llama_kv_stream_logical_cache::restore(const llama_kv_stream_logical_checkpoint & checkpoint) {

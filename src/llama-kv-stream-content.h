@@ -87,6 +87,8 @@ public:
     bool replace(std::shared_ptr<llama_kv_stream_host> host);
     // Report externally completed host changes; no logical token validity is inferred.
     bool invalidate();
+    // Reject stale writes and dirty the discarded suffix, including padding; preserve prefix mirror state.
+    bool invalidate_suffix(size_t first);
     // Call on every mirror rebind/repartition, even if addresses and arena generation happen to match.
     // Does not invalidate a pending host write; content and device-layout lifecycles are separate.
     bool reset_mirror();

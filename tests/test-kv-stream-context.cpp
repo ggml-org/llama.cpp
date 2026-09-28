@@ -3,6 +3,7 @@
 #include "../src/llama-context.h"
 #include "../src/llama-kv-stream-model.h"
 #include "../src/llama-kv-stream-logical-cache.h"
+#include "../src/llama-memory-recurrent-spill.h"
 #include "../src/llama-io.h"
 #include "testing.h"
 #include <algorithm>
@@ -17,8 +18,9 @@ static bool auxiliary_control = false, embedded_mtp_control = false, target_tg3_
 static bool target_with_stock_draft = false;
 static bool f16_control = false, shared_budget_control = false;
 static bool resident_control = false, trace_control = false;
-static bool mtp_memory_probe = false, mtp_sustained_control = false;
-static bool target_drift_control = false;
+static bool mtp_memory_probe = false, mtp_sustained_control = false, mtp_sustained_rs_control = false;
+static bool target_drift_control = false, target_drift_rs_control = false;
+static bool rollback_probe = false;
 
 struct recurrent_snapshot : llama_io_write_i {
     std::vector<uint8_t> metadata;
@@ -333,13 +335,63 @@ int main(int argc,char ** argv) {
         target_with_stock_draft = target_with_stock_draft || !std::strcmp(argv[i],"--target-with-stock-draft");
         mtp_memory_probe = mtp_memory_probe || !std::strcmp(argv[i],"--mtp-memory-probe");
         mtp_sustained_control = mtp_sustained_control || !std::strcmp(argv[i],"--embedded-mtp-sustained");
+        mtp_sustained_rs_control = mtp_sustained_rs_control || !std::strcmp(argv[i],"--embedded-mtp-sustained-rs");
+        mtp_sustained_control = mtp_sustained_control || mtp_sustained_rs_control;
         target_drift_control = target_drift_control || !std::strcmp(argv[i],"--mtp-target-drift");
+        target_drift_rs_control = target_drift_rs_control || !std::strcmp(argv[i],"--mtp-target-drift-rs");
+        target_drift_control = target_drift_control || target_drift_rs_control;
+        rollback_probe = rollback_probe || !std::strcmp(argv[i],"--mtp-rs-rollback-probe");
     }
     ggml_backend_load_all(); llama_backend_init();
     auto mparams = llama_model_default_params(); mparams.n_gpu_layers = 999;
-    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control;
+    mparams.load_mtp = embedded_mtp_control || mtp_memory_probe || mtp_sustained_control || target_drift_control || rollback_probe;
     model_ptr model(llama_model_load_from_file(argv[2],mparams),llama_model_free);
     if (!t.assert_true(bool(model))) return t.summary();
+    if (rollback_probe) {
+        t.test("streamed_mtp_uses_bounded_host_spilled_recurrent_rollback", [&](testing & t) {
+            auto p=llama_context_default_params();
+            p.n_ctx=1024; p.n_batch=p.n_ubatch=256;
+            p.n_threads=p.n_threads_batch=8;
+            p.type_k=GGML_TYPE_Q8_0; p.type_v=GGML_TYPE_Q4_0;
+            p.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            p.kv_stream_pool_bytes=16*1048576;
+            p.kv_stream_auxiliary_layers=1;
+            p.n_rs_seq=3;
+            auto invalid=p;
+            invalid.kv_stream_auxiliary_layers=0;
+            context_ptr unsafe(llama_init_from_model(model.get(),invalid),llama_free);
+            t.assert_true(!unsafe);
+            invalid=p;
+            invalid.n_rs_seq=4;
+            context_ptr too_deep(llama_init_from_model(model.get(),invalid),llama_free);
+            t.assert_true(!too_deep);
+            context_ptr ctx(llama_init_from_model(model.get(),p),llama_free);
+            if (!t.assert_true(bool(ctx))) return;
+            t.assert_equal(uint32_t(3),llama_n_rs_seq(ctx.get()));
+            auto * hybrid=dynamic_cast<llama_memory_hybrid *>(llama_get_memory(ctx.get()));
+            if (!t.assert_true(hybrid != nullptr && hybrid->get_mem_attn()->get_kv_stream())) return;
+            auto * spill=hybrid->get_mem_recr()->spill_bank();
+            if (!t.assert_true(spill != nullptr)) return;
+            t.assert_true(spill->host_bytes() >= 448*1048576 && spill->host_bytes() <= 450*1048576);
+            t.assert_true(spill->staged_device_bytes() >= 18*1048576 && spill->staged_device_bytes() <= 20*1048576);
+            auto batch=llama_batch_init(256,0,1);
+            for (int i=0; i<256; ++i) {
+                batch.token[i]=1; batch.pos[i]=i; batch.n_seq_id[i]=1;
+                batch.seq_id[i][0]=0; batch.logits[i]=i==255;
+            }
+            batch.n_tokens=256;
+            llama_set_kv_stream_decode(ctx.get(),false);
+            t.assert_equal(0,llama_decode(ctx.get(),batch));
+            batch.n_tokens=4;
+            for (int i=0; i<4; ++i) {
+                batch.token[i]=1; batch.pos[i]=256+i; batch.logits[i]=i==3;
+            }
+            llama_set_kv_stream_decode(ctx.get(),true);
+            t.assert_equal(0,llama_decode(ctx.get(),batch));
+            llama_batch_free(batch);
+        });
+        return t.summary();
+    }
     if (target_drift_control) {
         t.test("teacher_forced_target_verification_and_replay", [&](testing & t) {
             if (!t.assert_true(argc >= 5)) return;
@@ -353,6 +405,7 @@ int main(int argc,char ** argv) {
                     tokens.data(), needed, false, false) >= 7932)) return;
             auto p = llama_context_default_params();
             p.n_ctx = 8192; p.n_batch = p.n_ubatch = 256;
+            p.n_rs_seq = target_drift_rs_control ? 3 : 0;
             p.n_threads = p.n_threads_batch = 8;
             p.n_outputs_max = p.n_outputs_max_per_seq = 4;
             p.type_k = GGML_TYPE_Q8_0; p.type_v = GGML_TYPE_Q4_0;
@@ -580,6 +633,11 @@ int main(int argc,char ** argv) {
             auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(target.get()));
             t.assert_equal(size_t(257), hybrid->get_mem_attn()->get_kv_stream()->tokens());
             t.assert_equal(size_t(257), hybrid->get_mem_attn()->get_kv_stream()->auxiliary_cache()->tokens());
+            auto * stream=hybrid->get_mem_attn()->get_kv_stream();
+            t.assert_true(stream->has_mtp_layer());
+            target_batch.pos[0]=257;
+            if (!t.assert_equal(0,llama_decode(target.get(),target_batch))) return;
+            t.assert_true(!stream->has_mtp_layer());
             const bool target_removed = llama_memory_seq_rm(llama_get_memory(target.get()), 0, 0, -1);
             t.out << "native target full remove=" << target_removed << '\n';
             t.assert_true(target_removed);
@@ -613,6 +671,7 @@ int main(int argc,char ** argv) {
             p.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
             p.kv_stream_pool_bytes = 16*1048576;
             p.kv_stream_auxiliary_layers = 1;
+            p.n_rs_seq = mtp_sustained_rs_control ? 3 : 0;
             context_ptr target_ctx(llama_init_from_model(model.get(), p), llama_free);
             if (!t.assert_true(bool(target_ctx))) return;
             auto * hybrid = static_cast<llama_memory_hybrid *>(llama_get_memory(target_ctx.get()));
@@ -625,6 +684,7 @@ int main(int argc,char ** argv) {
             draft_params.ctx_other = target_ctx.get();
             draft_params.kv_stream_pool_bytes = 0;
             draft_params.kv_stream_auxiliary_layers = 0;
+            draft_params.n_rs_seq = 0;
             context_ptr draft_ctx(llama_init_from_model(model.get(), draft_params), llama_free);
             if (!t.assert_true(bool(draft_ctx))) return;
             draft_params.ctx_other = nullptr;

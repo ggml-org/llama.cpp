@@ -566,3 +566,89 @@ An 8K matched-mode comparison uses the same 7,932-token prompt, 256 generated to
 These are single-run correctness comparisons, not a full performance sweep. Adaptive prefill is about 1,596-1,598 tok/s versus 1,692-1,696 for stock, consistent with the retained strict-prefill gathering path. The no-MTP adaptive baseline measures 46.62 decode tok/s. Different outputs across draft lengths remain possible in stock's full-checkpoint mode; matching the execution mode is required before classifying them as streaming regressions.
 
 A post-fix 96K real-article streaming smoke test with three drafts completes a 32-token continuation without OOM or admission failure. This is a lifecycle/capacity check, not a long-context stock-equivalence comparison. The test helper now initializes every query head, including the actual 24-head fixture. Temporary stock-mode instrumentation is removed; no production configuration or container state is changed.
+
+## MTP optimization 1: suffix-aware target rollback (2026-09-26)
+
+The 8K-72K sweep has not entered target KV streaming. Nsight nevertheless shows context-sized target uploads after rejected drafts: target suffix truncation called full content invalidation, marking all resident K/V rows dirty. Private truncation also rebuilt its session and prefill scratch, although the retained physical prefix had not moved.
+
+The content owner now supports suffix invalidation. It advances the content generation to reject stale write tickets, marks the discarded suffix including padding dirty, and preserves existing prefix dirty marks and mirror identity. Target truncation drains pending work, reconstructs the logical publication frontier in the existing session, and retains the physical pool and scratch. No CUDA attention arithmetic, ring policy, recurrent checkpoint format, or MTP lease-renewal policy changes. Unknown external writes, full restores, and physical rebindings still invalidate the whole mirror. No additional MTP or target device allocation is introduced.
+
+TDD and correctness qualification:
+
+- The content regression first failed to compile because the suffix API did not exist. The model regression then failed against the original allocation-dependent truncation. Both pass after the implementation.
+- Content tests cover zero/full suffixes, bitmap and page boundaries, dirty prefixes, padded rows, stale writes, invalid/reentrant requests, and 81 encoded K/V combinations. CPU ASan with leak checking passes 17 cases / 193,520 assertions.
+- Resident tests cover rollback at tokens 255/256/257, bounded tail upload bytes, unchanged binding identity, TG1-TG4 attention, clean retry, and mandatory full refresh after unknown mutation. CPU ASan passes 15 cases / 275 assertions; CUDA passes 16 / 435.
+- CUDA model tests pass 12 cases / 418 assertions. They verify truncation succeeds while device allocation is disabled, stable grants, suffix-only refresh, and streamed append/replay with changed replacement KV bytes. CUDA memcheck reports zero errors. Session tests pass 15 / 669 in isolation.
+- The real IQ4_XS teacher-forced stock comparison passes TG1-TG4, including checkpoint restore/replay, with exact logits and recurrent state. The four runs pass 2,244 / 1,334 / 989 / 882 assertions respectively.
+
+Paired Nsight measurements use a 32K context, the same 32,508-token article prefix, 256 generated tokens, a 2,240 MiB arena, 256/256 batches, Q8_0/Q4_0 KV, and no UVM. These are single profiled runs, not a new full sweep; timings include profiler overhead. Decode windows are estimated from the final GPU kernel and reported decode duration.
+
+| Max draft length | Before tok/s | After tok/s | Decode H2D before/after | Acceptance before/after |
+| ---: | ---: | ---: | --- | --- |
+| 0 | 40.17 | 40.12 | 0.90 / 0.90 GiB | disabled |
+| 1 | 35.91 | 37.74 | 29.66 / 11.88 GiB | 105 / 127 in both |
+| 3 | 41.77 | 46.48 | 43.16 / 12.44 GiB | 144 / 223 in both |
+
+The 34 MiB target-K prefix upload bursts fall from 336 to zero for one draft, and from 592 to zero for three drafts. The MTP decode pool remains exactly 2,227.868164 MiB. Recurrent checkpoint D2H traffic is unchanged, as expected. Trace artifacts are in benchmarks/results/mtp-optimization-profile-20260926 and benchmarks/results/mtp-suffix-optimization-profile-20260926, with adjacent .nsys-rep and .sqlite files.
+
+Next optimization remains capacity-based MTP lease reuse and tail-only population, followed by recurrent checkpoint transfer optimization. Any proposal that increases the MTP device footprint requires user review before implementation.
+
+## MTP optimization 2: resident reuse with phase-local ring ownership (2026-09-27)
+
+The agreed policy keeps MTP as the 17th physical KV layer. Its resident prefix may survive across rounds, but its ring suffix must not shorten target streaming workspace. The target handoff now drains the draft and releases its MTP lease before main-model execution. Ring contents are never assumed to survive that handoff.
+
+Reacquisition validates a non-owning stamp containing the pool buffer, arena generation, and layout revision. A new session or changed physical identity resets the auxiliary content mirror. With an unchanged placement, population flushes only dirty resident rows, but always uploads the ring suffix into its new reservation. The stamp retains no device lease or ring slot. Allocation replacement and full host restore require a refresh; logical suffix truncation preserves accepted resident rows and invalidates the rejected tail.
+
+Within one MTP phase, catch-up and sequential predictions keep the existing complete-layer reservation. Host tail copies and completed D2D staging acknowledge only their resident rows; attention plans are refreshed under the new content generation. No additional page is reserved and the future-token limit remains unchanged. Population now reserves and installs the ring guard before writing KV, which drains target cross-token prefetch first. A failed acquisition clears its guard so the next attempt cannot remain blocked.
+
+The implementation uses the existing backend-neutral content bitmap, buffer tensor-copy APIs, layer owner, and session guard. It introduces no accelerator kernel or backend-interface change. No additional device allocation is made.
+
+TDD and qualification:
+
+- The zero-copy reacquisition and accepted-prefix dirty-state tests failed against the preceding implementation. The ring-reuse test initially failed to compile without the opt-in resident-population contract.
+- CPU and CUDA tests overwrite released ring bytes, reacquire the layer, verify suffix-only transfer counts, and compare the restored bytes. Tests cover changed resident rows, failed copy/retry, zero-copy clean reacquisition, full restore, allocation replacement, and guarded admission cleanup.
+- CPU ASan/leak checking passes the MTP lease suite (13 cases / 179 assertions) and logical cache suite (8 / 171). CUDA model tests pass 12 / 427; the MTP lease suite passes 13 / 175. Both CUDA suites pass memcheck with zero errors. Session tests pass 15 / 669 and context-memory tests pass 7 / 425.
+- Real IQ4_XS TG1-TG4 teacher-forced checks retain exact stock logits and recurrent state through verification and rollback/replay (2,244 / 1,334 / 989 / 882 assertions). The live shared-parent probe verifies that the next target decode has no MTP lease (2 cases / 28 assertions). Serial-request/prompt-cache checks pass 2 / 647.
+
+Initial 32K Nsight measurements compare against optimization 1, with identical article prefix, 256 generated tokens, Q8_0/Q4_0 KV, 256/256 batches, a 2,240 MiB arena, and no UVM. These are single profiled measurements; the subsequent guard-order correction is qualified separately by final-code numerical and streaming tests.
+
+| Max draft length | Optimization 1 tok/s | Resident-reuse tok/s | Decode H2D before/after | Acceptance |
+| ---: | ---: | ---: | --- | --- |
+| 0 | 40.12 | 40.20 | 0.90 / 0.90 GiB | disabled |
+| 1 | 37.74 | 38.92 | 11.88 / 4.34 GiB | 105 / 127 in both |
+| 3 | 46.49 | 47.65 | 12.44 / 6.78 GiB | 144 / 223 in both |
+
+Full-prefix copy counting must exclude 16 target phase-initialization copies: the earlier 166/129 counts included those copies. The corresponding MTP-only populations are 150/113 before this optimization and one cold population in each new 32K trace. Recurrent checkpoint D2H traffic is unchanged. The effective MTP decode pool stays at 2,227.868164 MiB. Traces are under benchmarks/results/mtp-resident-reuse-profile-20260927.
+
+Final-code 96K streaming checks use the same 98,044-token prompt and generate 256 tokens. Against the existing sweep reference, max draft 1 improves from 28.39 to 29.87 tok/s and max draft 3 from 43.65 to 46.37 tok/s. Acceptance is unchanged at 114/127 and 154/212; first/last output snippets match. These are reference comparisons, not repeated paired A/B trials or full-token-array equivalence checks. Pool size is unchanged at 2,227.368164 MiB, with 318 resident pages/layer and 76 ring slots in both versions. Artifacts are under benchmarks/results/mtp-resident-reuse-96k-20260927.
+
+Next: recurrent checkpoint transfer optimization. Increasing device staging, snapshot storage, or reserved MTP ring space still requires user review before implementation.
+
+## Default host-spilled recurrent rollback for attached MTP (2026-09-27)
+
+Serial Qwen3.8 MTP launches with `--kv-stream-auxiliary-layers 1` and `--spec-draft-n-max` from 1 to 3 now use bounded recurrent rollback automatically. No enabling flag is needed. The server derives the depth from the draft length, allocates host-spilled snapshots, and enables the two-slot publication stage. The attached MTP draft context does not allocate a second snapshot bank. `--no-kv-stream-rs-rollback` restores the earlier full target checkpoint/replay path for A/B testing. Unsupported depths fail before decoding. Direct library callers set `llama_context_params.n_rs_seq` to the draft depth on the target; zero keeps full checkpoints because the library cannot infer a draft length without the server's speculative settings.
+
+Example (replace `MODEL.gguf` with the actual model path):
+
+```sh
+build-device-memory-infra-cuda-release/bin/llama-server \
+  --model MODEL.gguf --ctx-size 262144 --parallel 1 \
+  --batch-size 256 --ubatch-size 256 --n-gpu-layers 999 \
+  --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
+  --kv-stream-arena-mib 2240 --kv-stream-auxiliary-layers 1 \
+  --spec-type draft-mtp --spec-draft-n-max 3 \
+  --fit off --no-mmproj
+```
+
+The host-spilled mode uses approximately 149.6 MiB of pinned snapshots per draft depth and 6.2 MiB of GPU staging per depth, beyond the existing 149.62 MiB GPU recurrent state. At depth three this is approximately 448.9 MiB pinned system RAM and an 18.70 MiB GPU publication stage. Compared with full-checkpoint mode, the measured decode KV pool is about 3 MiB smaller per draft depth inside the unchanged 2,240 MiB phase arena. No new MTP KV ring reservation is made. At full context the GPU had only about 64 MiB unallocated during the test, so other GPU applications may force UVM weight eviction or cause OOM if managed-memory eviction cannot satisfy them. The measurements below used UVM disabled; this mode is not a promise of concurrent ffmpeg capacity.
+
+Single-run IQ4_XS, Q8_0 K/Q4_0 V, 256-token continuation comparisons against the preceding full-checkpoint sweep:
+
+| Context | Full checkpoint decode | Bounded rollback decode | Full checkpoint prefill | Bounded rollback prefill |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 Ki | 62.68 tok/s | 77.43 tok/s | 1,598.3 tok/s | 1,589.0 tok/s |
+| 144 Ki | 39.43 tok/s | 43.72 tok/s | 672.3 tok/s | 670.6 tok/s |
+| 240 Ki | 16.34 tok/s | 20.68 tok/s | 449.0 tok/s | 448.1 tok/s |
+| 256 Ki | no full-checkpoint result | 16.72 tok/s | no full-checkpoint result | 434.5 tok/s |
+
+The rollback mode changes the recurrent execution schedule and can change generated text and draft acceptance compared with full checkpoints. A matched-mode 8 Ki stock/streamed comparison produced all 256 identical token IDs. TG1-TG4 teacher-forced comparisons are stock-exact in rollback mode, including tested restore/replay cases. A 24-cycle serial-request/prompt-cache test passes. An 8 Ki sweep tested all default draft depths 1-3: decode throughput was 64.33, 75.80, and 77.17 tok/s respectively. The full 262144-token-context request completed without OOM and kept the physical GPU allocation stable during prefill. More varied prompts, failure cases, and peak-memory tests are still warranted before enabling this mode in a multi-user production server.

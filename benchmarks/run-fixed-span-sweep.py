@@ -36,9 +36,10 @@ def arguments() -> argparse.Namespace:
         help="UTF-8 article text to tokenize once and use as the prefill prefix",
     )
     parser.add_argument("--server", type=Path, default=ROOT / "build-device-memory-infra-cuda-release/bin/llama-server")
-    parser.add_argument("--output", type=Path, default=ROOT / "benchmarks/results/fixed-span-8k-192k")
+    parser.add_argument("--output", type=Path, default=ROOT / "benchmarks/results/fixed-span-8k-256k")
     parser.add_argument("--min-context", type=int, default=8192)
-    parser.add_argument("--max-context", type=int, default=196608)
+    parser.add_argument("--max-context", type=int, default=262144,
+                        help="inclusive context endpoint in tokens (default: 262144 / 256 Ki)")
     parser.add_argument("--context-step", type=int, default=8192)
     parser.add_argument("--decode-tokens", type=int, default=256)
     parser.add_argument("--arena-mib", type=int, default=2368)
@@ -48,6 +49,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--production-container", default="llm-llmster")
     parser.add_argument("--no-manage-production", action="store_true")
     parser.add_argument("--uvm", action="store_true")
+    parser.add_argument("--no-kv-stream-rs-rollback", action="store_true",
+                        help="use the old full-checkpoint path instead of default MTP recurrent rollback")
     parser.add_argument(
         "--mtp-lengths", type=parse_mtp_lengths, default=(0,), metavar="N[,N...]",
         help="maximum MTP draft lengths to sweep (0=target-only baseline; supported: 1-4; default: 0)",
@@ -84,7 +87,24 @@ def server_command(args: argparse.Namespace, context: int, mtp_length: int) -> l
             "--spec-type", "draft-mtp",
             "--spec-draft-n-max", str(mtp_length),
         ]
+        if getattr(args, "no_kv_stream_rs_rollback", False):
+            command.append("--no-kv-stream-rs-rollback")
     return command
+
+
+def server_environment(uvm: bool) -> dict[str, str]:
+    env = os.environ.copy()
+    if uvm:
+        env["GGML_CUDA_ENABLE_UNIFIED_MEMORY"] = "1"
+    else:
+        for key in (
+            "GGML_CUDA_ENABLE_UNIFIED_MEMORY",
+            "GGML_CUDA_PREFER_MODEL_WEIGHTS",
+            "GGML_CUDA_PREFER_KV_HOST",
+            "GGML_CUDA_KV_ACCESSED_BY_GPU",
+        ):
+            env.pop(key, None)
+    return env
 
 
 def log_name(context: int, arena_mib: int, mtp_length: int) -> str:
@@ -220,6 +240,8 @@ def plot(rows: list[dict], output: Path, args: argparse.Namespace) -> None:
 
 def main() -> int:
     args = arguments()
+    if args.no_kv_stream_rs_rollback and not any(args.mtp_lengths):
+        raise SystemExit("--no-kv-stream-rs-rollback requires an MTP length")
     args.model = args.model.resolve()
     args.prefill_text = args.prefill_text.resolve()
     args.server = args.server.resolve()
@@ -257,15 +279,7 @@ def main() -> int:
         ):
             prompt_tokens = prompt_tokens_for_context(context, args.decode_tokens, args.mtp_lengths)
             log_path = logs / log_name(context, args.arena_mib, mtp_length)
-            env = os.environ.copy()
-            if not args.uvm:
-                for key in (
-                    "GGML_CUDA_ENABLE_UNIFIED_MEMORY",
-                    "GGML_CUDA_PREFER_MODEL_WEIGHTS",
-                    "GGML_CUDA_PREFER_KV_HOST",
-                    "GGML_CUDA_KV_ACCESSED_BY_GPU",
-                ):
-                    env.pop(key, None)
+            env = server_environment(args.uvm)
             command = server_command(args, context, mtp_length)
             started = time.monotonic()
             with log_path.open("w") as log:

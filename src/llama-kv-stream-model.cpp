@@ -26,6 +26,9 @@ struct llama_kv_stream_model::implementation {
     std::shared_ptr<const llama_kv_stream_ring_guard> mtp_guard;
     model_arena_ptr arena{nullptr,ggml_backend_memory_arena_free};
     size_t mtp_reserved_tokens = 0;
+    // A non-owning mirror stamp survives ring release but never pins an old arena.
+    ggml_backend_buffer_t mtp_resident_buffer = nullptr;
+    uint64_t mtp_resident_revision = 0, mtp_resident_arena_generation = 0;
     model_arena_ptr attention_arena{nullptr,ggml_backend_memory_arena_free};
     size_t decode_bytes = 0;
     size_t mma_bytes = 0;
@@ -59,6 +62,7 @@ struct llama_kv_stream_model::implementation {
             llama_memory_resource_id attention_id,
             llama_memory_stage_id prefill_id,
             llama_memory_stage_id decode_id) {
+        mtp_resident_buffer=nullptr;
         llama_kv_stream_policy_config policy = physical_policy;
         auto * pool_buffer = ggml_backend_memory_lease_buffer(grants[0].get());
         auto * attention_buffer = ggml_backend_memory_lease_buffer(grants[2].get());
@@ -305,9 +309,12 @@ struct llama_kv_stream_model::implementation {
         if (external_mutation || !session || session->active() || tokens > session->tokens()) return false;
         if (tokens == session->tokens()) return true;
         abort();
-        if (!content->invalidate()) return false;
+        if (!content->invalidate_suffix(tokens)) return false;
         external_mutation = true;
-        return restore(tokens);
+        if (!session->reconstruct(tokens)) return false;
+        suspended_tokens = tokens;
+        external_mutation = false;
+        return true;
     }
 };
 
@@ -429,6 +436,12 @@ bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
 
     const uint64_t revision = s.session->layout_revision();
     const uint64_t generation = mtp->identity().generation;
+    const uint64_t arena_generation=ggml_backend_memory_lease_generation(view.lease);
+    if (s.mtp_resident_buffer != view.buffer || s.mtp_resident_revision != revision ||
+            s.mtp_resident_arena_generation != arena_generation) {
+        if (!mtp->content()->reset_mirror()) return false;
+        s.mtp_resident_buffer=nullptr;
+    }
     auto owner = llama_kv_stream_layer_lease_owner::create(view.lease,
         {view.config, s.session->policy(), reserved_tokens, revision, generation, target_tokens});
     if (!owner) {
@@ -438,13 +451,25 @@ bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
             (unsigned long long) revision);
         return false;
     }
+    const llama_kv_stream_complete_layer_request initial{
+        physical_layer,1,revision,generation,mtp->identity().id,mtp_tokens};
+    mtp_lease_ptr reservation(owner->acquire(initial),llama_kv_stream_complete_layer_lease_free);
+    if (!reservation) return false;
+    auto guard=owner->hold_ring();
+    // Drain target lookahead before any MTP population writes into the reserved ring slots.
+    if (!guard || !s.session->set_ring_guard(guard)) return false;
+    struct admission_guard {
+        llama_kv_stream_session * session;
+        bool adopted=false;
+        ~admission_guard() { if (!adopted) session->set_ring_guard({}); }
+    } admission{s.session.get()};
     std::vector<mtp_lease_ptr> plans;
     plans.reserve(4);
     for (uint32_t width = 1; width <= 4; ++width) {
         const llama_kv_stream_complete_layer_request request{
             physical_layer, width, revision, generation, mtp->identity().id, mtp_tokens};
         auto * raw = width == 1 ?
-            owner->acquire_populated(s.config.backend, request, *mtp) :
+            owner->acquire_populated(s.config.backend, request, *mtp,true) :
             owner->acquire(request);
         if (!raw) {
             const auto frontier = mtp->frontiers();
@@ -455,12 +480,14 @@ bool llama_kv_stream_model::acquire_mtp_layer(size_t future_tokens) {
         }
         plans.emplace_back(raw, llama_kv_stream_complete_layer_lease_free);
     }
-    auto guard = owner->hold_ring();
-    if (!guard || !s.session->set_ring_guard(guard)) return false;
     s.mtp_owner = std::move(owner);
     s.mtp_plans = std::move(plans);
     s.mtp_guard = std::move(guard);
     s.mtp_reserved_tokens = reserved_tokens;
+    s.mtp_resident_buffer=view.buffer;
+    s.mtp_resident_revision=revision;
+    s.mtp_resident_arena_generation=arena_generation;
+    admission.adopted=true;
     return true;
 }
 

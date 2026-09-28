@@ -68,8 +68,10 @@ public:
         const llama_kv_stream_complete_layer_request & request);
 
     // Synchronize one upload before returning; query widths share the ready reservation.
+    // Resident reuse requires the caller to reset the content mirror on every physical layout change.
     llama_kv_stream_complete_layer_lease_t acquire_populated(ggml_backend_t backend,
-        const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache);
+        const llama_kv_stream_complete_layer_request & request, const llama_kv_stream_logical_cache & cache,
+        bool reuse_resident = false);
     // Rebase a populated prefix after logical suffix rejection without moving its
     // unchanged device bytes or releasing occupied ring slots.
     bool adopt_truncated_prefix(llama_kv_stream_complete_layer_lease_t previous,

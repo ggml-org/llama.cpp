@@ -33,6 +33,28 @@ int main(int argc, char ** argv) {
         t.assert_equal(data.size(), f.resident->last_upload_bytes());
         t.assert_equal(size_t(1), f.resident->last_upload_calls());
     });
+    t.test("suffix_rollback_preserves_mirror_and_attention_across_pages", [&](testing & t) {
+        for (size_t first : {255u,256u,257u}) {
+            fixture f(backend.get(),cuda,cuda ? GGML_TYPE_Q8_0 : GGML_TYPE_F16,
+                cuda ? GGML_TYPE_Q4_0 : GGML_TYPE_F16);
+            if (!t.assert_true(f.attach() && f.resident->synchronize(513))) return;
+            const auto view=*f.binding->view();
+            t.assert_true(f.content->invalidate_suffix(first));
+            const size_t active=first+2, padded=(active+255)/256*256;
+            if (!t.assert_true(f.resident->synchronize(active))) return;
+            const size_t row_bytes=f.host->layout().k_token_bytes+f.host->layout().v_token_bytes;
+            t.assert_equal((padded-first)*row_bytes*f.host->config().layers,f.resident->last_upload_bytes());
+            t.assert_true(f.binding->view()->buffer == view.buffer);
+            t.assert_equal(view.revision,f.binding->view()->revision);
+            for (size_t queries : {1u,2u,3u,4u})
+                if (!evaluate(t,f,true,1,active,queries)) return;
+            t.assert_true(f.resident->synchronize(active));
+            t.assert_equal(size_t(0),f.resident->last_upload_bytes());
+            t.assert_true(f.content->invalidate());
+            t.assert_true(f.resident->synchronize(active));
+            t.assert_equal(padded*row_bytes*f.host->config().layers,f.resident->last_upload_bytes());
+        }
+    });
     t.test("invalid_metadata_and_streaming_requirement_are_rejected", [&](testing & t) {
         fixture f(backend.get(), cuda);
         if (!t.assert_true(f.attach())) return;

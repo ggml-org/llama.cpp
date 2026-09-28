@@ -9,9 +9,9 @@
 
 using operand = ggml_kv_stream_operand;
 static std::shared_ptr<llama_kv_stream_host> storage(int k = GGML_TYPE_Q8_0, int v = GGML_TYPE_Q4_0,
-        ggml_backend_buffer_type_t type = ggml_backend_cpu_buffer_type()) {
+        ggml_backend_buffer_type_t type = ggml_backend_cpu_buffer_type(), size_t tokens = 17) {
     llama_kv_stream_host_config c{17, {k, v, 32, 32, 1, 8, 128},
-        {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, 17, 2};
+        {{k, true, true, true, true}, {v, true, true, true, true}, true, true}, tokens, 2};
     auto host = llama_kv_stream_host::create(c, type);
     GGML_ASSERT(host);
     return host;
@@ -30,6 +30,52 @@ static bool is_dirty(testing & t, const llama_kv_stream_content & content, uint3
 
 int main(int argc, char ** argv) {
     testing t;
+    t.test("suffix_invalidation_preserves_prefix_and_rejects_stale_writes", [](testing & t) {
+        for (size_t first : {0u,1u,63u,64u,65u,255u,256u,257u,513u,520u}) {
+            auto host = storage(GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,ggml_backend_cpu_buffer_type(),513);
+            llama_kv_stream_content content(host);
+            ggml_backend_buffer_clear(host->buffer(),91);
+            t.assert_true(content.flush(all(*host),[](const auto &) { return true; }));
+            uint8_t value = 19;
+            llama_kv_stream_write dirty, stale;
+            t.assert_true(content.prepare({{0,operand::k,3*host->layout().k_token_bytes,&value,1}},dirty));
+            t.assert_true(content.commit(dirty));
+            t.assert_true(content.prepare({{1,operand::v,0,&value,1}},stale));
+            const auto generation = content.generation(), epoch = content.mirror_epoch();
+            t.assert_true(content.invalidate_suffix(first));
+            t.assert_equal(generation+1,content.generation());
+            t.assert_equal(epoch,content.mirror_epoch());
+            t.assert_true(!content.commit(stale));
+            for (uint32_t layer = 0; layer < host->config().layers; ++layer) {
+                llama_kv_stream_host_layer planes;
+                t.assert_true(host->layer(layer,planes));
+                for (auto plane : {operand::k,operand::v}) {
+                    for (size_t row = 0; row < host->layout().tokens; ++row)
+                        t.assert_equal(row >= first || (layer == 0 && plane == operand::k && row == 3),
+                            is_dirty(t,content,layer,plane,row));
+                    t.assert_equal(uint8_t(91),*static_cast<const uint8_t *>(plane == operand::k ? planes.k : planes.v));
+                }
+            }
+            t.assert_true(content.flush(all(*host),[&](const auto & span) {
+                t.assert_true(span.rows.first >= first ||
+                    (span.rows.layer == 0 && span.rows.operand == operand::k && span.rows.first == 3));
+                return true;
+            }));
+        }
+    });
+    t.test("suffix_invalidation_rejects_invalid_and_reentrant_calls", [](testing & t) {
+        auto host = storage(); llama_kv_stream_content content(host);
+        const auto generation = content.generation();
+        t.assert_true(!content.invalidate_suffix(SIZE_MAX));
+        t.assert_true(!content.invalidate_suffix(host->layout().tokens+1));
+        t.assert_equal(generation,content.generation());
+        t.assert_true(!content.flush(all(*host),[&](const auto &) {
+            t.assert_true(!content.invalidate_suffix(0));
+            return false;
+        }));
+        t.assert_equal(generation,content.generation());
+        t.assert_true(is_dirty(t,content,0,operand::k,0));
+    });
     t.test("initial_state_and_partial_mirror_ranges", [](testing & t) {
         auto host = storage(); llama_kv_stream_content content(host);
         t.assert_true(content.host() == host);
@@ -222,6 +268,17 @@ int main(int argc, char ** argv) {
                     return true;
                 }));
                 t.assert_equal(size_t(1), calls);
+                t.assert_true(content.invalidate_suffix(8));
+                calls = 0;
+                t.assert_true(content.flush(all(*host), [&](const auto & span) {
+                    ++calls;
+                    const auto bytes = span.rows.operand == operand::k ? host->layout().k_token_bytes : host->layout().v_token_bytes;
+                    t.assert_equal(size_t(8),span.rows.first);
+                    t.assert_equal(host->layout().tokens-8,span.rows.count);
+                    t.assert_equal((host->layout().tokens-8)*bytes,span.bytes);
+                    return true;
+                }));
+                t.assert_equal(size_t(4),calls);
             }
     });
     t.test("external_restore_on_same_backing_invalidates_pending_write", [](testing & t) {

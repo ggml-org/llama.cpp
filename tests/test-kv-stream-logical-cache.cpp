@@ -64,6 +64,21 @@ struct generated_source {
 
 int main() {
     testing t;
+    t.test("suffix_truncation_preserves_clean_resident_rows_but_restore_invalidates_them", [](testing & t) {
+        auto cache = llama_kv_stream_logical_cache::create(host(202));
+        if (!t.assert_true(cache && append(t,*cache,4,0x20))) return;
+        const auto content=cache->content();
+        t.assert_true(content->flush({{0,operand::k,0,4},{0,operand::v,0,4}},[](const auto &) { return true; }));
+        t.assert_true(cache->truncate(2));
+        bool dirty=true;
+        t.assert_true(content->dirty({0,operand::k,0,2},dirty));
+        t.assert_true(!dirty);
+        t.assert_true(content->dirty({0,operand::v,2,2},dirty));
+        t.assert_true(dirty);
+        t.assert_true(cache->restore(cache->checkpoint()));
+        t.assert_true(content->dirty({0,operand::k,0,2},dirty));
+        t.assert_true(dirty);
+    });
     t.test("target_and_mtp_have_distinct_host_bytes_and_publication_revisions", [](testing & t) {
         auto target = llama_kv_stream_logical_cache::create(host(101));
         auto mtp = llama_kv_stream_logical_cache::create(host(202));

@@ -49,7 +49,7 @@ private:
     bool complete(llama_kv_stream_publication_domain domain);
     bool covers(const llama_kv_stream_write & write) const noexcept;
     bool drain_generated();
-    bool reset_frontier(size_t tokens);
+    bool reset_frontier(size_t tokens, bool suffix = false);
 
     std::shared_ptr<llama_kv_stream_host> backing;
     std::shared_ptr<llama_kv_stream_content> authoritative;

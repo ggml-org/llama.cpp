@@ -584,6 +584,7 @@ struct common_params {
     size_t kv_stream_pool_bytes = 0; // experimental serial CUDA consumer
     size_t shared_device_memory_bytes = 0; // exact shared device-local phase budget; mutually exclusive with kv_stream_pool_bytes
     uint32_t kv_stream_auxiliary_layers = 0; // opt-in attached MTP host cache
+    bool no_kv_stream_rs_rollback = false; // retain full checkpoints for attached MTP
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
     bool no_op_offload     = false; // globally disable offload host tensor operations to device

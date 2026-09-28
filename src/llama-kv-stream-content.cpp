@@ -247,6 +247,16 @@ bool llama_kv_stream_content::invalidate() {
     return true;
 }
 
+// A suffix rollback changes logical validity, not the encoded bytes of the retained prefix.
+bool llama_kv_stream_content::invalidate_suffix(size_t first) {
+    if (state->busy || state->generation == UINT64_MAX || first > state->host->layout().tokens) return false;
+    for (uint32_t layer = 0; layer < state->host->config().layers; ++layer)
+        for (auto operand : {ggml_kv_stream_operand::k,ggml_kv_stream_operand::v})
+            mark(*state,{layer,operand,first,state->host->layout().tokens-first},true);
+    ++state->generation;
+    return true;
+}
+
 // Even an unchanged pointer can represent a newly assigned resident/ring location.
 bool llama_kv_stream_content::reset_mirror() {
     if (state->busy || state->mirror_epoch == UINT64_MAX) return false;

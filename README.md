@@ -110,6 +110,8 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 - [Running on Docker](docs/docker.md)
 - [Build on Android](docs/android.md)
 - [Multi-GPU usage](docs/multi-gpu.md)
+- [Device memory infrastructure](DEVICE_MEMORY_INFRASTRUCTURE.md)
+- [Adaptive KV streaming and MTP integration](MTP_ADAPTIVE_KV_ROADMAP.md)
 - [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
 - [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 - [XCFramework](docs/xcframework.md)

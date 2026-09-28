@@ -269,6 +269,11 @@ llama_context::llama_context(
     cparams.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
     cparams.shared_device_memory_bytes = params.shared_device_memory_bytes;
     cparams.kv_stream_auxiliary_layers = params.kv_stream_auxiliary_layers;
+    const bool streamed_rs_rollback = cparams.kv_stream_auxiliary_layers == 1 &&
+        cparams.n_rs_seq > 0 && cparams.n_rs_seq <= 3;
+    if (cparams.kv_stream_auxiliary_layers && cparams.n_rs_seq > 3) {
+        throw std::runtime_error("KV-stream recurrent rollback supports depth 1-3");
+    }
     if (cparams.kv_stream_auxiliary_layers > 1 ||
             (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming())) {
         throw std::runtime_error("experimental auxiliary KV cache requires one layer and an enabled KV streaming pool");
@@ -279,9 +284,9 @@ llama_context::llama_context(
     if (params.kv_stream_pool_bytes || params.shared_device_memory_bytes) {
         if (model.arch != LLM_ARCH_QWEN35 || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT || params.ctx_other ||
                 hparams.no_alloc || hparams.vocab_only || model.devices.size() != 1 || cparams.n_seq_max != 1 ||
-                cparams.n_rs_seq || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
+                (cparams.n_rs_seq && !streamed_rs_rollback) || !cparams.offload_kqv || params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED ||
                 !cparams.causal_attn || params.embeddings || model.devices.front().is_meta || !llama_kv_stream_device_buffer_type(model.devices.front().dev)) {
-            throw std::runtime_error("KV streaming requires one CUDA device, serial Qwen35 target context, -fa on, no MTP/rollback/embedding mode and allocated weights (--fit off)");
+            throw std::runtime_error("KV streaming requires one CUDA device, serial Qwen35 target context, -fa on, supported rollback mode, no embedding mode and allocated weights (--fit off)");
         }
         for (uint32_t il = 0; il < hparams.n_layer(); ++il) if (model.dev_layer(il) != model.devices.front().dev) {
             throw std::runtime_error("initial KV streaming integration requires all model layers on the single CUDA device");
@@ -471,6 +476,7 @@ llama_context::llama_context(
             params_mem.kv_stream_pool_bytes = params.kv_stream_pool_bytes;
             params_mem.shared_device_memory_bytes = params.shared_device_memory_bytes;
             params_mem.kv_stream_auxiliary_layers = cparams.kv_stream_auxiliary_layers;
+            params_mem.kv_stream_rs_rollback = streamed_rs_rollback;
             params_mem.kv_stream_max_rows = cparams.n_ubatch;
             for (auto & backend : backends) if (ggml_backend_get_device(backend.get()) == model.devices.front().dev) {
                 params_mem.kv_stream_backend = backend.get(); break;
@@ -2235,7 +2241,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             n_tokens_all,
             cparams.n_seq_max == 1,
             cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT && !batch_inp.embd,
-            cparams.ctx_other != nullptr || cparams.n_rs_seq != 0 ||
+            cparams.ctx_other != nullptr || (cparams.n_rs_seq != 0 && cparams.kv_stream_auxiliary_layers != 1) ||
                 (text_phase == llama_memory_text_phase::decode && n_tokens_all != 1 && !supported_verify),
         });
         if (phase_result.status != llama_memory_text_phase_status::changed &&

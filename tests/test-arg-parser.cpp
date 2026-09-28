@@ -107,7 +107,10 @@ static void test(void) {
         target.cache_type_k = GGML_TYPE_Q8_0;
         target.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
         target.speculative.draft.n_max = 3;
+        assert(common_context_params_to_llama(target).n_rs_seq == 3);
+        target.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3};
         assert(common_context_params_to_llama(target).n_rs_seq == 0);
+        target.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
         target.cache_type_v = GGML_TYPE_Q4_0;
         const auto draft = common_base_params_to_speculative(target);
         assert(draft.kv_stream_auxiliary_layers == 0);
@@ -206,6 +209,24 @@ static void test(void) {
             "--kv-stream-auxiliary-layers","1"};
         assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),mtp,LLAMA_EXAMPLE_SERVER));
         assert(mtp.kv_stream_auxiliary_layers == 1);
+        common_params rollback;
+        argv = {"binary_name","--shared-device-memory-mib","4096",
+            "--kv-stream-auxiliary-layers","1","--spec-type","draft-mtp",
+            "--spec-draft-n-max","3"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),rollback,LLAMA_EXAMPLE_SERVER));
+        assert(common_context_params_to_llama(rollback).n_rs_seq == 3);
+        argv.push_back("--no-kv-stream-rs-rollback");
+        common_params full_checkpoint;
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),full_checkpoint,LLAMA_EXAMPLE_SERVER));
+        assert(common_context_params_to_llama(full_checkpoint).n_rs_seq == 0);
+        for (const std::vector<std::string> & invalid_rollback : {
+                std::vector<std::string>{"binary_name","--shared-device-memory-mib","4096",
+                    "--kv-stream-auxiliary-layers","1","--spec-type","draft-mtp",
+                    "--spec-draft-n-max","4"}}) {
+            common_params rejected;
+            argv = invalid_rollback;
+            assert(!common_params_parse(argv.size(),list_str_to_char(argv).data(),rejected,LLAMA_EXAMPLE_SERVER));
+        }
         for (const std::vector<std::string> & invalid_aux : {
                 std::vector<std::string>{"binary_name","--kv-stream-auxiliary-layers","1"},
                 std::vector<std::string>{"binary_name","--shared-device-memory-mib","4096",

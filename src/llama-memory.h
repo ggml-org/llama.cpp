@@ -31,6 +31,7 @@ struct llama_memory_params {
     size_t kv_stream_pool_bytes = 0;
     size_t shared_device_memory_bytes = 0;
     uint32_t kv_stream_auxiliary_layers = 0;
+    bool kv_stream_rs_rollback = false;
     uint32_t kv_stream_max_rows = 0;
 };
 

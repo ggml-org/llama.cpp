@@ -93,6 +93,27 @@ struct proxy_d2d_fault {
     }
 };
 
+// Observe synchronous resident refresh without changing its transfer behavior.
+struct resident_upload_probe {
+    using setter = void (*)(ggml_backend_buffer_t,ggml_tensor *,const void *,size_t,size_t);
+    inline static resident_upload_probe * active = nullptr;
+    ggml_backend_buffer_t buffer;
+    setter original;
+    size_t bytes = 0, calls = 0;
+    resident_upload_probe(ggml_backend_buffer_t buffer) : buffer(buffer),original(buffer->iface.set_tensor) {
+        GGML_ASSERT(!active && original);
+        active = this;
+        buffer->iface.set_tensor = [](ggml_backend_buffer_t buffer,ggml_tensor * tensor,
+                const void * data,size_t offset,size_t bytes) {
+            GGML_ASSERT(active && buffer == active->buffer);
+            active->bytes += bytes;
+            ++active->calls;
+            active->original(buffer,tensor,data,offset,bytes);
+        };
+    }
+    ~resident_upload_probe() { buffer->iface.set_tensor = original; active = nullptr; }
+};
+
 int main(int argc,char ** argv) {
     const bool auxiliary_only = argc > 1 && std::strcmp(argv[1], "--cuda-auxiliary-cache") == 0;
     const bool cancel_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-cancel") == 0;
@@ -431,6 +452,35 @@ int main(int argc,char ** argv) {
         t.assert_true(model->begin(1,1,true)); model->abort();
         t.assert_true(model->reset(false)); t.assert_equal(initial,model->granted_bytes());
     });
+    t.test("suffix_truncation_preserves_allocation_and_uploads_only_tail", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,1024,false,1);
+        ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
+        auto model=llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*8,256,4});
+        if (!t.assert_true(bool(model))) return;
+        ggml_backend_buffer_clear(model->buffer(),91);
+        t.assert_true(model->restore(252));
+        if (!t.assert_true(model->begin(254,2,true))) return;
+        model->abort();
+        const auto view=model->binding_view();
+        const auto granted=model->granted_bytes();
+        auto * type=llama_kv_stream_device_buffer_type(dev);
+        const auto allocate=type->iface.alloc_buffer;
+        type->iface.alloc_buffer=[](ggml_backend_buffer_type_t,size_t)->ggml_backend_buffer_t { return nullptr; };
+        const bool truncated=model->truncate(250);
+        type->iface.alloc_buffer=allocate;
+        if (!t.assert_true(truncated && model->complete())) return;
+        t.assert_true(model->binding_view().buffer == view.buffer);
+        t.assert_equal(granted,model->granted_bytes());
+        t.assert_equal(size_t(250),model->tokens());
+        t.assert_true(model->truncate(250));
+        t.assert_true(!model->truncate(251));
+        resident_upload_probe probe(view.buffer);
+        if (!t.assert_true(model->begin(252,2,true))) return;
+        t.assert_equal(size_t(2),probe.calls);
+        t.assert_equal(6*(model->host()->layout().k_token_bytes+model->host()->layout().v_token_bytes),probe.bytes);
+        t.assert_true(model->binding_view().buffer == view.buffer);
+        model->abort();
+    });
     t.test("suffix_truncation_reopens_frontier_without_erasing_host_bytes", [&](testing & t) {
         fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513,false,1);
         ggml_kv_stream_layout page; ggml_kv_stream_layout_make(f.policy.shape,256,page);
@@ -454,14 +504,21 @@ int main(int argc,char ** argv) {
         const auto prefill_grants = model->granted_bytes();
         f.host = model->host();
         size_t active = 0;
-        for (uint32_t rows : {256u,256u,1u}) {
+        size_t step = 0;
+        for (uint32_t rows : {256u,256u,1u,1u}) {
+            const bool replay = step++ == 3;
+            if (replay) {
+                t.assert_true(model->truncate(256));
+                active = 256;
+            }
             const size_t first = active; active += rows;
             ggml_context_ptr ctx(ggml_init({1024*1024,nullptr,true}));
             auto * source = ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,rows);
             auto * indices = ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I64,rows);
             ggml_backend_buffer_ptr inputs(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
             std::vector<float> data(rows*512); std::vector<int64_t> ids(rows);
-            for (size_t i = 0; i < data.size(); ++i) data[i] = .25f*std::sin(float((first*512+i)%677)*.07f);
+            for (size_t i = 0; i < data.size(); ++i)
+                data[i] = .25f*std::sin(float((first*512+i)%677)*.07f)+(replay ? .125f : 0);
             const auto expected_k = reference_bytes(backend.get(),data,GGML_TYPE_Q8_0,2);
             const auto expected_v = reference_bytes(backend.get(),data,GGML_TYPE_Q4_0,3);
             for (size_t i = 0; i < ids.size(); ++i) ids[i] = int64_t(first+i);
@@ -511,8 +568,7 @@ int main(int argc,char ** argv) {
         type->iface.alloc_buffer=[](ggml_backend_buffer_type_t,size_t)->ggml_backend_buffer_t { return nullptr; };
         const bool truncated=model->truncate(256);
         type->iface.alloc_buffer=allocate;
-        t.assert_true(!truncated && !model->complete());
-        t.assert_true(model->restore(256));
+        t.assert_true(truncated && model->complete());
         t.assert_equal(size_t(256),model->tokens());
     });
     t.test("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity", [&](testing & t) {
@@ -726,7 +782,22 @@ int main(int argc,char ** argv) {
         t.assert_true(model->mtp_layer_plan(1) == nullptr);
         t.assert_true(mtp->truncate(256));
         t.assert_true(model->acquire_mtp_layer());
-        t.assert_true(model->mtp_layer_population().bytes <= copied.bytes);
+        t.assert_equal(size_t(0),model->mtp_layer_population().bytes);
+        t.assert_true(model->release_mtp_layer());
+        t.assert_true(mtp->restore(mtp->checkpoint()));
+        const auto upload=backend->iface.set_tensor_async;
+        backend->iface.set_tensor_async=[](ggml_backend_t,ggml_tensor *,const void *,size_t,size_t) {
+            throw std::runtime_error("injected MTP resident refresh failure");
+        };
+        const bool failed_population=model->acquire_mtp_layer();
+        backend->iface.set_tensor_async=upload;
+        t.assert_true(!failed_population && !model->has_mtp_layer() && model->complete());
+        t.assert_true(model->acquire_mtp_layer());
+        t.assert_equal(256*(layout.k_token_bytes+layout.v_token_bytes),model->mtp_layer_population().bytes);
+        t.assert_true(model->release_mtp_layer());
+        t.assert_true(model->prepare_shared_memory() && model->resume_private_memory());
+        t.assert_true(model->acquire_mtp_layer());
+        t.assert_equal(256*(layout.k_token_bytes+layout.v_token_bytes),model->mtp_layer_population().bytes);
         model->abort();
         t.assert_true(model->release_mtp_layer());
         t.assert_true(!model->has_mtp_layer());

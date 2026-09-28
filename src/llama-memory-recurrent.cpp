@@ -49,7 +49,7 @@ llama_memory_recurrent::llama_memory_recurrent(
                  uint32_t   mem_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
-    const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
+    const layer_filter_cb & filter, bool stream_host_spill) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer();
 
     head = 0;
@@ -59,7 +59,7 @@ llama_memory_recurrent::llama_memory_recurrent(
     this->n_rs_seq = n_rs_seq;
     rs_idx.assign(n_seq_max, 0);
     const char * spill_flag=std::getenv("LLAMA_RS_HOST_SPILL");
-    const bool want_spill = n_rs_seq && spill_flag && std::strcmp(spill_flag,"1") == 0;
+    const bool want_spill = n_rs_seq && (stream_host_spill || (spill_flag && std::strcmp(spill_flag,"1") == 0));
     if (want_spill && n_seq_max != 1) throw std::runtime_error("recurrent host spill requires one serial sequence");
 
 
@@ -184,7 +184,7 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to allocate pinned recurrent snapshots");
         }
         const char * staged=std::getenv("LLAMA_RS_STAGED_PUBLICATION");
-        if (staged && std::strcmp(staged,"1") == 0) {
+        if (stream_host_spill || (staged && std::strcmp(staged,"1") == 0)) {
             auto * stage_device=device ? device : ggml_backend_dev_by_name("CPU");
             auto * stage_type=recurrent_stage_type(stage_device);
             if (!stage_type || !spill->enable_publication(stage_device,stage_type,2)) {

@@ -501,6 +501,9 @@ bool llama_context_memory::prepare_serial_target() noexcept {
     auto * child = impl->serial_child->impl.get();
     if (!child || child->serial_parent != this || child->serial_borrowed == false) return false;
     if (impl->serial_active == impl->serial_child && !child->drain()) return false;
+    // Target streaming regains every ring slot; only the MTP resident mirror survives this handoff.
+    if (impl->shared_stream && impl->shared_stream->has_mtp_layer() &&
+            !impl->shared_stream->release_mtp_layer()) return false;
     impl->serial_active = this;
     return true;
 }

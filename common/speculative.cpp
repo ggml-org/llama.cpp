@@ -2582,6 +2582,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
     // The draft attaches to the target's auxiliary logical cache; it must not
     // construct another streaming pool or reserve a second phase arena.
     result.kv_stream_auxiliary_layers = 0;
+    result.no_kv_stream_rs_rollback = false;
     result.kv_stream_pool_bytes = result.shared_device_memory_bytes = 0;
     result.n_outputs_max = params.n_parallel;
     result.n_outputs_max_per_seq = 1;
