@@ -708,6 +708,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (rs_fork != nullptr) { CUDA_CHECK(cudaEventDestroy(rs_fork)); }
+    if (rs_join != nullptr) { CUDA_CHECK(cudaEventDestroy(rs_join)); }
+    for (int i = 0; i < 2; ++i) {
+        if (rs_slot_done[i] != nullptr) { CUDA_CHECK(cudaEventDestroy(rs_slot_done[i])); }
+        if (rs_stage[i]     != nullptr) { CUDA_CHECK(cudaFree(rs_stage[i])); }
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -1324,6 +1330,51 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
     };
 
     return &ggml_backend_cuda_buffer_type_host;
+}
+
+// Private host buffer type for the recurrent (SSM) STATE cache only. Same pinned host
+// memory as above, but the accel device claims support for it even on a DISCRETE GPU, so the ops
+// that read/write the state stay on the CUDA backend and touch the pinned buffer in place instead
+// of being assigned to the CPU backend (which forces a device->host copy of every input and a
+// host->device copy of every result, per layer, per step). It is deliberately NOT in the model
+// loader's buffer-type list, so no weight is ever placed here - enabling device access for the
+// general host type would relocate weights.
+static const char * ggml_backend_cuda_rs_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
+    return GGML_CUDA_NAME "_RSHost";
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_buft_is_cuda_rs_host(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cuda_rs_host_buffer_type_name;
+}
+
+ggml_backend_buffer_type_t ggml_backend_cuda_rs_host_buffer_type() {
+    static struct ggml_backend_buffer_type ggml_backend_cuda_buffer_type_rs_host = {
+        /* .iface    = */ {
+            /* .get_name         = */ ggml_backend_cuda_rs_host_buffer_type_name,
+            /* .alloc_buffer     = */ ggml_backend_cuda_host_buffer_type_alloc_buffer,
+            /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+        },
+        /* .device   = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), 0),
+        /* .context  = */ nullptr,
+    };
+
+    return &ggml_backend_cuda_buffer_type_rs_host;
+}
+
+// [RS overlap] The recurrent-state rollback-snapshot copies (host-destination ggml_cpy nodes)
+// are staged into a small device ring and their D2H is issued on a side stream, so the transfer
+// overlaps the graph's compute instead of blocking it. Enabled by default; set
+// GGML_CUDA_RS_OVERLAP=0 to restore the original in-graph (serialized) copy for A/B.
+static bool ggml_cuda_rs_overlap_enabled() {
+    static const bool enabled = []() {
+        const char * e = getenv("GGML_CUDA_RS_OVERLAP");
+        return !(e != nullptr && e[0] == '0' && e[1] == '\0');
+    }();
+    return enabled;
 }
 
 //static bool ggml_backend_buffer_is_cuda_host(ggml_backend_buffer_t buffer) {
@@ -2089,7 +2140,59 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_CPY:
-            ggml_cuda_cpy(ctx, dst->src[0], dst->src[1]);
+            {
+                // [RS overlap] route a host-destination recurrent-state snapshot copy through a
+                // small device staging ring and issue the D2H on a side stream, so it overlaps the
+                // graph's compute. The main stream joins at graph end. Default on (GGML_CUDA_RS_OVERLAP=0 off).
+                const bool rs_overlap = ggml_cuda_rs_overlap_enabled();
+                ggml_tensor * rs_src = dst->src[0];
+                ggml_tensor * rs_dst = dst->src[1];
+                const bool rs_host_dst = rs_overlap && ctx.curr_stream_no == 0 &&
+                        rs_dst != nullptr && rs_dst->buffer != nullptr &&
+                        ggml_backend_buft_is_cuda_rs_host(ggml_backend_buffer_get_type(rs_dst->buffer)) &&
+                        !ggml_backend_buffer_is_cuda(rs_dst->buffer);
+                if (rs_host_dst && ggml_is_contiguous(rs_src)) {
+                    const size_t nbytes = ggml_nbytes(rs_src);
+                    const int    slot   = ctx.rs_slot;
+                    cudaStream_t main_stream = ctx.stream();
+                    cudaStream_t side_stream = ctx.stream(ctx.device, GGML_CUDA_MAX_STREAMS - 1);
+
+                    if (ctx.rs_fork == nullptr) {
+                        CUDA_CHECK(cudaEventCreateWithFlags(&ctx.rs_fork, cudaEventDisableTiming));
+                        CUDA_CHECK(cudaEventCreateWithFlags(&ctx.rs_join, cudaEventDisableTiming));
+                    }
+                    if (ctx.rs_slot_done[slot] == nullptr) {
+                        CUDA_CHECK(cudaEventCreateWithFlags(&ctx.rs_slot_done[slot], cudaEventDisableTiming));
+                    }
+                    if (ctx.rs_stage_cap[slot] < nbytes) {
+                        if (ctx.rs_stage[slot] != nullptr) {
+                            CUDA_CHECK(cudaFree(ctx.rs_stage[slot]));
+                        }
+                        CUDA_CHECK(cudaMalloc(&ctx.rs_stage[slot], nbytes));
+                        ctx.rs_stage_cap[slot] = nbytes;
+                    }
+                    // ring: do not overwrite this slot until its previous D2H has completed. Only
+                    // wait within the same graph execution: the first use of a slot is already
+                    // ordered by the previous execution's graph-end join, and a wait on a
+                    // pre-capture event cannot be represented inside a CUDA graph.
+                    if (ctx.rs_slot_seen & (1u << slot)) {
+                        CUDA_CHECK(cudaStreamWaitEvent(main_stream, ctx.rs_slot_done[slot], 0));
+                    }
+                    ctx.rs_slot_seen |= (1u << slot);
+                    // stage D2D on the main stream (cheap; source is only needed briefly)
+                    CUDA_CHECK(cudaMemcpyAsync(ctx.rs_stage[slot], rs_src->data, nbytes, cudaMemcpyDeviceToDevice, main_stream));
+                    // side stream: D2H into the host RS cache, overlapped with the rest of the graph
+                    CUDA_CHECK(cudaEventRecord(ctx.rs_fork, main_stream));
+                    CUDA_CHECK(cudaStreamWaitEvent(side_stream, ctx.rs_fork, 0));
+                    CUDA_CHECK(cudaMemcpyAsync(rs_dst->data, ctx.rs_stage[slot], nbytes, cudaMemcpyDeviceToHost, side_stream));
+                    CUDA_CHECK(cudaEventRecord(ctx.rs_slot_done[slot], side_stream));
+                    CUDA_CHECK(cudaEventRecord(ctx.rs_join, side_stream));
+                    ctx.rs_slot = (slot + 1) % 2;
+                    ctx.rs_pending = true;
+                } else {
+                    ggml_cuda_cpy(ctx, rs_src, rs_dst);
+                }
+            }
             break;
         case GGML_OP_CONT:
             ggml_cuda_dup(ctx, dst);
@@ -2561,6 +2664,10 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
         if (ggml_cuda_is_view_or_noop(node)) {
             continue;
         }
+
+        // [RS overlap] host-destination RS snapshot copies use side-stream fork/join events. The
+        // side stream is rejoined before cudaStreamEndCapture and the ring waits are confined to a
+        // single execution, so these graphs are CUDA-graph-capturable (verified).
 
         // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
         if (node->op == GGML_OP_MUL_MAT_ID) {
@@ -4358,6 +4465,14 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
             }
         }
 
+        // [RS overlap] rejoin the side stream that carried the host snapshot D2H copies. This must
+        // happen BEFORE cudaStreamEndCapture, otherwise the forked side stream is left unjoined and
+        // capture fails.
+        if (cuda_ctx->rs_pending) {
+            CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), cuda_ctx->rs_join, 0));
+            cuda_ctx->rs_pending = false;
+        }
+
 #ifdef USE_CUDA_GRAPH
         ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
@@ -4465,6 +4580,8 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
         CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
     }
+
+    cuda_ctx->rs_slot_seen = 0;
 
     ggml_cuda_graph_evaluate_and_capture(cuda_ctx, cgraph, use_cuda_graph, cuda_graph_update_required, graph_key);
 
@@ -5518,7 +5635,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
     const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
+    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) ||
+           (integrated && ggml_backend_buft_is_cuda_host(buft)) ||
+           // the private state-cache host type is device-operable even on a discrete GPU (see its
+           // definition): only the RS cache uses it, so keeping those nodes on this backend does
+           // not move any weight into host memory
+           (ggml_backend_buft_is_cuda_rs_host(buft) && buft->device == dev);
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {
@@ -5689,6 +5811,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_cuda_rs_host_buffer_type") == 0) {
+        return (void *) ggml_backend_cuda_rs_host_buffer_type;
     }
     return nullptr;
 }
