@@ -1,26 +1,42 @@
+import { getBackend } from './api-base';
 import { redactValue } from './redact';
 import { CORS_PROXY, HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
+import { getProtocolAdapter } from '$lib/services/protocols';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import type { Backend } from '$lib/types';
 
 /**
- * Get authorization headers for API requests
- * Includes Bearer token if API key is configured
+ * Get authorization headers for API requests to a backend.
  */
-export function getAuthHeaders(): Record<string, string> {
-	const currentConfig = settingsStore.config;
-	const apiKey = currentConfig.apiKey?.toString().trim();
+export function getAuthHeaders(backendId?: string): Record<string, string> {
+	const backend = getBackend(backendId);
+
+	if (backend) return getAuthHeadersForBackend(backend);
+
+	// no backends resolver yet (early startup, or a non-browser call): keep the
+	// pre-backends behaviour and authenticate against the serving origin
+	const apiKey = settingsStore.config.apiKey?.toString().trim();
 
 	return apiKey ? { [HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey}` } : {};
 }
 
 /**
+ * Get authorization headers for a backend object, including one that is not
+ * registered yet (used by the connection test on the add-backend form).
+ * The protocol adapter owns the credential scheme and any required headers.
+ */
+export function getAuthHeadersForBackend(backend: Backend): Record<string, string> {
+	return getProtocolAdapter(backend).authHeaders(backend);
+}
+
+/**
  * Get standard JSON headers with optional authorization
  */
-export function getJsonHeaders(): Record<string, string> {
+export function getJsonHeaders(backendId?: string): Record<string, string> {
 	return {
 		[HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON,
-		...getAuthHeaders()
+		...getAuthHeaders(backendId)
 	};
 }
 
