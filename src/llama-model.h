@@ -776,6 +776,8 @@ struct llama_model {
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
+    bool mtp_host() const { return params.mtp_host; } // native MTP block is in host RAM
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;

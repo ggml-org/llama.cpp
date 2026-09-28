@@ -797,3 +797,5 @@ bool llm_arch_is_hybrid         (const llm_arch & arch);
 bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
+// true when the arch's graph reads the recurrent S state via get_s_live()
+bool llm_arch_supports_rs_split(const llm_arch & arch);

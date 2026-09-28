@@ -1129,6 +1129,17 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     }
 }
 
+// Only these archs read the live S state via get_s_live(); others keep the whole RS cache in host RAM.
+bool llm_arch_supports_rs_split(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_GROK:

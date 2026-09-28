@@ -2870,6 +2870,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.mtp_host                    =*/ false,
     };
 
     return result;

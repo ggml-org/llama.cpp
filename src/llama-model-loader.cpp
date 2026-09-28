@@ -540,6 +540,7 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         bool load_mtp,
+        bool mtp_host,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
@@ -834,6 +835,7 @@ llama_model_loader::llama_model_loader(
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
     this->load_mtp = load_mtp;
+    this->mtp_host = mtp_host;
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -1257,6 +1259,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     break;
                 }
             }
+        }
+
+        // --cpu-mtp: MTP layers (bid >= n_layer) go to host; the trunk token_embd/output stay on device
+        if (!buft && mtp_host && tn.bid >= (int) hparams.n_layer()) {
+            buft = select_weight_buft(hparams, t_meta, op, buft_list_cpu);
+            LLAMA_LOG_INFO("%s: native MTP tensor %s (%zu MiB %s) -> host buffer (CPU compute)\n",
+                    __func__, tn.str().c_str(), ggml_nbytes(t_meta)/1024/1024, ggml_type_name(t_meta->type));
         }
 
         if (!buft) {
