@@ -283,7 +283,7 @@ void test_gbnf_generation(testing &t) {
 
     t.test("until grammar with parser delimiters", [](testing &t) {
         auto parser = build_peg_parser([](common_peg_parser_builder & p)  {
-            return p.until(p.literal("a") + p.literal("b") | p.literal("cd"));
+            return p.until((p.literal("a") + p.literal("b")) | p.literal("cd"));
         });
 
         auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
