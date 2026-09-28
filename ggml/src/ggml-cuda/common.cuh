@@ -1455,6 +1455,17 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
+    // [RS overlap] host-dest RS snapshot copies are staged in a device ring and copied
+    // to host on a side stream, overlapped with compute; the main stream joins at graph end.
+    cudaEvent_t rs_fork         = nullptr;
+    cudaEvent_t rs_join         = nullptr;
+    cudaEvent_t rs_slot_done[2] = { nullptr, nullptr };
+    void *      rs_stage[2]     = { nullptr, nullptr };
+    size_t      rs_stage_cap[2] = { 0, 0 };
+    int         rs_slot         = 0;
+    uint32_t    rs_slot_seen    = 0;
+    bool        rs_pending      = false;
+
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)
