@@ -56,6 +56,56 @@ static inline void simd_gemm_ukernel(
     }
 }
 
+template <int RM>
+static inline void simd_gemm_ukernel_tail(
+    float       * GGML_RESTRICT C,
+    const float * GGML_RESTRICT A,
+    const float * GGML_RESTRICT B,
+    int K, int N, int cols)
+{
+#if defined(__AVX512F__)
+    const __mmask16 mask = (1u << cols) - 1;
+    __m512 acc[RM];
+    for (int64_t i = 0; i < RM; i++) {
+        acc[i] = _mm512_maskz_loadu_ps(mask, C + i * N);
+    }
+    for (int64_t kk = 0; kk < K; kk++) {
+        const __m512 b = _mm512_maskz_loadu_ps(mask, B + kk * N);
+        for (int64_t i = 0; i < RM; i++) {
+            acc[i] = _mm512_mask3_fmadd_ps(_mm512_set1_ps(A[i * K + kk]), b, acc[i], mask);
+        }
+    }
+    for (int64_t i = 0; i < RM; i++) {
+        _mm512_mask_storeu_ps(C + i * N, mask, acc[i]);
+    }
+#elif defined(__AVX2__)
+    const __m256i mask = _mm256_cmpgt_epi32(_mm256_set1_epi32(cols), _mm256_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7));
+    __m256 acc[RM];
+    for (int64_t i = 0; i < RM; i++) {
+        acc[i] = _mm256_maskload_ps(C + i * N, mask);
+    }
+    for (int64_t kk = 0; kk < K; kk++) {
+        const __m256 b = _mm256_maskload_ps(B + kk * N, mask);
+        for (int64_t i = 0; i < RM; i++) {
+            acc[i] = GGML_F32_VEC_FMA(acc[i], b, _mm256_set1_ps(A[i * K + kk]));
+        }
+    }
+    for (int64_t i = 0; i < RM; i++) {
+        _mm256_maskstore_ps(C + i * N, mask, acc[i]);
+    }
+#else
+    for (int64_t j = 0; j < cols; j++) {
+        for (int64_t i = 0; i < RM; i++) {
+            float a = C[i * N + j];
+            for (int64_t kk = 0; kk < K; kk++) {
+                a += A[i * K + kk] * B[kk * N + j];
+            }
+            C[i * N + j] = a;
+        }
+    }
+#endif
+}
+
 // C[M x N] += A[M x K] * B[K x N]
 static void simd_gemm(
     float       * GGML_RESTRICT C,
@@ -74,14 +124,8 @@ static void simd_gemm(
         for (; jj + KN <= N; jj += KN) {
             simd_gemm_ukernel<GEMM_RM, 1>(C + jj, A, B + jj, K, N);
         }
-        for (; jj < N; jj++) {
-            for (int64_t i = 0; i < GEMM_RM; i++) {
-                float a = C[i * N + jj];
-                for (int64_t kk = 0; kk < K; kk++) {
-                    a += A[i * K + kk] * B[kk * N + jj];
-                }
-                C[i * N + jj] = a;
-            }
+        if (jj < N) {
+            simd_gemm_ukernel_tail<GEMM_RM>(C + jj, A, B + jj, K, N, N - jj);
         }
 
         A += GEMM_RM * K;
@@ -97,12 +141,8 @@ static void simd_gemm(
         for (; jj + KN <= N; jj += KN) {
             simd_gemm_ukernel<1, 1>(C + jj, A, B + jj, K, N);
         }
-        for (; jj < N; jj++) {
-            float a = C[jj];
-            for (int64_t kk = 0; kk < K; kk++) {
-                a += A[kk] * B[kk * N + jj];
-            }
-            C[jj] = a;
+        if (jj < N) {
+            simd_gemm_ukernel_tail<1>(C + jj, A, B + jj, K, N, N - jj);
         }
 
         A += K;
