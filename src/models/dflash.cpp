@@ -450,14 +450,13 @@ static ggml_tensor * build_dflash2_conv(
     for (int64_t tap = 0; tap < kernel_size; ++tap) {
         ggml_tensor * values = blocks;
         if (tap > 0) {
-            ggml_tensor * zeros = ggml_fill(ctx0,
-                    ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, std::min(tap, block_size), n_blocks), 0.0f);
             if (tap < block_size) {
                 ggml_tensor * previous = ggml_view_3d(ctx0, blocks, hidden_size, block_size - tap, n_blocks,
                         blocks->nb[1], blocks->nb[2], 0);
-                values = ggml_concat(ctx0, zeros, previous, 1);
+                values = ggml_pad_ext(ctx0, previous, 0, 0, tap, 0, 0, 0, 0, 0);
             } else {
-                values = zeros;
+                values = ggml_fill(ctx0,
+                        ggml_new_tensor_3d(ctx0, hidden->type, hidden_size, block_size, n_blocks), 0.0f);
             }
         }
         values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
