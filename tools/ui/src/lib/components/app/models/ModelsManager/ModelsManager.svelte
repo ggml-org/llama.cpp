@@ -29,11 +29,12 @@
 
 	interface Props {
 		class?: string;
+		onClose?: () => void;
 		/** Forwarded to the table's toolbar right end. */
 		toolbarEnd?: Snippet;
 	}
 
-	let { class: className, toolbarEnd }: Props = $props();
+	let { class: className, onClose, toolbarEnd }: Props = $props();
 
 	let filter = $state('');
 	let providerFilter = $state<string[]>([]);
@@ -45,69 +46,6 @@
 	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
 	let allModels = $derived(modelsStore.models);
-
-	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
-	// The pane is laid out before it is ever opened, so the first open only slides a
-	// finished panel in. It renders the selection, else the model it last showed.
-	let lastPicked = $state<ModelOption | null>(null);
-	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
-	let shownId = $state<string | null>(null);
-	let isSwapping = $state(false);
-	let fade = $state<'open' | 'swap'>('open');
-	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
-
-	$effect(() => {
-		const id = selectedId;
-
-		if (!id) return;
-
-		// untracked: the effect must not track the state it writes
-		untrack(() => {
-			lastPicked = allModels.find((option) => option.id === id) ?? null;
-		});
-	});
-
-	/** How long the panel takes to fade out before it swaps to another model. */
-	const SWAP_FADE_MS = 120;
-
-	// Another model fades the panel out, swaps it, then fades it back in.
-	$effect(() => {
-		const next = target?.id ?? null;
-
-		if (!next) return;
-
-		if (shownId === null) {
-			untrack(() => (shownId = next));
-
-			return;
-		}
-
-		if (next === shownId) {
-			if (selected) {
-				untrack(() => {
-					isSwapping = false;
-					fade = 'open';
-				});
-			}
-
-			return;
-		}
-
-		untrack(() => {
-			isSwapping = true;
-			fade = 'swap';
-		});
-
-		const timer = setTimeout(() => {
-			untrack(() => {
-				shownId = next;
-				isSwapping = false;
-			});
-		}, SWAP_FADE_MS);
-
-		return () => clearTimeout(timer);
-	});
-
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)
 	);
@@ -279,6 +217,67 @@
 
 		return ordered;
 	});
+	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
+	// The pane is laid out before it is ever opened, so the first open only slides a
+	// finished panel in. It renders the selection, else the model it last showed, else
+	// the first model in the list.
+	let lastPicked = $state<ModelOption | null>(null);
+	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
+	let shownId = $state<string | null>(null);
+	let isSwapping = $state(false);
+	let fade = $state<'open' | 'swap'>('open');
+	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
+
+	$effect(() => {
+		const id = selectedId;
+
+		if (!id) return;
+
+		// untracked: the effect must not track the state it writes
+		untrack(() => {
+			lastPicked = allModels.find((option) => option.id === id) ?? null;
+		});
+	});
+
+	// Another model fades the panel out, swaps it, then fades it back in. Reopening the
+	// same one only fades it, so the panel keeps its tab.
+	$effect(() => {
+		const next = target?.id ?? null;
+		const isOpen = selected !== null;
+
+		if (!next) return;
+
+		if (shownId === null) {
+			untrack(() => (shownId = next));
+
+			return;
+		}
+
+		if (next === shownId) {
+			if (isOpen) {
+				untrack(() => {
+					isSwapping = false;
+					fade = 'open';
+				});
+			}
+
+			return;
+		}
+
+		untrack(() => {
+			isSwapping = true;
+			fade = 'swap';
+		});
+
+		const timer = setTimeout(() => {
+			untrack(() => {
+				shownId = next;
+				isSwapping = false;
+			});
+		}, SWAP_FADE_MS);
+
+		return () => clearTimeout(timer);
+	});
 
 	// a caller can ask for one model to be revealed, the download rows do
 	$effect(() => {
@@ -292,6 +291,47 @@
 
 		uiStore.manageModelFocus = null;
 	});
+
+	/** How long the panel takes to fade out before it swaps to another model. */
+	const SWAP_FADE_MS = 120;
+	/** How long the calls to action take to leave the toolbar, matching their fade. */
+	const CTA_LEAVE_MS = 120;
+	/** How long the panel takes to slide out before the calls to action come back. */
+	const PANE_LEAVE_MS = 120;
+
+	// The calls to action leave first, then the panel takes the space they gave up.
+	// Closing runs the same order backwards.
+	let ctasVisible = $state(true);
+	// once faded the row leaves the flow, so the filters keep the room it was holding
+	let ctasGone = $state(false);
+	let paneOpen = $state(false);
+
+	$effect(() => {
+		if (selected !== null) {
+			untrack(() => (ctasVisible = false));
+
+			const timer = setTimeout(
+				() =>
+					untrack(() => {
+						ctasGone = true;
+						paneOpen = true;
+					}),
+				CTA_LEAVE_MS
+			);
+
+			return () => clearTimeout(timer);
+		}
+
+		untrack(() => {
+			paneOpen = false;
+			ctasGone = false;
+		});
+
+		const timer = setTimeout(() => untrack(() => (ctasVisible = true)), PANE_LEAVE_MS);
+
+		return () => clearTimeout(timer);
+	});
+
 	async function toggleLoad(option: ModelOption): Promise<void> {
 		if (modelsStore.isModelLoaded(option.model)) {
 			await modelsStore.status.unload(option.model);
@@ -308,6 +348,7 @@
 		// the chat is behind the dialog: close it, then let the composer take focus
 		uiStore.manageModelsOpen = false;
 		uiStore.requestComposerFocus();
+		onClose?.();
 	}
 
 	/** Point the selected model's load settings at another model as its draft. */
@@ -329,6 +370,17 @@
 	}
 </script>
 
+{#snippet toolbarEndRegion()}
+	<!-- the calls to action fade in place; the pane waits for them to be gone -->
+	<div
+		class="transition-[opacity,visibility] duration-[120ms] ease-[cubic-bezier(0.23,1,0.32,1)] {ctasGone
+			? 'hidden'
+			: 'flex items-center gap-2'} {ctasVisible ? 'visible opacity-100' : 'invisible opacity-0'}"
+	>
+		{@render toolbarEnd?.()}
+	</div>
+{/snippet}
+
 <div class={['relative flex min-h-0 flex-1', className]}>
 	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
@@ -345,7 +397,7 @@
 			{overrides}
 			{providerCounts}
 			{selectedId}
-			{toolbarEnd}
+			toolbarEnd={toolbarEndRegion}
 		/>
 	</div>
 
@@ -353,13 +405,13 @@
 	     repeat what the pane's own header says -->
 	<div
 		class="pane-drawer max-md:fixed max-md:inset-0 max-md:z-[60] shrink-0"
-		data-open={selected !== null}
+		data-open={paneOpen}
 	>
 		<!-- the content box keeps the open width, so it never reflows with the drawer -->
 		<div
 			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40 max-md:w-full max-md:max-w-none max-md:border-l-0 max-md:bg-background"
 			data-fade={fade}
-			data-visible={selected !== null && !isSwapping}
+			data-visible={paneOpen && !isSwapping}
 		>
 			{#if shownOption}
 				{#key shownId}
@@ -425,6 +477,19 @@
 	@media (max-width: 767px) {
 		.pane-drawer[data-open='true'] {
 			width: auto;
+		}
+	}
+
+	/* reduced motion keeps the fades and drops the slide */
+	@media (prefers-reduced-motion: reduce) {
+		.pane-drawer,
+		.pane-drawer[data-open='true'] {
+			transition: visibility 120ms;
+		}
+
+		.pane-content,
+		.pane-content[data-visible='true'][data-fade='open'] {
+			transition: opacity 100ms;
 		}
 	}
 </style>

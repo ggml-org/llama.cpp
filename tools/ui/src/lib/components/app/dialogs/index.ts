@@ -19,7 +19,7 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ * **DialogMcpServers** - MCP servers dialog shown from the sidebar
  *
  * Shows the same MCP server list as the `/mcp-servers` route inside a modal
  * dialog.
@@ -106,6 +106,9 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
  * />
  * ```
  */
+/** **DialogManageModels** - shell for the models manager. */
+export { default as DialogManageModels } from './DialogManageModels.svelte';
+
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
@@ -412,47 +415,6 @@ export { default as DialogConversationSelection } from './DialogConversationSele
  */
 
 /**
- * **DialogModelInformation** - Model details display
- *
- * Dialog showing comprehensive information about the currently loaded model
- * and server configuration. Displays model metadata, capabilities, and
- * server settings in a structured table format.
- *
- * **Architecture:**
- * - Uses ShadCN Dialog with wide layout for table display
- * - Fetches data from serverStore (props) and modelsStore (metadata)
- * - Auto-fetches models when dialog opens if not loaded
- *
- * **Information Displayed:**
- * - **Model**: Name with copy button
- * - **File Path**: Full path to model file with copy button
- * - **Context Size**: Current context window size
- * - **Training Context**: Original training context (if available)
- * - **Model Size**: File size in human-readable format
- * - **Parameters**: Parameter count (e.g., "7B", "70B")
- * - **Embedding Size**: Embedding dimension
- * - **Vocabulary Size**: Token vocabulary size
- * - **Vocabulary Type**: Tokenizer type (BPE, etc.)
- * - **Parallel Slots**: Number of concurrent request slots
- * - **Modalities**: Supported input types (text, vision, audio)
- * - **Build Info**: Server build information
- * - **Chat Template**: Full Jinja template in scrollable code block
- *
- * **Features:**
- * - Copy buttons for model name and path
- * - Modality badges with icons
- * - Responsive table layout with container queries
- * - Loading state while fetching model info
- * - Scrollable chat template display
- *
- * @example
- * ```svelte
- * <DialogModelInformation bind:open={showModelInfo} />
- * ```
- */
-export { default as DialogModelInformation } from './DialogModelInformation.svelte';
-
-/**
  * **DialogMcpResourcesBrowser** - MCP resources browser dialog
  *
  * Dialog for browsing and attaching MCP resources to chat context.
@@ -537,6 +499,3 @@ export { default as DialogMcpResourcePreview } from './DialogMcpResourcePreview.
  * ```
  */
 export { default as DialogMermaidPreview } from './DialogMermaidPreview.svelte';
-
-/** **DialogManageModels** - shell for the models manager. */
-export { default as DialogManageModels } from './DialogManageModels.svelte';
