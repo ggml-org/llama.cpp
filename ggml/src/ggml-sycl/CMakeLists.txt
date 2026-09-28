@@ -67,6 +67,11 @@ if (GGML_SYCL_SEPARATE_BUILD)
             list(APPEND sycl_args "-D${var}=${sycl_arg_value}")
         endif()
     endforeach()
+    # the nested module is copied into place, never relinked by an install step, so it has to be
+    # linked with the install RPATH itself
+    if (DEFINED CMAKE_INSTALL_RPATH)
+        list(APPEND sycl_args -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON)
+    endif()
     # anything else the nested configure needs (list values use | for ;)
     list(APPEND sycl_args ${GGML_SYCL_SEPARATE_BUILD_ARGS})
 
