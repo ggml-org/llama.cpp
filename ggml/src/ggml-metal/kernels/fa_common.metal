@@ -3,6 +3,7 @@ constant bool FC_flash_attn_ext_has_sinks [[function_constant(FC_FLASH_ATTN_EXT 
 constant bool FC_flash_attn_ext_has_bias  [[function_constant(FC_FLASH_ATTN_EXT + 2)]];
 constant bool FC_flash_attn_ext_has_scap  [[function_constant(FC_FLASH_ATTN_EXT + 3)]];
 constant bool FC_flash_attn_ext_has_kvpad [[function_constant(FC_FLASH_ATTN_EXT + 4)]];
+constant bool FC_flash_attn_ext_has_kv_rows [[function_constant(FC_FLASH_ATTN_EXT + 5)]];
 
 constant bool FC_flash_attn_ext_bc_mask [[function_constant(FC_FLASH_ATTN_EXT + 10)]];
 
@@ -53,6 +54,7 @@ void kernel_flash_attn_ext_impl(
         device const char * sinks,
         device const char * pad,
         device const char * blk,
+        device const char * kv_rows,
         device       char * dst,
         threadgroup  half * shmem_f16,
         uint3   tgpig,
@@ -246,7 +248,9 @@ void kernel_flash_attn_ext_impl(
                     FOR_UNROLL (short jj = 0; jj < NQ; ++jj) {
                         const short j = jj*NSG + sgitg;
 
-                        if (FC_flash_attn_ext_bc_mask) {
+                        if (FC_flash_attn_ext_has_kv_rows && ic + tiisg >= args.ne11) {
+                            sm2[j*SH + tiisg] = half2(-MAXHALF, -MAXHALF);
+                        } else if (FC_flash_attn_ext_bc_mask) {
                             sm2[j*SH + tiisg] = (iq1 + j) < args.ne31 ? pm2[jj][tiisg] : half2(-MAXHALF, -MAXHALF);
                         } else {
                             sm2[j*SH + tiisg] = pm2[jj][tiisg];
@@ -286,7 +290,7 @@ void kernel_flash_attn_ext_impl(
 
             // Q*K^T
             // this is compile-time check, so it does not have runtime overhead
-            if (is_same<kd4x4_t, k4x4_t>::value) {
+            if (!FC_flash_attn_ext_has_kv_rows && is_same<kd4x4_t, k4x4_t>::value) {
                 // we can read directly from global memory
                 device      const k_t * pk = (device const k_t *) (k + ic*args.nb11);
                 threadgroup const q_t * pq = sq;
@@ -351,10 +355,15 @@ void kernel_flash_attn_ext_impl(
                     const short tx = tiisg%4;
                     const short ty = tiisg/4;
 
+                    // kv_rows: resolve the K/V row for this cache column; padding rows read row 0
+                    const int i11 = FC_flash_attn_ext_has_kv_rows
+                        ? (ic + 8*cc + ty < args.ne11 ? max(((device const int *) kv_rows)[(int64_t) iq3*args.ne11 + ic + 8*cc + ty], 0) : 0)
+                        : (ic + 8*cc + ty);
+
                     qk8x8_t mqk = make_filled_simdgroup_matrix<qk_t, 8>((qk_t) 0.0f);
 
                     for (short ii = 0; ii < DK16; ii += 4) {
-                        device const kd4x4_t * pk4x4 = (device const kd4x4_t *) (k + ((ic + 8*cc + ty)*args.nb11));
+                        device const kd4x4_t * pk4x4 = (device const kd4x4_t *) (k + i11*args.nb11);
 
                         if (DK16%4 == 0) {
                             // the head is evenly divisible by 4*16 = 64, so no need for bound checks
@@ -458,7 +467,7 @@ void kernel_flash_attn_ext_impl(
             // O = O + (Q*K^T)*V
             {
                 // we can read directly from global memory
-                if (is_same<vd4x4_t, v4x4_t>::value) {
+                if (!FC_flash_attn_ext_has_kv_rows && is_same<vd4x4_t, v4x4_t>::value) {
                     static_assert(PV8 % NSG == 0, "");
 
                     constexpr short NO = PV8/NSG;
@@ -544,8 +553,13 @@ void kernel_flash_attn_ext_impl(
                         s8x8_t vs;
                         simdgroup_load(vs, ss + 8*cc, SH, 0, false);
 
+                        // kv_rows: resolve the K/V row for this cache column; padding rows read row 0
+                        const int i11 = FC_flash_attn_ext_has_kv_rows
+                            ? (ic + 8*cc + ty < args.ne11 ? max(((device const int *) kv_rows)[(int64_t) iq3*args.ne11 + ic + 8*cc + ty], 0) : 0)
+                            : (ic + 8*cc + ty);
+
                         for (short ii = 4*sgitg; ii < DV16; ii += 4*NSG) {
-                            device const vd4x4_t * pv4x4 = (device const vd4x4_t *) (v + ((ic + 8*cc + ty)*args.nb21));
+                            device const vd4x4_t * pv4x4 = (device const vd4x4_t *) (v + i11*args.nb21);
 
                             if (DV16%4 == 0) {
                                 // no need for bound checks
@@ -691,13 +705,14 @@ kernel void kernel_flash_attn_ext(
         device const char * sinks,
         device const char * pad,
         device const char * blk,
+        device const char * kv_rows,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
 #define FWD_TMPL q_t, q4_t, q8x8_t, k_t, k4x4_t, k8x8_t, v_t, v4x4_t, v8x8_t, qk_t, qk8x8_t, s_t, s2_t, s8x8_t, o_t, o4_t, o8x8_t, kd4x4_t, nl_k, deq_k, vd4x4_t, nl_v, deq_v, DK, DV, Q, C
-#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, dst, shmem_f16, tgpig, tiisg, sgitg
+#define FWD_ARGS args, q, k, v, mask, sinks, pad, blk, kv_rows, dst, shmem_f16, tgpig, tiisg, sgitg
     switch (FC_flash_attn_ext_nsg) {
       // note: disabled cases to reduce library load time
       //case 1: kernel_flash_attn_ext_impl<FWD_TMPL, 1>(FWD_ARGS); break;
