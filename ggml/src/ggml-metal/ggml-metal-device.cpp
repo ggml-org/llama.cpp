@@ -2399,15 +2399,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pad(ggml_metal_l
 
     const bool circular = ggml_get_op_params_i32(op, 8) != 0;
 
-    snprintf(base, 256, "kernel_pad%s_%s", circular ? "_circular" : "", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s", base);
+    snprintf(base, 256, "kernel_pad_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s_circular=%d", base, circular);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
-    if (res.pipeline) {
-        return res;
-    }
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
 
-    res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_set_bool(cv, circular, FC_PAD + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
+    }
 
     return res;
 }

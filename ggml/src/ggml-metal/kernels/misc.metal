@@ -114,13 +114,14 @@ kernel void kernel_roll_f32(
     }
 }
 
+constant bool FC_pad_circular [[function_constant(FC_PAD + 0)]];
+
 // circular means on a torus, so the coordinates wrap around
 static inline int32_t wrap_around(int32_t coord, int32_t size) {
     return (coord + size) % size;
 }
 
-template <bool circular>
-kernel void kernel_pad_impl(
+kernel void kernel_pad_f32(
     constant ggml_metal_kargs_pad & args,
     device  const char * src0,
     device        char * dst,
@@ -141,7 +142,7 @@ kernel void kernel_pad_impl(
     int32_t i02 = i2 - args.lp2;
     int32_t i03 = i3 - args.lp3;
 
-    if (circular) {
+    if (FC_pad_circular) {
         i01 = wrap_around(i01, ne01);
         i02 = wrap_around(i02, ne02);
         i03 = wrap_around(i03, ne03);
@@ -175,18 +176,13 @@ kernel void kernel_pad_impl(
 
         int32_t i00 = i0 - args.lp0;
 
-        if (circular) {
+        if (FC_pad_circular) {
             i00 = wrap_around(i00, ne00);
         }
 
         dst_ptr[i0] = i00 >= 0 && i00 < ne00 ? *((device const float *) (src0_row + i00*args.nb00)) : 0.0f;
     }
 }
-
-typedef decltype(kernel_pad_impl<false>) kernel_pad_t;
-
-template [[host_name("kernel_pad_f32")]]          kernel kernel_pad_t kernel_pad_impl<false>;
-template [[host_name("kernel_pad_circular_f32")]] kernel kernel_pad_t kernel_pad_impl<true>;
 
 // TODO: this is slow - optimize
 kernel void kernel_pad_reflect_1d_f32(
