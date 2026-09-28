@@ -521,7 +521,8 @@ static test_results run_tests_for_model(const std::string & model_path, const st
 
     if (model == nullptr) {
         LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
-        return {};
+        // a model that cannot be loaded is a failure, not a skip
+        return { test_status::FAIL, test_status::FAIL };
     }
 
     if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
@@ -648,19 +649,7 @@ int main(int argc, char ** argv) {
     }
 
     // single-model mode
-    common_init_result_ptr llama_init = common_init_from_params(params);
-    llama_model * model = llama_init->model();
-    if (model == nullptr) {
-        LOG_ERR("%s: failed to init model\n", __func__);
-        return 1;
-    }
-
-    if (!llama_model_is_recurrent(model) && !llama_model_is_hybrid(model)) {
-        LOG_INF("%s: skipping for non-recurrent model\n", __func__);
-        return 0;
-    }
-
-    const test_results res = run_tests(params, model);
+    const test_results res = run_tests_for_model(params.model.path, params);
 
     return (res.rollback == test_status::FAIL || res.replay == test_status::FAIL) ? 1 : 0;
 }
