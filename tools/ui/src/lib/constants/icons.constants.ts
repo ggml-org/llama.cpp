@@ -31,9 +31,6 @@ export const DEFAULT_FILE_ICON = FileIcon;
 /** The mark for a model, wherever one is listed. */
 export const MODEL_ICON = ModelIcon;
 
-/** Alias kept for the selector until it adopts MODEL_ICON. */
-export const MODEL_SELECTOR_ICON = ModelIcon;
-
 export const MODALITY_ICONS = {
 	[ModelModality.AUDIO]: AudioIcon,
 	[ModelModality.VIDEO]: VideoIcon,
