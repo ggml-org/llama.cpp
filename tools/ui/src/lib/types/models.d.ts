@@ -16,6 +16,8 @@ export interface ModelOption {
 	id: string;
 	name: string;
 	model: string;
+	/** Backend that serves this model; set on the aggregated option list. */
+	backendId?: string;
 	description?: string;
 	capabilities: string[];
 	/** Context size reported by the provider's model listing, when it reports one. */
@@ -23,6 +25,8 @@ export interface ModelOption {
 	modalities?: ModelModalities;
 	details?: ApiModelDetails['details'];
 	meta?: ApiModelDataEntry['meta'];
+	/** Load state the provider's own listing reports, when it reports one. */
+	status?: ApiModelDataEntry['status'];
 	parsedId?: ParsedModelId;
 	aliases?: string[];
 	tags?: string[];
@@ -49,6 +53,21 @@ export interface ModelDownloadProgress {
 	files: Record<string, ModelDownloadFileProgress>;
 }
 
+/**
+ * A draft sidecar file a model listing reports as its own entry. The router lists a
+ * downloaded sidecar as a model, so this is what pairs it back with its model.
+ */
+export interface ModelSidecarFile {
+	id: string;
+	kind: ModelSidecar;
+	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
+	model: string;
+	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
+	params: string | null;
+	/** Quantization of the sidecar file, e.g. `Q4_0`. */
+	quant: string | null;
+}
+
 export interface ParsedModelId {
 	raw: string;
 	orgName: string | null;
@@ -65,19 +84,4 @@ export interface ModalityCapabilities {
 	hasVision: boolean;
 	hasAudio: boolean;
 	hasVideo: boolean;
-}
-
-/**
- * A draft sidecar file a model listing reports as its own entry. The router lists a
- * downloaded sidecar as a model, so this is what pairs it back with its model.
- */
-export interface ModelSidecarFile {
-	id: string;
-	kind: ModelSidecar;
-	/** Repo the sidecar belongs to, e.g. `ggml-org/Qwen3.6-35B-A3B-GGUF`. */
-	model: string;
-	/** Parameter count the sidecar reports, e.g. `35B-A3B`. */
-	params: string | null;
-	/** Quantization of the sidecar file, e.g. `Q4_0`. */
-	quant: string | null;
 }

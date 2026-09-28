@@ -2,7 +2,7 @@
  * CORS Proxy utility for routing requests through llama-server's CORS proxy.
  */
 
-import { base } from '$app/paths';
+import { apiUrl } from './api-base';
 import { CORS_PROXY, CORS_PROXY_ENDPOINT } from '$lib/constants';
 
 /**
@@ -11,7 +11,7 @@ import { CORS_PROXY, CORS_PROXY_ENDPOINT } from '$lib/constants';
  * @returns URL pointing to the CORS proxy with target encoded
  */
 export function buildProxiedUrl(targetUrl: string): URL {
-	const proxyPath = `${base}${CORS_PROXY_ENDPOINT}`;
+	const proxyPath = apiUrl(CORS_PROXY_ENDPOINT);
 	const proxyUrl = new URL(proxyPath, window.location.origin);
 
 	proxyUrl.searchParams.set(CORS_PROXY.URL_PARAM, targetUrl);
