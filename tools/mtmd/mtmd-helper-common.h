@@ -87,7 +87,7 @@ struct decode_embd_batch {
             : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd), n_tokens(n_tokens), embd(embd) {
         GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
         pos   .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
-        logits.resize(n_tokens, 0);
+        logits.resize(n_tokens);
     }
 
     void set_position_normal(llama_pos pos_0, llama_seq_id seq_id) {
