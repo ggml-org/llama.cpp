@@ -5437,72 +5437,25 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         }
     }
 
-    // multimodal input: { "content": [ { "type": "text"|"image_url", ... } ] }, one embedding per object
-    auto is_wrapped_content = [](const json & p) {
-        if (!p.is_object() || !p.contains("content")) {
-            return false;
+    // same shapes as tokenize_input_prompts(), plus OAI content: { "content": [ { "type": "text"|"image_url", ... } ] }
+    auto tokenize_entry = [&](const json & p) {
+        if (p.is_object() && p.contains("content")) {
+            return tokenize_oai_content_array(ctx_server.vocab, ctx_server.mctx, meta->chat_params.media_path, p.at("content"), true, true, ctx_server.init_opt);
         }
-        const json & content = p.at("content");
-        if (!content.is_array() || content.empty()) {
-            return false;
-        }
-        for (const auto & part : content) {
-            if (!part.is_object() || !part.contains("type")) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    auto is_bare_content_array = [](const json & p) {
-        if (!p.is_array() || p.empty()) {
-            return false;
-        }
-        for (const auto & el : p) {
-            if (!el.is_object() || !el.contains("type")) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    // an array with any number ([12, 34, 56] or [12, "string", 56]) is one input, not a list of inputs
-    auto is_bare_token_array = [](const json & p) {
-        if (!p.is_array() || p.empty()) {
-            return false;
-        }
-        for (const auto & el : p) {
-            if (el.is_number()) {
-                return true;
-            }
-        }
-        return false;
+        return tokenize_input_subprompt(ctx_server.vocab, ctx_server.mctx, p, true, true, ctx_server.init_opt);
     };
 
     std::vector<server_tokens> tokenized_prompts;
-    if (is_wrapped_content(prompt)) {
-        tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, prompt.at("content"), ctx_server.init_opt));
-    } else if (prompt.is_array() && !is_bare_token_array(prompt)) {
+    if (prompt.is_array() && !json_is_array_and_contains_numbers(prompt)) {
         for (const auto & p : prompt) {
-            if (is_wrapped_content(p)) {
-                tokenized_prompts.push_back(tokenize_oai_content_array(ctx_server.mctx, meta->chat_params.media_path, p.at("content"), ctx_server.init_opt));
-            } else if (p.is_object()) {
-                res->error(format_error_response("multimodal \"input\" elements must be objects of the form { \"content\": [ { \"type\": \"text\"|\"image_url\", ... } ] }; got: " + safe_json_to_str(p), ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            } else if (is_bare_content_array(p)) {
-                res->error(format_error_response("each multimodal input must be wrapped as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
-                return res;
-            } else {
-                for (auto & t : tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, p, true, true, ctx_server.init_opt)) {
-                    tokenized_prompts.push_back(std::move(t));
-                }
-            }
+            tokenized_prompts.push_back(tokenize_entry(p));
         }
-    } else if (is_bare_content_array(prompt)) {
-        res->error(format_error_response("each multimodal input must be wrapped as { \"content\": [...] }", ERROR_TYPE_INVALID_REQUEST));
-        return res;
     } else {
-        tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true, ctx_server.init_opt);
+        tokenized_prompts.push_back(tokenize_entry(prompt));
+    }
+    if (tokenized_prompts.empty()) {
+        res->error(format_error_response("\"input\" must not be empty", ERROR_TYPE_INVALID_REQUEST));
+        return res;
     }
 
     for (const auto & tokens : tokenized_prompts) {

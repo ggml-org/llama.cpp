@@ -970,7 +970,7 @@ server_tokens process_mtmd_prompt(
 }
 
 /**
- * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * tokenize a single input "prompt" object
  * use tokenize_input_prompts() if the input could be an array.
  * this supports these cases:
  * - "prompt": "string"
@@ -978,7 +978,7 @@ server_tokens process_mtmd_prompt(
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -1147,10 +1147,9 @@ static void handle_media(
     }
 }
 
-// used by /embeddings endpoint
-server_tokens tokenize_oai_content_array(mtmd_context * mctx, const std::string & media_path, const json & content, const mtmd_helper_init_opt & init_opt) {
+server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context * mctx, const std::string & media_path, const json & content, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     if (!content.is_array()) {
-        throw std::invalid_argument("Expected 'content' to be an array");
+        throw std::invalid_argument("\"content\" must be an array");
     }
 
     std::string prompt;
@@ -1162,17 +1161,19 @@ server_tokens tokenize_oai_content_array(mtmd_context * mctx, const std::string 
             prompt += json_value(p, "text", std::string());
         } else if (type == "image_url") {
             if (mctx == nullptr) {
-                throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
+                throw std::invalid_argument("Multimodal data provided, but model does not support multimodal requests.");
             }
             const json image_url = json_value(p, "image_url", json::object());
-            const std::string url = json_value(image_url, "url", std::string());
-            handle_media(files, url, media_path);
+            handle_media(files, json_value(image_url, "url", std::string()), media_path);
             prompt += get_media_marker();
         } else {
-            throw std::invalid_argument("unsupported content[].type: " + type);
+            throw std::invalid_argument("unsupported content type: " + type);
         }
     }
 
+    if (files.empty()) {
+        return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
+    }
     return process_mtmd_prompt(mctx, prompt, files, init_opt);
 }
 

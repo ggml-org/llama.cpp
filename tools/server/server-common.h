@@ -300,11 +300,23 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
 
-// tokenize an OAI content array (text and image_url parts), used by /embeddings
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
+// tokenize an OAI content array: [ { "type": "text", ... }, { "type": "image_url", ... } ]
 server_tokens tokenize_oai_content_array(
+                                        const llama_vocab * vocab,
                                         mtmd_context * mctx,
                                         const std::string & media_path,
                                         const json & content,
+                                        bool add_special,
+                                        bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
 
 //
