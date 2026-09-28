@@ -8,12 +8,15 @@
 		loadOverrides,
 		type ModalityKey,
 		modelContextLength,
+		modelDraftsFor,
 		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup,
+		modelSupports,
 		saveOverrides
 	} from './utils';
 	import { LOCAL_BACKEND_ID } from '$lib/constants';
+	import { ModelCapability } from '$lib/enums';
 	import { backendsStore, conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
@@ -35,6 +38,8 @@
 	let providerFilter = $state<string[]>([]);
 	let contextLimit = $state(0);
 	let modalityFilter = $state<ModalityKey[]>([]);
+	let capabilityFilter = $state<ModelCapability[]>([]);
+	let draftFilter = $state(false);
 	let selectedId = $state<string | null>(null);
 	let overrides = $state<Record<string, ModelOverride>>(loadOverrides());
 
@@ -42,18 +47,28 @@
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)
 	);
-	// the rail counts follow the active view and filter, so it always says how many
-	// models each provider contributes to what the table is showing
-	let visible = $derived.by(() => {
+	// every filter but the provider one, so a provider count does not fall to zero
+	// the moment that provider is the one being looked at
+	let matching = $derived.by(() => {
 		const term = filter.trim().toLowerCase();
 
 		return allModels.filter((option) => {
 			if (term && !`${option.name} ${option.model}`.toLowerCase().includes(term)) return false;
 
-			if (providerFilter.length > 0) {
-				const backendId = option.backendId ?? LOCAL_BACKEND_ID;
+			// every capability asked for has to be there: tools and reasoning are
+			// features a model either has or does not, unlike modalities
+			if (
+				capabilityFilter.length > 0 &&
+				!capabilityFilter.every((capability) => modelSupports(option, capability))
+			) {
+				return false;
+			}
 
-				if (!providerFilter.includes(backendId)) return false;
+			if (
+				draftFilter &&
+				modelDraftsFor(option, overrides[option.id]?.load?.speculativeDecoding).length === 0
+			) {
+				return false;
 			}
 
 			// a model whose modalities are unknown cannot be shown to match
@@ -63,6 +78,24 @@
 
 			return contextLimit === 0 || modelContextLength(option) >= contextLimit;
 		});
+	});
+	let visible = $derived.by(() =>
+		providerFilter.length === 0
+			? matching
+			: matching.filter((option) => providerFilter.includes(option.backendId ?? LOCAL_BACKEND_ID))
+	);
+	// the rail counts follow the active view and filter, so it always says how many
+	// repos each provider contributes to what the table is showing
+	let providerCounts = $derived.by(() => {
+		const counts: Record<string, number> = {};
+
+		for (const entry of groupModelQuants(matching)) {
+			const backendId = entry.base.backendId ?? LOCAL_BACKEND_ID;
+
+			counts[backendId] = (counts[backendId] ?? 0) + 1;
+		}
+
+		return counts;
 	});
 	// recently used models lead their section, the rest keep the server's order
 	const rank = new SvelteMap<string, number>();
@@ -356,7 +389,9 @@
 <div class={['flex min-h-0 flex-1', className]}>
 	<div class="min-h-0 min-w-0 flex-1">
 		<ModelsManagerModelsTable
+			bind:capabilities={capabilityFilter}
 			bind:contextLimit
+			bind:draft={draftFilter}
 			bind:filter
 			bind:modalities={modalityFilter}
 			bind:providers={providerFilter}
@@ -365,6 +400,7 @@
 			onSelect={(option) => (selectedId = option.id)}
 			onUseAsDraft={useAsDraft}
 			{overrides}
+			{providerCounts}
 			{selectedId}
 			toolbarEnd={toolbarEndRegion}
 		/>

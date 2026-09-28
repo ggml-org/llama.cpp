@@ -6,6 +6,7 @@ import {
 	SETTINGS_KEYS,
 	SPEC_TYPE
 } from '$lib/constants';
+import { ModelCapability } from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { backendsModelsStore, modelsStore, settingsStore } from '$lib/stores';
 import type {
@@ -14,7 +15,9 @@ import type {
 	ModelOption,
 	ModelSidecarFile
 } from '$lib/types/models';
+import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
 import { getBackend } from '$lib/utils/api-base';
+import { getBackendCapabilities } from '$lib/utils/backend';
 import { formatFileSize, formatParameters } from '$lib/utils/formatters';
 import { rawModelId } from '$lib/utils/model-option-id';
 import { SvelteMap } from 'svelte/reactivity';
@@ -217,6 +220,9 @@ export function draftFromSetting(option: ModelOption, value?: string | null): Mo
  * settings name, then any other sidecar the model's own repo ships.
  */
 export function modelDraftsFor(option: ModelOption, settingValue?: string | null): ModelDraft[] {
+	// speculative decoding is a llama.cpp feature
+	if (!getBackendCapabilities(getBackend(option.backendId)).loadUnload) return [];
+
 	const args = modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args;
 	const configured = draftFromArgs(args, option) ?? draftFromSetting(option, settingValue);
 
@@ -259,6 +265,20 @@ export function modelDrafts(
 	}
 
 	return drafts;
+}
+
+/**
+ * Whether a model has a capability. A listing that declares nothing is not a listing
+ * that lacks it: the chat template the Hub carries says whether tools or reasoning work.
+ */
+export function modelSupports(option: ModelOption, capability: ModelCapability): boolean {
+	if (option.capabilities.includes(capability)) return true;
+
+	const template = HuggingFaceService.cachedDetails(option.model)?.gguf?.chat_template ?? '';
+
+	return capability === ModelCapability.TOOL_USE
+		? detectToolUseSupport(template)
+		: detectThinkingSupport(template);
 }
 
 export function servedByLabel(option: ModelOption): string {

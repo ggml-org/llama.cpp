@@ -58,9 +58,11 @@
 	$effect(() => {
 		if (!uiStore.discoverModelsOpen) return;
 
-		uiStore.discoverModelsOpen = false;
-		view = 'discover';
-		handleOpenChange(true);
+		untrack(() => {
+			uiStore.discoverModelsOpen = false;
+			view = 'discover';
+			handleOpenChange(true);
+		});
 	});
 
 	function handleOpenChange(value: boolean) {

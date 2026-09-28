@@ -1,17 +1,14 @@
 <script lang="ts">
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import {
-		draftFromArgs,
-		draftFromSetting,
 		isLocalOption,
 		type ModalityKey,
 		modelContextLength,
 		type ModelDraft,
-		modelDrafts,
+		modelDraftsFor,
 		type ModelOverride,
 		type ModelQuantGroup,
-		type ModelsTableGroup,
-		sidecarFilesFor
+		type ModelsTableGroup
 	} from './utils';
 	import {
 		ArrowDown,
@@ -48,7 +45,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { FAMILY_ROW_WINDOW, MODEL_ROW_WINDOW } from '$lib/constants';
-	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
+	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import {
 		backendsModelsStore,
 		backendsStore,
@@ -64,8 +61,12 @@
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
+		/** Capabilities a model must have every one of. */
+		capabilities?: ModelCapability[];
 		/** Smallest context a model must support; 0 keeps every model. */
 		contextLimit?: number;
+		/** Keep only models that have a draft sidecar to speculate with. */
+		draft?: boolean;
 		filter?: string;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
@@ -76,6 +77,8 @@
 		overrides: Record<string, ModelOverride>;
 		/** Backend ids to keep; empty keeps every provider. */
 		providers?: string[];
+		/** Repos each provider contributes to the current search, for the filter menu. */
+		providerCounts?: Record<string, number>;
 		/** Called when a row is set as the draft of the selected model. */
 		onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
 		selectedId: string | null;
@@ -84,7 +87,9 @@
 	}
 
 	let {
+		capabilities = $bindable<ModelCapability[]>([]),
 		contextLimit = $bindable(0),
+		draft = $bindable(false),
 		filter = $bindable(''),
 		groups,
 		isFavorite,
@@ -92,13 +97,20 @@
 		onSelect,
 		onUseAsDraft,
 		overrides,
+		providerCounts = {},
 		providers = $bindable<string[]>([]),
 		selectedId,
 		toolbarEnd
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	let hasFilters = $derived(providers.length > 0 || contextLimit > 0 || modalities.length > 0);
+	let hasFilters = $derived(
+		providers.length > 0 ||
+			contextLimit > 0 ||
+			modalities.length > 0 ||
+			capabilities.length > 0 ||
+			draft
+	);
 	let filterInput = $state<HTMLInputElement | null>(null);
 
 	// the dialog hands focus to its first control, so the filter takes it instead
@@ -224,16 +236,7 @@
 
 	/** Drafts to show on a row: the configured one first, then this repo's own sidecars. */
 	function draftsFor(option: ModelOption): ModelDraft[] {
-		// speculative decoding is a llama.cpp feature
-		if (!getBackendCapabilities(getBackend(option.backendId)).loadUnload) return [];
-
-		// the router reports the arguments a model loads with, draft included
-		const args = modelsStore.routerModels.find((model) => model.id === option.model)?.status?.args;
-		const configured =
-			draftFromArgs(args, option) ??
-			draftFromSetting(option, overrides[option.id]?.load?.speculativeDecoding);
-
-		return modelDrafts(option, sidecarFilesFor(option), configured);
+		return modelDraftsFor(option, overrides[option.id]?.load?.speculativeDecoding);
 	}
 
 	/** Name of the model the configuration pane has open, for the draft action label. */
@@ -646,10 +649,13 @@
 		/>
 
 		<ModelsManagerFilters
+			bind:capabilities
 			bind:contextLimit
+			bind:draft
 			bind:modalities
 			bind:providers
 			backends={backendsStore.enabled}
+			{providerCounts}
 		/>
 
 		{#if hasFilters}
@@ -659,6 +665,8 @@
 					providers = [];
 					contextLimit = 0;
 					modalities = [];
+					capabilities = [];
+					draft = false;
 				}}
 				size="sm"
 				variant="ghost"

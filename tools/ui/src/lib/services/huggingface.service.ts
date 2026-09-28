@@ -72,6 +72,7 @@ import type {
 	HfModelSibling
 } from '$lib/types/huggingface';
 import { sidecarFromFileToken } from '$lib/utils';
+import { SvelteMap } from 'svelte/reactivity';
 
 /**
  * HuggingFaceService - Service for browsing and searching GGUF models on Hugging Face Hub
@@ -91,7 +92,7 @@ export class HuggingFaceService {
 	// Model details and file trees fetched this session, keyed by repo id. The
 	// Hub rate limits aggressively, so each repo costs at most one request per
 	// app load; failed fetches are not cached so the next mount can retry.
-	private static detailsCache = new Map<string, HfModelDetailInfo | null>();
+	private static detailsCache = new SvelteMap<string, HfModelDetailInfo | null>();
 
 	private static detailsPending = new Map<string, Promise<HfModelDetailInfo | null>>();
 
