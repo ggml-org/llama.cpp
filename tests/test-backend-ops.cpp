@@ -11071,6 +11071,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS }) {
         test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, 17, 129, 512,
             false, 1, 1, false, false, true, false, { 1, 1 }));
+        // Prompt-processing tiles (J = 48 and 64) with a row count that needs no bounds checks.
+        for (int64_t m : { 48, 128 }) {
+            test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, m, 256, 512,
+                false, 1, 1, false, false, true, false, { 1, 1 }));
+        }
     }
     for (ggml_glu_op glu_op : { GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI, GGML_GLU_OP_SWIGLU_CLAMP }) {
         test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K, glu_op, 17, 129, 512,
