@@ -158,8 +158,8 @@ if [ ! -z ${GG_BUILD_WEBGPU} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then
-    # Use qy1 by default (MTT S80)
-    MUSA_ARCH=${MUSA_ARCH:-21}
+    # Use ph1 by default (MTT S5000)
+    MUSA_ARCH=${MUSA_ARCH:-31}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
 fi
 
@@ -666,6 +666,11 @@ function gg_run_test_backend_ops {
     # TODO: MoltenVK bug?
     #       https://github.com/ggml-org/llama.cpp/actions/runs/34611260059/job/103302413736?pr=28740#step:3:5897
     if [ ! -z "${GG_BUILD_VULKAN}" ] && [ "$(uname -s)" = "Darwin" ]; then
+        args_extra=""
+    fi
+
+    # TODO: OpenVINO GPU plugin crashes (CL_OUT_OF_RESOURCES) with 2 concurrent workers on GPU.
+    if [ ! -z "${GG_BUILD_OPENVINO}" ] && [ "${GGML_OPENVINO_DEVICE:-}" = "GPU" ]; then
         args_extra=""
     fi
 

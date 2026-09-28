@@ -73,4 +73,24 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 
+
+// Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
+// weights may carry different block types (q5_K / iq4_xs, mixed included).
+// vy: src1 quantized with plain quantize_q8_1 (padded rows). stride_col_y is in
+// block_q8_1 units. Returns false if the pair or batch is unhandled; caller falls back.
+bool ggml_sycl_mul_mat_vec_q_glu_plain(
+    enum ggml_type     gate_type,
+    enum ggml_type     up_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vgate,
+    const void *       vup,
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns, 1..MMVQ_MAX_BATCH_SIZE
+    int                stride_col_y,         // block_q8_1 units between activation columns
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
+
 #endif // GGML_SYCL_MMVQ_HPP
