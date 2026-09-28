@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelCapabilityIcons from '../../ModelCapabilityIcons.svelte';
-	import ModelsDiscoverAvatar from '../ModelsDiscoverAvatar.svelte';
+	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
 	import { ExternalLink } from '@lucide/svelte';
@@ -35,7 +35,7 @@
 <header class="space-y-3">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			<ModelsDiscoverAvatar
+			<ModelOrgAvatar
 				org={avatarOrg}
 				{quantOrg}
 				quantPositionClass="-bottom-1.5 -right-1.5"
