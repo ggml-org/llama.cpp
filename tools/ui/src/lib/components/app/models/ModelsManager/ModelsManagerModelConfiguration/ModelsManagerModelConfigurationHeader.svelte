@@ -65,7 +65,14 @@
 <header class="space-y-2.5 pt-3 pl-4">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			<ModelAvatar {option} showBaseModelAvatar size="size-12" />
+			<!-- same geometry as the discover details header: base org, quant org badge -->
+			<ModelAvatar
+				{option}
+				quantPositionClass="-bottom-1.5 -right-1.5"
+				quantSize="h-6 w-6"
+				showBaseModelAvatar
+				size="h-12 w-12"
+			/>
 
 			<div class="min-w-0">
 				<div class="flex items-center gap-2">
