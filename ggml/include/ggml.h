@@ -585,6 +585,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_FLASH_ATTN_SPARSE,
 
         GGML_OP_UNARY,
 
@@ -2511,6 +2512,28 @@ extern "C" {
     GGML_API void ggml_flash_attn_ext_add_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
+
+    // block-sparse attention: each query attends only to the key blocks listed for its kv head
+    // key j of block b is at position p = b*blk + j, it is visible if p <= q_pos and pos_cell[p] >= 0
+    //
+    // q:        [n_embd_k, n_batch,   n_head,    ne3]
+    // k:        [n_embd_k, n_kv,      n_head_kv, ne3]
+    // v:        [n_embd_v, n_kv,      n_head_kv, ne3] !! not transposed !!
+    // blk_idx:  [n_sel,    n_head_kv, n_batch,   ne3] i32, distinct block ids, < 0 = unused
+    // q_pos:    [n_batch,  ne3]                       i32, query positions
+    // pos_cell: [n_pos,    ne3]                       i32, position -> kv row, < 0 = no row
+    // res:      [n_embd_v, n_head,    n_batch,   ne3] !! permuted !!
+    //
+    GGML_API struct ggml_tensor * ggml_flash_attn_sparse(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * blk_idx,
+            struct ggml_tensor  * q_pos,
+            struct ggml_tensor  * pos_cell,
+            int                   blk,
+            float                 scale);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(

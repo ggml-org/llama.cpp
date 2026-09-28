@@ -9362,6 +9362,125 @@ void ggml_compute_forward_flash_attn_ext(
     }
 }
 
+// ggml_compute_forward_flash_attn_sparse
+
+void ggml_compute_forward_flash_attn_sparse(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * q        = dst->src[0];
+    const ggml_tensor * k        = dst->src[1];
+    const ggml_tensor * v        = dst->src[2];
+    const ggml_tensor * blk_idx  = dst->src[3];
+    const ggml_tensor * q_pos    = dst->src[4];
+    const ggml_tensor * pos_cell = dst->src[5];
+
+    GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk, k,   nb)
+    GGML_TENSOR_LOCALS(size_t,  nbv, v,   nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
+
+    const int64_t DK    = nek0;
+    const int64_t DV    = v->ne[0];
+    const int64_t n_kv  = nek1;
+    const int64_t n_sel = blk_idx->ne[0];
+
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbv0 == ggml_type_size(v->type));
+    GGML_ASSERT(nb0  == sizeof(float));
+
+    const float   scale = ggml_get_op_params_f32(dst, 0);
+    const int32_t blk   = ggml_get_op_params_i32(dst, 1);
+
+    const int64_t n_pos = pos_cell->ne[0];
+    const int64_t rk2   = neq2/nek2;
+
+    ggml_type         const k_vec_dot_type = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
+    ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
+    ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+    ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+
+    GGML_ASSERT(q_to_vec_dot && "fattn_sparse: unsupported K-type");
+    GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float) && "fattn_sparse: unsupported V-type");
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t nr  = neq1*neq2*neq3;
+    const int64_t dr  = (nr + nth - 1)/nth;
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    float * VKQ32 = (float *) params->wdata + ith*(DK + 2*DV + CACHE_LINE_SIZE_F32);
+    float * V32   = VKQ32 + DV;
+    void  * Q_q   = VKQ32 + 2*DV;
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t iq3 = ir/(neq2*neq1);
+        const int64_t iq2 = (ir - iq3*neq2*neq1)/neq1;
+        const int64_t iq1 = ir - iq3*neq2*neq1 - iq2*neq1;
+        const int64_t ik2 = iq2/rk2;
+
+        const float * pq = (const float *) ((const char *) q->data + iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
+        q_to_vec_dot(pq, Q_q, DK);
+
+        const int32_t   p_q  = *(const int32_t *) ((const char *) q_pos->data + iq1*q_pos->nb[0] + iq3*q_pos->nb[1]);
+        const int32_t * bids =  (const int32_t *) ((const char *) blk_idx->data + ik2*blk_idx->nb[1] + iq1*blk_idx->nb[2] + iq3*blk_idx->nb[3]);
+        const int32_t * pc   =  (const int32_t *) ((const char *) pos_cell->data + iq3*pos_cell->nb[1]);
+
+        float S = 0.0f;
+        float M = -INFINITY;
+        memset(VKQ32, 0, DV*sizeof(float));
+
+        for (int64_t is = 0; is < n_sel; ++is) {
+            const int64_t b = bids[is];
+            if (b < 0) {
+                continue;
+            }
+            const int64_t p1 = MIN(MIN((b + 1)*blk, (int64_t) p_q + 1), n_pos);
+            for (int64_t p = b*blk; p < p1; ++p) {
+                const int64_t ic = pc[p];
+                if (ic < 0 || ic >= n_kv) {
+                    continue;
+                }
+
+                float s;
+                kq_vec_dot(DK, &s, 0, (const char *) k->data + ic*nbk1 + ik2*nbk2 + iq3*nbk3, 0, Q_q, 0, 1);
+                s *= scale;
+
+                const float Mold = M;
+                float ms = 1.0f;
+                float vs = 1.0f;
+                if (s > M) {
+                    M  = s;
+                    ms = expf(Mold - M);
+                    ggml_vec_scale_f32(DV, VKQ32, ms);
+                } else {
+                    vs = expf(s - M);
+                }
+
+                const char * v_data = (const char *) v->data + ic*nbv1 + ik2*nbv2 + iq3*nbv3;
+                if (v_to_float) {
+                    v_to_float(v_data, V32, DV);
+                    ggml_vec_mad_f32(DV, VKQ32, V32, vs);
+                } else {
+                    ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
+                }
+
+                S = S*ms + vs;
+            }
+        }
+
+        ggml_vec_scale_f32(DV, VKQ32, S == 0.0f ? 0.0f : 1.0f/S);
+
+        // permute(0, 2, 1, 3)
+        memcpy((char *) dst->data + (iq3*ne2*ne1 + iq2 + iq1*ne1)*nb1, VKQ32, nb1);
+    }
+}
+
 // ggml_compute_forward_flash_attn_back
 
 static void ggml_compute_forward_flash_attn_back_f32(

@@ -537,7 +537,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_mask(
 
                 if constexpr (use_sparse) {
                     const int32_t index = i < i_sup ? indices[k_VKQ_0 + i] : -1;
-                    tile_mask[j_sram*(nbatch_fa + 8) + i] = index >= 0 ? mask_h[int64_t(j_vram)*stride_mask + index] : half(-INFINITY);
+                    // without a mask every listed column is visible
+                    tile_mask[j_sram*(nbatch_fa + 8) + i] = index < 0 ? half(-INFINITY) :
+                        mask_h ? mask_h[int64_t(j_vram)*stride_mask + index] : half(0.0f);
                 } else {
                     tile_mask[j_sram*(nbatch_fa + 8) + i] = i < i_sup ? mask_h[int64_t(j_vram)*stride_mask + k_VKQ_0 + i] : half(0.0f);
                 }
@@ -1796,7 +1798,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
 static constexpr __host__ __device__ bool ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(
         const int DKQ, const int DV, const int ncols1, const int ncols2) {
-    return (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
+    return (DKQ == 128 && DV == 128 && ncols1 == 1 && ncols2 == 8) ||
+           (DKQ == 128 && DV == 128 && ncols1 == 1 && ncols2 == 16) ||
+           (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8) ||
            (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16) ||
            (DKQ == 256 && DV == 256 && ncols1 == 1 && ncols2 == 8) ||
            (DKQ == 256 && DV == 256 && ncols1 == 8 && ncols2 == 8);
@@ -1927,7 +1931,7 @@ static __global__ void flash_attn_ext_f16(
 
         const float2 * Q_f2   = (const float2 *) (Q + nb03*sequence + nb02*zt_Q);
         const half2  * K_h2   = (const half2  *) (K + nb13*sequence + nb12*z_KV);
-        const half   * mask_h = ncols2 == 1 && !mask ? nullptr :
+        const half   * mask_h = (ncols2 == 1 || use_sparse) && !mask ? nullptr :
             (const half *) (mask + nb33*(sequence % ne33));
         float2       * dstk   = ((float2 *) dst) + (sequence*ne01.z*ne02 + zt_Q) * (DV/2);
 
@@ -1976,7 +1980,7 @@ static __global__ void flash_attn_ext_f16(
 
     const float2 * Q_f2   = (const float2 *) (Q + nb03*sequence + nb02*zt_Q);
     const half2  * K_h2   = (const half2  *) (K + nb13*sequence + nb12*z_KV);
-    const half   * mask_h = ncols2 == 1 && !mask ? nullptr :
+    const half   * mask_h = (ncols2 == 1 || use_sparse) && !mask ? nullptr :
         (const half *) (mask + nb33*(sequence % ne33));
     float2       * dstk   = ((float2 *) dst) + (sequence*ne01.z*ne02 + zt_Q) * (DV/2);
 

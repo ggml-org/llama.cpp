@@ -1093,8 +1093,13 @@ void launch_fattn(
     const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
 
     // sparse: a query tile of ncols1 queries shares one index list, the union of the queries' visible columns
+    // the lists are either built from the mask or given in src[5] (see ggml_cuda_flash_attn_sparse)
+    const ggml_tensor * sparse_lists = dst->src[5];
     int32_t n_kv_max = 0;
-    if (use_sparse) {
+    if (use_sparse && sparse_lists) {
+        GGML_ASSERT(ncols1 == 1 && sparse_lists->type == GGML_TYPE_I32);
+        n_kv_max = sparse_lists->ne[0];
+    } else if (use_sparse) {
         GGML_ASSERT(mask != nullptr);
         const int32_t n_kv_max_query = ggml_get_op_params_i32(KQV, 4);
         GGML_ASSERT(n_kv_max_query > 0);
@@ -1242,13 +1247,13 @@ void launch_fattn(
         V_data,
         mask ? ((const char *) mask->data) : nullptr,
         sinks ? ((const char *) sinks->data) : nullptr,
-        KV_max.ptr,
+        use_sparse && sparse_lists ? (const int *) sparse_lists->data : KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], n_kv, K->ne[2], K->ne[3], nb11, nb12, nb13,
         nb21, nb22, nb23,
-        mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+        mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : Q->ne[3],
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     );
     CUDA_CHECK(cudaGetLastError());

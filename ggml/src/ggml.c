@@ -1084,6 +1084,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "FLASH_ATTN_SPARSE",
 
     "UNARY",
 
@@ -1101,7 +1102,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1199,6 +1200,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    "flash_attn_sparse(q, k, v, blk_idx, q_pos, pos_cell)",
 
     "unary(x)",
 
@@ -1216,7 +1218,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5581,6 +5583,60 @@ void ggml_flash_attn_ext_add_sinks(
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
     a->src[4] = sinks;
+}
+
+// ggml_flash_attn_sparse
+
+struct ggml_tensor * ggml_flash_attn_sparse(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * blk_idx,
+        struct ggml_tensor  * q_pos,
+        struct ggml_tensor  * pos_cell,
+        int                   blk,
+        float                 scale) {
+    GGML_ASSERT(q->type        == GGML_TYPE_F32);
+    GGML_ASSERT(blk_idx->type  == GGML_TYPE_I32);
+    GGML_ASSERT(q_pos->type    == GGML_TYPE_I32);
+    GGML_ASSERT(pos_cell->type == GGML_TYPE_I32);
+    GGML_ASSERT(blk > 0);
+
+    GGML_ASSERT(q->ne[0] == k->ne[0]);
+    GGML_ASSERT(k->ne[1] == v->ne[1]);
+    GGML_ASSERT(k->ne[2] == v->ne[2]);
+    GGML_ASSERT(q->ne[2] % k->ne[2] == 0);
+    GGML_ASSERT(q->ne[3] == k->ne[3] && q->ne[3] == v->ne[3]);
+
+    GGML_ASSERT(blk_idx->ne[1] == k->ne[2]);
+    GGML_ASSERT(blk_idx->ne[2] == q->ne[1]);
+    GGML_ASSERT(blk_idx->ne[3] == q->ne[3]);
+    GGML_ASSERT(blk_idx->nb[0] == sizeof(int32_t));
+
+    GGML_ASSERT(q_pos->ne[0] == q->ne[1]);
+    GGML_ASSERT(q_pos->ne[1] == q->ne[3]);
+    GGML_ASSERT(q_pos->nb[0] == sizeof(int32_t));
+
+    GGML_ASSERT(pos_cell->ne[1] == q->ne[3]);
+    GGML_ASSERT(pos_cell->nb[0] == sizeof(int32_t));
+
+    // permute(0, 2, 1, 3)
+    int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    ggml_set_op_params_f32(result, 0, scale);
+    ggml_set_op_params_i32(result, 1, blk);
+
+    result->op     = GGML_OP_FLASH_ATTN_SPARSE;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = blk_idx;
+    result->src[4] = q_pos;
+    result->src[5] = pos_cell;
+
+    return result;
 }
 
 // ggml_flash_attn_back

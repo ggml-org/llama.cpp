@@ -8421,6 +8421,114 @@ struct test_lightning_indexer : public test_case {
     }
 };
 
+// GGML_OP_FLASH_ATTN_SPARSE
+struct test_flash_attn_sparse : public test_case {
+    const int64_t hs; // head size
+    const int64_t nh_kv; // num kv heads
+    const int64_t gqa; // q heads per kv head
+    const int64_t kv; // kv size
+    const int64_t nb; // batch size
+    const int64_t n_sel; // selected blocks per query
+    const int64_t blk; // block size
+    const int64_t ns; // num streams
+
+    const ggml_type type_KV;
+
+    std::string vars() override {
+        return VARS_TO_STR9(hs, nh_kv, gqa, kv, nb, n_sel, blk, ns, type_KV);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2 * 2 * hs * nh_kv*gqa * nb * n_sel*blk * ns;
+    }
+
+    test_flash_attn_sparse(int64_t hs = 128, int64_t nh_kv = 4, int64_t gqa = 16, int64_t kv = 1024, int64_t nb = 32, int64_t n_sel = 4, int64_t blk = 64, int64_t ns = 1, ggml_type type_KV = GGML_TYPE_F16)
+        : hs(hs), nh_kv(nh_kv), gqa(gqa), kv(kv), nb(nb), n_sel(n_sel), blk(blk), ns(ns), type_KV(type_KV) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // q/k/v as permuted views, like the KV cache
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nh_kv*gqa, nb, ns);
+        ggml_set_name(q, "q");
+
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, type_KV, hs, nh_kv, kv, ns);
+        ggml_set_name(k, "k");
+
+        ggml_tensor * v = ggml_new_tensor_4d(ctx, type_KV, hs, nh_kv, kv, ns);
+        ggml_set_name(v, "v");
+
+        ggml_tensor * bi = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, n_sel, nh_kv, nb, ns);
+        ggml_set_name(bi, "bi");
+
+        ggml_tensor * qp = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, nb, ns);
+        ggml_set_name(qp, "qp");
+
+        ggml_tensor * pc = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, ns);
+        ggml_set_name(pc, "pc");
+
+        ggml_tensor * out = ggml_flash_attn_sparse(ctx,
+                ggml_permute(ctx, q, 0, 2, 1, 3), ggml_permute(ctx, k, 0, 2, 1, 3), ggml_permute(ctx, v, 0, 2, 1, 3),
+                bi, qp, pc, blk, 1.0f/sqrtf(hs));
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::random_device rd;
+        std::default_random_engine rng(rd());
+
+        const int64_t nblk = (kv + blk - 1)/blk;
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "qp") == 0) {
+                // queries are the last nb positions
+                std::vector<int32_t> data(nb*ns);
+                for (int64_t i = 0; i < nb*ns; ++i) {
+                    data[i] = kv - nb + i % nb;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else if (strcmp(t->name, "bi") == 0) {
+                // the local block plus distinct random blocks, some unused (-1)
+                std::vector<int32_t> data(n_sel*nh_kv*nb*ns);
+                std::vector<int32_t> blocks(nblk);
+                for (int64_t r = 0; r < nh_kv*nb*ns; ++r) {
+                    const int32_t local = (kv - nb + (r/nh_kv) % nb)/blk;
+                    for (int64_t i = 0; i < nblk; ++i) {
+                        blocks[i] = i;
+                    }
+                    std::swap(blocks[0], blocks[local]);
+                    std::shuffle(blocks.begin() + 1, blocks.end(), rng);
+                    for (int64_t i = 0; i < n_sel; ++i) {
+                        data[r*n_sel + i] = i < nblk && (i == 0 || rng() % 8 != 0) ? blocks[i] : -1;
+                    }
+                    std::shuffle(data.begin() + r*n_sel, data.begin() + (r + 1)*n_sel, rng);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else if (strcmp(t->name, "pc") == 0) {
+                // shuffled position -> cell map with holes (-1)
+                std::vector<int32_t> data(kv*ns);
+                for (int64_t s = 0; s < ns; ++s) {
+                    for (int64_t i = 0; i < kv; ++i) {
+                        data[s*kv + i] = i;
+                    }
+                    std::shuffle(data.begin() + s*kv, data.begin() + (s + 1)*kv, rng);
+                }
+                for (int32_t & c : data) {
+                    c = rng() % 16 == 0 ? -1 : c;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(int32_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // Deserializable generic test case
 struct input_tensor {
     ggml_type type;
@@ -11251,6 +11359,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // flash_attn_sparse
+    for (ggml_type type_KV : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 16, 1000, 32, 16, 128, 1, type_KV));
+    }
+    test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 8, 1024, 32, 4, 64, 1, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 4, 1024, 32, 4, 64, 1, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 16, 1024, 1, 4, 64, 4, GGML_TYPE_F16));
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -11260,6 +11376,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    // flash_attn_sparse
+    test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 16, 32768, 512, 16, 128, 1)); // MiniMax-M3 prefill
+    test_cases.emplace_back(new test_flash_attn_sparse(128, 4, 16, 32768, 1, 16, 128, 8)); // MiniMax-M3 decode, 8 seqs
 
     // SWIGLU at a 27B-class FFN width, fused [gate|up] vs split operands
     // note: same bytes either way, so a backend that indexes them differently shows it here

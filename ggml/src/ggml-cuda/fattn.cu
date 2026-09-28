@@ -134,6 +134,11 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * mask = dst->src[3];
 
+    // index lists given by the caller
+    if (dst->src[5] != nullptr) {
+        return true;
+    }
+
     float max_bias = 0.0f;
     float logit_softcap = 0.0f;
     memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
