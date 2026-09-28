@@ -202,13 +202,13 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         auto start = p.rule("start", p.optional(p.token("<|turn>") + p.literal("model\n")));
         auto channel_start = p.token("<|channel>");
         auto channel_end = p.token("<channel|>");
-        auto think_start = channel_start + p.literal("thought\n");
+        auto think_start = channel_start + p.literal("thought");
         auto string_delim = p.token("<|\"|>");
 
         if (extract_reasoning) {
             p.rule("thought", think_start + p.space() + p.reasoning(p.until(channel_end)) + channel_end);
         } else {
-            p.rule("thought", p.content(think_start + p.until(channel_end) + channel_end));
+            p.rule("thought", p.content(think_start + p.space() + p.until(channel_end) + channel_end));
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(channel_start + p.negate(p.literal("thought"))), "");
@@ -273,7 +273,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             auto tool_call_start = p.token("<|tool_call>");
             auto tool_call_rest  = p.literal("call:") + tool_choice + p.token("<tool_call|>");
             auto tool_call       = p.rule("tool-call", tool_call_start + tool_call_rest);
-            auto more            = inputs.parallel_tool_calls ? p.zero_or_more(p.ref("tool-call")) : p.eps();
+            auto more            = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
             auto tool_calls = p.trigger_rule("tool-calls", tool_call_start, tool_call_rest + more);
 
