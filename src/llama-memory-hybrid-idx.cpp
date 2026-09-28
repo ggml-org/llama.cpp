@@ -191,6 +191,12 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
         const llama_pos stale = mem_idx_stale_pos(seq_id, p0);
         mem_idx->seq_rm(seq_id, p0, p1);
         mem_idx_stale_set(seq_id, stale);
+
+        // removing a sequence can free cells another sequence shared, but only this one is marked stale, so the
+        // survivor would keep shared = true and pin cache_safe off forever; stale every sequence to re-derive it
+        if (kpool_layout_shared()) {
+            mem_idx_stale_set(-1, 0);
+        }
     }
 
     return get_mem_attn()->seq_rm(seq_id, p0, p1);
@@ -698,6 +704,10 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
     return *kpool_lay;
 }
 
+bool llama_memory_hybrid_idx::kpool_layout_shared() const {
+    return kpool_lay && !kpool_lay->cache_safe;
+}
+
 // Pools are fixed by the positions relative to the sequence's first one, so the layout survives a plain
 // append. A sequence edit can regroup them, and mem_idx_stale tells us it happened.
 const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_layout_update() {
@@ -739,8 +749,9 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             }
         }
 
-        // the appended tail accounts for every cell only if nothing before it was dropped
-        if (sq.cells.size() != sp.size()) {
+        // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
+        // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
+        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
@@ -749,7 +760,8 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             n_kept     = 0;
         }
 
-        // sharing can only start with a seq_cp and only end with an edit, both of which force a rebuild
+        // sharing starts with a seq_cp; it ends with an edit or a seq_rm that frees the shared cells, both of
+        // which stale the sequence and force the rebuild above, so once set it holds and the rescan can be skipped
         if (unified && !sq.shared) {
             for (size_t j = n_kept; j < sq.cells.size(); ++j) {
                 if (cells.seq_count(sq.cells[j].second) > 1) {
