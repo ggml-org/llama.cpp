@@ -1,8 +1,12 @@
 <script lang="ts">
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import {
+		isLocalOption,
 		type ModalityKey,
 		modelContextLength,
+		type ModelDraft,
+		modelDraftsFor,
+		type ModelOverride,
 		type ModelQuantGroup,
 		type ModelsTableGroup
 	} from './utils';
@@ -19,7 +23,8 @@
 		MoreHorizontal,
 		Power,
 		Trash2,
-		X
+		X,
+		Zap
 	} from '@lucide/svelte';
 	import {
 		DropdownMenuActions,
@@ -40,8 +45,16 @@
 	import { Button } from '$lib/components/ui/button';
 	import { FAMILY_ROW_WINDOW, MODEL_ICON, MODEL_ROW_WINDOW } from '$lib/constants';
 	import { ModelCapability, ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
+	import {
+		backendsModelsStore,
+		backendsStore,
+		modelsStore,
+		settingsStore,
+		uiStore
+	} from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import type { Snippet } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -51,12 +64,22 @@
 		capabilities?: ModelCapability[];
 		/** Smallest context a model must support; 0 keeps every model. */
 		contextLimit?: number;
+		/** Keep only models that have a draft sidecar to speculate with. */
+		draft?: boolean;
 		filter?: string;
 		groups: ModelsTableGroup[];
 		isFavorite: (option: ModelOption) => boolean;
 		onSelect: (option: ModelOption) => void;
+		/** Per-model load and inference overrides, keyed by backend-qualified id. */
 		/** Modalities a model must support at least one of. */
 		modalities?: ModalityKey[];
+		overrides: Record<string, ModelOverride>;
+		/** Backend ids to keep; empty keeps every provider. */
+		providers?: string[];
+		/** Repos each provider contributes to the current search, for the filter menu. */
+		providerCounts?: Record<string, number>;
+		/** Called when a row is set as the draft of the selected model. */
+		onUseAsDraft?: (draft: ModelOption, targetId: string) => void;
 		selectedId: string | null;
 		/** Rendered at the toolbar's right end, past the filters. */
 		toolbarEnd?: Snippet;
@@ -65,17 +88,28 @@
 	let {
 		capabilities = $bindable<ModelCapability[]>([]),
 		contextLimit = $bindable(0),
+		draft = $bindable(false),
 		filter = $bindable(''),
 		groups,
 		isFavorite,
 		modalities = $bindable<ModalityKey[]>([]),
 		onSelect,
+		onUseAsDraft,
+		overrides,
+		providerCounts = {},
+		providers = $bindable<string[]>([]),
 		selectedId,
 		toolbarEnd
 	}: Props = $props();
 
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
-	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
+	let hasFilters = $derived(
+		providers.length > 0 ||
+			contextLimit > 0 ||
+			modalities.length > 0 ||
+			capabilities.length > 0 ||
+			draft
+	);
 	let filterInput = $state<HTMLInputElement | null>(null);
 
 	// the dialog hands focus to its first control, so the filter takes it instead
@@ -153,20 +187,38 @@
 	}
 
 	/** Row actions follow the app's dropdown pattern: icon, label, separators, variants. */
-	function rowActions(option: ModelOption, favorite: boolean, isHidden: boolean) {
+	function rowActions(option: ModelOption, canLoad: boolean, favorite: boolean, isHidden: boolean) {
+		// a draft only makes sense for the model the configuration pane has open, and
+		// only when both ends can load and unload at all
+		const canBeDraft = canLoad && selectedId !== null && selectedId !== option.id && selectedName;
+
 		return [
+			...(canBeDraft
+				? [
+						{
+							icon: Zap,
+							label: `Use as draft for ${selectedName}`,
+							onclick: () => onUseAsDraft?.(option, selectedId as string),
+							separator: true
+						}
+					]
+				: []),
 			{
 				icon: favorite ? HeartOff : Heart,
 				label: favorite ? 'Remove from favorites' : 'Add to favorites',
 				onclick: () => modelsStore.toggleFavorite(option.model)
 			},
-			{
-				icon: Trash2,
-				label: 'Delete from disk',
-				onclick: () => requestDelete(option),
-				separator: true,
-				variant: 'destructive' as const
-			},
+			...(canLoad
+				? [
+						{
+							icon: Trash2,
+							label: 'Delete from disk',
+							onclick: () => requestDelete(option),
+							separator: true,
+							variant: 'destructive' as const
+						}
+					]
+				: []),
 			{
 				icon: isHidden ? Eye : EyeOff,
 				label: isHidden ? 'Unhide model' : 'Hide model',
@@ -181,9 +233,25 @@
 		return modelsStore.getModelStatus(option.model);
 	}
 
-	/** Context the model runs with: what a loaded model reports. */
+	/** Drafts to show on a row: the configured one first, then this repo's own sidecars. */
+	function draftsFor(option: ModelOption): ModelDraft[] {
+		return modelDraftsFor(option, overrides[option.id]?.load?.speculativeDecoding);
+	}
+
+	/** Name of the model the configuration pane has open, for the draft action label. */
+	let selectedName = $derived(
+		modelsStore.models.find((option) => option.id === selectedId)?.name ?? null
+	);
+
+	/** Context the model runs with: the stored override, else what a loaded model reports. */
 	function configuredContext(option: ModelOption): number | null {
-		return isLoadedOption(option) ? modelsStore.props.getModelContextSize(option.model) : null;
+		const override = overrides[option.id]?.load?.contextLength;
+
+		if (override) return override;
+
+		return isLocalOption(option) && isLoadedOption(option)
+			? modelsStore.props.getModelContextSize(option.model)
+			: null;
 	}
 
 	type SortKey = 'context' | 'name' | 'status';
@@ -260,12 +328,14 @@
 	{@const isSleeping = status === ServerModelStatus.SLEEPING}
 
 	<ModelLoadControl
+		canLoad={getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 		class="justify-self-center"
 		{isFailed}
 		isLoaded={isLoadedOption(option)}
 		{isLoading}
 		{isSleeping}
 		{option}
+		showRemoteMark
 	/>
 {/snippet}
 
@@ -290,6 +360,7 @@
 
 {#snippet row(option: ModelOption, indent = 0)}
 	{@const favorite = isFavorite(option)}
+	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
 
 	<!-- <div class="px-2"> -->
@@ -317,6 +388,7 @@
 				<ModelId
 					aliases={option.aliases}
 					class="min-w-0 flex-1"
+					drafts={draftsFor(option)}
 					hideCapabilities
 					hideModalities
 					modalities={option.modalities}
@@ -335,7 +407,7 @@
 
 		<div class="flex items-center justify-center justify-self-center">
 			<DropdownMenuActions
-				actions={rowActions(option, favorite, isHidden)}
+				actions={rowActions(option, canLoad, favorite, isHidden)}
 				align="end"
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="Model actions"
@@ -347,10 +419,13 @@
 
 {#snippet repoRow(entry: ModelQuantGroup, indent = 0)}
 	{@const isExpanded = !collapsedQuants.has(entry.key)}
+	{@const providerCount = new Set(entry.quants.map((option) => option.backendId ?? '')).size}
 	{@const groupLabel =
-		entry.kind === 'variants'
-			? `${entry.quants.length} variants`
-			: `${entry.quants.length} quants available`}
+		entry.kind === 'providers'
+			? `${providerCount} provider${providerCount === 1 ? '' : 's'}`
+			: entry.kind === 'variants'
+				? `${entry.quants.length} variants`
+				: `${entry.quants.length} quants available`}
 	{@const anyLoaded = entry.quants.some(isLoadedOption)}
 
 	<!-- a repo row stands for its quants, so it reports what they agree on -->
@@ -377,6 +452,7 @@
 					<ModelId
 						aliases={entry.base.aliases}
 						class="min-w-0"
+						drafts={draftsFor(entry.base)}
 						hideCapabilities
 						hideModalities
 						hideQuantization
@@ -417,8 +493,9 @@
 	</div>
 {/snippet}
 
-{#snippet quantRow(option: ModelOption, indent = 0)}
+{#snippet quantRow(option: ModelOption, indent = 0, showProvider = false)}
 	{@const favorite = isFavorite(option)}
+	{@const canLoad = getBackendCapabilities(getBackend(option.backendId)).loadUnload}
 	{@const isHidden = modelsStore.isHidden(option.id)}
 	{@const quant = option.parsedId?.quantization ?? option.model}
 
@@ -435,7 +512,9 @@
 		tabindex="0"
 	>
 		<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-			<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+			<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">
+				{showProvider ? (getBackend(option.backendId)?.name ?? quant) : quant}
+			</Badge>
 
 			<span class="truncate text-sm text-muted-foreground">{option.model}</span>
 		</span>
@@ -446,7 +525,7 @@
 
 		<div class="flex items-center justify-center justify-self-center">
 			<DropdownMenuActions
-				actions={rowActions(option, favorite, isHidden)}
+				actions={rowActions(option, canLoad, favorite, isHidden)}
 				align="end"
 				triggerIcon={MoreHorizontal}
 				triggerTooltip="Model actions"
@@ -461,7 +540,7 @@
 
 		{#if !collapsedQuants.has(entry.key)}
 			{#each entry.quants as quant (quant.id)}
-				{@render quantRow(quant, indent + 24)}
+				{@render quantRow(quant, indent + 24, entry.kind === 'providers')}
 			{/each}
 		{/if}
 	{:else}
@@ -568,15 +647,25 @@
 			size="sm"
 		/>
 
-		<ModelsManagerFilters bind:capabilities bind:contextLimit bind:modalities />
+		<ModelsManagerFilters
+			bind:capabilities
+			bind:contextLimit
+			bind:draft
+			bind:modalities
+			bind:providers
+			backends={backendsStore.enabled}
+			{providerCounts}
+		/>
 
 		{#if hasFilters}
 			<Button
 				class="gap-1.5 text-muted-foreground"
 				onclick={() => {
+					providers = [];
 					contextLimit = 0;
 					modalities = [];
 					capabilities = [];
+					draft = false;
 				}}
 				size="sm"
 				variant="ghost"
@@ -633,12 +722,17 @@
 					{/if}
 				{/snippet}
 
+				{@const backendState = group.backendId ? backendsModelsStore.get(group.backendId) : null}
+
 				<ModelsSection
+					backendId={group.kind === 'provider' ? (group.backendId ?? undefined) : undefined}
 					chevronClass="mr-7"
 					count={group.items.length}
 					defaultOpen={group.kind !== 'hidden'}
-					icon={groupIcon}
+					error={Boolean(backendState?.error)}
+					icon={group.kind === 'provider' ? undefined : groupIcon}
 					label={group.label}
+					loading={Boolean(backendState?.loading)}
 					persistKey={group.key}
 					revealChevronOnHover
 					sticky

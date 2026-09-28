@@ -1,9 +1,13 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
-	import { HF_BASE_MODEL_TAG_REGEX } from '$lib/constants';
+	import { BackendIcon } from '$lib/components/app/backends';
+	import { Logo } from '$lib/components/app/misc';
+	import { HF_BASE_MODEL_TAG_REGEX, LOCAL_BACKEND_ID, MODEL_ICON } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { orgOf } from '$lib/utils';
+	import { getBackend } from '$lib/utils/api-base';
+	import { getBackendCapabilities } from '$lib/utils/backend';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -39,6 +43,12 @@
 
 	let parsedId = $derived(ModelsService.parseModelId(option.model));
 	let orgName = $derived(parsedId.orgName);
+	// a llama-compat model whose id carries no `org/name` is not a Hugging Face repo,
+	// so the provider's own mark identifies it better than an initial
+	let isLlamaCompat = $derived(getBackendCapabilities(getBackend(option.backendId)).props);
+	let useProviderIcon = $derived(isLlamaCompat && !orgName);
+	// the bundled server has no favicon to resolve, its mark is the llama.cpp logo
+	let isLocal = $derived(getBackend(option.backendId)?.id === LOCAL_BACKEND_ID);
 	let tagBaseModel = $derived(
 		(option.tags ?? [])
 			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
@@ -80,6 +90,12 @@
 
 		if (!isNearViewport || !showBaseModelAvatar || !orgName || tagBaseModel) return;
 
+		// external provider ids (`~openai/gpt-...`, `deepseek/deepseek-chat`) are
+		// not HF repos; their org is already the provider slug
+		const backend = getBackend(option.backendId);
+
+		if (backend && !getBackendCapabilities(backend).props) return;
+
 		let cancelled = false;
 
 		void HuggingFaceService.getBaseModel(option.model)
@@ -95,7 +111,19 @@
 	});
 </script>
 
-{#if orgName}
+{#if useProviderIcon}
+	<span class={['inline-flex shrink-0', className]}>
+		<BackendIcon backend={getBackend(option.backendId)} class={size}>
+			{#snippet fallback()}
+				{#if isLocal}
+					<Logo class={size} style="--size: 100%" />
+				{:else}
+					<MODEL_ICON class={size} />
+				{/if}
+			{/snippet}
+		</BackendIcon>
+	</span>
+{:else if orgName}
 	<span bind:this={avatarEl} class={['inline-flex shrink-0', className]}>
 		<ModelsDiscoverAvatar
 			class="mt-0"
