@@ -57,6 +57,87 @@ def test_reasoning(template_name: str, reasoning: Literal['on', 'off', 'auto'] |
     assert prompt.endswith(expected_end), f"Expected prompt to end with '{expected_end}', got '{prompt}'"
 
 
+# Gate A: --no-jinja --reasoning off must match Jinja disable suffixes (legacy post-process).
+# tools require --jinja; keep tools=None here.
+@pytest.mark.parametrize("template_name,expected_end", [
+    ("deepseek-ai-DeepSeek-R1-Distill-Qwen-32B", "<think>\n</think>"),
+    ("Qwen-Qwen3-0.6B", "<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+    ("Qwen-QwQ-32B", "<|im_start|>assistant\n<think>\n</think>"),
+    ("CohereForAI-c4ai-command-r7b-12-2024-tool_use",
+     "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_THINKING|><|END_THINKING|>"),
+])
+def test_reasoning_no_jinja_off(template_name: str, expected_end: str):
+    global server
+    server.jinja = False
+    server.reasoning = "off"
+    server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+    server.start()
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [
+            {"role": "user", "content": "What is today?"},
+        ],
+    })
+    assert res.status_code == 200
+    prompt = res.body["prompt"]
+    assert prompt.endswith(expected_end), f"Expected prompt to end with '{expected_end}', got '{prompt}'"
+
+
+# Gate B: chat_template_kwargs / reasoning_effort disable on legacy path
+@pytest.mark.parametrize("body_extra", [
+    {"chat_template_kwargs": {"enable_thinking": False}},
+    {"reasoning_effort": "none"},
+])
+def test_reasoning_no_jinja_kwargs_off(body_extra: dict):
+    global server
+    server.jinja = False
+    server.reasoning = "on"  # default on; request must override to off
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    data = {
+        "messages": [{"role": "user", "content": "What is today?"}],
+        **body_extra,
+    }
+    res = server.make_request("POST", "/apply-template", data=data)
+    assert res.status_code == 200
+    expected_end = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    assert res.body["prompt"].endswith(expected_end), f"got '{res.body['prompt']}'"
+
+
+# Gate: explicit thinking on must not append Qwen3 empty-close pair under --no-jinja
+def test_reasoning_no_jinja_on_no_false_disable():
+    global server
+    server.jinja = False
+    server.reasoning = "on"
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [{"role": "user", "content": "What is today?"}],
+    })
+    assert res.status_code == 200
+    prompt = res.body["prompt"]
+    assert prompt.endswith("<|im_start|>assistant\n"), f"got '{prompt}'"
+    assert "<think>\n\n</think>\n\n" not in prompt
+
+
+# Gate D: non-thinking ChatML-like / Llama template must not gain <think> under --no-jinja --reasoning off
+def test_reasoning_no_jinja_non_think_template():
+    global server
+    server.jinja = False
+    server.reasoning = "off"
+    server.chat_template_file = '../../../models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja'
+    server.start()
+
+    res = server.make_request("POST", "/apply-template", data={
+        "messages": [{"role": "user", "content": "What is today?"}],
+    })
+    assert res.status_code == 200
+    prompt = res.body["prompt"]
+    assert "<think>" not in prompt, f"unexpected think markers in non-think template: {prompt}"
+
+
 @pytest.mark.parametrize("tools", [None, [], [TEST_TOOL]])
 @pytest.mark.parametrize("template_name,format", [
     ("meta-llama-Llama-3.3-70B-Instruct",    "%d %b %Y"),
