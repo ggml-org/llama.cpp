@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { resolveModelSize } from '../utils';
-	import { Eject, HardDrive, Power, ScrollText, Server, SquarePen, X } from '@lucide/svelte';
-	import { ModelAvatar, ModelContext, ModelId } from '$lib/components/app';
+	import { Eject, Power, SquarePen, X } from '@lucide/svelte';
+	import { Logo, ModelAvatar, ModelId } from '$lib/components/app';
+	import { BackendIcon } from '$lib/components/app/backends';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { LOCAL_BACKEND_ID } from '$lib/constants';
 	import { ModelCapability, ServerModelStatus } from '$lib/enums';
 	import type { ModelOption } from '$lib/types/models';
 	import { getBackend } from '$lib/utils/api-base';
@@ -35,25 +36,6 @@
 			? 'llama.cpp server: reads /props and /slots'
 			: 'OpenAI-compatible: no /props, /slots, load or unload'
 	);
-
-	// the listing usually carries the size; a local repo falls back to its tree
-	let size = $state<string | null>(null);
-
-	$effect(() => {
-		let cancelled = false;
-
-		size = null;
-
-		void resolveModelSize(option)
-			.then((label) => {
-				if (!cancelled) size = label;
-			})
-			.catch(() => {});
-
-		return () => {
-			cancelled = true;
-		};
-	});
 
 	let statusLabel = $derived.by(() => {
 		if (status === ServerModelStatus.LOADING) return 'Loading';
@@ -103,10 +85,33 @@
 					{/if}
 				</div>
 
-				<p class="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
-					<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
+				<!-- one line: what state it is in, what it speaks, and who serves it -->
+				<p class="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+					<span class="flex items-center gap-1.5">
+						<span class="h-2 w-2 shrink-0 rounded-full {statusDot}"></span>
 
-					{statusLabel}
+						{statusLabel}
+					</span>
+
+					<Badge class="h-5 shrink-0 px-1.5 text-[10px]" title={compatTitle} variant="secondary">
+						{compatLabel}
+					</Badge>
+
+					{#if backend && backendName}
+						<span class="flex items-center gap-1.5" title="Served by {backendName}">
+							{#if backend.id === LOCAL_BACKEND_ID}
+								<BackendIcon {backend} class="h-3.5 w-3.5">
+									{#snippet fallback()}
+										<Logo class="shrink-0" style="--size: 0.875rem" />
+									{/snippet}
+								</BackendIcon>
+							{:else}
+								<BackendIcon {backend} class="h-3.5 w-3.5" />
+							{/if}
+
+							{backendName}
+						</span>
+					{/if}
 				</p>
 			</div>
 		</div>
@@ -120,34 +125,6 @@
 		>
 			<X class="h-4 w-4" />
 		</Button>
-	</div>
-
-	<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-		<span class="flex items-center gap-1.5" title="Context window">
-			<ScrollText class="h-3.5 w-3.5 shrink-0" />
-
-			<ModelContext {option} />
-		</span>
-
-		{#if size}
-			<span class="flex items-center gap-1.5" title="Size on disk">
-				<HardDrive class="h-3.5 w-3.5 shrink-0" />
-
-				{size}
-			</span>
-		{/if}
-
-		{#if backendName}
-			<span class="flex items-center gap-1.5" title="Served by">
-				<Server class="h-3.5 w-3.5 shrink-0" />
-
-				{backendName}
-			</span>
-		{/if}
-
-		<Badge class="h-5 shrink-0 px-1.5 text-[10px]" title={compatTitle} variant="secondary">
-			{compatLabel}
-		</Badge>
 	</div>
 
 	<div class="flex gap-2">
