@@ -4040,6 +4040,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--cpu-mtp"},
+        "run the model's native MTP block on the CPU (its tensors go to host RAM); the shared "
+        "trunk embedding/LM head stay on the device",
+        [](common_params & params) {
+            params.cpu_mtp = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SPECULATIVE}));
+    add_opt(common_arg(
+        {"--cpu-mtp-context"}, "N",
+        "bound the MTP draft head's attention to the last N positions (only with --cpu-mtp, "
+        "default 2048; 0 = full context, slower)",
+        [](common_params & params, int value) {
+            params.cpu_mtp_context = (int32_t) std::max(0, value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_SPECULATIVE}));
+    add_opt(common_arg(
         {"--spec-draft-cpu-mask-batch", "-Cbd", "--cpu-mask-batch-draft"}, "M",
         "Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)",
         [](common_params & params, const std::string & mask) {

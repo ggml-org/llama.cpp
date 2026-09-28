@@ -353,6 +353,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool mtp_host;        // place the native MTP block in host memory (CPU compute)
     };
 
     struct llama_sampler_seq_config {

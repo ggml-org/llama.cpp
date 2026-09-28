@@ -328,6 +328,10 @@ struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
+    int32_t mtp_window = 0; // --cpu-mtp-context: draft attention window (0 = off)
+
+    bool mtp_host = false;  // --cpu-mtp: the native MTP block was placed in host RAM
+
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
@@ -503,6 +507,9 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;
+
+    bool     cpu_mtp = false;      // --cpu-mtp: run the native MTP block on the CPU
+    int32_t  cpu_mtp_context = -1; // --cpu-mtp-context: draft attention window (-1 = default 2048)
 
     struct common_params_model model;
 

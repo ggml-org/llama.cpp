@@ -1225,6 +1225,19 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    // --cpu-mtp: mirror the host-MTP switch into the speculative draft slot, which the MTP
+    // implementation uses to enable the ring-stash prefill catch-up.
+    {
+        const bool spec_mtp_tgt = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        if (spec_mtp_tgt && params.cpu_mtp) {
+            params.speculative.draft.mtp_host = true;
+            // --cpu-mtp-context: default 2048 when unspecified
+            params.speculative.draft.mtp_window = params.cpu_mtp_context >= 0 ? params.cpu_mtp_context : 2048;
+            COM_INF("%s: native MTP block -> host memory (CPU compute), shared trunk heads stay on device\n", __func__);
+        }
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1654,6 +1667,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
     mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    mparams.mtp_host                    = params.cpu_mtp;
 
     return mparams;
 }
