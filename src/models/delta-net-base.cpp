@@ -594,13 +594,44 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         ggml_row_size(gdn_out->type, state_size_per_snap),
         ggml_row_size(gdn_out->type, attn_score_elems));
 
-    ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
-        D, n_seqs, n_written,
-        ssm_states_all->nb[1],
-        (size_t) mem_size * row_size,
-        (size_t) kv_head * row_size);
+    ggml_tensor * s_live = mctx_cur->get_s_live(il);
+    if (s_live == nullptr) {
+        ggml_tensor * dst = ggml_view_3d(ctx0, ssm_states_all,
+            D, n_seqs, n_written,
+            ssm_states_all->nb[1],
+            (size_t) mem_size * row_size,
+            (size_t) kv_head * row_size);
 
-    ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+    } else {
+        // RS split: slot 0 (the live state - read and written every step) goes to the
+        // device-resident live row; slots 1..n_written-1 (rollback snapshots, read only after a
+        // rejected draft) go to the host tensor, whose local row r holds global row r+1.
+        ggml_tensor * src_live = ggml_view_3d(ctx0, gdn_out,
+            D, n_seqs, 1,
+            ggml_row_size(gdn_out->type, D),
+            ggml_row_size(gdn_out->type, state_size_per_snap),
+            ggml_row_size(gdn_out->type, attn_score_elems));
+
+        ggml_tensor * dst_live = ggml_view_2d(ctx0, s_live, D, n_seqs, s_live->nb[1], (size_t) kv_head * row_size);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, src_live, dst_live));
+
+        if (n_written > 1) {
+            ggml_tensor * src_snap = ggml_view_3d(ctx0, gdn_out,
+                D, n_seqs, n_written - 1,
+                ggml_row_size(gdn_out->type, D),
+                ggml_row_size(gdn_out->type, state_size_per_snap),
+                ggml_row_size(gdn_out->type, attn_score_elems) + ggml_row_size(gdn_out->type, state_size_per_snap));
+
+            ggml_tensor * dst_snap = ggml_view_3d(ctx0, ssm_states_all,
+                D, n_seqs, n_written - 1,
+                ssm_states_all->nb[1],
+                (size_t) mem_size * row_size,
+                (size_t) kv_head * row_size);
+
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, src_snap, dst_snap));
+        }
+    }
 
     return output;
 }

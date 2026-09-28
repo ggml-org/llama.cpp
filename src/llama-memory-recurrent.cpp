@@ -5,6 +5,7 @@
 #include "llama-io.h"
 #include "llama-batch.h"
 #include "llama-model.h"
+#include "llama-arch.h"
 
 #include <algorithm>
 #include <cassert>
@@ -73,6 +74,12 @@ llama_memory_recurrent::llama_memory_recurrent(
     r_l.resize(n_layer);
     s_l.resize(n_layer);
     p_l.resize(n_layer);
+    s_live.resize(n_layer, nullptr);
+
+    // RS split (implied by --cpu-mtp): keep the live state row on the device (it is read and written every step) and
+    // only the n_rs_seq rollback snapshots in the host buffer (written every step, read only after
+    // a rejected draft). Requires the host placement below; R stays fully in host (it is ~4% of the
+    // state bytes).
 
     for (int i = 0; i < n_layer; i++) {
         if (filter && !filter(i)) {
@@ -83,12 +90,51 @@ llama_memory_recurrent::llama_memory_recurrent(
         const char * dev_name = "CPU";
 
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        ggml_backend_dev_t live_dev = nullptr;
+        bool placed_host = false;
 
         if (offload) {
             auto * dev = model.dev_layer(i);
             buft = ggml_backend_dev_buffer_type(dev);
+            live_dev = dev;
 
             dev_name = ggml_backend_dev_name(dev);
+
+            // rollback planes (n_rs_seq > 0 - i.e. MTP spec decoding on a hybrid SSM model) widen
+            // this cache to mem_size*(1 + n_rs_seq) rows, and build_recurrent_attn() writes one
+            // snapshot per verified token every step. The per-step bytes are the same wherever the
+            // state lives, so the fix is residency: keep it in the device's HOST buffer type
+            // (pinned, device-addressable RAM). Every op still runs on the accel backend - this
+            // buffer type is device-visible, so no graph split and no staging buffer, unlike
+            // -ot nextn=CPU - only the bytes move to host RAM.
+            //
+            // Gated on --cpu-mtp (model.mtp_host()): without it the whole RS cache stays on the
+            // device, exactly as before. How the host-resident cache is laid out is decided by the
+            // RS split (live row back on the device - see below); with the split off the whole
+            // cache stays in the host buffer.
+            if (model.mtp_host() && n_rs_seq > 0) {
+                // The device's private "device-operable host" buffer type (CUDA: <dev>_RSHost), for
+                // which the accel device claims support so the state-update nodes stay on the accel
+                // backend and read/write the pinned host buffer IN PLACE (no per-layer device<->host
+                // staging copies, no per-copy synchronizations).
+                ggml_backend_buffer_type_t host_buft = nullptr;
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                if (reg != nullptr) {
+                    auto get_rs_buft = (ggml_backend_buffer_type_t (*)(void))
+                            ggml_backend_reg_get_proc_address(reg, "ggml_backend_cuda_rs_host_buffer_type");
+                    if (get_rs_buft != nullptr) {
+                        host_buft = get_rs_buft();
+                    }
+                }
+                if (host_buft == nullptr) {
+                    host_buft = ggml_backend_dev_host_buffer_type(dev);
+                }
+                if (host_buft != nullptr) {
+                    buft        = host_buft;
+                    dev_name    = ggml_backend_buft_name(host_buft);
+                    placed_host = true;
+                }
+            }
         }
 
         LLAMA_LOG_DEBUG("%s, layer %3d: dev = %s\n", __func__, i, dev_name);
@@ -98,13 +144,43 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
-        ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
+        // a host-placed RS cache is always split - logical row 0 maps to the device live
+        // tensor and logical row r (1..n_rs_seq) to host snapshot local row r-1. That mapping is only
+        // valid with exactly one recurrent cell per sequence (mem_size == n_seq_max == 1, i.e. -np 1);
+        // with several cells the rollback planes are mem_size-major, so the split is refused and the
+        // whole cache stays in host RAM rather than corrupting state.
+        // The split needs one recurrent cell per sequence AND an arch whose graph reads the live S
+        // row from get_s_live(); otherwise the whole cache stays in host RAM.
+        const bool rs_split_ok = llm_arch_supports_rs_split(model.arch);
+        const bool lsplit = placed_host && n_rs_seq > 0 && mem_size == 1 && rs_split_ok;
+        if (placed_host && n_rs_seq > 0 && rs_split_ok && mem_size != 1) {
+            LLAMA_LOG_WARN("%s: RS split skipped: it needs one recurrent cell per sequence "
+                    "(mem_size=%u, n_seq_max=%u); the whole cache stays in host RAM\n",
+                    __func__, mem_size, n_seq_max);
+        }
+
+        // R keeps all rows (live row 0 + snapshots) - it is tiny and stays in host; S keeps only the
+        // snapshots here when split, the live row lives in a device tensor created below
+        const uint32_t n_rows_r = mem_size * (1 + n_rs_seq);
+        const uint32_t n_rows   = lsplit ? n_rs_seq : n_rows_r;
+
+        ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows_r);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
         ggml_format_name(s, "cache_s_l%d", i);
         r_l[i] = r;
         s_l[i] = s;
+
+        if (lsplit) {
+            ggml_backend_buffer_type_t live_buft = ggml_backend_dev_buffer_type(live_dev);
+            ggml_context * live_ctx = ctx_for_buft(live_buft);
+            if (!live_ctx) {
+                throw std::runtime_error("failed to create ggml context for the live rs state");
+            }
+            s_live[i] = ggml_new_tensor_2d(live_ctx, type_s, hparams.n_embd_s(), mem_size);
+            ggml_format_name(s_live[i], "cache_s_live_l%d", i);
+            this->split = true;
+        }
 
         // the PLE history needs its own row: Meta must mirror it while the delta-net conv state next door stays split
         if (hparams.ple_conv_state() > 0 && hparams.is_ple(i)) {
@@ -950,10 +1026,25 @@ void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::
 
             // Write each logical cell row range. With pending recurrent rollback,
             // the logical current state may live in a rollback snapshot plane.
-            for (const auto & range : cell_ranges) {
-                const size_t range_size = range.second - range.first;
-                const size_t buf_size = range_size * s_size_row;
-                io.write_tensor(s_l[il], range.first * s_size_row, buf_size);
+            if (split) {
+                // RS split: the host S tensor holds only the n_rs_seq snapshots (local row r-1 ==
+                // logical row r); logical row 0 is the device-resident live state and must be read
+                // from its own tensor, otherwise a checkpoint/prompt-cache save silently records a
+                // rollback snapshot as the live state.
+                GGML_ASSERT(s_live[il] != nullptr);
+                for (const auto & range : cell_ranges) {
+                    for (uint32_t row = range.first; row < range.second; ++row) {
+                        ggml_tensor * src = (row == 0) ? s_live[il] : s_l[il];
+                        const size_t off = (row == 0) ? 0 : (size_t) (row - 1) * s_size_row;
+                        io.write_tensor(src, off, s_size_row);
+                    }
+                }
+            } else {
+                for (const auto & range : cell_ranges) {
+                    const size_t range_size = range.second - range.first;
+                    const size_t buf_size = range_size * s_size_row;
+                    io.write_tensor(s_l[il], range.first * s_size_row, buf_size);
+                }
             }
         }
     } else {
@@ -1172,8 +1263,20 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
             }
 
             if (cell_count) {
-                // Read and set the values for the whole cell range
-                io.read_tensor(s_l[il], head * s_size_row, cell_count * s_size_row);
+                if (split) {
+                    // RS split: mirror state_write_data - logical row 0 goes to the device live
+                    // tensor, logical row r > 0 to host snapshot local row r-1
+                    GGML_ASSERT(s_live[il] != nullptr);
+                    for (uint32_t i = 0; i < cell_count; ++i) {
+                        const uint32_t row = head + i;
+                        ggml_tensor * dst = (row == 0) ? s_live[il] : s_l[il];
+                        const size_t off = (row == 0) ? 0 : (size_t) (row - 1) * s_size_row;
+                        io.read_tensor(dst, off, s_size_row);
+                    }
+                } else {
+                    // Read and set the values for the whole cell range
+                    io.read_tensor(s_l[il], head * s_size_row, cell_count * s_size_row);
+                }
             }
         }
     } else {
@@ -1303,6 +1406,28 @@ ggml_tensor * llama_memory_recurrent_context::get_p_l(int32_t il) const {
     return mem->p_l[il];
 }
 
+// RS split: materialize the rollback snapshot back into row 0 (the state the graph reads).
+// R keeps all rows in host, so its restore is a host memcpy of one row; S's snapshots are host
+// resident while the live row is on the device, so that one is a small host->device copy.
+void llama_memory_recurrent::s_restore_live(uint32_t row) {
+    if (row == 0 || row > n_rs_seq) {
+        return;
+    }
+    for (size_t il = 0; il < s_live.size(); ++il) {
+        if (s_live[il] == nullptr) {
+            continue;
+        }
+        ggml_tensor * r = r_l[il];
+        if (r != nullptr && r->data != nullptr && (int64_t) row < r->ne[1]) {
+            memcpy(r->data, (const char *) r->data + (size_t) row * r->nb[1], r->nb[1]);
+        }
+        ggml_tensor * s = s_l[il];
+        if (s != nullptr && s->data != nullptr && (int64_t) (row - 1) < s->ne[1]) {
+            ggml_backend_tensor_set(s_live[il], (const char *) s->data + (size_t) (row - 1) * s->nb[1], 0, s_live[il]->nb[1]);
+        }
+    }
+}
+
 int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;
@@ -1320,5 +1445,15 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
             mem->rs_idx[seq] = 0;
         }
     }
+
+    if (mem->split) {
+        // the graph only ever reads the device-resident live row (row 0), so a pending rollback is
+        // applied here, once, by copying the selected snapshot into it
+        if (idx > 0) {
+            mem->s_restore_live(idx);
+        }
+        return src0;
+    }
+
     return (int32_t)(idx * mem->size) + src0;
 }

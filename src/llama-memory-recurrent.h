@@ -66,6 +66,22 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
+    // RS split (implied by --cpu-mtp): the SSM state cache is split by residency - the live state (row 0,
+    // the one every step reads and writes) stays on the device, while the n_rs_seq rollback
+    // snapshots (written every step, read only after a rejected draft) stay in the host buffer.
+    // This removes the live row's device<->host round trip per step; the rollback snapshots are
+    // restored into the live row on demand (see s_copy()).
+    bool split = false;
+    std::vector<ggml_tensor *> s_live;
+
+    ggml_tensor * get_s_live(int il) const {
+        return (il >= 0 && il < (int) s_live.size()) ? s_live[il] : nullptr;
+    }
+
+    // restore snapshot row `row` of the host S cache into the device-resident live row, and the same
+    // row of the R (conv) cache into its own row 0 (R keeps all rows in host - it is tiny)
+    void s_restore_live(uint32_t row);
+
     uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
     uint32_t size = 0; // total number of cells, shared across all sequences
     uint32_t used = 0; // used cells (i.e. at least one seq_id)
@@ -174,6 +190,10 @@ public:
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
     ggml_tensor * get_p_l(int32_t il) const;
+    // RS split: the device-resident live state row (nullptr when the split is off)
+    ggml_tensor * get_s_live(int32_t il) const {
+        return mem->get_s_live(il);
+    }
 
     int32_t s_copy(int i) const;
 
