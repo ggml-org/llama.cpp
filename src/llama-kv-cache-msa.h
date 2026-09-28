@@ -134,8 +134,8 @@ public:
     // the model graph relates cache contents to token positions only through these per ubatch inputs
     // value for empty or other-sequence cells is 0 so consumers must mask them
     void set_input_cell_pos(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t div) const;
-    // positions without a cell map to cell 0, consumers must mask them assumes one sequence per stream
-    void set_input_pos_slot(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    // positions without a cell map to `missing`, consumers must mask them assumes one sequence per stream
+    void set_input_pos_slot(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t missing = 0) const;
     void set_input_pos_mask(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:

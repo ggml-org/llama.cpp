@@ -301,7 +301,7 @@ void llama_kv_cache_msa_context::set_input_cell_pos(ggml_tensor * dst, const lla
     }
 }
 
-void llama_kv_cache_msa_context::set_input_pos_slot(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+void llama_kv_cache_msa_context::set_input_pos_slot(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t missing) const {
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     GGML_ASSERT(dst->type == GGML_TYPE_I32 || dst->type == GGML_TYPE_F32);
 
@@ -317,7 +317,7 @@ void llama_kv_cache_msa_context::set_input_pos_slot(ggml_tensor * dst, const lla
 
         const auto & cells = kv->get_base()->get_cells(seq_id);
 
-        std::vector<int32_t> map(n_pos, 0);
+        std::vector<int32_t> map(n_pos, missing);
 
         for (uint32_t j = 0; j < cells.size(); ++j) {
             if (cells.is_empty(j) || !cells.seq_has(j, seq_id)) {
