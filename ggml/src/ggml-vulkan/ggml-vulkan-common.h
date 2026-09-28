@@ -267,7 +267,7 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[descriptor_set_idx];
 
     // a new buffer can get the handle of a destroyed one, so drop all cached bindings after any destroy
-    const uint64_t destroy_count = ctx->device->buffer_destroy_count;
+    const uint64_t destroy_count = ctx->device->buffer_destroy_count.load(std::memory_order_acquire);
     if (ctx->descriptor_set_bindings_destroy_count != destroy_count) {
         for (auto & b : ctx->descriptor_set_bindings) {
             b.clear();

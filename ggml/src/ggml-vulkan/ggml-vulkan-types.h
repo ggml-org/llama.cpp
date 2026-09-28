@@ -1058,9 +1058,10 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
+        // bump before destroying, so a thread that sees the buffer gone also sees the new count
+        device->buffer_destroy_count.fetch_add(1, std::memory_order_release);
         device->device.freeMemory(device_memory);
         device->device.destroyBuffer(buffer);
-        device->buffer_destroy_count++;
     }
 };
 
