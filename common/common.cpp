@@ -969,6 +969,17 @@ void common_set_env(const std::string & name, const std::string & value) {
 #endif
 }
 
+std::filesystem::path common_get_path_from_env(const std::string & name) {
+#if defined(_WIN32)
+    const std::wstring wname = utf8_to_wstring(name);
+    const wchar_t * wvalue = _wgetenv(wname.c_str());
+    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
+#else
+    const char * value = std::getenv(name.c_str());
+    return value ? std::filesystem::path(value) : std::filesystem::path();
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
