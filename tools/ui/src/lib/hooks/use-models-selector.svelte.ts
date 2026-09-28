@@ -1,14 +1,35 @@
-import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
-import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { modelsStore, serverStore } from '$lib/stores';
+import type { ModelItem } from '$lib/components/app/navigation/utils';
+import {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions,
+	groupProviderOptions
+} from '$lib/components/app/navigation/utils';
+import {
+	CHAT_INPUT_FOCUS_SELECTOR,
+	LOCAL_BACKEND_ID,
+	REMOTE_PROVIDER_MODEL_LIMIT
+} from '$lib/constants';
+import { backendsModelsStore, backendsStore, modelsStore, serverStore, uiStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
+import { getBackend } from '$lib/utils/api-base';
+import { getBackendCapabilities } from '$lib/utils/backend';
+import { rawModelId } from '$lib/utils/model-option-id';
 import { onMount } from 'svelte';
+import { SvelteSet } from 'svelte/reactivity';
+
+/** Groups of the favorites tab, which lists favorites only. */
+const EMPTY_GROUPS = { available: [], loaded: [], providers: [] };
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
 	useGlobalSelection?: () => boolean;
 	onModelChange?: () =>
-		| ((modelId: string, modelName: string) => Promise<boolean> | boolean | void)
+		| ((
+				modelId: string,
+				modelName: string,
+				backendId?: string
+		  ) => Promise<boolean> | boolean | void)
 		| undefined;
 	onOpenChange?: (open: boolean) => void;
 }
@@ -18,19 +39,24 @@ export interface UseModelsSelectorReturn {
 	readonly loading: boolean;
 	readonly updating: boolean;
 	readonly activeId: string | null;
+	readonly emptyMessage: string;
+	readonly isMultiModel: boolean;
 	readonly isRouter: boolean;
 	readonly serverModel: string | null;
 	readonly isHighlightedCurrentModelActive: boolean;
 	readonly isCurrentModelInCache: boolean;
+	readonly favoriteItems: ModelItem[];
+	readonly loadedItems: ModelItem[];
 	readonly filteredOptions: ModelOption[];
+	readonly isEmpty: boolean;
+	readonly isProviderView: boolean;
 	readonly groupedFilteredOptions: ReturnType<typeof groupModelOptions>;
 	readonly isLoadingModel: boolean;
 	readonly searchTerm: string;
-	readonly showModelDialog: boolean;
-	readonly infoModelId: string | null;
+	closeProvider(): void;
+	openProvider(backendId: string): void;
 	setSearchTerm(value: string): void;
-	setShowModelDialog(value: boolean): void;
-	handleInfoClick(modelName: string): void;
+	showBackendModels(backendId: string): Promise<void>;
 	handleSelect(modelId: string): Promise<void>;
 	handleOpenChange(open: boolean): void;
 	isFavorite(model: string): boolean;
@@ -45,16 +71,36 @@ export interface UseModelsSelectorReturn {
  * duplicating store derivations, selection handling, and model loading.
  */
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
-	const options = $derived(
+	/**
+	 * Current view: the favorites of every backend, the local server's models, or
+	 * the remote backends'. Favorites are the default while there is at least one.
+	 */
+	/** Remote backend drilled into from its section; null while browsing. */
+	let providerViewId = $state<string | null>(null);
+
+	const isProviderView = $derived(providerViewId !== null);
+	const isLocalOption = (option: ModelOption) => option.backendId === LOCAL_BACKEND_ID;
+	// every enabled backend's models are one list: favorites, then the local
+	// server, then one section per remote provider
+	const allOptions = $derived(
 		modelsStore.models.filter((option) => {
 			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
 	);
+	const options = $derived(
+		providerViewId ? allOptions.filter((option) => option.backendId === providerViewId) : allOptions
+	);
 	const loading = $derived(modelsStore.loading);
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
+	// Router mode and external backends both expose a selectable model list; only
+	// a lone llama.cpp server without a router has nothing to choose from.
+	const isMultiModel = $derived(
+		serverStore.isRouterMode ||
+			backendsStore.enabled.some((backend) => backend.id !== LOCAL_BACKEND_ID)
+	);
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
@@ -62,32 +108,95 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const isHighlightedCurrentModelActive = $derived.by(() => {
 		if (!isRouter || !currentModel) return false;
 
-		const currentOption = options.find((option) => option.model === currentModel);
+		const currentOption = allOptions.find((option) => option.model === currentModel);
 
 		return currentOption ? currentOption.id === activeId : false;
 	});
 	const isCurrentModelInCache = $derived.by(() => {
 		if (!isRouter || !currentModel) return true;
 
-		return options.some((option) => option.model === currentModel);
+		return allOptions.some((option) => option.model === currentModel);
 	});
 
 	let isLoadingModel = $state(false);
 	let searchTerm = $state('');
-	let showModelDialog = $state(false);
-	let infoModelId = $state<string | null>(null);
 
+	const visibleOptions = $derived(allOptions.filter((option) => !modelsStore.isHidden(option.id)));
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
-	const groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
-			modelsStore.isModelLoaded(m)
+	// favorites span every backend, so they come from the full option list
+	const favoriteItems = $derived(
+		groupFavoriteOptions(
+			filterModelOptions(visibleOptions, searchTerm),
+			modelsStore.favoriteModelIds
 		)
 	);
+	const remoteProviders = $derived(
+		backendsStore.enabled
+			.filter((backend) => backend.id !== LOCAL_BACKEND_ID)
+			.map((backend) => {
+				const state = backendsModelsStore.get(backend.id);
 
-	function handleInfoClick(modelName: string) {
-		infoModelId = modelName;
-		showModelDialog = true;
-	}
+				return {
+					backendId: backend.id,
+					catalog: state.models.length,
+					error: state.error,
+					loading: state.loading,
+					name: backend.name
+				};
+			})
+	);
+	// loaded models lead the list, from any llama-compat backend
+	const isLoadedLlamaCompat = (option: ModelOption) =>
+		modelsStore.isModelLoaded(option.model) &&
+		getBackendCapabilities(getBackend(option.backendId)).loadUnload;
+	const loadedItems = $derived.by(() => {
+		if (isProviderView) return [];
+
+		return filterModelOptions(visibleOptions, searchTerm)
+			.map((option, flatIndex) => ({ flatIndex, option }))
+			.filter(({ option }) => isLoadedLlamaCompat(option));
+	});
+	const loadedIds = $derived(new SvelteSet(loadedItems.map((item) => item.option.id)));
+	// loaded models and favorites are listed once, at the top: the sections skip both
+	const sectionOptions = $derived(
+		filteredOptions.filter(
+			(option) => !modelsStore.favoriteModelIds.has(option.model) && !loadedIds.has(option.id)
+		)
+	);
+	const providerSections = $derived(
+		groupProviderOptions(
+			sectionOptions,
+			remoteProviders,
+			// a drill-in or a search reaches every model, the sections stay short
+			providerViewId || searchTerm ? Infinity : REMOTE_PROVIDER_MODEL_LIMIT,
+			modelsStore.recentModelIds
+		)
+	);
+	const groupedFilteredOptions = $derived.by(() => {
+		if (isProviderView) {
+			const sections = providerSections.filter((section) => section.backendId === providerViewId);
+
+			return { ...EMPTY_GROUPS, providers: sections };
+		}
+
+		const local = groupModelOptions(sectionOptions.filter(isLocalOption), (m) =>
+			modelsStore.isModelLoaded(m)
+		);
+
+		return { ...local, providers: providerSections };
+	});
+	const isEmpty = $derived(
+		filteredOptions.length === 0 && favoriteItems.length === 0 && loadedItems.length === 0
+	);
+	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
+
+	// a row action can hand over to the models manager, which takes the focus;
+	// the selector closes so it does not sit open behind the dialog
+	$effect(() => {
+		if (!uiStore.manageModelsOpen) return;
+
+		opts.onOpenChange?.(false);
+	});
 
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
@@ -98,36 +207,61 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
 
-		if (isRouter) {
-			searchTerm = '';
+		// a single-model llama.cpp server with no other backend has no list to show,
+		// so the trigger opens the manager, which holds the one model's configuration
+		if (!isMultiModel) {
+			if (open) uiStore.openModelsManager();
 
-			if (open) {
-				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.props.fetchModalitiesForLoadedModels();
-				});
-			}
-
-			opts.onOpenChange?.(open);
-		} else {
-			showModelDialog = open;
+			return;
 		}
+
+		searchTerm = '';
+		providerViewId = null;
+
+		if (open && isRouter) {
+			modelsStore.props.fetchModalitiesForLoadedModels();
+		}
+
+		opts.onOpenChange?.(open);
+	}
+
+	/**
+	 * Switch the rendered view. Views are display only: the backend that serves
+	 * requests follows the selected model, not the view.
+	 */
+	/** Drill into one remote backend's full model list. */
+	function openProvider(backendId: string) {
+		providerViewId = backendId;
+		searchTerm = '';
+	}
+
+	function closeProvider() {
+		providerViewId = null;
+		searchTerm = '';
+	}
+
+	/** Refresh a backend's models, e.g. right after it was added. */
+	async function showBackendModels(backendId: string): Promise<void> {
+		await backendsModelsStore.ensureLoaded(backendId);
 	}
 
 	async function handleSelect(modelId: string) {
-		const option = options.find((opt) => opt.id === modelId);
+		// favorites live above the tabs and may belong to another backend, so the
+		// lookup spans every enabled backend
+		const option = allOptions.find((opt) => opt.id === modelId);
 
 		if (!option) return;
 
 		let shouldCloseMenu = true;
 
 		if (onModelChange) {
-			const result = await onModelChange(option.id, option.model);
+			const result = await onModelChange(rawModelId(option.id), option.model, option.backendId);
 
 			if (result === false) {
 				shouldCloseMenu = false;
 			}
 		} else {
-			await modelsStore.selectModelById(option.id);
+			await modelsStore.selectModelById(option.id, { recordRecent: true });
 		}
 
 		if (shouldCloseMenu) {
@@ -140,7 +274,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			});
 		}
 
-		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
+		// only the built-in server loads on request, and only in router mode
+		const canLoadHere = option.backendId === LOCAL_BACKEND_ID && isRouter;
+
+		if (!onModelChange && canLoadHere && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 
 			modelsStore.status
@@ -152,6 +289,18 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	function getDisplayOption(): ModelOption | undefined {
 		if (!isRouter) {
+			// External backend: the selection is backend-scoped, so it wins over
+			// the conversation's model, which may belong to another backend.
+			if (!serverStore.capabilities.props) {
+				const selected = activeId ? allOptions.find((option) => option.id === activeId) : undefined;
+
+				if (selected) return selected;
+
+				return currentModel
+					? allOptions.find((option) => option.model === currentModel)
+					: undefined;
+			}
+
 			const displayModel = serverModel || currentModel;
 
 			if (displayModel) {
@@ -176,11 +325,11 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 				};
 			}
 
-			return options.find((option) => option.model === currentModel);
+			return allOptions.find((option) => option.model === currentModel);
 		}
 
 		if (activeId) {
-			return options.find((option) => option.id === activeId);
+			return allOptions.find((option) => option.id === activeId);
 		}
 
 		return undefined;
@@ -191,6 +340,15 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return activeId;
 		},
 
+		closeProvider,
+
+		get emptyMessage() {
+			return emptyMessage;
+		},
+
+		get favoriteItems() {
+			return favoriteItems;
+		},
 		get filteredOptions() {
 			return filteredOptions;
 		},
@@ -201,18 +359,16 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return groupedFilteredOptions;
 		},
 
-		handleInfoClick,
-
 		handleOpenChange,
 
 		handleSelect,
 
-		get infoModelId() {
-			return infoModelId;
-		},
-
 		get isCurrentModelInCache() {
 			return isCurrentModelInCache;
+		},
+
+		get isEmpty() {
+			return isEmpty;
 		},
 
 		isFavorite(model: string) {
@@ -227,13 +383,27 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			return isLoadingModel;
 		},
 
+		get isMultiModel() {
+			return isMultiModel;
+		},
+
+		get isProviderView() {
+			return isProviderView;
+		},
+
 		get isRouter() {
 			return isRouter;
+		},
+
+		get loadedItems() {
+			return loadedItems;
 		},
 
 		get loading() {
 			return loading;
 		},
+
+		openProvider,
 
 		get options() {
 			return options;
@@ -251,13 +421,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			searchTerm = value;
 		},
 
-		setShowModelDialog(value: boolean) {
-			showModelDialog = value;
-		},
-
-		get showModelDialog() {
-			return showModelDialog;
-		},
+		showBackendModels,
 
 		get updating() {
 			return updating;

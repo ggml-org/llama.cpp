@@ -39,6 +39,7 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	MIN_P: 'min_p',
+	// Display
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	// Performance
@@ -56,7 +57,8 @@ export const SETTINGS_KEYS = {
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
-	SHOW_MODEL_ORG_NAME_IN_TRIGGER: 'showModelOrgNameInTrigger',
+	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
+	SHOW_MODEL_ORG_NAME: 'showModelOrgName',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
