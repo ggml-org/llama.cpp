@@ -10,6 +10,7 @@
 #include <set>
 #include <stdexcept>
 
+#define MAX_ALTERNATE_THRESHOLD 2000
 #define MAX_REPETITION_THRESHOLD 2000
 //
 // helpers
@@ -444,6 +445,9 @@ const char * llama_grammar_parser::parse_alternates(
     llama_grammar_rule rule;
     const char * pos = parse_sequence(src, rule_name, rule, is_nested);
     while (*pos == '|') {
+        if (++n_alternates > MAX_ALTERNATE_THRESHOLD) {
+            throw std::runtime_error("number of grammar alternatives exceeds sane defaults, please reduce the number of alternatives");
+        }
         rule.push_back({LLAMA_GRETYPE_ALT, 0});
         pos = parse_space(pos + 1, true);
         pos = parse_sequence(pos, rule_name, rule, is_nested);
@@ -1527,4 +1531,3 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
         throw std::runtime_error("Unexpected empty grammar stack after accepting piece: " + piece + " (" + std::to_string(token) + ")");
     }
 }
-
