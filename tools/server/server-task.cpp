@@ -343,6 +343,7 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
         {"content",             content},
         {"tokens",              tokens},
         {"id_slot",             id_slot},
+        {"session_id",          session_id},
         {"stop",                true},
         {"model",               oaicompat_model},
         {"tokens_predicted",    n_decoded},

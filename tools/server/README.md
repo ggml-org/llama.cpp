@@ -223,6 +223,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
+| `--slot-save-sessions HEADERS` | enable session-keyed save/restore; comma-separated HTTP headers in priority order from which the session id can be read, the body field session_id is always accepted and takes priority, an empty value means body field only (default: disabled) |
+| `--slot-save-sessions-max N` | maximum number of session save files to keep (default: 128) |
 | `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
@@ -583,6 +585,8 @@ These words will not be included in the completion, so make sure to add them to 
 `t_max_predict_ms`: Set a time limit in milliseconds for the prediction (a.k.a. text-generation) phase. The timeout will trigger if the generation takes more than the specified time (measured since the first token was generated) and if a new-line character has already been generated. Useful for FIM applications. Default: `0`, which is disabled.
 
 `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
+
+`session_id`: Optional session identifier for the conversation. Only read when the server is started with `--slot-save-sessions`; without that flag the field and the session headers are ignored. When set, the server keeps track of the slot that holds the session's KV state. If that slot is taken by another request, the session's state is automatically saved to `--slot-save-path` (as `llama-session-<id>.bin`), and the next request with the same session id restores it from disk. The id can also be provided via the headers named by `--slot-save-sessions` (case-insensitive, checked in the listed priority order); if both the body field and a header are present they must be equal. The id must be a valid file name, otherwise the request is rejected. Requires `--slot-save-path` for the disk save/restore to happen; without it the session id only pins the slot in memory. Saved files persist across restarts; at startup the server indexes them and deletes the oldest ones beyond the `--slot-save-sessions-max` cap. On shutdown (and on sleep or model reload) the sessions still held in slot memory are flushed to disk, so a conversation resumes from its latest state, not from its last eviction. Default: not set
 
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
@@ -974,6 +978,8 @@ Same as the `/v1/embeddings` endpoint.
 ### GET `/slots`: Returns the current slots processing state
 
 This endpoint is enabled by default and can be disabled with `--no-slots`. It can be used to query various per-slot metrics, such as speed, processed tokens, sampling parameters, etc.
+
+The `session_id` field of each slot reports the session (see `session_id` in the `/completion` options) whose KV state the slot currently holds, empty if none.
 
 If query param `?fail_on_no_slot=1` is set, this endpoint will respond with status code 503 if there is no available slots.
 

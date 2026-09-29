@@ -3625,6 +3625,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--slot-save-sessions"}, "HEADERS",
+        "enable session-keyed save/restore; comma-separated HTTP headers in priority order from which the session id can be read, "
+        "the body field session_id is always accepted and takes priority, an empty value means body field only (default: disabled)",
+        [](common_params & params, const std::string & value) {
+            params.session_id_enabled = true;
+            for (const auto & h : string_split(value, ",")) {
+                if (!h.empty()) {
+                    params.session_id_headers.push_back(h);
+                }
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--slot-save-sessions-max"}, "N",
+        string_format("maximum number of session save files to keep (default: %d)", params.session_max_sessions),
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("must be a positive integer: " + std::to_string(value));
+            }
+            params.session_max_sessions = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--media-path"}, "PATH",
         "directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)",
         [](common_params & params, const std::string & value) {
