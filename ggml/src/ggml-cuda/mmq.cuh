@@ -1464,7 +1464,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
     const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm*tiles_nwaves);
     // BF16 dst: one CUDA block per tile, so no partial sums are rounded to BF16 before the fixup
-    const bool use_tiling = args.dst_bf16 || (GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90);
+    static const bool force_tiling = getenv("GGML_CUDA_MMQ_FORCE_TILING") != nullptr && atoi(getenv("GGML_CUDA_MMQ_FORCE_TILING"));
+    const bool use_tiling = args.dst_bf16 || force_tiling || (GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90);
     const dim3 block_nums_stream_k(use_tiling ? ntiles_dst : nsm, 1, 1);
 
     GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30)); // Assert that variable kbc will not overflow.
