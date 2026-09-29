@@ -73,9 +73,6 @@ import type {
 } from '$lib/types/huggingface';
 import { sidecarFromFileToken } from '$lib/utils';
 
-/**
- * HuggingFaceService - Service for browsing and searching GGUF models on Hugging Face Hub
- */
 export class HuggingFaceService {
 	private static readonly BASE_URL = HF_API_MODELS_URL;
 
@@ -130,8 +127,8 @@ export class HuggingFaceService {
 	/**
 	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
 	 * shard, summing every shard's size so the kept entry reflects the whole
-	 * quant. Non-sharded files pass through unchanged. Downloads are tag-based
-	 * (`repo:quant`), so the first shard is enough to represent the set.
+	 * quant. Downloads are tag-based (`repo:quant`), so the first shard is
+	 * enough to represent the set.
 	 */
 	static collapseGgufShards(siblings: HfModelSibling[]): HfModelSibling[] {
 		const sizeByPath = new Map(siblings.map((f) => [f.path, f.size ?? 0]));
@@ -146,7 +143,6 @@ export class HuggingFaceService {
 				continue;
 			}
 
-			// Keep only the first shard; its size becomes the whole shard set's.
 			if (Number(match[1]) !== HF_FIRST_SHARD) continue;
 
 			const total = Number(match[2]);
@@ -170,18 +166,11 @@ export class HuggingFaceService {
 
 	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
-	 * (`mtp`, `dflash`, `mmproj`, ...) from a `.gguf` filename. The sidecar token
-	 * shows up either as a sidecar prefix (`mtp-<name>.gguf`, `dflash-<name>.gguf`,
-	 * `mmproj-<name>.gguf`), as a `-mtp` suffix, or as the whole filename
-	 * (`imatrix.gguf`); a `-draft` tail marks a standalone sidecar file
-	 * (`Model-MTP-draft.gguf`).
+	 * (`mtp`, `dflash`, `mmproj`, ...) from a `.gguf` filename.
 	 *
-	 * `sidecarForm` records which side of the filename the sidecar token sat
-	 * on so callers can render badges differently (e.g. prefix on the left of
-	 * the quant label, suffix appended to it).
-	 * `quant` is `null` for files that don't carry a bit-depth token
-	 * (e.g. `*-BF16.gguf`); `sidecar` is `null` if no sidecar flag is present.
-	 * Returns `null` only when the filename doesn't end in `.gguf`.
+	 * `sidecarForm` records which side of the filename the sidecar token sat on
+	 * so callers can render badges differently. `quant` and `sidecar` are `null`
+	 * when absent; returns `null` for non-GGUF filenames.
 	 */
 	static extractQuantMeta(filename: string): {
 		quant: string | null;
@@ -260,18 +249,12 @@ export class HuggingFaceService {
 		return { quant, shared, sidecar, sidecarForm };
 	}
 
-	/**
-	 * Filter raw siblings by file extension and sort by size descending.
-	 */
 	static filterByExtension(siblings: HfModelSibling[], ext: string): HfModelSibling[] {
 		return siblings
 			.filter((f) => f.path.toLowerCase().endsWith(ext.toLowerCase()) && (f.size ?? 0) > 0)
 			.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
 	}
 
-	/**
-	 * Format model downloads count with K/M/B suffix
-	 */
 	static formatDownloads(downloads: number): string {
 		if (downloads >= GIGABYTE) {
 			return `${(downloads / GIGABYTE).toFixed(1)}${GIGA_LABEL}`;
@@ -288,9 +271,6 @@ export class HuggingFaceService {
 		return downloads.toString();
 	}
 
-	/**
-	 * Format file size in bytes to human-readable string
-	 */
 	static formatFileSize(bytes: number): string {
 		if (bytes >= GIGABYTE) {
 			return `${(bytes / GIGABYTE).toFixed(1)} ${GIGABYTE_LABEL}`;
@@ -307,9 +287,6 @@ export class HuggingFaceService {
 		return `${bytes} ${BYTE_LABEL}`;
 	}
 
-	/**
-	 * Format likes count with K suffix if applicable
-	 */
 	static formatLikes(likes: number): string {
 		if (likes >= KILOBYTE) {
 			return `${(likes / KILOBYTE).toFixed(1)}${KILO_LABEL}`;
@@ -318,9 +295,6 @@ export class HuggingFaceService {
 		return likes.toString();
 	}
 
-	/**
-	 * Format timestamp to relative time
-	 */
 	static formatRelativeTime(timestamp: string): string {
 		const date = new Date(timestamp);
 		const now = new Date();
@@ -346,8 +320,7 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * Format a min-max size range with a single shared unit and no spaces
-	 * around the dash, e.g. `19.0-28.6 GB`.
+	 * Format a min-max size range with one shared unit, e.g. `19.0-28.6 GB`.
 	 */
 	static formatSizeRange(min: number, max: number): string {
 		const unit =
@@ -438,7 +411,6 @@ export class HuggingFaceService {
 	 * Returns `null` for unrecognized tokens.
 	 */
 	static getBitDepth(quant: string): number | null {
-		// Strip a leading `UD-` (Unsloth Dynamic) prefix before lookup.
 		const base = quant.replace(HF_UD_QUANT_PREFIX_REGEX, '');
 		const direct = HuggingFaceService.QUANT_BIT_DEPTH[base];
 
@@ -451,9 +423,6 @@ export class HuggingFaceService {
 		return match ? parseInt(match[1], 10) : null;
 	}
 
-	/**
-	 * Get GGUF models by pipeline task
-	 */
 	static async getByTask(
 		pipelineTag: string,
 		params: Omit<HfModelSearchParams, 'pipeline_tag'> = {}
@@ -464,10 +433,6 @@ export class HuggingFaceService {
 		});
 	}
 
-	/**
-	 * Fetch the llama.app model catalog. Returns an empty array on failure so
-	 * callers can fall back gracefully.
-	 */
 	static async getCatalog(): Promise<HfCatalogEntry[]> {
 		const response = await fetch(MODELS_DISCOVER_CATALOG_URL);
 
@@ -498,32 +463,20 @@ export class HuggingFaceService {
 		}
 	}
 
-	/**
-	 * Get model URL on Hugging Face Hub
-	 */
 	static getModelUrl(modelId: string): string {
 		return `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}`;
 	}
 
 	// Utility Methods
 
-	/**
-	 * Get most liked GGUF models
-	 */
 	static async getMostLiked(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.LIKES });
 	}
 
-	/**
-	 * Get newly released GGUF models
-	 */
 	static async getNew(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.CREATED_AT });
 	}
 
-	/**
-	 * Get most popular GGUF models by downloads
-	 */
 	static async getPopular(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.DOWNLOADS });
 	}
@@ -582,9 +535,6 @@ export class HuggingFaceService {
 		return files;
 	}
 
-	/**
-	 * Get trending GGUF models
-	 */
 	static async getTrending(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: HfModelSort.TRENDING_SCORE });
 	}
@@ -641,9 +591,6 @@ export class HuggingFaceService {
 		return value * multiplier;
 	}
 
-	/**
-	 * Parse model tags to extract useful information
-	 */
 	static parseTags(tags: string[]): {
 		license: string | null;
 		isGated: boolean;
@@ -682,9 +629,6 @@ export class HuggingFaceService {
 		return this.fetchWithRetry(url);
 	}
 
-	/**
-	 * Search models by query string
-	 */
 	static async searchByQuery(
 		query: string,
 		params: Omit<HfModelSearchParams, 'search'> = {}
@@ -695,9 +639,6 @@ export class HuggingFaceService {
 		});
 	}
 
-	/**
-	 * Build API URL from search parameters
-	 */
 	private static buildUrl(params: HfModelSearchParams): string {
 		const url = new URL(this.BASE_URL);
 
@@ -714,16 +655,10 @@ export class HuggingFaceService {
 		return url.toString();
 	}
 
-	/**
-	 * Delay helper for retry logic
-	 */
 	private static delay(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	/**
-	 * Fetch data with retry logic for resilience
-	 */
 	private static async fetchWithRetry(url: string, attempt: number = 1): Promise<HfModelInfo[]> {
 		try {
 			const response = await fetch(url);
@@ -754,7 +689,6 @@ export class HuggingFaceService {
 
 			throw new Error('Unexpected API response format');
 		} catch (error) {
-			// only transient failures are retried; anything else fails the search
 			const transient =
 				error instanceof TypeError ||
 				(error instanceof Error && error.message.startsWith('API request failed: 5'));
