@@ -9,10 +9,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <map>
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #define GGUF_MAX_STRING_LENGTH  (1024*1024*1024)
@@ -237,6 +239,7 @@ struct gguf_reader {
         : callback(callback),
           userdata(userdata),
           max_chunk_read(max_chunk_read),
+          start_offset(data_offset),
           data_offset(data_offset),
           nbytes_remain(nbytes_remain) {
         GGML_ASSERT(max_chunk_read > 0);
@@ -365,6 +368,11 @@ struct gguf_reader {
         return data_offset;
     }
 
+    // position in the file where the GGUF data starts, alignment is relative to it, not to the file
+    uint64_t start() const {
+        return start_offset;
+    }
+
     bool seek(uint64_t absolute_offset) const {
         const uint64_t end_offset = uint64_t(data_offset) + nbytes_remain;
         if (absolute_offset > end_offset) {
@@ -414,6 +422,7 @@ private:
     gguf_reader_callback_t callback = nullptr;
     void * userdata = nullptr;
     size_t max_chunk_read = 0;
+    uint64_t start_offset = 0;
     mutable uint64_t data_offset = 0;
     mutable uint64_t nbytes_remain = 0;
 };
@@ -542,6 +551,8 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
     // KV pairs
     {
+        std::unordered_set<std::string> seen_keys;
+
         for (int64_t i = 0; ok && i < n_kv; ++i) {
             std::string key;
             gguf_type   type     = gguf_type(-1);
@@ -561,11 +572,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 GGML_LOG_ERROR("%s: key %" PRIi64 " is empty\n", __func__, i);
                 ok = false;
             }
-            for (size_t j = 0; ok && j < ctx->kv.size(); ++j) {
-                if (key == ctx->kv[j].key) {
-                    GGML_LOG_ERROR("%s: duplicate key '%s' for tensors %zu and %" PRIi64 " \n", __func__, key.c_str(), j, i);
-                    ok = false;
-                }
+            if (ok && !seen_keys.insert(key).second) {
+                GGML_LOG_ERROR("%s: duplicate key '%s' for KV pair %" PRIi64 "\n", __func__, key.c_str(), i);
+                ok = false;
             }
             if (!ok) {
                 break;
@@ -628,6 +637,8 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
     }
 
     // read the tensor info
+    std::unordered_set<std::string> seen_tensor_names;
+
     for (int64_t i = 0; ok && i < n_tensors; ++i) {
         struct gguf_tensor_info info;
 
@@ -651,12 +662,10 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             ggml_set_name(&info.t, name.c_str());
 
             // make sure there are no duplicate tensor names
-            for (int64_t j = 0; ok && j < i; ++j) {
-                if (strcmp(info.t.name, ctx->info[j].t.name) == 0) {
-                    GGML_LOG_ERROR("%s: duplicate tensor name '%s' for tensors %" PRIi64 " and %" PRIi64 "\n", __func__, info.t.name, j, i);
-                    ok = false;
-                    break;
-                }
+            if (ok && !seen_tensor_names.insert(name).second) {
+                GGML_LOG_ERROR("%s: duplicate tensor name '%s' for tensor %" PRIi64 "\n", __func__, info.t.name, i);
+                ok = false;
+                break;
             }
         }
         if (!ok) {
@@ -762,7 +771,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
     GGML_ASSERT(int64_t(ctx->info.size()) == n_tensors);
 
     // we require the data section to be aligned, so take into account any padding
-    if (n_tensors > 0 && !gr.seek(GGML_PAD(gr.tell(), ctx->alignment))) {
+    if (n_tensors > 0 && !gr.seek(gr.start() + GGML_PAD(gr.tell() - gr.start(), ctx->alignment))) {
         GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
         gguf_free(ctx);
         return nullptr;

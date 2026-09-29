@@ -43,6 +43,10 @@ int  common_log_get_verbosity_thold(void);
 
 void common_log_set_verbosity_thold(int verbosity); // not thread-safe
 
+bool common_log_get_jsonl(void);
+
+void common_log_set_jsonl(bool jsonl); // not thread-safe
+
 int common_log_get_verbosity(enum ggml_log_level level);
 
 void common_log_default_callback(enum ggml_log_level level, const char * text, void * user_data);
@@ -91,7 +95,6 @@ void common_log_set_file      (struct common_log * log, const char * file); // n
 void common_log_set_colors    (struct common_log * log, log_colors colors); // not thread-safe
 void common_log_set_prefix    (struct common_log * log, bool prefix);       // whether to output prefix to each log
 void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
-void common_log_set_jsonl     (struct common_log * log, bool jsonl);        // print each log as a JSON object on one line, not thread-safe
 void common_log_flush         (struct common_log * log);                    // flush all pending log messages
 
 // helper macros for logging
@@ -127,3 +130,17 @@ void common_log_flush         (struct common_log * log);                    // f
 #define LOG_WRNV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  verbosity, __VA_ARGS__)
 #define LOG_ERRV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, verbosity, __VA_ARGS__)
 #define LOG_CNTV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  verbosity, __VA_ARGS__)
+
+class common_json; // defined in common/json.h
+
+// helper allows different types of json output
+// no-op if --log-jsonl is not set
+void common_log_add_json(struct common_log * log, const char * type, const common_json & data);
+
+// will only print if --log-jsonl is set
+#define LOG_JSON(type, data) \
+    do { \
+        if (common_log_get_jsonl()) { \
+            common_log_add_json(common_log_main(), type, data); \
+        } \
+    } while (0)

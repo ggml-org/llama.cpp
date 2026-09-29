@@ -55,6 +55,10 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         // K-shift must not rotate them while the stream copies in the same update still apply
         hparams_idx.rope_type = LLAMA_ROPE_TYPE_NONE;
 
+        // fool llama_kv_cache into thinking this is a MLA cache, so it won't cache V tensors
+        hparams_idx.n_embd_head_k_mla_impl = model.hparams.indexer_head_size;
+        hparams_idx.n_embd_head_v_mla_impl = model.hparams.indexer_head_size;
+
         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
         return new llama_kv_cache(
@@ -273,7 +277,8 @@ void llama_memory_hybrid_idx::set_input_qsa(
         ggml_tensor * bias,
         const llama_ubatch * ubatch,
         uint32_t ratio,
-        bool blk_bias) const {
+        bool blk_bias,
+        bool causal_attn) const {
     GGML_ASSERT(ratio > 0);
     GGML_ASSERT(get_mem_idx() != nullptr);
 
@@ -541,7 +546,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
 
             if (blk_bias) {
                 // a block sits wholly inside or outside the tail, so one value covers it
-                // the caller adds the attention mask, which drops empty, foreign and future cells
+                // the caller adds the attention mask, which drops empty, foreign and, when causal, future cells
                 float * cur_blk_bias = dst_bias + i*n_blocks;
 
                 for (int64_t b = 0; b < n_blocks; ++b) {
@@ -551,7 +556,7 @@ void llama_memory_hybrid_idx::set_input_qsa(
                     }
 
                     // finite, so it can never meet a -inf and produce a nan
-                    cur_blk_bias[b] = bid_idx[b] >= tail_start ? 1e9f : 0.0f;
+                    cur_blk_bias[b] = (causal_attn && bid_idx[b] >= tail_start) ? 1e9f : 0.0f;
                 }
 
                 // the spare block holds the unpooled cells, which are the incomplete tail, so
@@ -572,7 +577,10 @@ void llama_memory_hybrid_idx::set_input_qsa(
                 if (!cells.is_empty(j) && cells.seq_has(j, seq_id)) {
                     const int64_t idx = ranked ? rank[j] : cells.pos_get(j);
 
-                    if (idx <= q) {
+                    if (!causal_attn) {
+                        // every visible block competes on score and the unpooled cells are always selected
+                        v = blk_of[j] < 0 ? 1e9f : 0.0f;
+                    } else if (idx <= q) {
                         // finite, so it can never meet a -inf and produce a nan
                         v = idx >= tail_start ? 1e9f : (blk_of[j] < 0 ? -INFINITY : 0.0f);
                     }
@@ -672,8 +680,9 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * bias,
         const llama_ubatch * ubatch,
         uint32_t ratio,
-        bool blk_bias) const {
+        bool blk_bias,
+        bool causal_attn) const {
     GGML_ASSERT(mem != nullptr);
 
-    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
+    mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias, causal_attn);
 }

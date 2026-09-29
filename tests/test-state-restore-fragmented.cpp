@@ -30,7 +30,7 @@ int main(int argc, char ** argv) {
 
     // init
 
-    ggml_backend_load_all();
+    llama_backend_init();
 
     common_init_result_ptr llama_init = common_init_from_params(params);
 

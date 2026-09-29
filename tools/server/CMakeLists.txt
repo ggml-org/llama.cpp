@@ -30,7 +30,7 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
-target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
 # llama-server-impl: server logic, reusable by app
@@ -49,7 +49,7 @@ add_library(${TARGET}
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(${TARGET} PRIVATE ../mtmd ../mediagen ${CMAKE_SOURCE_DIR})
+target_include_directories(${TARGET} PRIVATE ../mtmd ../mediagen ${PROJECT_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib mediagen ${CMAKE_THREAD_LIBS_INIT})
 
 add_dependencies(${TARGET} llama-ui-assets)

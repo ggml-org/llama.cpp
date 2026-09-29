@@ -7,6 +7,7 @@ constant short FC_mul_mm_ne12  [[function_constant(FC_MUL_MM + 2)]];
 constant short FC_mul_mm_ne13  [[function_constant(FC_MUL_MM + 3)]];
 constant short FC_mul_mm_r2    [[function_constant(FC_MUL_MM + 4)]];
 constant short FC_mul_mm_r3    [[function_constant(FC_MUL_MM + 5)]];
+constant bool FC_mul_mm_id_amax [[function_constant(FC_MUL_MM + 6)]];
 
 // each block_q contains 16*nl weights
 #ifdef GGML_METAL_HAS_TENSOR
@@ -413,6 +414,85 @@ kernel void kernel_mul_mm_id_map0(
     tpe_u32[ide] = n_all;
 }
 
+kernel void kernel_mul_mm_id_amax_part_f32(
+        constant ggml_metal_kargs_mul_mm_id_amax & args,
+        device   const char * src1,
+        device         char * dst,
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort   ntg[[threads_per_threadgroup]]) {
+    const int nrow = args.ne01*args.ne02;
+
+    float lmax = 0.0f;
+
+    for (int ir = tgpig; ir < nrow; ir += N_MM_NPART_AMAX) {
+        const int i01 = ir % args.ne01;
+        const int i02 = ir / args.ne01;
+
+        device const float * row = (device const float *) (src1 + i02*args.nb02 + i01*args.nb01);
+
+        for (int i00 = tiitg; i00 < args.ne00; i00 += ntg) {
+            lmax = max(lmax, fabs(row[i00]));
+        }
+    }
+
+    float amax = simd_max(lmax);
+
+    threadgroup float * shared_amax = (threadgroup float *) shmem;
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_amax[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_amax[sgitg] = amax;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        amax = shared_amax[tiisg];
+        amax = simd_max(amax);
+    }
+
+    if (tiitg == 0) {
+        ((device float *) (dst + 8))[tgpig] = amax;
+    }
+}
+
+kernel void kernel_mul_mm_id_amax_f32(
+        device char * dst,
+        ushort tiitg[[thread_index_in_threadgroup]]) {
+    device const float * part = (device const float *) (dst + 8);
+
+    float amax = 0.0f;
+
+    for (int i = tiitg; i < N_MM_NPART_AMAX; i += N_SIMDWIDTH) {
+        amax = max(amax, part[i]);
+    }
+
+    amax = simd_max(amax);
+
+    if (tiitg == 0) {
+        // leave a comfortable margin below the f16 max of 65504
+        float scale = 1.0f;
+
+        // isfinite: src1 already inf/nan is not ours to fix - keep the
+        // scale at 1.0 instead of turning it into a different failure
+        if (isfinite(amax) && amax > 32768.0f) {
+            scale = exp2(ceil(log2(amax)) - 15.0f);
+        }
+
+        device float * d = (device float *) dst;
+
+        d[0] = 1.0f/scale; // exact: scale is a power of two
+        d[1] = scale;
+    }
+}
+
 typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
 
 template [[host_name("kernel_mul_mm_id_map0_ne20_1" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<1>;
@@ -433,6 +513,7 @@ kernel void kernel_mul_mm_id(
         device const char * htpe,
         device const char * hids,
         device       char * dst,
+        device const char * amax,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
@@ -496,6 +577,17 @@ kernel void kernel_mul_mm_id(
         + args.nb11*i11
         + args.nb10*iy);
 
+    // skip the upper half of the token tile when the expert did not fill it
+    constexpr short NR1H = NR1/2;
+
+    const bool has_hi = nr1 > NR1H;
+
+    const short lb1 = (short) tiitg/NL1; // 0 .. NR1-1, this thread's row of the B tile
+
+    // power-of-two rescaling
+    const float s1_inv   = FC_mul_mm_id_amax ? ((device const float *) amax)[0] : 1.0f;
+    const float s1_scale = FC_mul_mm_id_amax ? ((device const float *) amax)[1] : 1.0f;
+
 #ifndef GGML_METAL_HAS_TENSOR
     S0_8x8 ma[4];
     S1_8x8 mb[2];
@@ -505,15 +597,22 @@ kernel void kernel_mul_mm_id(
     for (short i = 0; i < 8; i++){
         mc[i] = make_filled_simdgroup_matrix<float, 8>(0.f);
     }
+
+    // simdgroups 2,3 own rows NR1H..NR1-1
+    const bool sg_active = has_hi || sgitg < 2;
 #else
-    auto tA = tensor<threadgroup S0, dextents<int32_t, 2>, tensor_inline>(sa, dextents<int32_t, 2>(NK,  NR0));
-    auto tB = tensor<threadgroup S1, dextents<int32_t, 2>, tensor_inline>(sb, dextents<int32_t, 2>(NR1, NK ));
+    auto tA  = tensor<threadgroup S0, dextents<int32_t, 2>, tensor_inline>(sa, dextents<int32_t, 2>(NK, NR0));
+
+    // sb is [NR1][NK] row-major
+    auto tB0 = tensor<threadgroup S1, dextents<int32_t, 2>, tensor_inline>(sb,             dextents<int32_t, 2>(NK, NR1H));
+    auto tB1 = tensor<threadgroup S1, dextents<int32_t, 2>, tensor_inline>(sb + NR1H*NK,   dextents<int32_t, 2>(NK, NR1H));
 
     mpp::tensor_ops::matmul2d<
-        mpp::tensor_ops::matmul2d_descriptor(NR1, NR0, NK, false, true, false, mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
+        mpp::tensor_ops::matmul2d_descriptor(NR1H, NR0, NK, false, true, false, mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<4>> mm;
 
-    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>();
+    auto cT0 = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB0), float>();
+    auto cT1 = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB1), float>();
 #endif
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += NK) {
@@ -572,7 +671,7 @@ kernel void kernel_mul_mm_id(
 
                 const short ib = 4*sx + sy;
 
-                *(sb + 64*ib + 8*ly + lx) = loop_k + iy + i < args.ne00 ? (S1) *((device T1 *) y + i) : 0;
+                *(sb + 64*ib + 8*ly + lx) = loop_k + iy + i < args.ne00 ? (S1) (*((device T1 *) y + i) * (T1) s1_inv) : 0;
             }
         } else {
             const short sx = (tiitg%NL1);
@@ -585,7 +684,7 @@ kernel void kernel_mul_mm_id(
 
             const short ib = 4*sx + sy;
 
-            *(threadgroup S1_2x4 *)(sb + 64*ib + 8*ly) = (S1_2x4)(*((device T1_2x4 *) y));
+            *(threadgroup S1_2x4 *)(sb + 64*ib + 8*ly) = (S1_2x4)((*((device T1_2x4 *) y)) * (T1) s1_inv);
         }
 #else
         // load data and store to threadgroup memory
@@ -633,7 +732,7 @@ kernel void kernel_mul_mm_id(
                 //const short lx = (tiitg/NL1)%8;
                 //const short ly = i;
 
-                *(sb + NK*(8*sy + ly) + 8*sx + lx) = loop_k + iy + i < args.ne00 ? (S1) *((device T1 *) y + i) : 0;
+                *(sb + NK*(8*sy + ly) + 8*sx + lx) = loop_k + iy + i < args.ne00 ? (S1) (*((device T1 *) y + i) * (T1) s1_inv) : 0;
             }
         } else {
             const short sx = (tiitg%NL1);
@@ -644,7 +743,7 @@ kernel void kernel_mul_mm_id(
             //const short lx = (tiitg/NL1)%8;
             //const short ly = i;
 
-            *(threadgroup S1_2x4 *)(sb + NK*(8*sy + ly) + 8*sx) = (S1_2x4)(*((device T1_2x4 *) y));
+            *(threadgroup S1_2x4 *)(sb + NK*(8*sy + ly) + 8*sx) = (S1_2x4)((*((device T1_2x4 *) y)) * (T1) s1_inv);
         }
 #endif
 
@@ -656,37 +755,45 @@ kernel void kernel_mul_mm_id(
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
 #ifndef GGML_METAL_HAS_TENSOR
-        // load matrices from threadgroup memory and conduct outer products
-        threadgroup const S0 * lsma = (sa + 4*64*(sgitg%2));
-        threadgroup const S1 * lsmb = (sb + 2*64*(sgitg/2));
+        if (sg_active) {
+            // load matrices from threadgroup memory and conduct outer products
+            threadgroup const S0 * lsma = (sa + 4*64*(sgitg%2));
+            threadgroup const S1 * lsmb = (sb + 2*64*(sgitg/2));
 
-        FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
-            simdgroup_barrier(mem_flags::mem_none);
+            FOR_UNROLL (short ik = 0; ik < NK/8; ik++) {
+                simdgroup_barrier(mem_flags::mem_none);
 
-            FOR_UNROLL (short i = 0; i < 4; i++) {
-                simdgroup_load(ma[i], lsma + 64*i, 8, 0, false);
+                FOR_UNROLL (short i = 0; i < 4; i++) {
+                    simdgroup_load(ma[i], lsma + 64*i, 8, 0, false);
+                }
+
+                simdgroup_barrier(mem_flags::mem_none);
+
+                FOR_UNROLL (short i = 0; i < 2; i++) {
+                    simdgroup_load(mb[i], lsmb + 64*i, 8, 0, false);
+                }
+
+                simdgroup_barrier(mem_flags::mem_none);
+
+                FOR_UNROLL (short i = 0; i < 8; i++){
+                    simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]);
+                }
+
+                lsma += 8*64;
+                lsmb += 4*64;
             }
-
-            simdgroup_barrier(mem_flags::mem_none);
-
-            FOR_UNROLL (short i = 0; i < 2; i++) {
-                simdgroup_load(mb[i], lsmb + 64*i, 8, 0, false);
-            }
-
-            simdgroup_barrier(mem_flags::mem_none);
-
-            FOR_UNROLL (short i = 0; i < 8; i++){
-                simdgroup_multiply_accumulate(mc[i], mb[i/4], ma[i%4], mc[i]);
-            }
-
-            lsma += 8*64;
-            lsmb += 4*64;
         }
 #else
-        auto sA = tA.slice(0, 0);
-        auto sB = tB.slice(0, 0);
+        auto sA  = tA.slice(0, 0);
+        auto sB0 = tB0.slice(0, 0);
 
-        mm.run(sB, sA, cT);
+        mm.run(sB0, sA, cT0);
+
+        if (has_hi) {
+            auto sB1 = tB1.slice(0, 0);
+
+            mm.run(sB1, sA, cT1);
+        }
 #endif
     }
 
@@ -694,13 +801,20 @@ kernel void kernel_mul_mm_id(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
 #ifdef GGML_METAL_HAS_TENSOR
-    auto tC = tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>(sc, dextents<int32_t, 2>(NR0, NR1));
-    cT.store(tC);
-#else
-    threadgroup float * temp_str = ((threadgroup float *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
+    auto tC0 = tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>(sc,             dextents<int32_t, 2>(NR0, NR1H));
+    cT0.store(tC0);
 
-    for (short i = 0; i < 8; i++) {
-        simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*NR0*(i/4), NR0, 0, false);
+    if (has_hi) {
+        auto tC1 = tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>(sc + NR1H*NR0, dextents<int32_t, 2>(NR0, NR1H));
+        cT1.store(tC1);
+    }
+#else
+    if (sg_active) {
+        threadgroup float * temp_str = ((threadgroup float *) shmem) + 32*(sgitg&1) + (16*(sgitg >> 1))*NR0;
+
+        for (short i = 0; i < 8; i++) {
+            simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*NR0*(i/4), NR0, 0, false);
+        }
     }
 #endif
 
@@ -720,12 +834,12 @@ kernel void kernel_mul_mm_id(
 
         int i = tiisg;
         for (; i < nr0/4; i += 32) {
-            *(D4 + i) = *(C4 + i);
+            *(D4 + i) = *(C4 + i) * s1_scale;
         }
 
         i = (4*(nr0/4)) + tiisg;
         for (; i < nr0; i += 32) {
-            *(D + i) = *(C + i);
+            *(D + i) = *(C + i) * s1_scale;
         }
     }
 }
