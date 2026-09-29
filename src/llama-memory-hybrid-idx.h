@@ -232,7 +232,7 @@ private:
     // Which pools of the layout this ubatch must re-pool. The layout itself belongs to the memory.
     struct kpool_state;
     kpool_state kpool_build_sizes() const;
-    kpool_state kpool_build_state(const llama_ubatch & ubatch) const;
+    void kpool_build_state(const llama_ubatch & ubatch);
     const kpool_state & kpool_cur() const;
 
     // unique_ptr because kpool_state is incomplete here.

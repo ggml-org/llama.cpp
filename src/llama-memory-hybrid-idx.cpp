@@ -692,7 +692,8 @@ struct llama_memory_hybrid_idx::kpool_layout {
 
 // Which pools of the layout the current ubatch must re-pool, in the layout's pool order.
 struct llama_memory_hybrid_idx_context::kpool_state {
-    std::vector<uint8_t> is_new;
+    std::vector<uint32_t> is_new;
+    uint32_t generation = 0;
 
     uint32_t n_pool_real = 0;
     uint32_t n_new       = 0;
@@ -892,7 +893,10 @@ bool llama_memory_hybrid_idx_context::apply() {
     // Extend the pool layout with this ubatch's cells, then pick what it must re-pool.
     if (res && kpool_track()) {
         mem->kpool_layout_update();
-        kpool_st = std::make_unique<kpool_state>(kpool_build_state(get_ubatch()));
+        if (!kpool_st) {
+            kpool_st = std::make_unique<kpool_state>();
+        }
+        kpool_build_state(get_ubatch());
         i_kpool  = i_cur;
     }
 
@@ -990,75 +994,75 @@ llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kp
 // A seq_* edit regroups the pools from the edited position on, so it stales them and the first ubatch of the next batch
 // rebuilds them from the still-valid key | gate rows, rewriting the (possibly different) rep rows.
 // Orphaned pooled slots are never cleared, a slot is only ever read through pool_cells, which follows the current grouping.
-llama_memory_hybrid_idx_context::kpool_state llama_memory_hybrid_idx_context::kpool_build_state(
-        const llama_ubatch & ubatch) const {
+void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & ubatch) {
     const auto & lay = mem->kpool_layout_get();
+    auto & st = *kpool_st;
 
-    kpool_state st = kpool_build_sizes();
-    st.is_new.assign(lay.n_pool_real, 0);
+    st.n_pool_real = lay.n_pool_real;
+    st.cache_safe  = lay.cache_safe;
+    st.n_new       = 0;
+    if (++st.generation == 0) {
+        std::fill(st.is_new.begin(), st.is_new.end(), 0);
+        st.generation = 1;
+    }
+    st.is_new.resize(lay.n_pool_real, 0);
+
+    auto mark = [&](uint32_t ip) {
+        if (st.is_new[ip] != st.generation) {
+            st.is_new[ip] = st.generation;
+            ++st.n_new;
+        }
+    };
 
     const uint32_t kpool = mem->get_kpool();
-
-    // Shared cells cannot cache sequence relative pools, so everything is re-pooled while sharing lasts.
-    const bool all_new = !st.cache_safe;
-
-    std::vector<std::vector<llama_pos>> upos(LLAMA_MAX_SEQ);
-    if (!all_new) {
-        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-            for (int32_t k = 0; k < ubatch.n_seq_id[i]; ++k) {
-                upos[ubatch.seq_id[i][k]].push_back(ubatch.pos[i]);
-            }
-        }
-        for (auto & v : upos) {
-            if (!std::is_sorted(v.begin(), v.end())) {
-                std::sort(v.begin(), v.end());
-            }
-        }
-    }
-
-    size_t ip = 0;
+    std::array<uint32_t, LLAMA_MAX_SEQ> pool_start;
+    uint32_t ip = 0;
     for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
         const auto & sq = lay.seqs[s];
-        if (sq.pools.empty()) {
+        pool_start[s] = ip;
+        ip += (uint32_t) sq.pools.size();
+
+        if (!st.cache_safe) {
             continue;
         }
 
-        if (all_new) {
-            std::fill(st.is_new.begin() + ip, st.is_new.begin() + ip + sq.pools.size(), 1);
-            st.n_new += (uint32_t) sq.pools.size();
-            ip += sq.pools.size();
-            continue;
-        }
-
-        // The first ubatch of the batch also rebuilds what the last sequence edits regrouped.
+        // A sequence edit invalidates only pools ending after the edited position.
         const llama_pos stale_from = i_cur == 0 ?
             mem_idx_stale_batch[s] : llama_memory_hybrid_idx::POS_CLEAN;
-
-        const auto & up = upos[s];
-        if (up.empty() && stale_from == llama_memory_hybrid_idx::POS_CLEAN) {
-            ip += sq.pools.size();
+        if (stale_from == llama_memory_hybrid_idx::POS_CLEAN) {
             continue;
         }
 
-        for (size_t pi = 0; pi < sq.pools.size(); ++pi, ++ip) {
-            const llama_pos p0 = sq.cells[sq.pools[pi]].first;
-            const llama_pos p1 = p0 + (llama_pos) kpool;
-
-            bool is_new = p1 > stale_from;
-            if (!is_new) {
-                auto it = std::lower_bound(up.begin(), up.end(), p0);
-                is_new = it != up.end() && *it < p1;
-            }
-
-            if (is_new) {
-                st.is_new[ip] = 1;
-                st.n_new++;
-            }
+        auto first = std::lower_bound(sq.pools.begin(), sq.pools.end(), stale_from,
+                [&](uint32_t j, llama_pos p) { return sq.cells[j].first + (llama_pos) kpool <= p; });
+        for (auto it = first; it != sq.pools.end(); ++it) {
+            mark(pool_start[s] + (uint32_t) (it - sq.pools.begin()));
         }
     }
     GGML_ASSERT(ip == st.is_new.size());
 
-    return st;
+    if (!st.cache_safe) {
+        std::fill(st.is_new.begin(), st.is_new.end(), st.generation);
+        st.n_new = st.n_pool_real;
+        return;
+    }
+
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        const llama_pos p = ubatch.pos[i];
+        for (int32_t k = 0; k < ubatch.n_seq_id[i]; ++k) {
+            const llama_seq_id s = ubatch.seq_id[i][k];
+            const auto & sq = lay.seqs[s];
+            auto it = std::upper_bound(sq.pools.begin(), sq.pools.end(), p,
+                    [&](llama_pos pos, uint32_t j) { return pos < sq.cells[j].first; });
+            if (it == sq.pools.begin()) {
+                continue;
+            }
+            --it;
+            if (p < sq.cells[*it].first + (llama_pos) kpool) {
+                mark(pool_start[s] + (uint32_t) (it - sq.pools.begin()));
+            }
+        }
+    }
 }
 
 const llama_memory_hybrid_idx_context::kpool_state & llama_memory_hybrid_idx_context::kpool_cur() const {
@@ -1186,7 +1190,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
                     (int32_t) (gather ? gcell(sq, sq.cells[j + k].second) : (int64_t) sq.cells[j + k].second);
             }
 
-            if (st.is_new[ip]) {
+            if (st.is_new[ip] == st.generation) {
                 GGML_ASSERT(i_new < n_new);
                 for (uint32_t k = 0; k < kpool; ++k) {
                     nidx[(size_t) i_new*kpool + k] = (int32_t) gcell(sq, sq.cells[j + k].second);
