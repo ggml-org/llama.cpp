@@ -225,6 +225,11 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
         return GGML_STATUS_SUCCESS;
     }
 
+    // reject empty tensors to avoid zDNN crash
+    if (ggml_is_empty(tensor)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
     ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
 
     const int64_t tsize = ggml_nbytes(tensor);
