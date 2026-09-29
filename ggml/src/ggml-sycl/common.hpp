@@ -81,6 +81,8 @@ enum ggml_sycl_xmx_gather_type {
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
+// Which joint_matrix shapes the XMX dequant-GEMM paths may use, one bit per shape (see fused-gemm.cpp).
+extern int g_ggml_sycl_xmx_gather_shapes;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;

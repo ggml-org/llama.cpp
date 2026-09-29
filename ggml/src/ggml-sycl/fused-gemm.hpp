@@ -5,7 +5,7 @@
 
 
 // Shape and type gates for the kernels below. Device capability is separate: it needs a queue to ask.
-static constexpr int GGML_SYCL_FG_MAX_N = 64; // 2 * FG_BN
+static constexpr int GGML_SYCL_FG_MAX_N = 64; // widest N taken; each shape covers it in BN-wide tiles
 
 // weight formats the fused A stage decodes; K must cover whole stored blocks
 constexpr bool ggml_sycl_fused_dequant_gemm_f16_type_ok(ggml_type src0_type, int64_t K) {
