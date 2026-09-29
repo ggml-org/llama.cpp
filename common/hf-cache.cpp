@@ -172,29 +172,6 @@ static bool is_valid_subpath(const fs::path & path, const fs::path & subpath) {
     return b_end == b.end();
 }
 
-static void safe_write_file(const fs::path & path, const std::string & data) {
-    fs::path path_tmp = path;
-    path_tmp += ".tmp";
-
-    if (path.has_parent_path()) {
-        fs::create_directories(path.parent_path());
-    }
-
-    std::ofstream file(path_tmp);
-    file << data;
-    file.close();
-
-    std::error_code ec;
-
-    if (!file.fail()) {
-        fs::rename(path_tmp, path, ec);
-    }
-    if (file.fail() || ec) {
-        fs::remove(path_tmp, ec);
-        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
-    }
-}
-
 static common_json api_get(const std::string & url,
                            const std::string & token) {
     auto [cli, parts] = common_http_client(url);
@@ -282,7 +259,7 @@ static std::string get_repo_commit(const std::string & repo_id,
             return {};
         }
 
-        safe_write_file(refs_path / name_path, commit);
+        fs_write_atomic(refs_path / name_path, commit);
         return commit;
 
     } catch (const common_json_error & e) {
