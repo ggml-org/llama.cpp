@@ -394,6 +394,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
     }
 
+    if (arch == LLM_ARCH_GRANITE_SPEECH_5) {
+        ms.add_kv(LLM_KV_CTC_CONTEXT_SIZE, 128u);
+        ms.add_kv(LLM_KV_CTC_MAX_POS_EMB, 512u);
+        ms.add_kv(LLM_KV_CTC_CONV_KERNEL, 7u);
+        ms.add_kv(LLM_KV_CTC_CONV_EXPANSION_FACTOR, 2u);
+        ms.add_kv(LLM_KV_CTC_SUBSAMPLE_LAYERS, std::vector<uint32_t>({1u, 2u}));
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);
