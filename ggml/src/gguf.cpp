@@ -573,7 +573,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 ok = false;
             }
             if (ok && !seen_keys.insert(key).second) {
-                GGML_LOG_ERROR("%s: duplicate key '%s' for key %" PRIi64 "\n", __func__, key.c_str(), i);
+                GGML_LOG_ERROR("%s: duplicate key '%s' for KV pair %" PRIi64 "\n", __func__, key.c_str(), i);
                 ok = false;
             }
             if (!ok) {
