@@ -116,6 +116,20 @@ This provides BLAS acceleration using only the CPU. Make sure to have OpenBLAS i
 
 Check [BLIS.md](./backend/BLIS.md) for more information.
 
+### AMD AOCL-BLAS
+
+Link against AMD AOCL-BLAS on EPYC or Ryzen for large F32 prompt GEMMs. This is not the ZenDNN backend; see [ZenDNN.md](./backend/ZenDNN.md).
+
+Source `amd-libs.cfg` from your AOCL install (MT tree by default), then build (CMake 3.27+ recommended for the `AOCL` / `AOCL_mt` vendors):
+
+```bash
+source /opt/aocl/5.3.0/aocc/MT/amd-libs.cfg   # adjust path; ST tree uses .../ST/amd-libs.cfg
+cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=AOCL_mt -DBLAS_INCLUDE_DIRS="${AOCL_ROOT}/include" -DGGML_NATIVE=ON
+cmake --build build --config Release
+```
+
+Full steps, threading notes, and a fallback for older CMake: [AOCL.md](./backend/AOCL.md).
+
 ### Intel oneMKL
 
 Building through oneAPI compilers will make avx_vnni instruction set available for intel processors that do not support avx512 and avx512_vnni. Please note that this build config **does not support Intel GPU**. For Intel GPU support, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
