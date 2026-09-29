@@ -171,6 +171,9 @@ struct server_task {
     int id_target = -1;
     int id_slot   = -1;
 
+    // client-provided session id, used to persist and restore the slot state
+    std::string session_id;
+
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
     // temporary store of child tasks for scheduling
@@ -406,6 +409,7 @@ struct completion_token_output {
 struct server_task_result_cmpl_final : server_task_result {
     common_chat_input content;
     llama_tokens tokens;
+    std::string session_id;
 
     bool stream;
     bool include_usage;
