@@ -121,6 +121,8 @@ struct ov_runtime_context {
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
+    // GGML_OPENVINO_DISABLE_CACHE only: the request whose states the next per-call model inherits.
+    std::shared_ptr<ov::InferRequest> last_stateful_request;
 
     ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0) {}
 

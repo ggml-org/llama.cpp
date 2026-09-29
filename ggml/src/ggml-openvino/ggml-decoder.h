@@ -354,6 +354,9 @@ public:
 
     void update_io(ggml_cgraph * cgraph);
 
+    // True if the captured node/src pointers are exactly those of `cgraph`.
+    bool is_bound_to(const ggml_cgraph * cgraph) const;
+
     static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }

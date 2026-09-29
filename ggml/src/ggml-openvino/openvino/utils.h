@@ -67,11 +67,15 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 // Lifts the given node to the specified rank using Unsqueeze op
 ov::Output<ov::Node> lift_to_rank(const ov::Output<ov::Node> & value, int64_t target_rank);
 
+// Lift the lower-rank operand of a binary op to the other's rank (what NUMPY broadcasting does implicitly).
+void align_ranks(ov::Output<ov::Node> & a, ov::Output<ov::Node> & b);
+
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
     auto input_0 = process_view_input_new(context, 0);
     auto input_1 = process_view_input_new(context, 1);
+    align_ranks(input_0, input_1);
     auto res = std::make_shared<T>(input_0, input_1);
     return rename_outputs_with_suffix({res}, context.get_name());
 }

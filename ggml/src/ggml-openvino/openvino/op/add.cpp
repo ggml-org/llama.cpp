@@ -36,6 +36,7 @@ OutputVector translate_add(const NodeContext & context) {
 
     auto input_0 = process_view_input_new(context, 0);
     auto input_1 = process_view_input_new(context, 1);
+    align_ranks(input_0, input_1);
     // opset1::Add needs matching types (e.g. fused ADD_ADD mixes f16/f32); add in f32, cast once.
     auto output_type = context.get_output_type();
     if (input_0.get_element_type() != input_1.get_element_type()) {

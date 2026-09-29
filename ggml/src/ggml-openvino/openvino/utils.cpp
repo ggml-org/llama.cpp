@@ -287,6 +287,17 @@ ov::Output<ov::Node> lift_to_rank(const ov::Output<ov::Node> & value, int64_t ta
     return std::make_shared<ov::op::v0::Unsqueeze>(value, axes_const);
 }
 
+void align_ranks(ov::Output<ov::Node> & a, ov::Output<ov::Node> & b) {
+    const auto & ra = a.get_partial_shape().rank();
+    const auto & rb = b.get_partial_shape().rank();
+    if (ra.is_dynamic() || rb.is_dynamic()) {
+        return;
+    }
+    const int64_t rank = std::max(ra.get_length(), rb.get_length());
+    a = lift_to_rank(a, rank);
+    b = lift_to_rank(b, rank);
+}
+
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {
     auto input = context.get_input(input_index);
 
