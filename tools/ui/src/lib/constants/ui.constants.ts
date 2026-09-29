@@ -45,13 +45,13 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
+/** Models listed per remote provider before the "+ X more" line; search covers the rest. */
+export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
+
 /** Orgs whose avatar is dark and needs inverting in dark mode. */
 export const DARK_INVERT_AVATAR_ORGS = ['openai'];
 
-/**
- * Model rows mounted before the list is scrolled. A local catalog can hold
- * hundreds of models and mounting them all costs seconds on open.
- */
+/** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
 export const MODEL_ROW_WINDOW = 50;
 
 /** Models of one family shown before the rest fold behind a "show more" row. */

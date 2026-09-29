@@ -1,6 +1,14 @@
 <script lang="ts">
-	import { Image, Lightbulb, Mic, Video, Wrench } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import {
+		CAPABILITY_ICONS,
+		CAPABILITY_LABELS,
+		MODALITY_FLAG_KEYS,
+		MODALITY_ICONS,
+		MODALITY_LABELS,
+		MODALITY_ORDER
+	} from '$lib/constants';
+	import { ModelCapability } from '$lib/enums';
 	import type { ModelModalities } from '$lib/types/models';
 
 	interface Props {
@@ -23,71 +31,48 @@
 		supportsToolUse = false
 	}: Props = $props();
 
-	let hasModalityIcons = $derived(modalities?.vision || modalities?.video || modalities?.audio);
+	let capabilities = $derived([
+		...(supportsToolUse ? [ModelCapability.TOOL_USE] : []),
+		...(supportsThinking ? [ModelCapability.REASONING] : [])
+	]);
+
+	let shownModalities = $derived(
+		MODALITY_ORDER.filter((modality) => modalities?.[MODALITY_FLAG_KEYS[modality]])
+	);
 </script>
 
 <span class="inline-flex items-center {gapClass}">
-	{#if supportsToolUse && !hideCapabilities}
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<Wrench class="{iconSize} text-muted-foreground" />
-			</Tooltip.Trigger>
+	{#if !hideCapabilities}
+		{#each capabilities as capability (capability)}
+			{@const Icon = CAPABILITY_ICONS[capability]}
 
-			<Tooltip.Content>
-				<p>Tool use</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<Icon class="{iconSize} text-muted-foreground" />
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>{CAPABILITY_LABELS[capability]}</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/each}
 	{/if}
 
-	{#if supportsThinking && !hideCapabilities}
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				<Lightbulb class="{iconSize} text-muted-foreground" />
-			</Tooltip.Trigger>
-
-			<Tooltip.Content>
-				<p>Reasoning</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
-	{/if}
-
-	{#if hasModalityIcons && !hideModalities}
+	{#if shownModalities.length > 0 && !hideModalities}
 		<span class="inline-flex items-center {gapClass} text-muted-foreground">
-			{#if modalities?.vision}
+			{#each shownModalities as modality (modality)}
+				{@const Icon = MODALITY_ICONS[modality]}
+
 				<Tooltip.Root>
 					<Tooltip.Trigger>
-						<Image class={iconSize} />
+						<Icon class={iconSize} />
 					</Tooltip.Trigger>
 
 					<Tooltip.Content>
-						<p>Vision</p>
+						<p>{MODALITY_LABELS[modality]}</p>
 					</Tooltip.Content>
 				</Tooltip.Root>
-			{/if}
-
-			{#if modalities?.video}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Video class={iconSize} />
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Video</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			{#if modalities?.audio}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Mic class={iconSize} />
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Audio</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
+			{/each}
 		</span>
 	{/if}
 </span>

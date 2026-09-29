@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ModelsDiscoverAvatar from './discover/ModelsDiscoverAvatar.svelte';
+	import ModelOrgAvatar from './ModelOrgAvatar.svelte';
 	import { HF_BASE_MODEL_TAG_REGEX } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
@@ -13,9 +13,8 @@
 		option: ModelOption;
 		quantPositionClass?: string;
 		quantSize?: string;
-		/** Show the base model's org as the main image and the repo (quantizer) org as the
-		 *  corner badge. Resolving the base org costs one Hugging Face request per repo, so
-		 *  it waits until the row is near the viewport. */
+		/** Show the base model's org as the main image, the repo (quantizer) org as the
+		 *  corner badge. The base org costs one Hub request per repo. */
 		showBaseModelAvatar?: boolean;
 		/** Show the repo's own org as the main image, skipping the base model.
 		 *  Used inside a heading that already carries the base org. */
@@ -44,8 +43,8 @@
 			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
 			?.match(HF_BASE_MODEL_TAG_REGEX)?.[1] ?? null
 	);
-	// Long lists mount hundreds of avatars at once; resolving every base model up
-	// front means one request per row, so the avatar waits until its row is near the viewport.
+	// long lists mount hundreds of avatars at once, so the base org lookup waits
+	// until the row is near the viewport
 	let fetchedBaseModelOrg = $state<string | null>(null);
 	let baseModelOrg = $derived(orgOf(tagBaseModel) || fetchedBaseModelOrg);
 	let isNearViewport = $state(false);
@@ -75,7 +74,7 @@
 		use:nearViewport={() => (isNearViewport = true)}
 		class={['inline-flex shrink-0', className]}
 	>
-		<ModelsDiscoverAvatar
+		<ModelOrgAvatar
 			class="mt-0"
 			org={showRepoOrgAvatar ? orgName : (baseModelOrg ?? orgName)}
 			quantOrg={showBaseModelAvatar && showQuantBadge && !showRepoOrgAvatar ? orgName : undefined}

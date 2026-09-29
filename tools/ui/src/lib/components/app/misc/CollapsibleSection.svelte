@@ -6,14 +6,13 @@
 	import type { Snippet } from 'svelte';
 
 	interface Props {
-		/** Collapsible content. */
 		children: Snippet;
-		/** Trigger content; this component appends the chevron. */
+		/** Trigger content; the chevron is appended. */
 		trigger: Snippet;
 		/** Render the trigger as a dropdown menu item, so menu keyboard navigation reaches it. */
 		inMenu?: boolean;
-		/** Start expanded. The section owns the state, so a parent rebuild cannot
-		 *  snap it back open. Bind `open` instead to control it from outside. */
+		/** Start expanded. The section owns the state, so a parent rebuild cannot snap
+		 *  it back open; bind `open` to control it from outside. */
 		defaultOpen?: boolean;
 		/** Controlled open state, for a caller that binds it. */
 		open?: boolean;

@@ -7,10 +7,10 @@
 	import { configuredContext, isModelRunning } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { KeyboardKey } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 
 	interface Props {
-		/** Repo entry the row folds. */
 		entry: ModelQuantGroup;
 		expanded: boolean;
 		onToggle: () => void;
@@ -31,9 +31,9 @@
 	let mediaSource = $derived(entry.quants.find((quant) => quant.modalities) ?? entry.base);
 
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === ' ') event.preventDefault();
+		if (event.key === KeyboardKey.SPACE) event.preventDefault();
 
-		if (event.key === 'Enter' || event.key === ' ') onToggle();
+		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) onToggle();
 	}
 </script>
 
@@ -60,7 +60,6 @@
 				<ModelId
 					aliases={entry.base.aliases}
 					class="min-w-0"
-					draftSidecars={entry.base.draftSidecars}
 					hideCapabilities
 					hideModalities
 					hideQuantization

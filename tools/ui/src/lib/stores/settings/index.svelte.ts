@@ -476,11 +476,7 @@ class SettingsStore {
 		}
 	}
 
-	/**
-	 * Move the trigger-only org name key onto the selector wide one. The setting
-	 * grew from the trigger to every model id, so an explicit choice has to
-	 * survive the rename.
-	 */
+	/** Move the trigger-only org name key onto the selector wide one. */
 	private migrateModelOrgNameKey() {
 		if (!browser) return;
 

@@ -221,7 +221,6 @@ export { default as ChatFormActionReasoning } from './ChatForm/ChatFormActions/C
  */
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
 
-
 /**
  * Compact context-usage gauge with per-turn and cumulative breakdown in the tooltip.
  */

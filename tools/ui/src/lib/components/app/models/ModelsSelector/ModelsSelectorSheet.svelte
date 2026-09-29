@@ -7,7 +7,6 @@
 		ModelsSelectorTriggerIcon,
 		SearchInput
 	} from '$lib/components/app';
-	import { DialogBackendForm } from '$lib/components/app/backends';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
@@ -19,14 +18,8 @@
 		class?: string;
 		currentModel?: string | null;
 		/** Callback when model changes. Return false to keep menu open (e.g., for validation failures) */
-		onModelChange?: (
-			modelId: string,
-			modelName: string,
-			backendId?: string
-		) => Promise<boolean> | boolean | void;
+		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		disabled?: boolean;
-		/** The provider behind this selector is unreachable. */
-		error?: boolean;
 		forceForegroundText?: boolean;
 		/** When true, user's global selection takes priority over currentModel (for form selector) */
 		useGlobalSelection?: boolean;
@@ -36,14 +29,12 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
-		error = false,
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
 
 	let sheetOpen = $state(false);
-	let showAddBackend = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -54,7 +45,6 @@
 		useGlobalSelection: () => useGlobalSelection
 	});
 
-	// one setting for every model id in the selector: the trigger and the rows
 	const showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
 
 	export function open() {
@@ -73,13 +63,6 @@
 		// let the sheet finish closing before the dialog takes focus
 		setTimeout(() => uiStore.openModelsManager(), 0);
 	}
-
-	function handleAddBackend() {
-		sheetOpen = false;
-
-		// let the sheet finish closing before the dialog takes focus
-		setTimeout(() => (showAddBackend = true), 0);
-	}
 </script>
 
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
@@ -89,13 +72,7 @@
 			Loading models…
 		</div>
 	{:else if ms.options.length === 0 && ms.isMultiModel}
-		<button
-			class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-			onclick={handleAddBackend}
-			type="button"
-		>
-			No models yet. Add a backend to get started.
-		</button>
+		<span class="text-xs text-muted-foreground">No models yet.</span>
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}
@@ -114,15 +91,13 @@
 			<button
 				class={[
 					`relative inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 max-sm:px-3 max-sm:py-2 max-sm:text-sm dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-					error
-						? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
-						: !ms.isCurrentModelInCache
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-							: forceForegroundText
+					!ms.isCurrentModelInCache
+						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+						: forceForegroundText
+							? 'text-foreground'
+							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: ms.isHighlightedCurrentModelActive
-									? 'text-foreground'
-									: 'text-foreground',
+								: 'text-foreground',
 					sheetOpen && 'text-foreground'
 				]}
 				disabled={disabled || ms.updating}
@@ -201,8 +176,6 @@
 								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
 								loaded={ms.loadedItems}
-								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
-								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								sectionHeaderClass="px-2 py-2 text-xs font-semibold text-muted-foreground/60 select-none"
 								{showOrgName}
@@ -227,15 +200,13 @@
 			<button
 				class={[
 					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-					error
-						? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
-						: !ms.isCurrentModelInCache
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-							: forceForegroundText
+					!ms.isCurrentModelInCache
+						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+						: forceForegroundText
+							? 'text-foreground'
+							: ms.isHighlightedCurrentModelActive
 								? 'text-foreground'
-								: ms.isHighlightedCurrentModelActive
-									? 'text-foreground'
-									: 'text-foreground'
+								: 'text-foreground'
 				]}
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}
@@ -257,8 +228,3 @@
 		{/if}
 	{/if}
 </div>
-
-<DialogBackendForm
-	bind:open={showAddBackend}
-	onSaved={(backend) => void ms.showBackendModels(backend.id)}
-/>

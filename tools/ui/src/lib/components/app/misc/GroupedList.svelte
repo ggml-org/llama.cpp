@@ -5,6 +5,14 @@
 		group: G;
 		key: string;
 	}
+
+	/** What a show-more row counts: rows of one group, or whole groups of the list. */
+	export const GroupedListUnit = {
+		ENTRIES: 'entries',
+		GROUPS: 'families'
+	} as const;
+
+	export type GroupedListUnit = (typeof GroupedListUnit)[keyof typeof GroupedListUnit];
 </script>
 
 <script generics="G, E" lang="ts">
@@ -29,7 +37,7 @@
 		/** Identity of a row, used for the keyed each. */
 		keyOf: (entry: E) => string;
 		/** The show more row. Without it the rest of a window stays hidden. */
-		more?: Snippet<[{ count: number; onMore: () => void; unit: 'entries' | 'families' }]>;
+		more?: Snippet<[{ count: number; onMore: () => void; unit: GroupedListUnit }]>;
 		/** Flat entries, rendered when the list has no groups. */
 		items?: E[];
 		/** Entries of the list shown before its show more row. 0 shows every entry. */
@@ -57,9 +65,8 @@
 		weightOf
 	}: Props = $props();
 
-	// groups start open; this tracks the ones the user folded away, and a list with
-	// a state key opens with the ones the user had folded away before the reload
-	// the initial namespace only
+	// groups start open: this tracks the ones the user folded away, and a state key
+	// restores the ones folded away before the reload
 	// svelte-ignore state_referenced_locally
 	const collapsed = new SvelteSet<string>(
 		groupStateKey ? modelsStore.collapsedGroupsUnder(groupStateKey) : []
@@ -139,7 +146,7 @@
 				{@render more({
 					count: Math.min(groupWindow, entry.hidden),
 					onMore: () => growGroup(entry.key),
-					unit: 'entries'
+					unit: GroupedListUnit.ENTRIES
 				})}
 			{/if}
 		</CollapsibleRegion>
@@ -149,7 +156,7 @@
 		{@render more({
 			count: Math.min(sectionWindow, (groups?.length ?? 0) - windowed.length),
 			onMore: () => (sectionSteps += 1),
-			unit: 'families'
+			unit: GroupedListUnit.GROUPS
 		})}
 	{/if}
 {:else}
@@ -161,7 +168,7 @@
 		{@render more({
 			count: Math.min(sectionWindow, items.length - flatRows.length),
 			onMore: () => (sectionSteps += 1),
-			unit: 'entries'
+			unit: GroupedListUnit.ENTRIES
 		})}
 	{/if}
 {/if}

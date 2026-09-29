@@ -136,6 +136,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: false,
+				help: 'Fetch model metadata (avatars, context length, chat template, file sizes) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models.',
+				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
+				label: 'Use Hugging Face Hub API for models metadata',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: true,
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,

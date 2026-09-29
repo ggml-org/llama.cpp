@@ -55,10 +55,6 @@ export default defineConfig(({ mode }) => {
 			fs: {
 				allow: [searchForWorkspaceRoot(process.cwd()), resolve(__dirname, 'tests')]
 			},
-			headers: {
-				'Cross-Origin-Embedder-Policy': 'require-corp',
-				'Cross-Origin-Opener-Policy': 'same-origin'
-			},
 			proxy: {
 				'/cors-proxy': SERVER_ORIGIN,
 				'/models': SERVER_ORIGIN,

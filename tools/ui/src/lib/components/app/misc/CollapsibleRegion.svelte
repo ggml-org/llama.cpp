@@ -36,12 +36,8 @@
 </div>
 
 <style>
-	/*
-	 * The region animates between height 0 and height auto. `interpolate-size`
-	 * lets the auto keyword take part in the interpolation, so the content needs
-	 * no measured height to stay in sync with. Browsers without it fall back to
-	 * an interpolating grid row, which snaps only in the oldest engines.
-	 */
+	/* `interpolate-size` lets `height: auto` take part in the transition, so the content
+	   needs no measured height. Older engines fall back to an interpolating grid row. */
 	.collapsible-region {
 		height: 0;
 		/* clip, not hidden: hidden would make the region a scrollport, and the

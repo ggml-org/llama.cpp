@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
-	import { isLocalOption } from './ModelsManager/utils';
+	import { MODEL_ID } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
@@ -21,14 +21,13 @@
 	$effect(() => {
 		template = '';
 
-		if (!isNearViewport || !isLocalOption(option)) return;
+		if (!isNearViewport) return;
 
-		// the listing says nothing about tools and reasoning; only the model's chat
-		// template does, and the Hub carries that template for a local GGUF whether
-		// it is loaded or not
-		const repo = option.model.split(':')[0] ?? '';
+		// only the chat template says whether tools and reasoning work, and the Hub
+		// carries it for a local GGUF whether the model is loaded or not
+		const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? '';
 
-		if (!repo.includes('/')) return;
+		if (!repo.includes(MODEL_ID.ORG_SEPARATOR)) return;
 
 		let cancelled = false;
 

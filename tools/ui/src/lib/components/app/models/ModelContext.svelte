@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { isLocalOption } from './ModelsManager/utils';
+	import { MODEL_ID } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { nearViewport } from '$lib/utils';
-	import { formatParameters } from '$lib/utils/formatters';
+	import { formatContextLength } from '$lib/utils/formatters';
 
 	interface Props {
 		class?: string;
@@ -22,10 +22,10 @@
 	$effect(() => {
 		fetched = null;
 
-		if (reported || !isNearViewport || !isLocalOption(option)) return;
+		if (reported || !isNearViewport) return;
 
 		// a local GGUF carries its trained context in the model metadata
-		const repo = option.model.split(':')[0] ?? '';
+		const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? '';
 
 		if (!repo) return;
 
@@ -44,7 +44,6 @@
 	});
 
 	let context = $derived(reported ?? fetched);
-	// `configured / supported`, or whichever of the two is known
 	let values = $derived(
 		[configured, context].filter((value): value is number => typeof value === 'number')
 	);
@@ -54,5 +53,5 @@
 	use:nearViewport={() => (isNearViewport = true)}
 	class={['text-sm text-muted-foreground', className]}
 >
-	{values.length ? `${values.map((value) => formatParameters(value)).join(' / ')} tokens` : '-'}
+	{formatContextLength(values)}
 </span>

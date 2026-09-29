@@ -13,8 +13,7 @@
 	let isDefault = $derived(reasoning.currentEffort === ReasoningEffort.DEFAULT);
 </script>
 
-<!-- Reasoning effort sits beside the model selector: the level belongs to the chat, not
-     to the model list, and the label says which one is in force without opening it. -->
+<!-- the level belongs to the chat, not to the model list -->
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
 		{#snippet child({ props })}
