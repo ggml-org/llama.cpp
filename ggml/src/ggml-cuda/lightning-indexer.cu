@@ -336,6 +336,8 @@ static __global__ void lightning_indexer_kernel_mma(
 
     __syncthreads();
 
+    constexpr ggml_cuda_mma::data_layout input_layout = ggml_cuda_mma::get_input_data_layout();
+
     for (int tile_idx = i_warp; tile_idx < N_TILES; tile_idx += WARPS_PER_BLOCK) {
         const int ht = tile_idx / N_KV_TILES;
         const int kt = tile_idx % N_KV_TILES;
@@ -344,8 +346,8 @@ static __global__ void lightning_indexer_kernel_mma(
 
 #pragma unroll
         for (int et = 0; et < N_EMBD_TILES; ++et) {
-            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2> Aq;
-            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2> Bk;
+            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2, input_layout> Aq;
+            ggml_cuda_mma::tile<MMA_DIM, MMA_DIM/2, half2, input_layout> Bk;
             ggml_cuda_mma::load_generic(Aq, (const half2 *) &q_shared[ht*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED/2);
             ggml_cuda_mma::load_generic(Bk, (const half2 *) &k_shared[kt*MMA_DIM][et*MMA_DIM], N_EMBD_PADDED/2);
             ggml_cuda_mma::mma(Dqk, Aq, Bk);
