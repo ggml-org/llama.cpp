@@ -29,11 +29,8 @@
 		size = 'h-9 w-9'
 	}: Props = $props();
 
-	let avatarError = $state(false);
-	let quantError = $state(false);
-
-	let orgAvatarFailed = $derived(avatarError || failedAvatarOrgs.has(org));
-	let quantAvatarFailed = $derived(quantError || failedAvatarOrgs.has(quantOrg ?? ''));
+	let orgAvatarFailed = $derived(failedAvatarOrgs.has(org));
+	let quantAvatarFailed = $derived(failedAvatarOrgs.has(quantOrg ?? ''));
 
 	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
 	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));
@@ -76,7 +73,6 @@
 				loading="lazy"
 				onerror={() => {
 					failedAvatarOrgs.add(org);
-					avatarError = true;
 				}}
 				src={HuggingFaceService.getAvatarUrl(org)}
 			/>
@@ -104,7 +100,6 @@
 					loading="lazy"
 					onerror={() => {
 						failedAvatarOrgs.add(quantOrg ?? '');
-						quantError = true;
 					}}
 					src={HuggingFaceService.getAvatarUrl(quantOrg)}
 				/>

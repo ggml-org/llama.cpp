@@ -28,8 +28,8 @@ export function formatFileSize(bytes: number | unknown): string {
 /**
  * Format parameter count to human-readable format (B, M, K)
  *
- * Billions render as whole numbers (`176.94e9` -> `177B`): the decimals are
- * noise at badge sizes and id-parsed counts are whole anyway (`Qwen3-8B`).
+ * Billions keep one decimal for hub counts (`15.2B`) and none for whole
+ * values (id-parsed counts are integers anyway, e.g. `8B`).
  *
  * @param params - Parameter count
  * @returns Human-readable parameter count
@@ -38,7 +38,9 @@ export function formatParameters(params: number | unknown): string {
 	if (typeof params !== 'number') return 'Unknown';
 
 	if (params >= 1e9) {
-		return `${Math.round(params / 1e9)}B`;
+		const billions = params / 1e9;
+
+		return `${Number.isInteger(billions) ? billions : billions.toFixed(1)}B`;
 	}
 
 	if (params >= 1e6) {
