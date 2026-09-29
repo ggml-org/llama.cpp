@@ -2308,6 +2308,7 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, const lla
 
 void llama_context::output_reorder() {
     const uint64_t n_vocab     = model.vocab.n_tokens();
+    const uint64_t n_embd      = model.hparams.n_embd;
     const uint64_t n_embd_out  = model.hparams.n_embd_out();
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
@@ -2363,7 +2364,6 @@ void llama_context::output_reorder() {
     output_swaps.clear();
 
     // Layer inputs and unmasked NextN embeddings contain all token rows, independent of logits selection.
-    const size_t n_embd = model.hparams.n_embd;
     for (size_t i = 0; i < embd_token_ids.size(); ++i) {
         while (embd_token_ids[i] != (int32_t) i) {
             const int32_t j = embd_token_ids[i];
