@@ -3,7 +3,6 @@
 #include "llama-impl.h"
 
 #include "ggml.h"
-#include "ggml-backend.h"
 
 #include <cstring>
 #include <climits>
@@ -679,9 +678,9 @@ const bool llama_mmap::SUPPORTED  = true;
 const bool llama_mmap::SUPPORTED  = false;
 #endif
 
-void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows) {
+void llama_prefetch(std::vector<llama_memory_range> ranges) {
 #if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
-    if (!tensor || !tensor->data || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer) || n_rows == 0) {
+    if (ranges.empty()) {
         return;
     }
 
@@ -699,10 +698,9 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
     }
 
     const size_t page = (size_t) page_size;
-    const size_t row_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
-    const uintptr_t base = (uintptr_t) tensor->data;
-    std::vector<int32_t> sorted(rows, rows + n_rows);
-    std::sort(sorted.begin(), sorted.end());
+    std::sort(ranges.begin(), ranges.end(), [](const llama_memory_range & a, const llama_memory_range & b) {
+        return (uintptr_t) a.addr < (uintptr_t) b.addr;
+    });
 
     uintptr_t begin = 0, end = 0;
 #if defined(_WIN32)
@@ -715,17 +713,19 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
 #else
     auto prefetch = [&]() {
         if (madvise((void *) begin, end - begin, MADV_WILLNEED) != 0) {
-            LLAMA_LOG_WARN("llama_prefetch_rows: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
+            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
             return false;
         }
         return true;
     };
 #endif
-    for (const int32_t row : sorted) {
-        GGML_ASSERT(row >= 0 && row < tensor->ne[1]);
-        const uintptr_t pointer = base + (size_t) row * tensor->nb[1];
+    for (const auto & range : ranges) {
+        if (!range.addr || range.size == 0) {
+            continue;
+        }
+        const uintptr_t pointer = (uintptr_t) range.addr;
         const uintptr_t first = pointer / page * page;
-        const uintptr_t last = (pointer + row_bytes + page - 1) / page * page;
+        const uintptr_t last = (pointer + range.size + page - 1) / page * page;
         if (end && first > end) {
             if (!prefetch()) {
                 return;
@@ -741,15 +741,13 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
         prefetch();
     }
 #if defined(_WIN32)
-    if (!PrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
-        LLAMA_LOG_WARN("llama_prefetch_rows: PrefetchVirtualMemory failed: %s\n",
+    if (!entries.empty() && !PrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
+        LLAMA_LOG_WARN("llama_prefetch: PrefetchVirtualMemory failed: %s\n",
                 llama_format_win_err(GetLastError()).c_str());
     }
 #endif
 #else
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(rows);
-    GGML_UNUSED(n_rows);
+    GGML_UNUSED(ranges);
 #endif
 }
 

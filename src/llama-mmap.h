@@ -6,8 +6,6 @@
 #include <vector>
 #include <cstdio>
 
-struct ggml_tensor;
-
 struct llama_file;
 struct llama_mmap;
 struct llama_mlock;
@@ -78,7 +76,12 @@ private:
     std::unique_ptr<impl> pimpl;
 };
 
-// Prefetch the host pages needed to gather these rows.
-void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows);
+struct llama_memory_range {
+    const void * addr;
+    size_t size;
+};
+
+// Prefetch the host pages covering these memory ranges.
+void llama_prefetch(std::vector<llama_memory_range> ranges);
 
 size_t llama_path_max();

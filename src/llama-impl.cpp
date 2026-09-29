@@ -1,5 +1,7 @@
 #include "llama-impl.h"
+#include "llama-mmap.h"
 
+#include "ggml-backend.h"
 #include "gguf.h"
 #include "llama.h"
 
@@ -16,6 +18,22 @@ struct llama_logger_state {
 };
 
 static llama_logger_state g_logger_state;
+
+void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows) {
+    if (!tensor || !tensor->data || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer) || n_rows == 0) {
+        return;
+    }
+
+    const size_t row_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
+    const auto * base = (const char *) tensor->data;
+    std::vector<llama_memory_range> ranges;
+    ranges.reserve(n_rows);
+    for (size_t i = 0; i < n_rows; ++i) {
+        GGML_ASSERT(rows[i] >= 0 && rows[i] < tensor->ne[1]);
+        ranges.push_back({ base + (size_t) rows[i] * tensor->nb[1], row_bytes });
+    }
+    llama_prefetch(std::move(ranges));
+}
 
 time_meas::time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
 
