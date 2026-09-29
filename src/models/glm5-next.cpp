@@ -598,18 +598,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
     ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
 
-    ggml_tensor * k_store = mctx_lid->get_k_storage(il); // [3*n_embd_indexer, kv_size, n_stream]
-    GGML_ASSERT(k_store->ne[0] == 3*n_embd_indexer);
-    const int64_t n_cells = k_store->ne[1]*k_store->ne[2];
-    const int64_t n_kv    = mctx_lid->get_n_kv();
-
-    ggml_tensor * kg_all     = ggml_view_2d(ctx0, k_store, 2*n_embd_indexer, n_cells, k_store->nb[1], 0);
-    // View into the persistent pooled slots of the idx cache. Guarded by mem_idx_stale.
-    ggml_tensor * pooled_all = ggml_view_2d(ctx0, k_store,   n_embd_indexer, n_cells, k_store->nb[1],
-                                            ggml_row_size(k_store->type, 2*n_embd_indexer));
+    auto kpool_cache = mctx_lid->get_kpool_access(ctx0, il, n_embd_indexer);
+    const int64_t n_kv = mctx_lid->get_n_kv();
 
     // Pool the entries completed by this ubatch. The last one is a dummy when the ubatch completes none.
-    ggml_tensor * rows = ggml_get_rows(ctx0, kg_all, ggml_reshape_1d(ctx0, inp_kpool->new_pool_idxs, kpool*n_new));
+    ggml_tensor * rows = kpool_cache.gather_key_gate(ggml_reshape_1d(ctx0, inp_kpool->new_pool_idxs, kpool*n_new));
     rows = ggml_reshape_3d(ctx0, rows, 2*n_embd_indexer, kpool, n_new);
 
     ggml_tensor * pk = ggml_view_3d(ctx0, rows, n_embd_indexer, kpool, n_new, rows->nb[1], rows->nb[2], 0);
@@ -628,12 +621,12 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
 
     if (inp_kpool->cache_safe) {
         // Write before the pool gather.
-        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, pooled_all, pooled_new, inp_kpool->new_pool_rep));
+        ggml_build_forward_expand(gf, kpool_cache.scatter_pooled(pooled_new, inp_kpool->new_pool_rep));
     }
 
     ggml_tensor * pooled = nullptr;
     if (inp_kpool->cache_safe) {
-        pooled = ggml_get_rows(ctx0, pooled_all, inp_kpool->pool_cells);
+        pooled = kpool_cache.gather_pooled(inp_kpool->pool_cells);
     } else {
         GGML_ASSERT(n_new <= n_pool);
         ggml_tensor * pad = ggml_fill(ctx0,
@@ -779,12 +772,8 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
         ggml_tensor * sel_idx = sel; // I32 [n_sel, n_tokens]
         const int64_t n_sel = sel_idx->ne[0];
 
-        ggml_tensor * k = mctx_mla->get_k_storage(il); // [kv_lora_rank, kv_size, n_stream]
-        GGML_ASSERT(k->ne[0] == kv_lora_rank && "GLM5-Next MLA cache holds a single latent head");
-
-        ggml_tensor * rows = ggml_view_2d(ctx0, k, k->ne[0], k->ne[1]*k->ne[2], k->nb[1], 0);
-        ggml_tensor * k_g  = ggml_get_rows(ctx0, rows, ggml_reshape_1d(ctx0, sel_idx, n_sel*n_tokens));
-        k_g = ggml_reshape_4d(ctx0, k_g, k->ne[0], n_sel, 1, n_tokens); // F32 [kv_lora_rank, n_sel, 1, n_tokens]
+        ggml_tensor * k_g = mctx_mla->gather_k_rows(ctx0, sel_idx, n_sel*n_tokens, kv_lora_rank, il);
+        k_g = ggml_reshape_4d(ctx0, k_g, kv_lora_rank, n_sel, 1, n_tokens); // F32 [kv_lora_rank, n_sel, 1, n_tokens]
         cb(k_g, "kv_gathered", il);
 
         ggml_tensor * q_g = ggml_permute(ctx0, q_absorbed, 0, 2, 3, 1); // [kv_lora_rank, 1, n_head, n_tokens]

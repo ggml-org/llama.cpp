@@ -19,6 +19,22 @@ struct llama_context;
 
 class llama_kv_cache : public llama_memory_i {
 public:
+    class kpool_access {
+    public:
+        ggml_tensor * gather_key_gate(ggml_tensor * idxs) const;
+        ggml_tensor * scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const;
+        ggml_tensor * gather_pooled(ggml_tensor * idxs) const;
+
+    private:
+        friend class llama_kv_cache;
+
+        kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd);
+
+        ggml_context * ctx;
+        ggml_tensor  * key_gate;
+        ggml_tensor  * pooled;
+    };
+
     struct stream_copy_info {
         bool empty() const {
             assert(ssrc.size() == sdst.size());
@@ -165,7 +181,11 @@ public:
     ggml_type type_v() const;
 
     std::vector<uint32_t> get_layer_ids() const;
+    // DSV4 state I/O and stream clearing still need all K rows. Revisit this raw access:
+    // https://github.com/ggml-org/llama.cpp/pull/27773#discussion_r4130905603
     ggml_tensor * get_k_storage(int32_t il) const;
+    kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
+    ggml_tensor * gather_k_rows(ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const;
 
     const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
@@ -361,6 +381,7 @@ public:
     // some shorthands
     using slot_info_vec_t  = llama_kv_cache::slot_info_vec_t;
     using stream_copy_info = llama_kv_cache::stream_copy_info;
+    using kpool_access     = llama_kv_cache::kpool_access;
 
     // used for errors
     llama_kv_cache_context(llama_memory_status status);
@@ -407,8 +428,8 @@ public:
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
-    // The full K storage tensor of the layer, spanning all streams.
-    ggml_tensor * get_k_storage(int32_t il) const;
+    kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
+    ggml_tensor * gather_k_rows(ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
