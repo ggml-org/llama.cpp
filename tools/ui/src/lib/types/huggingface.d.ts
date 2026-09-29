@@ -5,6 +5,8 @@
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
 
+import type { HfEntryType, HfModelSort } from '$lib/enums';
+
 // Search Options
 
 export interface HfModelSearchParams {
@@ -40,8 +42,6 @@ export interface HfModelSearchParams {
 	gated?: boolean;
 }
 
-import type { HfEntryType, HfModelSort } from '$lib/enums';
-
 // Model Info (from /api/models)
 
 export interface HfModelInfo {
@@ -51,8 +51,8 @@ export interface HfModelInfo {
 	id: string;
 	/** Number of likes */
 	likes: number;
-	/** Trending score */
-	trendingScore: number;
+	/** Trending score; only present when the query sorts by it or expands the field */
+	trendingScore?: number;
 	/** Whether the model is private */
 	private: boolean;
 	/** Number of downloads */
@@ -63,8 +63,8 @@ export interface HfModelInfo {
 	pipeline_tag: string | null;
 	/** Library name (e.g., "transformers", "diffusers") */
 	library_name: string | null;
-	/** Creation timestamp */
-	createdAt: string;
+	/** Creation timestamp; only present when the query expands the field */
+	createdAt?: string;
 	/** Model ID (alias for id) */
 	modelId: string;
 	/** Author / organization (present when full=true) */
