@@ -15,7 +15,15 @@ export const SIDECAR_TOKENS: string[] = [
 
 /** Separator between token alternatives in the sidecar regexes. */
 const REGEX_ALTERNATION_SEPARATOR = '|';
-const SIDECAR_TOKEN_ALTERNATION = SIDECAR_TOKENS.join(REGEX_ALTERNATION_SEPARATOR);
+
+/** Escape regex metacharacters so a token change cannot silently corrupt the alternation. */
+function escapeRegExp(token: string): string {
+	return token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SIDECAR_TOKEN_ALTERNATION = SIDECAR_TOKENS.map(escapeRegExp).join(
+	REGEX_ALTERNATION_SEPARATOR
+);
 
 export const MODEL_ID = {
 	/**
