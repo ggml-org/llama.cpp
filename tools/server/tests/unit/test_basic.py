@@ -3,6 +3,8 @@ import requests
 import socket
 from utils import *
 
+pytestmark = pytest.mark.pr
+
 server = ServerPreset.tinyllama2()
 
 
