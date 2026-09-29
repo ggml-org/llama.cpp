@@ -81,7 +81,7 @@ struct mtmd_cli_context {
     llama_context     * lctx;
     const llama_vocab * vocab;
     common_sampler    * smpl;
-    llama_batch         batch;
+    common_batch        batch;
     int                 n_batch;
 
     mtmd::bitmaps bitmaps;
@@ -115,7 +115,7 @@ struct mtmd_cli_context {
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;
-        batch = llama_batch_init(1, 0, 1); // batch for next token generation
+        batch = common_batch(lctx); // batch for next token generation
         n_batch = params.n_batch;
 
         init_vision_context(params);
@@ -148,7 +148,6 @@ struct mtmd_cli_context {
     }
 
     ~mtmd_cli_context() {
-        llama_batch_free(batch);
         common_sampler_free(smpl);
     }
 
@@ -230,9 +229,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         }
 
         // eval the token
-        common_batch_clear(ctx.batch);
-        common_batch_add(ctx.batch, token_id, ctx.n_past++, {0}, true);
-        if (llama_decode(ctx.lctx, ctx.batch)) {
+        ctx.batch.clear();
+        ctx.batch.add(token_id, ctx.n_past++, 0, true);
+        if (llama_process(ctx.lctx, LLAMA_PROCESS_TYPE_DECODE, ctx.batch.get())) {
             LOG_ERR("failed to decode token\n");
             return 1;
         }
