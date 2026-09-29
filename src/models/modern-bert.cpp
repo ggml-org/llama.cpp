@@ -20,6 +20,11 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
     }
 
+    // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
+    if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+        hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
+    }
+
     switch (hparams.n_layer()) {
         case 12:
             type = LLM_TYPE_47M; break; // granite-embedding-small

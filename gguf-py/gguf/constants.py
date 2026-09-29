@@ -313,6 +313,7 @@ class Keys:
 
     class Classifier:
         OUTPUT_LABELS = "{arch}.classifier.output_labels"
+        POOLING_TYPE  = "{arch}.classifier.pooling_type"
 
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
