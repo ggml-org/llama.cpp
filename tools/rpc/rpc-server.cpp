@@ -18,12 +18,13 @@
 #include <thread>
 #include <vector>
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
 
 
+// NOTE: this is copied from common.cpp to avoid linking with libcommon
 static std::string fs_path_to_utf8(const std::filesystem::path & path) {
     const auto value = path.u8string();
     return std::string(value.begin(), value.end());
@@ -45,38 +46,37 @@ static std::filesystem::path common_get_path_from_env(const std::string & name) 
 }
 
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
+#if !defined(_WIN32)
+static std::filesystem::path get_home_directory() {
+    std::filesystem::path home = common_get_path_from_env("HOME");
+    if (!home.empty()) {
+        return home;
+    }
+    const struct passwd * pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir || !*pw->pw_dir) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    return pw->pw_dir;
+}
+#endif
+
+// NOTE: this is copied from common.cpp to avoid linking with libcommon
 static std::filesystem::path fs_get_cache_directory() {
     std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
-
 #if defined(_WIN32)
     cache_directory = common_get_path_from_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
-    cache_directory = common_get_path_from_env("HOME");
-    if (cache_directory.empty()) {
-        throw std::runtime_error("Failed to find $HOME directory");
-    }
-    cache_directory /= "Library/Caches";
+    cache_directory = get_home_directory() / "Library/Caches";
 #else
     cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
-        cache_directory = common_get_path_from_env("HOME");
-        if (!cache_directory.empty()) {
-            cache_directory /= ".cache";
-        } else {
-            /* no $HOME is defined, fallback to getpwuid */
-            const struct passwd * pw = getpwuid(getuid());
-            if (!pw || !pw->pw_dir || !*pw->pw_dir) {
-                throw std::runtime_error("Failed to find $HOME directory");
-            }
-            cache_directory = pw->pw_dir;
-            cache_directory /= ".cache";
-        }
+        cache_directory = get_home_directory() / ".cache";
     }
 #endif
     return cache_directory / "llama.cpp";

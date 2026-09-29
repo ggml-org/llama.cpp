@@ -916,7 +916,7 @@ bool fs_is_directory(const std::string & path);
 
 std::filesystem::path fs_get_cache_directory();
 std::filesystem::path fs_get_cache_file(const std::string & filename);
-std::string fs_get_config_directory();
+std::filesystem::path fs_get_config_directory();
 
 struct common_file_info {
     std::string path;
