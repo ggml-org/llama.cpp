@@ -2914,6 +2914,11 @@ void common_speculative_draft(common_speculative * spec) {
                     if (!result.empty() && (int) result.size() > dp.n_max) {
                         SPC_DBG("truncating draft to %d tokens\n", dp.n_max);
                         result.resize(dp.n_max);
+
+                        // the candidates are one per drafted token and must be cut with them
+                        if (dp.result_q) {
+                            dp.result_q->resize(dp.n_max);
+                        }
                     }
                 }
 
