@@ -95,6 +95,7 @@ public:
                          bool   offload,
                          bool   swa_full,
                          bool   unified,
+                         bool   gpu_pill,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,

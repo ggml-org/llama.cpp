@@ -1,5 +1,9 @@
 #include "llama-model.h"
 
+#ifdef GUANACO_ENABLED
+#include "guanaco/guanaco_model_hook.h"
+#endif
+
 #include "llama-arch.h"
 #include "llama-ext.h"
 #include "llama-hparams.h"
@@ -1940,6 +1944,71 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+#ifdef GUANACO_ENABLED
+    // Tensor-Data Redirection: for every fused expert tensor, allocate a
+    // sparse slab and point the ggml tensor's data at it. The router
+    // (via the eval callback) later preads only the selected
+    // expert slices into that slab before mul_mat_id runs.
+    if (this->guanaco_hook != nullptr) {
+        auto * hook = static_cast<guanaco::GuanacoModelHook *>(this->guanaco_hook);
+        for (auto & [ctx, buf_map] : ctx_buf_maps) {
+            (void)buf_map;
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                const char * name = ggml_get_name(t);
+                if (name == nullptr || strstr(name, "exps.weight") == nullptr) {
+                    continue;
+                }
+                const guanaco::ExpertManifestEntry * e = hook->lookup_expert(name);
+                if (e == nullptr) {
+                    continue;
+                }
+                // fused expert tensor: trailing dim > 1 is the expert count
+                int num_experts = 1;
+                for (int d = GGML_MAX_DIMS - 1; d >= 0; --d) {
+                    if (t->ne[d] > 1) {
+                        num_experts = (int)t->ne[d];
+                        break;
+                    }
+                }
+                if (num_experts <= 1) {
+                    continue;
+                }
+                // Safety: only redirect tensors whose expert count matches our
+                // parsed GGUF manifest and whose bytes divide evenly per
+                // expert. Models where a non-routed tensor happens to contain
+                // "exps.weight" (e.g. shared-expert or cascade blocks) would
+                // otherwise get a broken slab and corrupt inference. In that
+                // case leave ggml's normal mmap in place (safe fallback).
+                const size_t nb = ggml_nbytes(t);
+                if (e->num_experts_in_tensor != num_experts ||
+                    num_experts <= 0 || nb == 0 || nb % (size_t)num_experts != 0) {
+                    fprintf(stderr, "%s: guanaco skipping '%s' (manifest experts=%d, tensor experts=%d, bytes=%zu) - not a cleanly-routed expert tensor\n",
+                            __func__, name, e->num_experts_in_tensor, num_experts, nb);
+                    continue;
+                }
+                // MXFP4 (microscaling FP4) stores each expert's weights with
+                // block scales in a layout our flat per-expert slab copy does
+                // not reproduce correctly, which corrupts inference. Leave
+                // such tensors on ggml's normal mmap (correct, just not
+                // streamed) until the slice layout is supported.
+                if (t->type == GGML_TYPE_MXFP4) {
+                    fprintf(stderr, "%s: guanaco skipping '%s' (type=MXFP4) - streaming unsupported for this quant; using mmap\n",
+                            __func__, name);
+                    continue;
+                }
+                // In-place mmap paging: keep ggml reading from the original
+                // file-backed mmap address; guanaco streams experts via
+                // madvise (DONTNEED/WILLNEED) using this address as the base.
+                hook->register_expert_tensor(name, e->layer_idx, e->file_offset, nb, num_experts, t->data);
+            }
+        }
+        // All expert tensors registered: seed hot-expert pinning from a
+        // sibling imatrix prior (if present) and pin the calibration-hot
+        // experts so they are resident before the first token is processed.
+        hook->on_expert_tensors_registered();
+    }
+#endif
+
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
@@ -2374,6 +2443,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         !cparams.flash_attn,
                         cparams.offload_kqv,
                         cparams.kv_unified,
+                        params.gpu_pill,
                         cparams.n_ctx_seq,
                         cparams.n_seq_max,
                         1,
@@ -2401,12 +2471,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
                             hparams.swa_type,
-                            nullptr,
+                            params.mem_other,
                             filter,
                             nullptr,
                             nullptr);
@@ -2426,6 +2497,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             1,
@@ -2448,12 +2520,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
                             hparams.swa_type,
-                            nullptr,
+                            params.mem_other,
                             nullptr,
                             nullptr,
                             nullptr);
@@ -2468,6 +2541,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             1,
@@ -2495,12 +2569,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
                             hparams.swa_type,
-                            nullptr,
+                            params.mem_other,
                             filter,
                             nullptr,
                             nullptr);
@@ -2520,6 +2595,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             params.swa_full,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
@@ -2546,11 +2622,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             params.swa_full,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
                             1,
-                            nullptr,
+                            params.mem_other,
                             filter_mtp,
                             nullptr,
                             nullptr);
@@ -2563,6 +2640,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             params.swa_full,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
@@ -2586,11 +2664,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             params.swa_full,
                             cparams.kv_unified,
+                            params.gpu_pill,
                             cparams.n_ctx_seq,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
                             1,
-                            nullptr,
+                            params.mem_other,
                             nullptr,
                             nullptr,
                             nullptr);
@@ -2674,6 +2753,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
+                            /* gpu_pill          */ params.gpu_pill,
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr));
                     } else if (needs_mem_idx) {
@@ -2694,6 +2774,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
+                            /* gpu_pill          */ params.gpu_pill,
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr),
                             /* filter_idx        */ std::move(filter_idx));
@@ -2714,6 +2795,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
+                            /* gpu_pill          */ params.gpu_pill,
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr));
                     }
@@ -2772,6 +2854,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     cparams.offload_kqv,
                                     params.swa_full,
                                     cparams.kv_unified,
+                                    params.gpu_pill,
                                     cparams.n_ctx_seq,
                                     cparams.n_seq_max,
                                     cparams.n_ubatch,
@@ -2789,11 +2872,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                     cparams.offload_kqv,
                                     params.swa_full,
                                     cparams.kv_unified,
+                                    params.gpu_pill,
                                     cparams.n_ctx_seq,
                                     cparams.n_seq_max,
                                     cparams.n_ubatch,
                                     1,
-                                    nullptr,
+                                    params.mem_other,
                                     filter,
                                     reuse,
                                     share);
@@ -2809,12 +2893,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
+                                params.gpu_pill,
                                 cparams.n_ctx_seq,
                                 cparams.n_seq_max,
                                 1,
                                 hparams.n_swa,
                                 hparams.swa_type,
-                                nullptr,
+                                params.mem_other,
                                 filter,
                                 nullptr,
                                 nullptr);
@@ -2869,6 +2954,13 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+#ifdef GUANACO_ENABLED
+        /*.guanaco_max_experts         =*/ -1,
+        /*.guanaco_io_uring            =*/ true,
+        /*.guanaco_pilot               =*/ true,
+        /*.guanaco_pilot_mass          =*/ 0.9f,
+        /*.guanaco_imatrix             =*/ true,
+#endif
         /*.load_mtp                    =*/ false,
     };
 
@@ -3314,6 +3406,15 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
     TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL),
     TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
     TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
+
+llama_model_base::~llama_model_base() {
+#ifdef GUANACO_ENABLED
+    if (guanaco_hook != nullptr) {
+        guanaco::destroy_guanaco_model_hook(guanaco_hook);
+        guanaco_hook = nullptr;
+    }
+#endif
+}
 
 ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
     GGML_ASSERT(ml != nullptr);

@@ -591,8 +591,12 @@ static hf_cache::hf_file find_best_sibling(const hf_cache::hf_files & files,
     auto model_parts = string_split<std::string>(model, '/');
     auto model_dir = model_parts.end() - 1;
 
+    auto is_gguf_ext = [](const std::string & p) {
+        return string_ends_with(p, ".gguf") || string_ends_with(p, ".gguf_file");
+    };
+
     for (const auto & f : files) {
-        if (!string_ends_with(f.path, ".gguf") ||
+        if (!is_gguf_ext(f.path) ||
             f.path.find(keyword) == std::string::npos) {
             continue;
         }
@@ -656,6 +660,11 @@ static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
                                           const std::string        & model,
                                           const std::string        & tag = "") {
     return find_best_sibling(files, model, "dspark-", tag);
+}
+
+static hf_cache::hf_file find_best_imatrix(const hf_cache::hf_files & files,
+                                           const std::string        & model) {
+    return find_best_sibling(files, model, "imatrix");
 }
 
 static bool gguf_filename_is_model(const std::string & filepath) {
@@ -792,6 +801,9 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
     }
     if (opts.download_dspark) {
         plan.dspark = find_best_dspark(all, primary.path, tag);
+    }
+    if (opts.download_imatrix) {
+        plan.imatrix = find_best_imatrix(all, primary.path);
     }
 
     if (primary.path.empty() &&

@@ -3,6 +3,7 @@
 
 // shared globals
 extern ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface;
+extern ggml_backend_buffer_type_i ggml_backend_vk_uma_buffer_type_interface;
 extern bool vk_memory_logger_enabled;
 extern bool vk_perf_logger_enabled;
 extern bool vk_perf_logger_concurrent;
@@ -12,6 +13,7 @@ extern std::string vk_pipeline_stats_filter;
 extern void * const vk_ptr_base;
 extern vk_instance_t vk_instance;
 extern ggml_backend_buffer_i ggml_backend_vk_buffer_interface;
+extern ggml_backend_buffer_i ggml_backend_vk_buffer_interface_host;
 
 // instance
 vk_device ggml_vk_get_device(size_t idx);
@@ -228,6 +230,16 @@ ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buff
 size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
+
+const char * ggml_backend_vk_buffer_type_uma_name(ggml_backend_buffer_type_t buft);
+ggml_backend_buffer_t ggml_backend_vk_buffer_type_uma_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);
+size_t ggml_backend_vk_buffer_type_uma_get_alignment(ggml_backend_buffer_type_t buft);
+size_t ggml_backend_vk_buffer_type_uma_get_max_size(ggml_backend_buffer_type_t buft);
+size_t ggml_backend_vk_buffer_type_uma_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
+bool ggml_backend_vk_buffer_type_uma_is_host(ggml_backend_buffer_type_t buft);
+ggml_backend_buffer_type_t ggml_backend_vk_buffer_type_uma(size_t dev_num);
+
+void * ggml_backend_vk_buffer_get_base_host(ggml_backend_buffer_t buffer);
 void ggml_backend_vk_free(ggml_backend_t backend);
 ggml_backend_reg_t ggml_backend_vk_reg();
 
@@ -279,4 +291,3 @@ inline void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
         subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
     }
 }
-

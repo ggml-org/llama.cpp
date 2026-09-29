@@ -20,6 +20,7 @@ public:
                          bool   v_trans,
                          bool   offload,
                          bool   unified,
+                         bool   gpu_pill,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_pad,

@@ -779,6 +779,8 @@ struct ggml_backend_sched_split {
     struct ggml_tensor ** inputs;
     int n_inputs;
     int inputs_capacity;
+    int sync_backend_ids[GGML_SCHED_MAX_BACKENDS];
+    int n_sync_backends;
     // graph view of this split
     struct ggml_cgraph graph;
 };
@@ -858,6 +860,25 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
     }
     split->inputs = pnew;
     split->inputs_capacity = new_cap;
+}
+
+static void ggml_backend_sched_split_sync_add(struct ggml_backend_sched_split * split, int backend_id) {
+    if (backend_id < 0) {
+        return;
+    }
+
+    for (int i = 0; i < split->n_sync_backends; i++) {
+        if (split->sync_backend_ids[i] == backend_id) {
+            return;
+        }
+    }
+
+    if (split->n_sync_backends >= GGML_SCHED_MAX_BACKENDS) {
+        GGML_LOG_ERROR("%s: too many sync backends\n", __func__);
+        return;
+    }
+
+    split->sync_backend_ids[split->n_sync_backends++] = backend_id;
 }
 
 static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
@@ -1309,6 +1330,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         }
         split->i_start = 0;
         split->n_inputs = 0;
+        split->n_sync_backends = 0;
         int cur_backend_id = split->backend_id;
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
@@ -1358,6 +1380,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 split->backend_id = node_backend_id;
                 split->i_start = i;
                 split->n_inputs = 0;
+                split->n_sync_backends = 0;
                 cur_backend_id = node_backend_id;
             }
 
@@ -1396,27 +1419,31 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     }
                 }
 
-                if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
-                    // create a copy of the input in the split's backend
-                    if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
-                        ggml_backend_t backend = sched->backends[cur_backend_id];
-                        for (int c = 0; c < sched->n_copies; c++) {
-                            struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
-                            ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
-                            if (sched->n_copies > 1) {
-                                ggml_set_input(tensor_copy);
-                                ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
+                if (src_backend_id != cur_backend_id) {
+                    if (!ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
+                        // create a copy of the input in the split's backend
+                        if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
+                            ggml_backend_t backend = sched->backends[cur_backend_id];
+                            for (int c = 0; c < sched->n_copies; c++) {
+                                struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
+                                ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
+                                if (sched->n_copies > 1) {
+                                    ggml_set_input(tensor_copy);
+                                    ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
+                                }
+                                tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
+                                SET_CAUSE(tensor_copy, "4.cpy");
                             }
-                            tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
-                            SET_CAUSE(tensor_copy, "4.cpy");
+                            int n_inputs = split->n_inputs++;
+                            if (n_inputs >= split->inputs_capacity) {
+                                ggml_backend_sched_split_inputs_grow(split);
+                            }
+                            split->inputs[n_inputs] = src;
                         }
-                        int n_inputs = split->n_inputs++;
-                        if (n_inputs >= split->inputs_capacity) {
-                            ggml_backend_sched_split_inputs_grow(split);
-                        }
-                        split->inputs[n_inputs] = src;
+                        node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+                    } else if (src->buffer && ggml_backend_buft_is_host(src->buffer->buft)) {
+                        ggml_backend_sched_split_sync_add(split, src_backend_id);
                     }
-                    node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
             }
         }
@@ -1792,6 +1819,18 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ggml_backend_tensor_copy(input, input_cpy);
                     }
                 }
+            }
+        }
+
+        for (int sync_id = 0; sync_id < split->n_sync_backends; sync_id++) {
+            const int src_backend_id = split->sync_backend_ids[sync_id];
+            if (src_backend_id < 0 || src_backend_id == split_backend_id) {
+                continue;
+            }
+            if (sched->events[src_backend_id][sched->cur_copy] != NULL) {
+                ggml_backend_event_wait(split_backend, sched->events[src_backend_id][sched->cur_copy]);
+            } else {
+                ggml_backend_synchronize(sched->backends[src_backend_id]);
             }
         }
 

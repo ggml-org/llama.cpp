@@ -19,6 +19,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                      bool   offload,
                      bool   swa_full,
                      bool   unified,
+                     bool   gpu_pill,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
@@ -27,7 +28,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share) :
-    llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
+    llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified, gpu_pill,
             kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share) {
 }
 
@@ -40,6 +41,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
                      bool   offload,
                      bool   swa_full,
                      bool   unified,
+                     bool   gpu_pill,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
@@ -94,14 +96,14 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
 
     kv_base = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
-            v_trans, offload, unified, size_base, n_seq_max, n_pad,
+            v_trans, offload, unified, gpu_pill, size_base, n_seq_max, n_pad,
             0, LLAMA_SWA_TYPE_NONE, mem_other_base, filter_base, reuse, share);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
             model, hparams, type_k, type_v,
-            v_trans, offload, unified, size_swa, n_seq_max, n_pad,
+            v_trans, offload, unified, gpu_pill, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share);
 }
 

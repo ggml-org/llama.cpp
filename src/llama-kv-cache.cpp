@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "ggml-backend.h"
 
 #include <algorithm>
 #include <cassert>
@@ -58,6 +59,26 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
     }
 }
 
+using ggml_backend_vk_get_uma_buffer_type_t = ggml_backend_buffer_type_t (*)(ggml_backend_dev_t dev);
+
+static ggml_backend_buffer_type_t ggml_backend_dev_get_uma_buft(ggml_backend_dev_t dev) {
+    if (!dev) {
+        return nullptr;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    if (!reg) {
+        return nullptr;
+    }
+
+    auto fn = (ggml_backend_vk_get_uma_buffer_type_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_vk_get_uma_buffer_type");
+    if (!fn) {
+        return nullptr;
+    }
+
+    return fn(dev);
+}
+
 //
 // llama_kv_cache
 //
@@ -70,6 +91,7 @@ llama_kv_cache::llama_kv_cache(
                      bool   v_trans,
                      bool   offload,
                      bool   unified,
+                     bool   gpu_pill,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_pad,
@@ -216,6 +238,11 @@ llama_kv_cache::llama_kv_cache(
         if (offload) {
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
+            if (gpu_pill) {
+                if (auto * uma_buft = ggml_backend_dev_get_uma_buft(dev)) {
+                    buft = uma_buft;
+                }
+            }
 
             dev_name = ggml_backend_dev_name(dev);
         }

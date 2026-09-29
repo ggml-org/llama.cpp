@@ -27,6 +27,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
                  uint32_t   n_rs_seq,
                      bool   offload,
                      bool   unified,
+                     bool   gpu_pill,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
     const layer_filter_cb & filter_recr) :
@@ -39,6 +40,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
         offload,
         swa_full,
         unified,
+        gpu_pill,
         kv_size,
         n_seq_max,
         n_ubatch,

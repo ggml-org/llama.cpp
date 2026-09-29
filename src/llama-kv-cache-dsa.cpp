@@ -18,6 +18,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
                      bool   v_trans,
                      bool   offload,
                      bool   unified,
+                     bool   gpu_pill,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_pad,
@@ -32,7 +33,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
 
     kv_mla = std::make_unique<llama_kv_cache>(
             model, model.hparams, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
+            v_trans, offload, unified, gpu_pill, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, nullptr, filter_mla, reuse, nullptr);
 
     // we use llama_kv_cache for caching indexer keys
@@ -49,7 +50,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
 
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
-            v_trans, offload, unified, kv_size, n_seq_max, n_pad,
+            v_trans, offload, unified, gpu_pill, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
 }
 
