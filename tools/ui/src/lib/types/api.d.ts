@@ -456,6 +456,11 @@ export interface ApiModelsLoadResponse {
 export interface ApiModelsListResponse {
 	object: string;
 	data: ApiModelDataEntry[];
+	/**
+	 * Optional details aligned by index with `data`: `models[i]` describes
+	 * `data[i]`. The server fills both arrays in one pass, so the pairing only
+	 * holds while neither array is filtered independently.
+	 */
 	models?: ApiModelDetails[];
 }
 
