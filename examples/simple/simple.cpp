@@ -77,9 +77,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // load dynamic backends
-
-    ggml_backend_load_all();
+    llama_backend_init();
 
     // initialize the model
 

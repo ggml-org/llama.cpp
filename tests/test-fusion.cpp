@@ -297,7 +297,7 @@ int main(int argc, char ** argv) {
     }
 
     common_init();
-    ggml_backend_load_all();
+    llama_backend_init();
 
     ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
     if (!dev) {

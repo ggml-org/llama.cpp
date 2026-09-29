@@ -489,6 +489,7 @@ extern "C" {
     LLAMA_API void llama_backend_free(void);
 
     // Optional: enable numa optimizations
+    // TODO: deprecate and make part of llama_backend_init()
     LLAMA_API void llama_numa_init(enum ggml_numa_strategy numa);
 
     // Optional: an auto threadpool gets created in ggml if not passed explicitly
