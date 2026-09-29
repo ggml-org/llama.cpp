@@ -379,3 +379,15 @@ if (TARGET gguf-model-data)
     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+# CPU reference by default; pass a backend name explicitly for device qualification.
+llama_build_and_test(test-vulkan-adreno-compat.cpp)
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if (Python3_Interpreter_FOUND AND NOT CMAKE_CROSSCOMPILING AND NOT MSVC)
+    add_test(NAME test-vulkan-adreno-routing
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-vulkan-adreno-routing.py
+                --compiler ${CMAKE_CXX_COMPILER})
+    add_test(NAME test-vulkan-adreno-mutations
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-vulkan-adreno-mutations.py
+                --compiler ${CMAKE_CXX_COMPILER})
+endif()

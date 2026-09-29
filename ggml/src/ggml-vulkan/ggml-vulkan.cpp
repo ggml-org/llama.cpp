@@ -1,3 +1,4 @@
+#include "ggml-vulkan-adreno-compat.hpp"
 #include "ggml-vulkan-common.h"
 
 namespace {
@@ -2691,7 +2692,15 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     auto const &rm_id = [&](uint32_t rows) { return is_rdna3 ? 4u : rows; };
     uint32_t rm_iq = 2 * rm_kq;
 
-    const bool use_subgroups = device->subgroup_arithmetic;
+    bool use_subgroups = device->subgroup_arithmetic;
+#if defined(__ANDROID__) && defined(GGML_VULKAN_ADRENO_750_SHMEM)
+    // This Adreno 750 driver's shader compiler crashes in vkCreateComputePipelines on the
+    // subgroup-reduction dequant mul_mat_vec shaders; fall back to shared-memory reduction.
+    if (ggml_vk_adreno_750_dmmv_shmem(device->properties.vendorID, static_cast<uint32_t>(device->driver_id),
+                                      device->properties.driverVersion, device->properties.deviceName.data())) {
+        use_subgroups = false;
+    }
+#endif
     // The Imagination proprietary compiler rejects the subgroup-only dequant mul_mat_vec
     // shaders that require a subgroup size >= 16; fall back to shared-memory reduction.
     const bool is_imagination_proprietary =
