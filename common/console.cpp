@@ -1050,7 +1050,6 @@ namespace console {
         if (!std::getline(std::wcin, wline)) {
             // Input stream is bad or EOF received
             line.clear();
-            GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
             return false;
         }
 
