@@ -2292,7 +2292,7 @@ class TextModel(ModelBase):
         if (field := vocab_reader.get_field(gguf.Keys.Tokenizer.ADD_EOS)) is not None:
             self.gguf_writer.add_add_eos_token(field.parts[-1].tolist()[0])
 
-    def _try_set_pooling_type(self) -> None:
+    def _get_pooling_type(self) -> gguf.PoolingType | None:
         # get pooling path
         pooling_path = None
         module_path = self.dir_model / "modules.json"
@@ -2324,6 +2324,11 @@ class TextModel(ModelBase):
                 pooling_type = mode_mapping[pooling_mode]
             else:
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
+            return pooling_type
+        return None
+
+    def _try_set_pooling_type(self) -> None:
+        if (pooling_type := self._get_pooling_type()) is not None:
             self.gguf_writer.add_pooling_type(pooling_type)
 
     def _set_vocab_glmedge(self):

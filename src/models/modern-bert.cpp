@@ -63,10 +63,11 @@ void llama_model_modern_bert::load_arch_tensors(llama_model_loader &) {
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
     }
 
-    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
-    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
-    cls       = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {n_embd, n_embd},            TENSOR_NOT_REQUIRED);
-    cls_norm  = create_tensor(tn(LLM_TENSOR_CLS_NORM, "weight"), {n_embd},                    TENSOR_NOT_REQUIRED);
+    cls_out    = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+    cls_out_b  = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+    cls        = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {n_embd, n_embd},            TENSOR_NOT_REQUIRED);
+    cls_norm   = create_tensor(tn(LLM_TENSOR_CLS_NORM, "weight"), {n_embd},                    TENSOR_NOT_REQUIRED);
+    cls_norm_b = create_tensor(tn(LLM_TENSOR_CLS_NORM, "bias"),   {n_embd},                    TENSOR_NOT_REQUIRED);
 
 }
 

@@ -2830,7 +2830,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     std::unique_ptr<llm_graph_context> llm = build_arch_graph(params);
 
     // add on pooling layer
-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
+    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm, cls_norm_b);
 
     // add backend sampling layers (if any)
     llm->build_sampling();

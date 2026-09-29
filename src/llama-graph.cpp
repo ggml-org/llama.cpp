@@ -3688,7 +3688,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
         ggml_tensor * cls_out_b,
-        ggml_tensor * cls_norm) const {
+        ggml_tensor * cls_norm,
+        ggml_tensor * cls_norm_b) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -3751,7 +3752,7 @@ void llm_graph_context::build_pooling(
                     }
                     if (cls_norm) {
                         // head norm
-                        cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
+                        cur = build_norm(cur, cls_norm, cls_norm_b, LLM_NORM, -1);
                     }
                 }
 

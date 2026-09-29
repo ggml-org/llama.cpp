@@ -600,6 +600,61 @@ class JinaBertV2Model(BertModel):
 class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cross_encoder_pooling, self.cross_encoder_head = self._get_cross_encoder_head()
+
+    def _get_cross_encoder_head(self) -> tuple[gguf.PoolingType | None, list[tuple[str, str]]]:
+        # sentence-transformers CrossEncoder with the score head stored as separate modules
+        st_config_file = self.dir_model / "config_sentence_transformers.json"
+        modules_file = self.dir_model / "modules.json"
+        if not st_config_file.is_file() or not modules_file.is_file():
+            return None, []
+        with open(st_config_file, encoding="utf-8") as f:
+            if json.load(f).get("model_type") != "CrossEncoder":
+                return None, []
+        with open(modules_file, encoding="utf-8") as f:
+            modules = json.load(f)
+
+        kinds = [mod["type"].rsplit(".", 1)[-1] for mod in modules]
+        if kinds == ["Transformer"]:
+            return None, []
+        if kinds[:2] != ["Transformer", "Pooling"] or kinds[2:] not in (["Dense"], ["Dense", "Dense"], ["Dense", "LayerNorm", "Dense"]):
+            raise NotImplementedError(f"Unsupported CrossEncoder modules: {kinds}")
+        pooling_type = self._get_pooling_type()
+        if pooling_type not in (gguf.PoolingType.CLS, gguf.PoolingType.MEAN):
+            raise NotImplementedError(f"Unsupported CrossEncoder pooling: {pooling_type}")
+
+        n_embd = self.hparams["hidden_size"]
+        n_cls_out = len(self.cls_out_labels) if self.cls_out_labels else 1
+        head: list[tuple[str, str]] = []
+        for mod, kind in zip(modules[2:], kinds[2:]):
+            if not (self.dir_model / mod["path"] / "model.safetensors").is_file():
+                raise NotImplementedError(f"CrossEncoder module {mod['path']} has no model.safetensors, only safetensors weights are supported")
+            with open(self.dir_model / mod["path"] / "config.json", encoding="utf-8") as f:
+                cfg = json.load(f)
+            if kind == "LayerNorm":
+                ok = cfg["dimension"] == n_embd
+                prefix = "head.norm"
+            elif mod is modules[-1]:
+                # score projection
+                ok = cfg["activation_function"].endswith(".Identity") and cfg["in_features"] == n_embd and cfg["out_features"] == n_cls_out
+                prefix = "classifier.out_proj"
+            else:
+                # rank graph applies GELU after this dense, no bias
+                ok = cfg["activation_function"].endswith(".GELU") and not cfg["bias"] and cfg["in_features"] == cfg["out_features"] == n_embd
+                prefix = "head.dense"
+            if not ok:
+                raise NotImplementedError(f"Unsupported CrossEncoder module {mod['path']}: {cfg}")
+            head.append((mod["path"], prefix))
+        return pooling_type, head
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        from safetensors.torch import load_file
+        for path, prefix in self.cross_encoder_head:
+            for name, tensor in load_file(self.dir_model / path / "model.safetensors").items():
+                yield f"{prefix}.{name.rsplit('.', 1)[-1]}", tensor
+
     def set_vocab(self):
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
@@ -619,7 +674,9 @@ class ModernBertModel(BertModel):
         # llama.cpp graph can pick the matching activation.
         if hidden_act := self.hparams.get("hidden_activation"):
             self.gguf_writer.add_hidden_act(hidden_act)
-        if self.hf_arch == "ModernBertForSequenceClassification":
+        if self.cross_encoder_pooling is not None:
+            self.gguf_writer.add_classifier_pooling_type(self.cross_encoder_pooling)
+        elif self.hf_arch == "ModernBertForSequenceClassification":
             # transformers defaults to "cls"
             pooling_types = {"cls": gguf.PoolingType.CLS, "mean": gguf.PoolingType.MEAN}
             self.gguf_writer.add_classifier_pooling_type(pooling_types[self.hparams.get("classifier_pooling", "cls")])
