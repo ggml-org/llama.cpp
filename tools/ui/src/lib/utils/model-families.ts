@@ -5,16 +5,20 @@ export interface ModelFamilyGroup<T> {
 	label: string;
 }
 
+/** Leading letters of a repo name, e.g. the `Qwen` of `Qwen3.8-27B`. */
+const FAMILY_LETTERS = /^[A-Za-z]+/;
+/** Separators between the segments of a repo name. */
+const FAMILY_SEPARATORS = /[-_.]/;
+
 /**
- * Family a repo belongs to, from its name. The version is dropped, so `Qwen3.5`,
- * `Qwen3.8-27B` and `Qwen3.8-Flash-Next` all read as `Qwen`. A name that does not
- * start with letters keeps its first segment.
+ * Family a repo belongs to: the leading letters of its name, so `Qwen3.5` and
+ * `Qwen3.8-27B` both read as `Qwen`.
  */
 export function modelFamilyKey(repo: string): string {
 	const name = repo.split('/').pop() ?? repo;
-	const letters = name.match(/^[A-Za-z]+/);
+	const letters = name.match(FAMILY_LETTERS);
 
-	return letters ? letters[0] : (name.split(/[-_.]/)[0] ?? name);
+	return letters ? letters[0] : (name.split(FAMILY_SEPARATORS)[0] ?? name);
 }
 
 /** Fold entries into families, so `Qwen` collects its sizes and variants. */

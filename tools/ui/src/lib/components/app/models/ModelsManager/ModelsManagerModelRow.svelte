@@ -9,12 +9,12 @@
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { KeyboardKey } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
 		isFavorite: (option: ModelOption) => boolean;
-		/** Model this row stands for. */
 		option: ModelOption;
 		onDelete: (option: ModelOption) => void;
 		onSelect: (option: ModelOption) => void;
@@ -29,9 +29,9 @@
 	let isHidden = $derived(modelsStore.isHidden(option.id));
 
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === ' ') event.preventDefault();
+		if (event.key === KeyboardKey.SPACE) event.preventDefault();
 
-		if (event.key === 'Enter' || event.key === ' ') onSelect(option);
+		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) onSelect(option);
 	}
 </script>
 

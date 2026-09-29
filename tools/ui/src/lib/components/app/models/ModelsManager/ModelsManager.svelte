@@ -1,20 +1,23 @@
 <script lang="ts">
+	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
 		groupModelQuants,
-		type ModalityKey,
 		modelContextLength,
 		type ModelQuantGroup,
-		MODELS_TABLE_GROUP_LABELS,
 		type ModelsTableGroup,
-		ModelsTableGroupKind,
 		modelSupports
 	} from './utils';
-	import { LOCAL_BACKEND_ID } from '$lib/constants';
+	import {
+		LOCAL_BACKEND_ID,
+		type ModalityKey,
+		MODELS_TABLE_GROUP_LABELS,
+		ModelsTableGroupKind
+	} from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
-	import { type Snippet } from 'svelte';
+	import { type Snippet, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -32,6 +35,68 @@
 	let selectedId = $state<string | null>(null);
 
 	let allModels = $derived(modelsStore.models);
+
+	let selected = $derived(allModels.find((option) => option.id === selectedId) ?? null);
+	// The pane is laid out before it is ever opened, so the first open only slides a
+	// finished panel in. It renders the selection, else the model it last showed.
+	let lastPicked = $state<ModelOption | null>(null);
+	let target = $derived(selected ?? lastPicked ?? allModels[0] ?? null);
+	let shownId = $state<string | null>(null);
+	let isSwapping = $state(false);
+	let fade = $state<'open' | 'swap'>('open');
+	let shownOption = $derived(allModels.find((option) => option.id === shownId) ?? null);
+
+	$effect(() => {
+		const id = selectedId;
+
+		if (!id) return;
+
+		// untracked: the effect must not track the state it writes
+		untrack(() => {
+			lastPicked = allModels.find((option) => option.id === id) ?? null;
+		});
+	});
+
+	// Another model fades the panel out, swaps it, then fades it back in.
+	$effect(() => {
+		const next = target?.id ?? null;
+
+		if (!next) return;
+
+		if (shownId === null) {
+			untrack(() => (shownId = next));
+
+			return;
+		}
+
+		if (next === shownId) {
+			if (selected) {
+				untrack(() => {
+					isSwapping = false;
+					fade = 'open';
+				});
+			}
+
+			return;
+		}
+
+		untrack(() => {
+			isSwapping = true;
+			fade = 'swap';
+		});
+
+		const timer = setTimeout(() => {
+			untrack(() => {
+				shownId = next;
+				isSwapping = false;
+			});
+		}, SWAP_FADE_MS);
+
+		return () => clearTimeout(timer);
+	});
+
+	/** How long the panel takes to fade out before it swaps to another model. */
+	const SWAP_FADE_MS = 120;
 	let isFavorite = $derived((option: ModelOption) =>
 		modelsStore.favoriteModelIds.has(option.model)
 	);
@@ -59,8 +124,7 @@
 		});
 	});
 
-	// recently used models lead their section, the rest keep the server's order;
-	// derived, so a pick made while the manager is open reorders the sections
+	// recently used models lead their section, the rest keep the server's order
 	let rank = $derived.by(() => {
 		const map = new SvelteMap<string, number>();
 
@@ -73,12 +137,10 @@
 		Math.min(...entry.quants.map((quant) => rank.get(quant.id) ?? Number.MAX_SAFE_INTEGER));
 	const byRecency = (list: ModelQuantGroup[]) =>
 		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
-	// one entry per repo, so a model with several quants is a single table row;
-	// loaded models lead the table, then favorites, then the local block
+	// one entry per repo, so a model with several quants takes a single table row
 	let entries = $derived(byRecency(groupModelQuants(matching)));
 	let groups = $derived.by(() => {
-		// A loaded quant is a model of its own: it moves to the loaded section, and
-		// the quants of its repo that are not loaded stay behind as that repo.
+		// a loaded quant is a model of its own: its repo keeps the quants left behind
 		const isLoaded = (option: ModelOption) => modelsStore.isModelLoaded(option.model);
 		const loaded: ModelQuantGroup[] = [];
 		const rest: ModelQuantGroup[] = [];
@@ -140,6 +202,22 @@
 
 		uiStore.manageModelFocus = null;
 	});
+	async function toggleLoad(option: ModelOption): Promise<void> {
+		if (modelsStore.isModelLoaded(option.model)) {
+			await modelsStore.status.unload(option.model);
+
+			return;
+		}
+
+		await modelsStore.status.load(option.model);
+	}
+
+	async function useInNewChat(option: ModelOption): Promise<void> {
+		await modelsStore.selectModelById(option.id);
+		await conversationsStore.openNewChat();
+		// the chat is behind the dialog, so it takes focus once the dialog is out of the way
+		uiStore.requestComposerFocus();
+	}
 </script>
 
 <div class={['flex min-h-0 flex-1', className]}>
@@ -156,4 +234,68 @@
 			{toolbarEnd}
 		/>
 	</div>
+
+	<div class="pane-drawer shrink-0" data-open={selected !== null}>
+		<!-- the content box keeps the open width, so it never reflows with the drawer -->
+		<div
+			class="pane-content flex h-full min-h-0 w-[30rem] max-w-[30rem] flex-col border-l border-border/40"
+			data-fade={fade}
+			data-visible={selected !== null && !isSwapping}
+		>
+			{#if shownOption}
+				{#key shownId}
+					<ModelsManagerModelConfiguration
+						onClose={() => (selectedId = null)}
+						onToggleLoad={() => void toggleLoad(shownOption)}
+						onUseInNewChat={() => void useInNewChat(shownOption)}
+						option={shownOption}
+					/>
+				{/key}
+			{/if}
+		</div>
+	</div>
 </div>
+
+<style>
+	/*
+	 * The drawer moves by width because the table behind it gets that space back, so
+	 * the content box inside holds the open width and only the container changes.
+	 * Opening takes the iOS-like drawer curve; closing is the system responding, so
+	 * it snaps back on the stronger ease-out.
+	 */
+	.pane-drawer {
+		width: 0;
+		overflow: clip;
+		visibility: hidden;
+		transition:
+			width 120ms cubic-bezier(0.23, 1, 0.32, 1),
+			visibility 120ms;
+	}
+
+	.pane-drawer[data-open='true'] {
+		width: 30rem;
+		visibility: visible;
+		transition:
+			width 200ms cubic-bezier(0.32, 0.72, 0, 1),
+			visibility 200ms;
+	}
+
+	.pane-content {
+		opacity: 0;
+		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+
+	.pane-content[data-visible='true'] {
+		opacity: 1;
+	}
+
+	/* opening: the fade waits for the drawer to move */
+	.pane-content[data-visible='true'][data-fade='open'] {
+		transition: opacity 150ms cubic-bezier(0.23, 1, 0.32, 1) 80ms;
+	}
+
+	/* swapping models: out, then in, with no pause */
+	.pane-content[data-visible='true'][data-fade='swap'] {
+		transition: opacity 120ms cubic-bezier(0.23, 1, 0.32, 1);
+	}
+</style>

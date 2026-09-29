@@ -8,14 +8,13 @@
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
 	} from '$lib/components/app';
-	import { DialogBackendForm } from '$lib/components/app/backends';
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
-		MODEL_ID,
 		MODEL_ICON,
+		MODEL_ID,
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
@@ -24,20 +23,13 @@
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
 	import { modelLoadFraction } from '$lib/utils';
-	import { rawModelId } from '$lib/utils/model-option-id';
 
 	interface Props {
 		class?: string;
 		currentModel?: string | null;
 		disabled?: boolean;
-		/** The provider behind this selector is unreachable. */
-		error?: boolean;
 		forceForegroundText?: boolean;
-		onModelChange?: (
-			modelId: string,
-			modelName: string,
-			backendId?: string
-		) => Promise<boolean> | boolean | void;
+		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		useGlobalSelection?: boolean;
 	}
 
@@ -45,7 +37,6 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
-		error = false,
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
@@ -53,7 +44,6 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
-	let showAddBackend = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -97,9 +87,8 @@
 		highlightedId = null;
 	});
 
-	// The search input takes focus as soon as it is mounted. bits-ui auto-focuses
-	// the opened content by default, which can yank the page scroll, so the content
-	// prevents that and this waits for the input instead.
+	// bits-ui auto-focuses the opened content, which can yank the page scroll: the
+	// content prevents that and this focuses the search input instead
 	$effect(() => {
 		if (!isOpen) return;
 
@@ -127,9 +116,6 @@
 		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
-		}
-		for (const provider of ms.groupedFilteredOptions.providers) {
-			for (const item of provider.items) order.push(item.option.id);
 		}
 
 		return order;
@@ -164,13 +150,6 @@
 		setTimeout(() => uiStore.openModelsManager(), 0);
 	}
 
-	function handleAddBackend() {
-		isOpen = false;
-
-		// let the menu finish closing before the dialog takes focus
-		setTimeout(() => (showAddBackend = true), 0);
-	}
-
 	// Alt+Enter only unloads and keeps the dropdown open.
 	async function handleModelKeyAction(modelId: string, unload: boolean) {
 		if (!unload) {
@@ -179,13 +158,12 @@
 			return;
 		}
 
-		const rawId = rawModelId(modelId);
-		const model = modelsStore.routerModels.find((m) => m.id === rawId);
+		const model = modelsStore.routerModels.find((m) => m.id === modelId);
 		const status = model?.status?.value as ServerModelStatus | undefined;
 
 		if (status === ServerModelStatus.LOADING) return;
 
-		await modelsStore.status.unload(rawId);
+		await modelsStore.status.unload(modelId);
 	}
 
 	export function open() {
@@ -232,13 +210,7 @@
 				<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
-			<button
-				class="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-				onclick={handleAddBackend}
-				type="button"
-			>
-				No models yet. Add a backend to get started.
-			</button>
+			<span class="text-xs text-muted-foreground">No models yet.</span>
 		{/if}
 	{:else}
 		{@const triggerStatus = triggerModel
@@ -262,15 +234,13 @@
 								{...props}
 								class={[
 									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-									error
-										? 'border-destructive/40 bg-destructive/10 !text-destructive hover:bg-destructive/20'
-										: !ms.isCurrentModelInCache
-											? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-											: forceForegroundText
+									!ms.isCurrentModelInCache
+										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+										: forceForegroundText
+											? 'text-foreground'
+											: ms.isHighlightedCurrentModelActive
 												? 'text-foreground'
-												: ms.isHighlightedCurrentModelActive
-													? 'text-foreground'
-													: 'text-foreground',
+												: 'text-foreground',
 									isOpen && 'text-foreground',
 									'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
 								]}
@@ -285,8 +255,8 @@
 									{#if selectedOption}
 										<ModelId
 											class="min-w-0 overflow-hidden"
-											draftSidecars={selectedOption.draftSidecars}
 											hideOrgName={!showOrgName}
+											hideQuantization
 											modelId={selectedOption.model}
 										/>
 									{:else}
@@ -387,8 +357,6 @@
 								favorites={ms.favoriteItems}
 								groups={ms.groupedFilteredOptions}
 								loaded={ms.loadedItems}
-								onProviderBack={ms.isProviderView ? ms.closeProvider : undefined}
-								onProviderOpen={ms.openProvider}
 								onSelect={ms.handleSelect}
 								renderOption={modelOption}
 								sectionHeaderClass="[&:not(:first-child)]:mt-1 mb-1 px-2 py-2 text-[13px] font-semibold text-foreground/80 select-none"
@@ -440,8 +408,8 @@
 							{#if selectedOption}
 								<ModelId
 									class="min-w-0 overflow-hidden"
-									draftSidecars={selectedOption.draftSidecars}
 									hideOrgName={!showOrgName}
+									hideQuantization
 									modelId={selectedOption.model}
 								/>
 							{/if}
@@ -455,15 +423,10 @@
 
 				{#if selectedOption}
 					<Tooltip.Content>
-							<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
-						</Tooltip.Content>
+						<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
+					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
 		{/if}
 	{/if}
 </div>
-
-<DialogBackendForm
-	bind:open={showAddBackend}
-	onSaved={(backend) => void ms.showBackendModels(backend.id)}
-/>

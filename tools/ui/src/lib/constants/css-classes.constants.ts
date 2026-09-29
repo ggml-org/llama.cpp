@@ -23,6 +23,9 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
 
+/** Search input of an open dropdown-menu, focused after the menu mounts. */
+export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-content"] input';
+
 /** Filter controls above the model table: one box, one height, one fill. */
 export const FILTER_TRIGGER_CLASS = `
     h-8
@@ -35,6 +38,10 @@ export const FILTER_TRIGGER_CLASS = `
     hover:bg-muted/80 dark:hover:bg-muted
     ${INPUT_CLASSES}
 `;
+
+/** One filter toggle of the models manager toolbar. */
+export const FILTER_TOGGLE_ITEM_CLASS =
+	'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
 
 /** Column grid shared by every row of the models manager table. */
 export const MODEL_ROW_GRID_CLASS =

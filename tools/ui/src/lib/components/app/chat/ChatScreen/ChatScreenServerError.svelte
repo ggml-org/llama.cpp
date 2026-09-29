@@ -2,17 +2,10 @@
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { useBackendAvailability } from '$lib/hooks/use-backend-availability.svelte';
-	import { backendsStore, serverStore } from '$lib/stores';
+	import { serverStore } from '$lib/stores';
 
-	const availability = useBackendAvailability();
-
+	let hasError = $derived(!!serverStore.error);
 	let isLoadingModel = $derived(serverStore.status === 503);
-	// A single provider leaves nowhere to switch to, so the banner is the only
-	// place the failure can be reported. With another provider available the
-	// selector carries it instead, and stays usable.
-	let isOnlyProvider = $derived(backendsStore.enabled.length <= 1);
-	let hasError = $derived(availability.isOffline && isOnlyProvider);
 </script>
 
 {#if hasError || isLoadingModel}

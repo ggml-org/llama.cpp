@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
-	import { type ModalityKey } from './utils';
 	import { X } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
+	import { type ModalityKey } from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 	import { uiStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';

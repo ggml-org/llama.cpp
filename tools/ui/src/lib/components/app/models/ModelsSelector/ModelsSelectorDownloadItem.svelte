@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelsDiscoverAvatar from '../discover/ModelsDiscoverAvatar.svelte';
-	import ModelsDiscoverDownloadProgressBar from '../discover/ModelsDiscoverDownloadProgressBar.svelte';
+	import ModelDownloadProgressBar from '../ModelDownloadProgressBar.svelte';
+	import ModelOrgAvatar from '../ModelOrgAvatar.svelte';
 	import { Info, Loader2, Pause, Play, X } from '@lucide/svelte';
-	import { ModelId } from '$lib/components/app';
+	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore, uiStore } from '$lib/stores';
 	import type { ModelDownloadProgress } from '$lib/types';
@@ -10,10 +10,7 @@
 	interface Props {
 		/** One entry from the status feed: an in-flight or paused download. */
 		entry: { isPaused: boolean; progress: ModelDownloadProgress | null; repoWithTag: string };
-		/**
-		 * Ask the list to confirm cancelling this download. The row owns no dialog;
-		 * the list renders a single shared confirmation.
-		 */
+		/** Ask the list to confirm cancelling; the list owns the single dialog. */
 		onRequestCancel?: (repoWithTag: string) => void;
 		/** Show the organization name in the repo id, as the other selector rows do. */
 		showOrgName?: boolean;
@@ -29,8 +26,7 @@
 
 	let actionText = $derived(entry.isPaused ? 'Resume downloading' : 'Pause downloading');
 
-	// Avatar: the repo org with the quantizer org corner badge, as in the model
-	// option rows; the base model org resolves lazily via HF when unknown
+	// the base model org resolves lazily via HF when unknown
 	let orgName = $derived(ModelsService.parseModelId(entry.repoWithTag).orgName);
 	let fetchedBaseModelOrg = $state<string | null>(null);
 
@@ -71,7 +67,7 @@
 		type="button"
 	>
 		{#if orgName}
-			<ModelsDiscoverAvatar
+			<ModelOrgAvatar
 				org={fetchedBaseModelOrg ?? orgName}
 				quantOrg={orgName}
 				quantPositionClass="-bottom-1 -right-1"
@@ -107,26 +103,24 @@
 		</span>
 	</button>
 
-	<button
-		aria-label="Manage model"
-		class="inline-flex h-4 w-4 shrink-0 scale-75 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-foreground group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+	<ActionIcon
+		ariaLabel="Manage model"
+		class="h-4 w-4 shrink-0 scale-75 cursor-pointer rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-foreground group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+		icon={Info}
+		iconSize="h-4 w-4"
 		onclick={() => uiStore.openModelsManager(entry.repoWithTag)}
-		type="button"
-	>
-		<Info class="h-4 w-4" />
-	</button>
+	/>
 
-	<button
-		aria-label="Cancel downloading"
-		class="inline-flex h-4 w-4 shrink-0 scale-75 cursor-pointer items-center justify-center rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-destructive group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+	<ActionIcon
+		ariaLabel="Cancel downloading"
+		class="h-4 w-4 shrink-0 scale-75 cursor-pointer rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-destructive group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+		icon={X}
+		iconSize="h-4 w-4"
 		onclick={() => onRequestCancel?.(entry.repoWithTag)}
-		type="button"
-	>
-		<X class="h-4 w-4" />
-	</button>
+	/>
 
 	{#if entry.progress && entry.progress.totalBytes > 0}
-		<ModelsDiscoverDownloadProgressBar
+		<ModelDownloadProgressBar
 			downloadedBytes={entry.progress.downloadedBytes}
 			overlay
 			totalBytes={entry.progress.totalBytes}

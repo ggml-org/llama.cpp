@@ -5,7 +5,6 @@
 	import type { Snippet } from 'svelte';
 
 	interface Props {
-		/** Section rows. */
 		children: Snippet;
 		/** Extra classes for the chevron, to line it up with a row's own control. */
 		chevronClass?: string;
@@ -26,7 +25,6 @@
 		sectionHeaderClass?: string;
 		/** Sticky class of the header, so a surface can shade it differently. */
 		stickyClass?: string;
-		/** Sticks the header to the top of the scrollport. */
 		sticky?: boolean;
 	}
 
@@ -50,7 +48,7 @@
 	let triggerClass = $derived(
 		`${sectionHeaderClass} flex w-full cursor-pointer items-center gap-1.5 text-left${sticky ? ` ${stickyClass}` : ''}`
 	);
-	// the dropdown publishes its search block height, surfaces without one fall back to 0
+	// surfaces without a search block fall back to a 0 sticky height
 	let triggerStyle = $derived(sticky ? 'top: var(--dropdown-sticky-height, 0px)' : '');
 </script>
 
@@ -68,8 +66,7 @@
 				aria-label="Back to all providers"
 				class="-ml-1 inline-flex shrink-0 cursor-pointer items-center rounded-sm p-0.5 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground"
 				onclick={(event) => {
-					// the surrounding trigger toggles the section, the back control
-					// must not collapse the list it is leaving
+					// the back control must not collapse the list it is leaving
 					event.stopPropagation();
 					onBack?.();
 				}}
