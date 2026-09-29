@@ -38,7 +38,8 @@ RUN apt-get update && \
     libssl-dev \
     libgomp1 \
     musa-mualg-5-2 \
-    musa-muthrust-5-2
+    musa-muthrust-5-2 \
+    libmthreads-compute
 
 WORKDIR /app
 
