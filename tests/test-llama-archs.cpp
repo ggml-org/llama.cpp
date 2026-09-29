@@ -851,7 +851,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
 
-                bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
+                // granite_speech_5 takes audio embd input only (tok_embd has 1 row), so token input does not apply; the model is still generated above to cover the saver/loader round trip
+                bool skip = !arch_supported(arch) || arch == LLM_ARCH_GRANITE_SPEECH_5 || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 bool test_executed = false;
                 bool test_ok = true;
                 if (!skip) {
