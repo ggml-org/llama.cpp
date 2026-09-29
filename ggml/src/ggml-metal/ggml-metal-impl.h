@@ -1242,7 +1242,7 @@ typedef struct {
 
 // widths at or above this use the threadgroup FWHT kernel, one row per threadgroup
 // with GGML_METAL_FWHT_TG_NT threads, instead of one row per simdgroup
-#define GGML_METAL_FWHT_TG_MIN_N 1024
+#define GGML_METAL_FWHT_TG_MIN_N 512
 #define GGML_METAL_FWHT_TG_NT    256
 
 typedef struct {
