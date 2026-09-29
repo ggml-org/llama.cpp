@@ -12273,6 +12273,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
     }
 
+    // one token, short K (several rows per block), rows not a multiple of the block: the last block of an expert slot must not write into the next slot
+    for (ggml_type type_a : all_types) {
+        if (ggml_blck_size(type_a) < 32) {
+            continue;
+        }
+        for (int n_used : {2, 4}) {
+            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, n_used, false, 67, 1, 2*ggml_blck_size(type_a)));
+        }
+    }
+
     // Test IQP panel path for all grid IQ types
     for (ggml_type type_a : {GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
