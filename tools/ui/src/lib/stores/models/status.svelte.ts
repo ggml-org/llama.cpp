@@ -89,11 +89,8 @@ export class ModelStatusManager {
 
 	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
 	/**
-	 * Draft sidecars the registered models pull with them, keyed by the repo of
-	 * the model that pulls them. Read from the models' `--model-draft` args,
-	 * which is where the router records a sidecar it serves with a model; the
-	 * listing carries no sidecar entries of its own. The badge keeps the
-	 * sidecar's own repo, which may differ from the model's.
+	 * Draft sidecars the registered models pull with them, keyed by the repo of the model
+	 * that pulls them: the router records them in the model's `--model-draft` args.
 	 */
 	private draftSidecarsByRepo = $derived.by(() => {
 		const result = new SvelteMap<string, ModelSidecarBadge[]>();

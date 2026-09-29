@@ -1,10 +1,18 @@
 <script lang="ts">
-	import { MODALITY_KEYS, type ModalityKey } from './utils';
-	import { Image, Lightbulb, Mic, Video, Wrench } from '@lucide/svelte';
 	import { ScrollCarousel } from '$lib/components/app';
 	import * as Select from '$lib/components/ui/select';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
-	import { FILTER_TRIGGER_CLASS } from '$lib/constants';
+	import {
+		CAPABILITY_ICONS,
+		CAPABILITY_LABELS,
+		FILTER_TOGGLE_ITEM_CLASS,
+		FILTER_TRIGGER_CLASS,
+		MODALITY_FLAG_KEYS,
+		MODALITY_ICONS,
+		MODALITY_LABELS,
+		MODALITY_ORDER,
+		type ModalityKey
+	} from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
 
 	interface Props {
@@ -31,33 +39,28 @@
 		{ label: '1M or more', value: 1_048_576 }
 	];
 
-	const CAPABILITY_TOGGLES: { icon: typeof Wrench; label: string; value: ModelCapability }[] = [
-		{ icon: Wrench, label: 'Tool use', value: ModelCapability.TOOL_USE },
-		{ icon: Lightbulb, label: 'Reasoning', value: ModelCapability.REASONING }
-	];
+	const CAPABILITY_TOGGLES = [ModelCapability.TOOL_USE, ModelCapability.REASONING].map((value) => ({
+		icon: CAPABILITY_ICONS[value],
+		label: CAPABILITY_LABELS[value],
+		value
+	}));
 
-	const MODALITY_TOGGLES: { icon: typeof Wrench; label: string; value: ModalityKey }[] = [
-		{ icon: Image, label: 'Vision', value: 'vision' },
-		{ icon: Video, label: 'Video', value: 'video' },
-		{ icon: Mic, label: 'Audio', value: 'audio' }
-	];
+	const MODALITY_TOGGLES = MODALITY_ORDER.map((modality) => ({
+		icon: MODALITY_ICONS[modality],
+		label: MODALITY_LABELS[modality],
+		value: MODALITY_FLAG_KEYS[modality]
+	}));
 
-	// one group holds everything a model either has or does not: what it can do,
-	// and what it can accept
+	// one group holds what a model can do and what it can accept
 	const TOGGLES = [...CAPABILITY_TOGGLES, ...MODALITY_TOGGLES];
 	const CAPABILITY_VALUES = new Set<string>(CAPABILITY_TOGGLES.map((entry) => entry.value));
+	const MODALITY_VALUES = new Set<string>(MODALITY_TOGGLES.map((entry) => entry.value));
 
 	// the group holds one flat list, so a change splits back into the two filters
 	function setToggles(values: string[]): void {
 		capabilities = values.filter((value): value is ModelCapability => CAPABILITY_VALUES.has(value));
-		modalities = values.filter(
-			(value): value is ModalityKey =>
-				!CAPABILITY_VALUES.has(value) && (MODALITY_KEYS as string[]).includes(value)
-		);
+		modalities = values.filter((value): value is ModalityKey => MODALITY_VALUES.has(value));
 	}
-
-	const TOGGLE_ITEM_CLASS =
-		'bg-muted! border-border/30! shadow-none! dark:border-border/20! data-[state=on]:bg-muted-foreground/15! data-[state=on]:text-foreground! dark:data-[state=on]:bg-muted-foreground/25!';
 
 	let contextLabel = $derived(
 		CONTEXT_STEPS.find((step) => step.value === contextLimit)?.label ?? CONTEXT_STEPS[0].label
@@ -93,7 +96,7 @@
 		{#each TOGGLES as toggle (toggle.value)}
 			<ToggleGroup.Item
 				aria-label={toggle.label}
-				class={TOGGLE_ITEM_CLASS}
+				class={FILTER_TOGGLE_ITEM_CLASS}
 				title={toggle.label}
 				value={toggle.value}
 			>

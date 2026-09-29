@@ -77,6 +77,8 @@ export const SETTINGS_KEYS = {
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
 	TYP_P: 'typ_p',
+	// General
+	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;

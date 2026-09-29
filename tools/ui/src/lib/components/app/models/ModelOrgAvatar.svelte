@@ -29,8 +29,11 @@
 		size = 'h-9 w-9'
 	}: Props = $props();
 
-	let orgAvatarFailed = $derived(failedAvatarOrgs.has(org));
-	let quantAvatarFailed = $derived(failedAvatarOrgs.has(quantOrg ?? ''));
+	// with the Hub off there is nothing to fetch: render the monogram straight away
+	let orgAvatarFailed = $derived(!HuggingFaceService.isEnabled() || failedAvatarOrgs.has(org));
+	let quantAvatarFailed = $derived(
+		!HuggingFaceService.isEnabled() || failedAvatarOrgs.has(quantOrg ?? '')
+	);
 
 	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
 	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));

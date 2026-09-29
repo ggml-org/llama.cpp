@@ -62,11 +62,7 @@ export interface ParsedModelId {
 	tags: string[];
 }
 
-/**
- * Draft sidecar available for a model, with the quantization its file ships
- * as and the repo it was pulled from, e.g. `mtp` at `Q8_0` of the model's own
- * repo. Shown as a badge pair next to the model id.
- */
+/** Draft sidecar of a model, shown as a `+ [KIND] [QUANT]` badge pair. */
 export interface ModelSidecarBadge {
 	kind: ModelSidecar;
 	/** Quantization of the sidecar file itself; null when the name carries none. */
@@ -82,10 +78,7 @@ export interface ModalityCapabilities {
 	hasVideo: boolean;
 }
 
-/**
- * A draft sidecar file a model listing reports as its own entry. The router lists a
- * downloaded sidecar as a model, so this is what pairs it back with its model.
- */
+/** Sidecar file a listing reports as its own model entry, paired back to its model. */
 export interface ModelSidecarFile {
 	id: string;
 	kind: ModelSidecar;

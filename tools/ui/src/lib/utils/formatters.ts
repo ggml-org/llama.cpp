@@ -60,6 +60,22 @@ export function formatParameters(params: number | unknown): string {
  * @param num - Number to format
  * @returns Human-readable number
  */
+/** Separator between the context values shown for one model, e.g. `8192 / 4096`. */
+const CONTEXT_VALUE_SEPARATOR = ' / ';
+/** Unit the context values are shown in. */
+const CONTEXT_UNIT = 'tokens';
+/** Shown where a value is unknown. */
+const UNKNOWN_VALUE = '-';
+
+/**
+ * Context window of a model: `configured / supported tokens`, or whichever is known.
+ */
+export function formatContextLength(values: number[]): string {
+	return values.length
+		? `${values.map((value) => formatParameters(value)).join(CONTEXT_VALUE_SEPARATOR)} ${CONTEXT_UNIT}`
+		: UNKNOWN_VALUE;
+}
+
 export function formatNumber(num: number | unknown): string {
 	if (typeof num !== 'number') return 'Unknown';
 

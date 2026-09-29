@@ -8,9 +8,6 @@
  *
  * Integrates with modelsStore for model data and serverStore for mode detection.
  *
- * The selection UI lives in the ModelsSelector subfolder; the shared model
- * display primitives (id / badge rendering) stay here.
- *
  */
 
 /** * **ModelBadge** - Model name display badge
@@ -51,38 +48,15 @@ export { default as ModelCapabilities } from './ModelCapabilities.svelte';
 export { default as ModelContext } from './ModelContext.svelte';
 export { default as ModelId } from './ModelId.svelte';
 export { default as ModelAvatar } from './ModelAvatar.svelte';
+export { default as ModelDownloadProgressBar } from './ModelDownloadProgressBar.svelte';
 export { default as ModelLoadControl } from './ModelLoadControl.svelte';
+export { default as ModelOrgAvatar } from './ModelOrgAvatar.svelte';
 export { default as ModelRowActions } from './ModelRowActions.svelte';
 export { default as ModelsSection } from './ModelsSection.svelte';
 
-/**
- * **ModelCapabilityIcons** - Capability and modality icon row
- *
- * The shared tool-use / reasoning / vision / video / audio icon cluster with
- * tooltips, used by ModelId and the discover details header so the order and
- * styling stay consistent across every model-id surface.
- */
+/** Capability and modality icon row, shared by every model-id surface. */
 export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
-/**
- * **ModelDraftSidecars** - draft sidecar badges
- *
- * The `mtp|Q8_0` style badges for the draft sidecars a model pulls with it,
- * shared by ModelId and the manager's quant rows so they render identically
- * everywhere.
- */
-export { default as ModelDraftSidecars } from './ModelDraftSidecars.svelte';
-/**
- * **ModelId** - Parsed model identifier display
- *
- * Displays a model ID with optional org name, parameter badges, quantization,
- * aliases, and tags. Supports raw mode to show the unprocessed model name.
- * Respects the user's `showRawModelNames` setting.
- */
-export { default as ModelCapabilities } from './ModelCapabilities.svelte';
-export { default as ModelContext } from './ModelContext.svelte';
-export { default as ModelAvatar } from './ModelAvatar.svelte';
-export { default as ModelLoadControl } from './ModelLoadControl.svelte';
-export { default as ModelRowActions } from './ModelRowActions.svelte';
-export { default as ModelsSection } from './ModelsSection.svelte';
 
+/** Draft sidecar badges, rendered as `+ [KIND] [QUANT]` per sidecar. */
+export { default as ModelDraftSidecars } from './ModelDraftSidecars.svelte';
 export * from './ModelsSelector';

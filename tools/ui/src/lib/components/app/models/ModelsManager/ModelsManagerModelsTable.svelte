@@ -5,12 +5,9 @@
 	import ModelsManagerTableToolbar from './ModelsManagerTableToolbar.svelte';
 	import {
 		isModelRunning,
-		type ModalityKey,
 		modelContextLength,
 		type ModelQuantGroup,
-		type ModelsTableGroup,
-		ModelsTableGroupKind,
-		ModelsTableSortKey
+		type ModelsTableGroup
 	} from './utils';
 	import {
 		ArrowDown,
@@ -23,16 +20,25 @@
 		Power
 	} from '@lucide/svelte';
 	import {
+		CollapsibleRegion,
 		GroupedList,
 		type GroupedListGroup,
+		GroupedListUnit,
 		Logo,
 		ModelAvatar,
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
-	import { FAMILY_ROW_WINDOW, MODEL_ROW_GRID_CLASS, MODEL_ROW_WINDOW } from '$lib/constants';
-	import { ModelCapability, ModelDownloadConfirmAction } from '$lib/enums';
+	import {
+		FAMILY_ROW_WINDOW,
+		type ModalityKey,
+		MODEL_ROW_GRID_CLASS,
+		MODEL_ROW_WINDOW,
+		ModelsTableGroupKind,
+		ModelsTableSortKey
+	} from '$lib/constants';
+	import { KeyboardKey, ModelCapability, ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
@@ -72,6 +78,12 @@
 
 	/** In-flight and paused downloads, tracked by the status feed. */
 	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
+
+	/** Noun the show-more row counts in, per unit of the grouped list. */
+	const SHOW_MORE_NOUNS: Record<GroupedListUnit, string> = {
+		[GroupedListUnit.ENTRIES]: 'models',
+		[GroupedListUnit.GROUPS]: 'families'
+	};
 	let pendingCancel = $state('');
 	let cancelOpen = $state(false);
 	let pendingDelete = $state('');
@@ -98,7 +110,6 @@
 		})
 	);
 
-	/** Families of one section. */
 	function familyGroups(
 		group: (typeof sections)[number]
 	): GroupedListGroup<ModelFamilyGroup<ModelQuantGroup>, ModelQuantGroup>[] {
@@ -109,8 +120,7 @@
 		}));
 	}
 
-	// Cancel is confirmed once for the whole list, so a single dialog instance
-	// serves however many downloads are in flight.
+	// cancel is confirmed once for the whole list, so one dialog serves every row
 	function requestCancel(repoWithTag: string): void {
 		pendingCancel = repoWithTag;
 		cancelOpen = true;
@@ -184,9 +194,9 @@
 	}
 
 	function handleFamilyKeydown(event: KeyboardEvent, toggle: () => void): void {
-		if (event.key === ' ') event.preventDefault();
+		if (event.key === KeyboardKey.SPACE) event.preventDefault();
 
-		if (event.key === 'Enter' || event.key === ' ') toggle();
+		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) toggle();
 	}
 </script>
 
@@ -218,7 +228,7 @@
 			onToggle={() => toggleQuants(entry.key)}
 		/>
 
-		{#if !collapsedQuants.has(entry.key)}
+		<CollapsibleRegion open={!collapsedQuants.has(entry.key)}>
 			{#each entry.quants as quant (quant.id)}
 				<ModelsManagerQuantRow
 					indent={indent + 24}
@@ -229,7 +239,7 @@
 					selected={selectedId === quant.id}
 				/>
 			{/each}
-		{/if}
+		</CollapsibleRegion>
 	{:else}
 		<ModelsManagerModelRow
 			{indent}
@@ -302,7 +312,7 @@
 }: {
 	count: number;
 	onMore: () => void;
-	unit: 'entries' | 'families';
+	unit: GroupedListUnit;
 })}
 	<div class="px-2">
 		<button
@@ -310,7 +320,7 @@
 			onclick={onMore}
 			type="button"
 		>
-			Show {count} more {unit === 'families' ? 'families' : 'models'}
+			Show {count} more {SHOW_MORE_NOUNS[unit]}
 		</button>
 	</div>
 {/snippet}
