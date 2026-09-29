@@ -11,6 +11,18 @@
 #include "server-common.h"
 
 #include <sstream>
+#include <cmath>
+#include <iomanip>
+
+// Helper to serialize a double with exactly 1 decimal place in JSON output.
+// std::round(x*10)/10 produces artifacts like 3.3000000000000003;
+// snprintf("%.1f") formats the rounded value as a string, then we parse it
+// back into a double so the JSON library writes it as a number.
+static json json_round1(double value) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%.1f", value);
+    return json(std::stod(buf));
+}
 
 //
 // task_params
@@ -1514,9 +1526,107 @@ json server_task_result_slots::to_json() {
     return slots_data;
 }
 
+static const char * slot_state_name(int state) {
+    switch (state) {
+        case 0:  return "idle";
+        case 1:  return "wait_other";
+        case 2:  return "started";
+        case 3:  return "processing_prompt";
+        case 4:  return "done_prompt";
+        case 5:  return "generating";
+        default: return "unknown";
+    }
+}
+
 json server_task_result_metrics::to_json() {
-    // not used, /metrics renders prometheus text via to_metrics()
-    return json{};
+    double utilization = metrics.kvcache_capacity_tokens > 0
+        ? (double)metrics.kvcache_used_tokens / (double)metrics.kvcache_capacity_tokens * 100.0
+        : 0.0;
+
+    double prompt_tps = metrics.prompt_bucket.time > 0
+        ? (double)metrics.prompt_bucket.count / (double)metrics.prompt_bucket.time * 1e6
+        : 0.0;
+    double predict_tps = metrics.predict_bucket.time > 0
+        ? (double)metrics.predict_bucket.steps / (double)metrics.predict_bucket.time * 1e6
+        : 0.0;
+
+    double n_busy = metrics.n_decode > 0
+        ? (double)metrics.n_busy_slots / (double)metrics.n_decode
+        : 0.0;
+
+    json kvcache = json::object();
+    kvcache["capacity_tokens"] = metrics.kvcache_capacity_tokens;
+    kvcache["used_tokens"]    = metrics.kvcache_used_tokens;
+    kvcache["utilization"]    = json_round1(std::round(utilization * 10.0) / 10.0);
+    kvcache["slots"]          = json::array();
+    for (const auto & slot : metrics.kvcache_slots) {
+        kvcache["slots"].push_back(json{
+            {"slot",   slot.slot_id},
+            {"state",  std::to_string(slot.state) + " - " + slot_state_name(slot.state)},
+            {"tokens", slot.n_tokens},
+        });
+    }
+
+    json base = json::object();
+    base["tasks"] = json{
+        {"processing", n_processing_slots},
+        {"queued",     n_tasks_deferred},
+    };
+
+    base["prompt"] = json{
+        {"tokens_total",         metrics.prompt.count},
+        {"tokens_cached_total",  metrics.n_prompt_cached},
+        {"seconds_total",        json_round1(std::round(metrics.prompt.time / 1e4) / 10.0)},
+        {"tokens_per_second",    json_round1(std::round(prompt_tps * 10.0) / 10.0)},
+    };
+
+    base["prediction"] = json{
+        {"tokens_total",         metrics.predict.count},
+        {"seconds_total",        json_round1(std::round(metrics.predict.time / 1e4) / 10.0)},
+        {"tokens_per_second",    json_round1(std::round(predict_tps * 10.0) / 10.0)},
+    };
+
+    json decode = json{
+        {"total",                metrics.n_decode},
+        {"n_tokens_max",         metrics.n_tokens_max},
+        {"seconds_total",        json_round1(std::round(metrics.predict_bucket.time / 1e4) / 10.0)},
+        {"busy_slots_per_decode", json_round1(std::round(n_busy * 10.0) / 10.0)},
+    };
+
+    // speculative section only when draft tokens were generated
+    if (metrics.n_draft_tokens > 0 || metrics.n_draft_accepted > 0) {
+        decode["speculative"] = json{
+            {"draft_tokens_total",      metrics.n_draft_tokens},
+            {"accepted_tokens_total",   metrics.n_draft_accepted},
+            {"verification_steps_total", metrics.n_draft_verif_steps},
+        };
+    }
+
+    base["decode"] = decode;
+
+    base["kvcache"] = kvcache;
+    base["memory"] = json{
+        {"context_bytes", metrics.memory_context_bytes},
+        {"model_bytes",   metrics.memory_model_bytes},
+    };
+
+    if (!recent.empty()) {
+        json recent_arr = json::array();
+        for (const auto & r : recent) {
+            recent_arr.push_back(json{
+                {"slot",         r.id},
+                {"prompt_tps",   json_round1(std::round(r.prompt_tps * 10.0) / 10.0)},
+                {"generation_tps", json_round1(std::round(r.gen_tps * 10.0) / 10.0)},
+            });
+        }
+        base["recent"] = recent_arr;
+    }
+
+    json result = json::array();
+    result.push_back(base);
+    json wrapped = json::object();
+    wrapped["metrics"] = result;
+    return wrapped;
 }
 
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
@@ -1602,6 +1712,9 @@ std::string server_task_result_metrics::to_metrics() {
     add_items("counter", counters);
     add_items("gauge",   gauges);
 
+    // new integer-valued metrics (kvcache / memory)
+    prometheus << to_metrics_int();
+
     // labeled counter: one time series per draft position
     if (!metrics.n_accepted_per_pos.empty()) {
         prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
@@ -1612,6 +1725,50 @@ std::string server_task_result_metrics::to_metrics() {
                        << i << "\"} " << metrics.n_accepted_per_pos[i] << "\n";
         }
     }
+
+    return prometheus.str();
+}
+
+std::string server_task_result_metrics::to_metrics_int() {
+    std::stringstream prometheus;
+
+    auto add_metric = [&prometheus](const char * name, const char * help, double value) {
+        prometheus << "# HELP llamacpp:" << name << " " << help << "\n"
+                   << "# TYPE llamacpp:" << name << " gauge\n";
+        if (value == std::floor(value) && std::isfinite(value)) {
+            prometheus << "llamacpp:" << name << " " << std::to_string((int64_t)value) << "\n";
+        } else {
+            std::stringstream ss;
+            ss << std::fixed << std::setprecision(6) << value;
+            std::string s = ss.str();
+            size_t dot = s.find('.');
+            if (dot != std::string::npos) {
+                s.erase(s.find_last_not_of('0') + 1, std::string::npos);
+                if (s.back() == '.') {
+                    s += '0';
+                }
+            }
+            prometheus << "llamacpp:" << name << " " << s << "\n";
+        }
+    };
+
+    add_metric("kvcache_capacity_tokens",
+               "Total KV cache token capacity (llama_n_ctx)",
+               (double)metrics.kvcache_capacity_tokens);
+    add_metric("kvcache_used_tokens",
+               "Approximate KV cache tokens in use (sum of slot prompts, may double-count in unified KV mode)",
+               (double)metrics.kvcache_used_tokens);
+    add_metric("kvcache_utilization",
+               "KV cache utilization percentage",
+               metrics.kvcache_capacity_tokens > 0
+                   ? (double)metrics.kvcache_used_tokens / (double)metrics.kvcache_capacity_tokens * 100.0
+                   : 0.0);
+    add_metric("memory_context_bytes",
+               "Total RAM consumed by context/KV cache buffers across all devices",
+               (double)metrics.memory_context_bytes);
+    add_metric("memory_model_bytes",
+               "Total RAM consumed by model weights across all devices",
+               (double)metrics.memory_model_bytes);
 
     return prometheus.str();
 }

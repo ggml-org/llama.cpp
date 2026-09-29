@@ -491,9 +491,17 @@ struct server_task_result_error : server_task_result {
 
 // used by /metrics API
 struct server_task_result_metrics : server_task_result {
-    // these are immediate stats, not accumulated (server_metrics is cumulative)
+    // immediate stats about active tasks
     int n_processing_slots = 0;
     int n_tasks_deferred = 0;
+
+    // recent per-slot TPS snapshots (last completed requests)
+    struct recent_slot {
+        int    id         = -1;
+        double prompt_tps = 0.0;
+        double gen_tps    = 0.0;
+    };
+    std::vector<recent_slot> recent;
 
     server_metrics metrics;
 
@@ -505,6 +513,7 @@ struct server_task_result_metrics : server_task_result {
         double value; // prometheus values are always float64
     };
     std::string to_metrics();
+    std::string to_metrics_int();
 };
 
 // used by /slots API
