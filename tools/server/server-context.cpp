@@ -3170,8 +3170,11 @@ private:
                             return;
                         }
 
-                        // TODO: support memory-less logits computation
-                        if (slot.task->need_logits() && !llama_get_memory(ctx_tgt)) {
+                        // memory-less contexts can only produce logits via a single-shot, non-causal
+                        // encode() pass (see llama_context::encode()) - incompatible with incremental
+                        // sampling/generation, but fine for encoder-only tasks (e.g. CTC transcription)
+                        // that don't need sampling
+                        if (slot.task->need_logits() && slot.task->need_sampling() && !llama_get_memory(ctx_tgt)) {
                             send_error(slot, "the current context does not support logits computation. skipping", ERROR_TYPE_SERVER);
                             slot.release();
                             return;
