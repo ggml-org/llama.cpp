@@ -7,6 +7,7 @@
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
 #include <map>
+#include <vector>
 
 class llama_memory_hybrid_idx_context;
 
@@ -84,7 +85,19 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        qkv_mixed,
             int64_t              conv_kernel_size,
             int64_t              conv_channels,
-            int                  il);
+            int                  il,
+            std::vector<ggml_tensor *> * deferred_state_cpys = nullptr);
+
+    // GDN decode fast path: build_rs()'s ggml_get_rows(states, state_copy_main) does a
+    // full gather even when the requested row is already resident at the cache's own
+    // persistent slot for a single continuing sequence (the common decode case) -- this
+    // returns a zero-copy view directly into the cache instead, falling back to build_rs()
+    // whenever that fast-path precondition doesn't hold (fresh sequence, rollback, multi-seq).
+    ggml_tensor * build_rs_fast(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        s,
+                    int32_t      state_size,
+                    int32_t      n_seqs) const;
 
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
