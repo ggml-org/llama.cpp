@@ -66,12 +66,11 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
                                               p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
 
-        // Structured output: the final answer is constrained to the schema; reasoning
-        // messages before it stay free-form.
         if (has_response_format) {
+            auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
             auto response_format = p.rule("response-format",
                 recipient + p.literal("<|message|>") +
-                p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema)));
+                (p.literal("```json") + p.space() + response_json + p.space() + p.literal("```") | response_json));
 
             return p.zero_or_more(start + analysis) + start + response_format;
         }
