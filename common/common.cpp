@@ -912,6 +912,29 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
     return std::string(value.begin(), value.end());
 }
 
+void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
+    std::error_code ec;
+    std::filesystem::path path_tmp = path;
+    path_tmp += ".tmp";
+
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+    }
+
+    std::ofstream file(path_tmp, std::ios::binary);
+    file << data;
+    file.close();
+
+    if (!file.fail()) {
+        std::filesystem::rename(path_tmp, path, ec);
+    }
+
+    if (file.fail() || ec) {
+        std::filesystem::remove(path_tmp, ec);
+        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+    }
+}
+
 bool fs_is_directory(const std::string & path) {
     std::filesystem::path dir(path);
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
