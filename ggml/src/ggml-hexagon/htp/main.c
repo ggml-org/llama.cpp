@@ -806,6 +806,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_SCALE:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
         case HTP_OP_LEAKY_RELU:
@@ -835,6 +836,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_softmax(octx);
 
         case HTP_OP_ROPE:
+        case HTP_OP_ROPE_NX:
             return op_rope(octx);
 
         case HTP_OP_FLASH_ATTN_EXT:
@@ -863,6 +865,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_top_k(octx);
 
         case HTP_OP_SSM_CONV:
+        case HTP_OP_SSM_CONV_SILU:
             return op_ssm_conv(octx);
 
         case HTP_OP_CUMSUM:

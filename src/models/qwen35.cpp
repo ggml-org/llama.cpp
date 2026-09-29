@@ -312,8 +312,8 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
     // Expanding both norms explicitly here, before either RoPE call exists, forces them into
     // cgraph->nodes[] first; the subsequent RoPE calls' only remaining unvisited parent is
     // each other's RoPE node itself, so they land back-to-back in the final postorder walk.
-    // No-op today (no try_fuse_rope_nx matcher exists yet to exploit the adjacency); this
-    // hint is the prerequisite step for a future ROPE_NX fusion.
+    // The Hexagon backend's try_fuse_rope_nx matcher folds that adjacent pair into a single
+    // ROPE_NX op, so the MRoPE theta_cache is computed once instead of twice.
     ggml_build_forward_expand(gf, Qcur);
     ggml_build_forward_expand(gf, Kcur);
 

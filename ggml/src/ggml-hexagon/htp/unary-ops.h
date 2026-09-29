@@ -46,6 +46,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_SCALE:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -128,7 +129,7 @@ static inline void htp_unary_vtcm_layout_build(
     }
 
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
-                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM);
+                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_SCALE || op == HTP_OP_L2_NORM);
     // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
     // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
     // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM

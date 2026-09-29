@@ -207,8 +207,35 @@ static void rms_norm_mul_f32(const float * restrict src,
     }
 }
 
+
 static void norm_f32(const float * restrict src,
                      float * restrict dst,
+// RMS_NORM+SCALE: GDN's Q/K L2-norm (build_gdn_l2_norm). SCALE's scale/bias are host
+// scalars from the fused-away SCALE node's own op_params (packed into this fused op's
+// op_params[1]/op_params[2], epsilon stays at op_params[0] matching plain RMS_NORM's
+// layout) -- no second DMA'd buffer, unlike RMS_NORM_MUL's weight tensor.
+static void rms_norm_scale_f32(const void * restrict src,
+                               void * restrict dst,
+                               const uint32_t num_rows,
+                               const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float epsilon = 0.f;
+    float scale_mul = 0.f;
+    float bias = 0.f;
+    memcpy(&epsilon,   &op_params[0], sizeof(float));
+    memcpy(&scale_mul, &op_params[1], sizeof(float));
+    memcpy(&bias,      &op_params[2], sizeof(float));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_fast_rms_norm_scale_f32((const uint8_t *) src_local, (uint8_t *) dst_local, ne0, epsilon, scale_mul, bias);
+    }
+}
+
+static void norm_f32(const void * restrict src,
+                     void * restrict dst,
                      const uint32_t num_rows,
                      const struct htp_unary_context * uctx) {
     htp_unary_op_preamble;
@@ -1105,6 +1132,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         case HTP_OP_NORM:            op_type = is_f16 ? "norm-f16"     : "norm-f32";         break;
         case HTP_OP_RMS_NORM:        op_type = is_f16 ? "rmsnorm-f16"  : "rmsnorm-f32";      break;
         case HTP_OP_RMS_NORM_MUL:    op_type = "rmsnorm-mul-f32";                            break;
+        case HTP_OP_RMS_NORM_SCALE:  op_type = "rmsnorm-scale-f32";                          break;
         case HTP_OP_SCALE:           op_type = is_f16 ? "scale-f16"    : "scale-f32";        break;
         case HTP_OP_CLAMP:           op_type = is_f16 ? "clamp-f16"    : "clamp-f32";        break;
         case HTP_OP_LEAKY_RELU:      op_type = "leaky-relu-f32";                             break;
@@ -1313,6 +1341,53 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         } else {
             FARF(ERROR, "execute_op_unary: task function is NULL for op %d\n", octx->op);
             err = HTP_STATUS_NO_SUPPORT;
+    } else if (is_f16) {
+        task_func = unary_thread_row_block;
+        switch (octx->op) {
+            case HTP_OP_NORM:            compute_func = (void *) norm_f16;                break;
+            case HTP_OP_RMS_NORM:        compute_func = (void *) rms_norm_f16;            break;
+            case HTP_OP_SCALE:           compute_func = (void *) scale_f16;               break;
+            case HTP_OP_CLAMP:           compute_func = (void *) clamp_f16;               break;
+            case HTP_OP_SQR:             compute_func = (void *) sqr_f16;                 break;
+            case HTP_OP_SQRT:            compute_func = (void *) sqrt_f16;                break;
+            case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f16;             break;
+            case HTP_OP_UNARY_ABS:       compute_func = (void *) abs_f16;                 break;
+            case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f16;                 break;
+            case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f16;                break;
+            default:                     break;
+        }
+    } else {
+        task_func = unary_thread_row_block;
+        switch (octx->op) {
+            case HTP_OP_NORM:            compute_func = (void *) norm_f32;                break;
+            case HTP_OP_RMS_NORM:        compute_func = (void *) rms_norm_f32;            break;
+            case HTP_OP_RMS_NORM_MUL:
+                task_func    = unary_thread_rms_norm_mul_f32;
+                compute_func = (void *) rms_norm_mul_f32;
+                break;
+            case HTP_OP_RMS_NORM_SCALE:  compute_func = (void *) rms_norm_scale_f32;      break;
+            case HTP_OP_SCALE:           compute_func = (void *) scale_f32;               break;
+            case HTP_OP_CLAMP:           compute_func = (void *) clamp_f32;               break;
+            case HTP_OP_LEAKY_RELU:      compute_func = (void *) leaky_relu_f32;          break;
+            case HTP_OP_SQR:             compute_func = (void *) sqr_f32;                 break;
+            case HTP_OP_SQRT:            compute_func = (void *) sqrt_f32;                break;
+            case HTP_OP_UNARY_NEG:       compute_func = (void *) neg_f32;                 break;
+            case HTP_OP_UNARY_EXP:       compute_func = (void *) exp_f32;                 break;
+            case HTP_OP_UNARY_SIGMOID:   compute_func = (void *) sigmoid_f32;             break;
+            case HTP_OP_UNARY_SILU:      compute_func = (void *) silu_f32;                break;
+            case HTP_OP_UNARY_GELU:      compute_func = (void *) gelu_f32;                break;
+            case HTP_OP_UNARY_SOFTPLUS:  compute_func = (void *) softplus_f32;            break;
+            case HTP_OP_UNARY_TANH:      compute_func = (void *) tanh_f32;                break;
+            case HTP_OP_UNARY_ABS:       compute_func = (void *) abs_f32;                 break;
+            case HTP_OP_UNARY_LOG:       compute_func = (void *) log_f32;                 break;
+            case HTP_OP_UNARY_RELU:      compute_func = (void *) relu_f32;                break;
+            case HTP_OP_UNARY_STEP:      compute_func = (void *) step_f32;                break;
+            case HTP_OP_L2_NORM:         compute_func = (void *) l2_norm_f32;             break;
+            case HTP_OP_TRI:
+                task_func    = unary_thread_tri_f32;
+                compute_func = (void *) tri_f32;
+                break;
+            default:                     break;
         }
     }
 

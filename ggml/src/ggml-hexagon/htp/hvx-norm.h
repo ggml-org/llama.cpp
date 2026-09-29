@@ -133,6 +133,81 @@ static inline void hvx_fast_rms_norm_mul_f32(const uint8_t * restrict src,
     }
 }
 
+// RMS_NORM+SCALE fusion for GDN's Q/K L2-norm (build_gdn_l2_norm in models.h:
+// ggml_scale(ggml_rms_norm(x, eps/n), 1/sqrt(n))). SCALE's multiplier/bias are host
+// scalars baked into op_params (ggml_scale_impl), not a device tensor like MUL's weight
+// -- unlike hvx_fast_rms_norm_mul_f32 above, there is no second buffer to DMA in.
+//
+// Bit-exact with the unfused two-op sequence by construction: the unfused SCALE kernel
+// (scale_f32/hvx_scale_offset_f32_aa) reads RMS_NORM's already-rounded-to-f32 output back
+// from DRAM and applies its own separate qf32 multiply+add+round on top. This kernel
+// reproduces that exact two-step rounding (round x*rsqrt(mean+eps) to f32 first, THEN
+// multiply-add by scale_mul/bias and round again) rather than collapsing the whole
+// row into one algebraically-equivalent-but-differently-rounded pass.
+static inline void hvx_fast_rms_norm_scale_f32(const uint8_t * restrict src,
+                                               uint8_t * restrict dst,
+                                               const int num_elems,
+                                               float     epsilon,
+                                               float     scale_mul,
+                                               float     bias) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const int nvec = num_elems / VLEN_FP32;    // number of full vectors
+    const int nloe = num_elems % VLEN_FP32;    // leftover elements
+
+    // Compute sum of squares for full vectors
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
+    HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
+
+    #pragma unroll(4)
+    for (int i = 0; i < nvec; i++) {
+        HVX_Vector v1 = v_src[i];
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(v1, v1);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
+    }
+
+    // Reduce HVX sum
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+
+    HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
+    HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
+    HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
+    HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
+
+    HVX_Vector rms_scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    HVX_Vector scale_mul_v = hvx_vec_splat_f32(scale_mul);
+    HVX_Vector bias_v      = hvx_vec_splat_f32(bias);
+
+    #pragma unroll(4)
+    for (int i = 0; i < nvec; i++) {
+        HVX_Vector v1  = v_src[i];
+        HVX_Vector rms = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v1, rms_scale_v)); // RMS_NORM's own rounding
+        HVX_Vector out = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(rms, scale_mul_v), bias_v); // SCALE's own rounding
+        v_dst[i] = Q6_Vsf_equals_Vqf32(out);
+    }
+
+    // Handle tail elements using vectorized ops with masking
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 4);
+        HVX_Vector v1  = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_Vector rms = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(v1, rms_scale_v));
+        HVX_Vector out = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(rms, scale_mul_v), bias_v);
+        HVX_Vector result = Q6_Vsf_equals_Vqf32(out);
+
+        // Store with masking to avoid overwriting memory beyond the tensor
+        hvx_vec_store_a(&v_dst[nvec], nloe * 4, result);
+    }
+}
+
 static inline void hvx_fast_norm_f32(const uint8_t * restrict src,
                                      uint8_t * restrict dst,
                                      const int num_elems,

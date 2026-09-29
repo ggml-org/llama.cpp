@@ -113,6 +113,16 @@ enum ggml_hexagon_fusion_flags {
     GGML_HEXAGON_FUSE_MUL_MAT_ADD   = (1 << 3), // 8
     GGML_HEXAGON_FUSE_MUL_MAT_NX    = (1 << 4), // 16
     GGML_HEXAGON_FUSE_MUL_MAT_ID_NX = (1 << 5), // 32
+    GGML_HEXAGON_FUSE_ALLREDUCE_ADD    = (1 << 1),  // 2
+    GGML_HEXAGON_FUSE_RMS_NORM_MUL     = (1 << 2),  // 4
+    GGML_HEXAGON_FUSE_MUL_MAT_ADD      = (1 << 3),  // 8
+    GGML_HEXAGON_FUSE_MUL_MAT_NX       = (1 << 4),  // 16
+    GGML_HEXAGON_FUSE_MUL_MAT_ID_NX    = (1 << 5),  // 32
+    GGML_HEXAGON_FUSE_GDN_CPY          = (1 << 6),  // 64
+    GGML_HEXAGON_FUSE_SSM_CONV_SILU    = (1 << 7),  // 128
+    GGML_HEXAGON_FUSE_CONCAT_SSM_CONV  = (1 << 8),  // 256
+    GGML_HEXAGON_FUSE_ROPE_NX          = (1 << 9),  // 512
+    GGML_HEXAGON_FUSE_RMS_NORM_SCALE   = (1 << 10), // 1024
 };
 
 static inline bool ggml_hexagon_is_fusion_enabled(int flag) {
@@ -321,6 +331,29 @@ static void ggml_hexagon_precompute_rope_params(
     struct htp_rope_kernel_params * kparams
 );
 
+static void ggml_hexagon_precompute_ssm_conv_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_ssm_conv_kernel_params * kparams,
+    bool fused_concat = false,
+    uint32_t n_state_rows = 0
+);
+
+static void ggml_hexagon_precompute_gated_delta_net_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_gdn_kernel_params * kparams
+);
+
+static void ggml_hexagon_precompute_sort_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    bool is_top_k,
+    struct htp_sort_kernel_params * kparams
+);
+
 static void ggml_hexagon_precompute_fused_mmnx_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -355,6 +388,7 @@ static bool is_mergeable_mul_mat(const ggml_tensor * t);
 static bool is_mergeable_mul_mat_pair(const ggml_tensor * n1, const ggml_tensor * n2);
 static bool is_mergeable_mul_mat_id(const ggml_tensor * t);
 static bool is_mergeable_mul_mat_id_pair(const ggml_tensor * n1, const ggml_tensor * n2);
+static bool is_mergeable_rope_pair(const ggml_tensor * n1, const ggml_tensor * n2);
 
 // ** backend sessions
 
@@ -2601,6 +2635,85 @@ struct ggml_hexagon_opbatch {
         return true;
     }
 
+    // GDN's Q/K L2-norm (build_gdn_l2_norm, models.h: ggml_scale(ggml_rms_norm(x, eps/n),
+    // 1/sqrt(n))) is emitted as RMS_NORM followed by a scalar SCALE, not the codebase's
+    // native L2_NORM op (L2_NORM's own formula -- rsqrt(fmax(sum, eps)), no mean-divide --
+    // is a different, incompatible normalization; see hvx_fast_l2_norm_f32 vs.
+    // hvx_fast_rms_norm_f32 in hvx-norm.h). Structurally this mirrors try_fuse_rms_norm_mul
+    // above, but SCALE's multiplier/bias are host-side scalars baked into the SCALE node's
+    // own op_params (ggml_scale_impl), not a device tensor like MUL's weight operand -- so
+    // there is no second src to DMA in, and no new VTCM buffer beyond RMS_NORM's own.
+    bool try_fuse_rms_norm_scale(const htp_opnode & node) {
+        if (n_ops == 0) return false;
+        if (node.opcode != HTP_OP_SCALE) return false;
+
+        htp_opnode & last_node = ops[n_ops - 1];
+        if (last_node.opcode != HTP_OP_RMS_NORM) return false;
+
+        const ggml_tensor * scale_src0 = node.src0();
+        const ggml_tensor * rms_out    = last_node.dst();
+
+        if (scale_src0 != rms_out && scale_src0->data != rms_out->data) return false;
+        if (!ggml_hexagon_tensor_is_fuseable(rms_out)) return false;
+
+        const ggml_tensor * src0 = last_node.src0();
+
+        // F32-only, same scope as RMS_NORM_MUL above: the fused kernel below reinterprets
+        // rows as HVX_Vector f32 lanes directly, no F16 promote/narrow path exists for it.
+        if (src0->type != GGML_TYPE_F32 || node.dst()->type != GGML_TYPE_F32) return false;
+
+        if (!ggml_are_same_shape(rms_out, node.dst())) return false;
+        if (ggml_is_contiguous(rms_out) != ggml_is_contiguous(node.dst())) return false;
+        if (!ggml_are_same_shape(src0, node.dst())) return false;
+
+        struct htp_unary_kernel_params new_kparams;
+        ggml_hexagon_precompute_unary_params(
+            sess, HTP_OP_RMS_NORM_SCALE, src0, nullptr, node.dst(), &new_kparams
+        );
+
+        if ((size_t) new_kparams.vtcm_size > sess->vtcm_size) {
+            HEX_VERBOSE("ggml-hex: %s skip RMS_NORM_SCALE fusion: VTCM needed (%d) > budget (%zu)\n",
+                        sess->c_name(), new_kparams.vtcm_size, sess->vtcm_size);
+            return false;
+        }
+
+        if (!try_fuse_common({node.dst()})) {
+            return false;
+        }
+
+        float scale_bias[2];
+        memcpy(scale_bias, node.node->op_params, sizeof(scale_bias));
+
+        last_node.opcode = HTP_OP_RMS_NORM_SCALE;
+        last_node.name   = "RMS_NORM+SCALE";
+        last_node.inputs.clear();
+        last_node.inputs.push_back(src0);
+        last_node.outputs.clear();
+        last_node.outputs.push_back(node.dst());
+        last_node.fused.push_back(node.node);
+        memcpy(last_node.kernel_params, &new_kparams, sizeof(new_kparams));
+
+        htp_op_desc & o = h_ops[n_ops - 1];
+        o.opcode = HTP_OP_RMS_NORM_SCALE;
+        // params[0] (eps) is already correct from add_op()'s original RMS_NORM memcpy;
+        // append SCALE's own scale/bias in params[1]/params[2], matching
+        // rms_norm_scale_f32's op_params[0]/[1]/[2] read order.
+        memcpy(&o.params[1], scale_bias, sizeof(scale_bias));
+        memcpy(o.kernel_params, &new_kparams, sizeof(new_kparams));
+
+        o.src[0] = add_tensor(src0);
+        for (uint32_t s = 1; s < HTP_OP_MAX_INPUTS; s++) {
+            o.src[s] = 0xffff;
+        }
+        o.dst[0] = add_tensor(node.dst());
+        for (uint32_t d = 1; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        HEX_VERBOSE("ggml-hex: %s fused RMS_NORM+SCALE (#%u)\n", sess->c_name(), n_ops - 1);
+        return true;
+    }
+
     bool try_fuse_mul_mat_add(const htp_opnode & node) {
         if (n_ops == 0) return false;
         if (node.opcode != HTP_OP_ADD) return false;
@@ -2842,6 +2955,74 @@ struct ggml_hexagon_opbatch {
         return false;
     }
 
+    // Fuses two independent ROPE calls (e.g. Q and K) sharing the same inp_pos/
+    // freq_factors/op_params into one ROPE_NX dispatch that computes the theta_cache
+    // once instead of once per tensor. Requires the two ROPE nodes to already be
+    // adjacent in the op list (see qwen35.cpp's build_layer_attn forced-expand hint) --
+    // this matcher never reorders nodes itself, it only recognizes an adjacency that
+    // already exists.
+    bool try_fuse_rope_nx(const htp_opnode & node) {
+        if (n_ops == 0 || node.opcode != HTP_OP_ROPE) return false;
+
+        htp_opnode & last_node = ops[n_ops - 1];
+        if (last_node.opcode != HTP_OP_ROPE) return false;
+
+        if (!is_mergeable_rope_pair(last_node.node, node.node)) return false;
+
+        const ggml_tensor * a_in  = last_node.node->src[0];
+        const ggml_tensor * pos   = last_node.node->src[1];
+        const ggml_tensor * ff    = last_node.node->src[2]; // may be null
+        const ggml_tensor * a_out = last_node.dst();
+        const ggml_tensor * b_in  = node.node->src[0];
+        const ggml_tensor * b_out = node.dst();
+        if (!a_in || !pos || !a_out || !b_in || !b_out) return false;
+
+        // Authoritative cap: HTP_ROPE_SPAD_NSLOTS*HTP_ROPE_SPAD_BLOCK (rope-ops.h) -- each
+        // token's row block for either tensor must fit the DSP-side per-token spad in one
+        // shot (no chunking). Duplicated here as a literal since that constant is private
+        // to rope-ops.c/.h; matches the check execute_op_rope_nx_f32 makes again on-device.
+        constexpr int64_t k_rope_nx_max_heads = 32; // HTP_ROPE_SPAD_NSLOTS(4) * HTP_ROPE_SPAD_BLOCK(8)
+        if (a_in->ne[1] > k_rope_nx_max_heads || b_in->ne[1] > k_rope_nx_max_heads) {
+            return false;
+        }
+
+        if (!try_fuse_common({b_in, b_out})) {
+            return false;
+        }
+
+        last_node.opcode = HTP_OP_ROPE_NX;
+        last_node.name   = "ROPE_NX";
+        last_node.inputs.clear();
+        last_node.inputs.push_back(a_in);
+        last_node.inputs.push_back(pos);
+        last_node.inputs.push_back(ff);
+        last_node.inputs.push_back(b_in);
+        last_node.outputs.clear();
+        last_node.outputs.push_back(a_out);
+        last_node.outputs.push_back(b_out);
+        last_node.fused.push_back(node.node);
+        // kernel_params unused by ROPE/ROPE_NX (op_params carries everything); leave as-is.
+
+        htp_op_desc & o = h_ops[n_ops - 1];
+        o.opcode = HTP_OP_ROPE_NX;
+
+        o.src[0] = add_tensor(a_in);
+        o.src[1] = add_tensor(pos);
+        o.src[2] = ff ? add_tensor(ff) : 0xffff;
+        o.src[3] = add_tensor(b_in);
+        for (uint32_t s = 4; s < HTP_OP_MAX_INPUTS; s++) {
+            o.src[s] = 0xffff;
+        }
+        o.dst[0] = add_tensor(a_out);
+        o.dst[1] = add_tensor(b_out);
+        for (uint32_t d = 2; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        HEX_VERBOSE("ggml-hex: %s fused ROPE_NX (#%u)\n", sess->c_name(), n_ops - 1);
+        return true;
+    }
+
     bool try_fuse_mul_mat_id_nx(const htp_opnode & node) {
         if (n_ops == 0 || node.opcode != HTP_OP_MUL_MAT_ID) return false;
         if (!is_mergeable_mul_mat_id(node.node)) return false;
@@ -3005,13 +3186,264 @@ struct ggml_hexagon_opbatch {
         return false;
     }
 
+    // SSM_CONV(_SILU): the GDN conv-prep block always runs conv1d straight into silu with
+    // no bias in between (qwen35.cpp: conv_output_silu = ggml_silu(ctx0, conv_output_proper)).
+    // The DSP-side kernel already supports fusing them (HTP_OP_SSM_CONV_SILU dispatches to
+    // op_ssm_conv_f32 with scctx.apply_silu=true, writing silu(y)=y*sigmoid(y) directly at
+    // the conv's own output-store site instead of round-tripping the [d_inner, n_t] conv
+    // output tensor through a separate HTP dispatch) -- this matcher wires that already-
+    // built kernel path to the graph's own SSM_CONV->SILU adjacency.
+    //
+    // Restricted to the HVX prefill path (n_t > 1): the decode worker
+    // (ssm_conv_thread_f32_decode) has no SILU epilogue implemented (mirrors the private
+    // fork's own precedent of excluding decode -- its scalar per-token path would need a
+    // per-element libm expf() call instead of a vectorized guard, measured there as a ~5%
+    // tg128 regression when attempted). Decode's SSM_CONV cost is negligible either way
+    // (~8-9 usec/call in this model's own profile) so excluding it costs nothing.
+    bool try_fuse_ssm_conv_silu(const htp_opnode & node) {
+        if (n_ops == 0) return false;
+        if (node.opcode != HTP_OP_UNARY_SILU) return false;
+
+        htp_opnode & last_node = ops[n_ops - 1];
+        if (last_node.opcode != HTP_OP_SSM_CONV) return false;
+        if (last_node.outputs.size() != 1) return false;
+
+        const ggml_tensor * conv_out  = last_node.dst();
+        const ggml_tensor * silu_node = node.node;
+        const ggml_tensor * silu_src  = node.src0();
+        const ggml_tensor * silu_dst  = node.dst();
+
+        if (!silu_src || !silu_dst || !silu_dst->data) return false;
+        if (silu_src != conv_out) return false;
+        if (conv_out->type != GGML_TYPE_F32 || silu_dst->type != GGML_TYPE_F32) return false;
+        if ((conv_out->flags & GGML_TENSOR_FLAG_OUTPUT) || (silu_node->flags & GGML_TENSOR_FLAG_OUTPUT)) return false;
+        if (!ggml_hexagon_tensor_is_fuseable(conv_out)) return false; // must be SSM_CONV's only real consumer
+
+        // Decode gate: n_t (conv_out->ne[1]) > 1 required, matching op_ssm_conv_f32's own
+        // apply_silu decode-path defensive NO-SUPPORT guard (ssm-conv.c) -- an n_t==1 shape
+        // safely skips this fusion instead of ever reaching that guard.
+        if (conv_out->ne[1] <= 1) return false;
+
+        // Same-shape sanity (SSM_CONV's dst and SILU's dst are always the same shape by
+        // construction -- ggml_unary_impl's ggml_dup_tensor -- but check explicitly rather
+        // than assume, since this is exactly the kind of precondition a future refactor
+        // could silently break).
+        if (!ggml_are_same_shape(conv_out, silu_dst) || !ggml_is_contiguous(silu_dst)) return false;
+
+        if (!try_fuse_common({silu_dst})) {
+            return false;
+        }
+
+        last_node.opcode = HTP_OP_SSM_CONV_SILU;
+        last_node.name    = "SSM_CONV+SILU";
+        last_node.outputs.clear();
+        last_node.outputs.push_back(silu_dst);
+        last_node.fused.push_back(node.node);
+
+        htp_op_desc & o = h_ops[n_ops - 1];
+        o.opcode = HTP_OP_SSM_CONV_SILU;
+        // kernel_params (VTCM tile sizes, d_inner/n_t/d_conv, etc.) were already precomputed
+        // by ggml_hexagon_precompute_ssm_conv_params for the unfused SSM_CONV node and stay
+        // valid unchanged -- they depend only on tensor shapes, which are identical between
+        // conv_out and silu_dst (checked above), not on which buffer the output lands in.
+        o.dst[0] = add_tensor(silu_dst);
+        for (uint32_t d = 1; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        HEX_VERBOSE("ggml-hex: %s fused SSM_CONV+SILU (#%u)\n", sess->c_name(), n_ops - 1);
+        return true;
+    }
+
+    // CONCAT(conv_states, TRANSPOSE(qkv_mixed)) -> SSM_CONV(_SILU): the GDN conv-input
+    // build materializes conv_input to DDR via CONCAT purely so SSM_CONV can read it right
+    // back and re-transpose it into VTCM for its own staging -- CONCAT's own HVX gather-
+    // transpose and SSM_CONV's transpose_src0_block are literal mathematical inverses for
+    // the qkv_mixed portion of the tensor (qkv_mixed's pre-transpose layout is already
+    // token-major/channel-contiguous, exactly what SSM_CONV's VTCM staging wants).
+    //
+    // Prerequisite (src/models/delta-net-base.cpp + qwen35.cpp's build_conv_state /
+    // build_layer_attn_linear graph-reorder, landed separately and verified neutral in
+    // isolation): CONCAT+SSM_CONV must be dispatch-adjacent and CONCAT must have exactly
+    // one real consumer for this fusion to trigger -- true for every prefill call
+    // (n_tokens >= conv_kernel_size - 1) once that reorder redirects the state-update CPY
+    // to read from qkv_mixed directly instead of from conv_input.
+    bool try_fuse_concat_ssm_conv(const htp_opnode & node) {
+        if (n_ops == 0) return false;
+        if (node.opcode != HTP_OP_SSM_CONV && node.opcode != HTP_OP_SSM_CONV_SILU) return false;
+
+        htp_opnode & last_node = ops[n_ops - 1];
+        if (last_node.opcode != HTP_OP_CONCAT) return false;
+        if (ggml_get_op_params_i32(last_node.node, 0) != 0) return false; // must concat along dim 0
+
+        const ggml_tensor * conv_input     = last_node.dst();
+        const ggml_tensor * conv_states     = last_node.src0();
+        const ggml_tensor * qkv_transposed = last_node.src1();
+        if (!conv_input || !conv_states || !qkv_transposed) return false;
+
+        const ggml_tensor * conv_ssm_src = node.src0();
+        if (!conv_ssm_src || conv_ssm_src != conv_input) return false;
+        if (!ggml_hexagon_tensor_is_fuseable(conv_input)) return false; // must be CONCAT's only real consumer
+
+        // qkv_transposed must be a plain GGML_OP_TRANSPOSE view (CONCAT's src1 built by
+        // build_conv_state's `qkv_mixed = ggml_transpose(ctx0, qkv_mixed)`), and its source
+        // (qkv_mixed_orig) must be token-major/channel-contiguous (nb[0] == type_size) --
+        // exactly the layout the fused kernel's "no transpose needed" bulk-copy path
+        // assumes. A non-plain-TRANSPOSE src1 (shouldn't occur for this call site, but
+        // guard against future refactors) safely skips the fusion instead of miscomputing.
+        if (qkv_transposed->op != GGML_OP_TRANSPOSE) return false;
+        const ggml_tensor * qkv_mixed_orig = qkv_transposed->src[0];
+        if (!qkv_mixed_orig || qkv_mixed_orig->nb[0] != ggml_type_size(qkv_mixed_orig->type)) return false;
+
+        // conv_states must be genuinely small (the tiny conv-kernel-history tail, not a
+        // pathological huge state) and itself contiguous (transpose_src0_state_rows_fused's
+        // per-tap scalar gather assumes contiguous rows of n_state_rows floats each -- true
+        // for the build_rs + reshape_3d chain that produces it).
+        const int64_t n_state_rows = conv_states->ne[0];
+        constexpr int64_t k_hvx_vlen_fp32 = 32; // matches htp/hvx-types.h's VLEN_FP32 (128B/4B), not visible from the host build
+        if (n_state_rows <= 0 || n_state_rows >= k_hvx_vlen_fp32) return false;
+        if (!ggml_is_contiguous(conv_states)) return false;
+
+        // qkv_mixed_orig's token count must exactly cover conv_input's remaining span --
+        // true by construction from build_conv_state, checked here defensively.
+        if (qkv_mixed_orig->ne[1] != conv_input->ne[0] - n_state_rows) return false;
+        if (qkv_mixed_orig->ne[2] != conv_states->ne[2]) return false; // n_seqs must match
+
+        // Fused kernel's transpose_src0_state_rows_fused/DMA-bulk-copy path is prefill-only
+        // (same n_t>1 gate op_ssm_conv_f32's decode-mode NO-SUPPORT guard enforces) -- gate
+        // here too so an ineligible shape safely falls back to the unfused CONCAT+SSM_CONV
+        // path instead of ever hitting that guard at dispatch time. d_inner must also be a
+        // multiple of the HVX tile width for the per-tile transpose/DMA math to divide
+        // evenly (matches op_ssm_conv_f32's own kparams->d_inner_tile rounding).
+        const int64_t d_inner = conv_states->ne[1];
+        const int64_t n_t     = node.dst()->ne[1];
+        if (d_inner < k_hvx_vlen_fp32 || n_t <= 1) return false;
+
+        if (!try_fuse_common({conv_states, qkv_mixed_orig, node.dst()})) {
+            return false;
+        }
+
+        last_node.opcode = node.opcode; // HTP_OP_SSM_CONV or HTP_OP_SSM_CONV_SILU
+        last_node.name   = (node.opcode == HTP_OP_SSM_CONV_SILU) ? "SSM_CONV+SILU(fused)" : "SSM_CONV(fused)";
+        last_node.outputs.clear();
+        last_node.outputs.push_back(node.dst());
+        last_node.fused.push_back(node.node);
+
+        // Recompute the staging layout for the fused path. Its qkv portion is already
+        // token-major in DDR, and only the small recurrent-state tail needs raw staging.
+        struct htp_ssm_conv_kernel_params new_kparams;
+        ggml_hexagon_precompute_ssm_conv_params(
+            sess, node.node->src[0], node.src1(), node.dst(), &new_kparams,
+            true, (uint32_t) n_state_rows
+        );
+        if ((size_t) new_kparams.vtcm_size > sess->vtcm_size) {
+            return false;
+        }
+        memcpy(last_node.kernel_params, &new_kparams, sizeof(new_kparams));
+
+        htp_op_desc & o = h_ops[n_ops - 1];
+        o.opcode = node.opcode;
+        memcpy(o.kernel_params, &new_kparams, sizeof(new_kparams));
+
+        // Fused inputs: [0]=conv_states, [1]=conv_kernel weight (node.src1()), [2]=
+        // qkv_mixed_orig. CONCAT's own inputs (conv_states, qkv_transposed) are dropped.
+        last_node.inputs.clear();
+        last_node.inputs.push_back(conv_states);
+        last_node.inputs.push_back(node.src1());
+        last_node.inputs.push_back(qkv_mixed_orig);
+
+        o.src[0] = add_tensor(conv_states);
+        o.src[1] = add_tensor(node.src1());
+        o.src[2] = add_tensor(qkv_mixed_orig);
+        for (uint32_t s = 3; s < HTP_OP_MAX_INPUTS; s++) {
+            o.src[s] = 0xffff;
+        }
+        o.dst[0] = add_tensor(node.dst());
+        for (uint32_t d = 1; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        HEX_VERBOSE("ggml-hex: %s fused CONCAT+%s (#%u)\n", sess->c_name(),
+                    node.opcode == HTP_OP_SSM_CONV_SILU ? "SSM_CONV+SILU" : "SSM_CONV", n_ops - 1);
+        return true;
+    }
+
+    bool try_fuse_gdn_cpy(const htp_opnode & node) {
+        if (n_ops == 0 || node.opcode != HTP_OP_CPY) return false;
+
+        htp_opnode & last_node = ops[n_ops - 1];
+        if (last_node.opcode != HTP_OP_GATED_DELTA_NET) return false;
+        if (last_node.outputs.size() != 1) return false;
+
+        const ggml_tensor * gdn_out  = last_node.dst();
+        const ggml_tensor * cpy_node = node.node;
+        const ggml_tensor * cpy_src  = node.src0();
+        const ggml_tensor * cpy_dst  = node.dst();
+
+        if (!cpy_src || !cpy_dst || !cpy_dst->data) return false;
+        if (gdn_out->type != GGML_TYPE_F32 || cpy_src->type != GGML_TYPE_F32 || cpy_dst->type != GGML_TYPE_F32) return false;
+        if ((gdn_out->flags & GGML_TENSOR_FLAG_OUTPUT) || (cpy_node->flags & GGML_TENSOR_FLAG_OUTPUT)) return false;
+
+        const ggml_tensor * v = last_node.node->src[2];
+        if (!v) return false;
+
+        const int64_t S_v      = v->ne[0];
+        const int64_t H        = v->ne[1];
+        const int64_t n_tokens = v->ne[2];
+        const int64_t n_seqs   = v->ne[3];
+        const int64_t K        = ggml_get_op_params_i32(last_node.node, 0);
+        const size_t  tail_off = (size_t) S_v * H * n_tokens * n_seqs * sizeof(float);
+
+        const int64_t D         = S_v * S_v * H;
+        const int64_t n_written = std::min<int64_t>(n_tokens, K);
+
+        if (cpy_src->op != GGML_OP_VIEW || (cpy_src->view_src != gdn_out && cpy_src->view_src->data != gdn_out->data) ||
+            cpy_src->view_offs != tail_off || !ggml_is_contiguous(cpy_src)) {
+            return false;
+        }
+
+        if (cpy_dst->ne[0] != D || cpy_dst->ne[1] != n_seqs || cpy_dst->nb[0] != sizeof(float)) {
+            return false;
+        }
+        if (n_seqs > 1 && cpy_dst->nb[1] != (size_t) D * sizeof(float)) {
+            return false;
+        }
+        if (n_written > 1) {
+            if (cpy_dst->ne[2] != n_written || cpy_dst->nb[2] != (size_t) D * n_seqs * sizeof(float)) {
+                return false;
+            }
+        }
+
+        if (!try_fuse_common({cpy_dst})) {
+            return false;
+        }
+
+        last_node.name += "+CPY";
+        last_node.outputs.push_back(cpy_dst);
+        last_node.fused.push_back(node.node);
+
+        htp_op_desc & o = h_ops[n_ops - 1];
+        o.dst[1] = add_tensor(cpy_dst);
+        for (uint32_t d = 2; d < HTP_OP_MAX_OUTPUTS; d++) {
+            o.dst[d] = 0xffff;
+        }
+
+        HEX_VERBOSE("ggml-hex: %s fused GATED_DELTA_NET+CPY (#%u)\n", sess->c_name(), n_ops - 1);
+        return true;
+    }
+
     bool try_fuse(const htp_opnode & node) {
         if (!opt_opfusion) return false;
         if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_ALLREDUCE_ADD) && try_fuse_allreduce_add(node)) return true;
         if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_RMS_NORM_MUL)  && try_fuse_rms_norm_mul(node))  return true;
+        if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_RMS_NORM_SCALE) && try_fuse_rms_norm_scale(node)) return true;
         if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_MUL_MAT_ADD)   && try_fuse_mul_mat_add(node))   return true;
         if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_MUL_MAT_NX)    && try_fuse_mul_mat_nx(node))    return true;
         if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_MUL_MAT_ID_NX) && try_fuse_mul_mat_id_nx(node)) return true;
+        if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_GDN_CPY)       && try_fuse_gdn_cpy(node))       return true;
+        if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_SSM_CONV_SILU) && try_fuse_ssm_conv_silu(node)) return true;
+        if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_CONCAT_SSM_CONV) && try_fuse_concat_ssm_conv(node)) return true;
+        if (ggml_hexagon_is_fusion_enabled(GGML_HEXAGON_FUSE_ROPE_NX)        && try_fuse_rope_nx(node))        return true;
         return false;
     }
 };
@@ -4820,6 +5252,237 @@ static void ggml_hexagon_precompute_rope_params(
     }
 }
 
+static void ggml_hexagon_precompute_ssm_conv_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_ssm_conv_kernel_params * kparams,
+    bool fused_concat,
+    uint32_t n_state_rows
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t d_conv  = (uint32_t) src1->ne[0];
+    const uint32_t d_inner = (uint32_t) src0->ne[1];
+    const uint32_t n_t     = (uint32_t) dst->ne[1];
+    const uint32_t n_s     = (uint32_t) dst->ne[2];
+    const uint32_t ncs     = (uint32_t) src0->ne[0];
+    const bool use_fused_prefetch = fused_concat && n_t > 1 && n_state_rows > 0 && n_state_rows < ncs;
+
+    const uint32_t n_threads = (std::min)((uint32_t) sess->n_threads, (d_inner + 31) / 32);
+
+    kparams->n_threads = n_threads;
+    kparams->d_conv    = d_conv;
+    kparams->d_inner   = d_inner;
+    kparams->n_t       = n_t;
+    kparams->n_s       = n_s;
+    kparams->fused_concat = use_fused_prefetch ? 1 : 0;
+    kparams->n_state_rows = use_fused_prefetch ? n_state_rows : 0;
+
+    const uint32_t raw_rpt = (d_inner + n_threads - 1) / n_threads;
+    const uint32_t d_inner_per_thread = hex_round_up(raw_rpt, 32);
+    kparams->d_inner_per_thread = d_inner_per_thread;
+
+    kparams->src0_row_size_aligned = hex_round_up(ncs * sizeof(float), 128);
+    kparams->src1_row_size_aligned = hex_round_up(d_conv * sizeof(float), 128);
+    kparams->dst_row_size_aligned  = hex_round_up(d_inner * sizeof(float), 128);
+
+    if (n_t == 1) {
+        kparams->d_inner_tile = d_inner_per_thread;
+
+        const uint32_t src1_raw_bytes = hex_round_up(d_inner_per_thread * d_conv * sizeof(float), 128) + 128;
+        const uint32_t src1_T_bytes   = hex_round_up(d_conv * d_inner_per_thread * sizeof(float), 128);
+        const uint32_t vtcm_src1_per_thread = src1_raw_bytes + src1_T_bytes;
+
+        const uint32_t src0_raw_bytes = hex_round_up(d_inner_per_thread * d_conv * sizeof(float), 128) + 128;
+        const uint32_t src0_T_bytes   = hex_round_up(d_conv * d_inner_per_thread * sizeof(float), 128);
+        const uint32_t vtcm_src0_per_thread = src0_raw_bytes + src0_T_bytes;
+
+        const uint32_t vtcm_dst_per_thread = hex_round_up(d_inner_per_thread * sizeof(float), 128);
+
+        kparams->vtcm_src0_size_per_thread = vtcm_src0_per_thread;
+        kparams->vtcm_src1_size_per_thread = vtcm_src1_per_thread;
+        kparams->vtcm_dst_size_per_thread  = vtcm_dst_per_thread;
+
+        kparams->vtcm_src0_size = vtcm_src0_per_thread * n_threads;
+        kparams->vtcm_src1_size = vtcm_src1_per_thread * n_threads;
+        kparams->vtcm_dst_size  = vtcm_dst_per_thread  * n_threads;
+        kparams->vtcm_size      = kparams->vtcm_src0_size + kparams->vtcm_src1_size + kparams->vtcm_dst_size;
+    } else {
+        const uint32_t src1_raw_bytes = hex_round_up(d_inner_per_thread * d_conv * sizeof(float), 128) + 128;
+        const uint32_t src1_T_bytes   = hex_round_up(d_conv * d_inner_per_thread * sizeof(float), 128);
+        const uint32_t vtcm_src1_per_thread = src1_raw_bytes + src1_T_bytes;
+
+        const size_t vtcm_budget = (sess->vtcm_size > 0 ? sess->vtcm_size / n_threads : (1024 * 1024));
+        const size_t avail_for_src0 = vtcm_budget > vtcm_src1_per_thread ? vtcm_budget - vtcm_src1_per_thread : (128 * 1024);
+
+        uint32_t d_inner_tile;
+        if (use_fused_prefetch) {
+            d_inner_tile = d_inner_per_thread;
+            while (d_inner_tile > 32) {
+                const size_t raw_bytes = hex_round_up(d_inner_tile * n_state_rows * sizeof(float), 128) + 128;
+                const size_t trans_bytes = hex_round_up(ncs * d_inner_tile * sizeof(float), 128);
+                const size_t dst_bytes = hex_round_up(d_inner_tile * n_t * sizeof(float), 128);
+                if (2 * (raw_bytes + trans_bytes) + dst_bytes <= avail_for_src0) {
+                    break;
+                }
+                d_inner_tile -= 32;
+            }
+        } else {
+            d_inner_tile = (uint32_t)((avail_for_src0 / 2) / (ncs * sizeof(float) + n_t * sizeof(float) + 1));
+            d_inner_tile = (d_inner_tile / 32) * 32;
+            if (d_inner_tile == 0) {
+                d_inner_tile = 32;
+            }
+            if (d_inner_tile > d_inner_per_thread) {
+                d_inner_tile = d_inner_per_thread;
+            }
+        }
+        kparams->d_inner_tile = d_inner_tile;
+
+        const uint32_t src0_raw_rows = use_fused_prefetch ? n_state_rows : ncs;
+        const uint32_t src0_slots = use_fused_prefetch ? 2 : 1;
+        const uint32_t src0_tile_raw = hex_round_up(d_inner_tile * src0_raw_rows * sizeof(float), 128) + 128;
+        const uint32_t src0_tile_T   = hex_round_up(ncs * d_inner_tile * sizeof(float), 128);
+        const uint32_t vtcm_src0_per_thread = src0_slots * (src0_tile_raw + src0_tile_T);
+
+        const uint32_t vtcm_dst_per_thread = hex_round_up(d_inner_tile * n_t * sizeof(float), 128);
+
+        kparams->vtcm_src0_size_per_thread = vtcm_src0_per_thread;
+        kparams->vtcm_src1_size_per_thread = vtcm_src1_per_thread;
+        kparams->vtcm_dst_size_per_thread  = vtcm_dst_per_thread;
+
+        kparams->vtcm_src0_size = vtcm_src0_per_thread * n_threads;
+        kparams->vtcm_src1_size = vtcm_src1_per_thread * n_threads;
+        kparams->vtcm_dst_size  = vtcm_dst_per_thread  * n_threads;
+        kparams->vtcm_size      = kparams->vtcm_src0_size + kparams->vtcm_src1_size + kparams->vtcm_dst_size;
+    }
+
+    kparams->div_n_threads = init_fastdiv_values(n_threads);
+}
+
+static void ggml_hexagon_precompute_gated_delta_net_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_gdn_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * q     = op->src[0];
+    const struct ggml_tensor * k     = op->src[1];
+    const struct ggml_tensor * v     = op->src[2];
+    const struct ggml_tensor * g     = op->src[3];
+    const struct ggml_tensor * state = op->src[5];
+
+    const uint32_t S_v      = (uint32_t) v->ne[0];
+    const uint32_t H        = (uint32_t) v->ne[1];
+    const uint32_t n_tokens = (uint32_t) v->ne[2];
+    const uint32_t n_seqs   = (uint32_t) v->ne[3];
+    const uint32_t K        = (uint32_t) ggml_get_op_params_i32(op, 0);
+
+    const uint32_t rq3 = (uint32_t) (n_seqs / q->ne[3]);
+    const uint32_t rk3 = (uint32_t) (n_seqs / k->ne[3]);
+    const uint32_t total_rows = H * n_seqs;
+    const uint32_t n_threads  = (std::min)((uint32_t) sess->n_threads, total_rows);
+
+    const bool can_use_hmx = (opt_gdn_select >= 2) &&
+                             (sess->n_hmx > 0) &&
+                             (S_v % 64 == 0) &&
+                             (n_tokens >= HTP_GDN_MIN_TOKENS) &&
+                             (g->ne[0] == 1) &&
+                             (K == 1);
+
+    struct htp_gdn_hmx_vtcm_layout hmx_layout;
+    struct htp_gdn_vtcm_layout hvx_layout;
+    uint32_t n_heads_batch = 1;
+
+    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, S_v, HTP_GDN_CHUNK_SIZE, total_rows, sess->vtcm_size, n_threads, true, &n_heads_batch)) {
+        kparams->kernel_type     = HTP_GDN_KERNEL_HMX_CHUNKED;
+        kparams->pipeline        = hmx_layout.pipeline ? 1 : 0;
+        kparams->chunk_size      = HTP_GDN_CHUNK_SIZE;
+        kparams->n_chunks        = (n_tokens + HTP_GDN_CHUNK_SIZE - 1) / HTP_GDN_CHUNK_SIZE;
+        kparams->n_heads_batch   = (uint16_t) n_heads_batch;
+        kparams->vtcm_size       = (uint32_t) hmx_layout.total_bytes;
+        kparams->state_aligned   = (uint32_t) hmx_layout.state_f32_bytes;
+        kparams->vtcm_per_thread = (uint32_t) (hmx_layout.total_bytes / (n_threads > 0 ? n_threads : 1));
+    } else {
+        htp_gdn_vtcm_layout_build(&hvx_layout, S_v, n_threads);
+        kparams->kernel_type     = HTP_GDN_KERNEL_HVX_RECURRENT;
+        kparams->pipeline        = 0;
+        kparams->n_heads_batch   = 1;
+        kparams->state_aligned   = (uint32_t) hvx_layout.state_aligned;
+        kparams->vtcm_per_thread = (uint32_t) hvx_layout.bytes_per_thread;
+        kparams->vtcm_size       = (uint32_t) hvx_layout.total_bytes;
+    }
+
+    kparams->n_threads           = n_threads;
+    kparams->S_v                 = S_v;
+    kparams->H                   = H;
+    kparams->n_tokens            = n_tokens;
+    kparams->n_seqs              = n_seqs;
+    kparams->K                   = K;
+    kparams->total_rows          = total_rows;
+    kparams->rows_per_thread     = (total_rows + kparams->n_threads - 1) / kparams->n_threads;
+    kparams->kda                 = (g->ne[0] == S_v) ? 1 : 0;
+    kparams->state_seq_stride    = (uint32_t) (state->nb[3] / sizeof(float));
+    kparams->state_size_per_snap = S_v * S_v * H * n_seqs;
+    kparams->scale               = 1.0f / sqrtf((float) S_v);
+
+    if (H > 0)                  kparams->div_H         = init_fastdiv_values(H);
+    if (q->ne[1] > 0)           kparams->div_q1        = init_fastdiv_values((uint32_t) q->ne[1]);
+    if (k->ne[1] > 0)           kparams->div_k1        = init_fastdiv_values((uint32_t) k->ne[1]);
+    if (rq3 > 0)                kparams->div_rq3       = init_fastdiv_values(rq3);
+    if (rk3 > 0)                kparams->div_rk3       = init_fastdiv_values(rk3);
+    if (kparams->n_threads > 0) kparams->div_n_threads = init_fastdiv_values(kparams->n_threads);
+}
+
+static void ggml_hexagon_precompute_sort_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    bool is_top_k,
+    struct htp_sort_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    const uint32_t total_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t ne00       = src0->ne[0];
+    const uint32_t k          = dst->ne[0];
+
+    int32_t order = GGML_SORT_ORDER_DESC;
+    if (!is_top_k) {
+        order = ((const int32_t *) op->op_params)[0];
+    }
+
+    const uint32_t n_threads_max = sess->n_threads > 0 ? sess->n_threads : 4;
+    const size_t vtcm_budget = sess->vtcm_size > 0 ? sess->vtcm_size : (8 * 1024 * 1024);
+
+    struct htp_sort_vtcm_layout layout;
+    bool ok = htp_sort_solve_layout(&layout, ne00, total_rows, k, n_threads_max, vtcm_budget, is_top_k);
+    GGML_ASSERT(ok);
+
+    kparams->n_threads         = (int32_t) layout.n_threads;
+    kparams->total_rows        = (int32_t) total_rows;
+    kparams->row_start         = 0;
+    kparams->row_end           = (int32_t) total_rows;
+    kparams->ne00              = (int32_t) ne00;
+    kparams->k                 = (int32_t) k;
+    kparams->order             = order;
+    kparams->is_top_k          = is_top_k ? 1 : 0;
+    kparams->use_dma           = 1;
+    kparams->chunk_elems       = (int32_t) layout.chunk_elems;
+    kparams->n_chunks          = (int32_t) layout.n_chunks;
+    kparams->vtcm_size         = (int32_t) layout.total_bytes;
+    kparams->phase1_slot_size  = (int32_t) layout.phase1_slot_size;
+    kparams->merge_values_off  = (int32_t) layout.merge_values_off;
+    kparams->merge_indices_off = (int32_t) layout.merge_indices_off;
+    kparams->merge_elems       = (int32_t) layout.merge_elems;
+    kparams->n_slots           = (int32_t) layout.n_slots;
+}
+
 static void ggml_hexagon_precompute_fused_mmnx_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0, // W0
@@ -5877,6 +6540,37 @@ static bool is_mergeable_mul_mat_id_pair(const ggml_tensor * n1, const ggml_tens
     return true;
 }
 
+// Predicate for fusing two ROPE calls (e.g. Q and K) that share the same position/
+// freq_factors inputs and op_params into one ROPE_NX dispatch, computing the
+// theta_cache once instead of once per tensor. Duplicated logic/comment from
+// is_mergeable_mul_mat_pair's family above by design -- this is a distinct op class
+// with its own eligibility rules (shared src[1]/src[2] rather than shared src[1] alone,
+// exact op_params match rather than shared-weight-shape match).
+static bool is_mergeable_rope_pair(const ggml_tensor * n1, const ggml_tensor * n2) {
+    if (!n1 || !n2 || n1->op != GGML_OP_ROPE || n2->op != GGML_OP_ROPE) {
+        return false;
+    }
+    if (n1->type != GGML_TYPE_F32 || n2->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (n1->src[0]->type != GGML_TYPE_F32 || n2->src[0]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (n1->src[1] != n2->src[1]) { // inp_pos
+        return false;
+    }
+    if (n1->src[2] != n2->src[2]) { // freq_factors (nullable, but must match)
+        return false;
+    }
+    if (n1->ne[0] != n2->ne[0]) {
+        return false;
+    }
+    if (memcmp(n1->op_params, n2->op_params, sizeof(n1->op_params)) != 0) {
+        return false;
+    }
+    return true;
+}
+
 static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
 
@@ -5901,13 +6595,41 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             extra->flags &= ~GGML_HEXAGON_TENSOR_FUSEABLE;
 
-            if (graph->nodes[i]->op == GGML_OP_RMS_NORM && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+            if (graph->nodes[i]->op == GGML_OP_RMS_NORM &&
+                (ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }) ||
+                 ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_SCALE }))) {
                 extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
             } else if (graph->nodes[i]->op == GGML_OP_MUL_MAT || graph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
                 if ((i + 1 < graph->n_nodes && graph->nodes[i + 1]->op == GGML_OP_ADD && ggml_can_fuse(graph, i, { graph->nodes[i]->op, GGML_OP_ADD })) ||
                     ggml_node_has_n_uses(graph, i, 1)) {
                     extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
                 }
+            } else if (graph->nodes[i]->op == GGML_OP_SSM_CONV &&
+                       i + 1 < graph->n_nodes &&
+                       graph->nodes[i + 1]->op == GGML_OP_UNARY &&
+                       ggml_get_unary_op(graph->nodes[i + 1]) == GGML_UNARY_OP_SILU &&
+                       graph->nodes[i + 1]->src[0] == graph->nodes[i] &&
+                       ggml_node_has_n_uses(graph, i, 1)) {
+                // try_fuse_ssm_conv_silu (see enqueue_op): SSM_CONV's dst and SILU's dst
+                // are same-shape here, but ggml_can_fuse's op-list form (unlike this
+                // explicit check) can't express "GGML_OP_UNARY specifically carrying
+                // GGML_UNARY_OP_SILU", only the raw ggml_op enum -- so this uses the same
+                // manual-adjacency-check pattern as the MUL_MAT/CONCAT tagging above,
+                // re-checked more precisely inside try_fuse_ssm_conv_silu itself.
+                extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
+            } else if (graph->nodes[i]->op == GGML_OP_CONCAT &&
+                       i + 1 < graph->n_nodes &&
+                       (graph->nodes[i + 1]->op == GGML_OP_SSM_CONV) &&
+                       graph->nodes[i + 1]->src[0] == graph->nodes[i] &&
+                       ggml_node_has_n_uses(graph, i, 1)) {
+                // try_fuse_concat_ssm_conv (see enqueue_op): the reordered GDN conv-input
+                // build (delta-net-base.cpp's deferred_state_cpys) makes CONCAT land
+                // node-array-adjacent to its only real consumer, SSM_CONV, whenever the
+                // fusion's other shape preconditions hold (checked again, more precisely,
+                // inside try_fuse_concat_ssm_conv itself). Not ggml_can_fuse: that helper
+                // also requires the two nodes be ggml_are_same_shape, which CONCAT (ne[0] =
+                // n_state_rows + n_tokens) and SSM_CONV (ne[0] = d_inner) never are.
+                extra->flags |= GGML_HEXAGON_TENSOR_FUSEABLE;
             }
         }
 
