@@ -1606,7 +1606,7 @@ OpenAI-compatible endpoints are served instead:
   synchronous; the completed video job object is returned with `content_url`.
 - `GET /v1/videos/{id}` and `GET /v1/videos/{id}/content`: the job object and the mp4 (h264 + aac,
   requires `ffmpeg` in `PATH`; without it the frames and the audio are inlined in the job object as
-  base64 png / wav).
+  base64 png / wav). In router mode add `?model=<name>` to the GET (`content_url` already has it).
 - `POST /v1/audio/speech`: `input`, `seconds`; returns a wav file.
 
 `GET /v1/models` and `GET /props` report the `image`, `video` and `audio` capabilities.
