@@ -14,6 +14,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #define GGUF_MAX_STRING_LENGTH  (1024*1024*1024)
@@ -550,6 +551,8 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
     // KV pairs
     {
+        std::unordered_set<std::string> seen_keys;
+
         for (int64_t i = 0; ok && i < n_kv; ++i) {
             std::string key;
             gguf_type   type     = gguf_type(-1);
@@ -569,11 +572,9 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 GGML_LOG_ERROR("%s: key %" PRIi64 " is empty\n", __func__, i);
                 ok = false;
             }
-            for (size_t j = 0; ok && j < ctx->kv.size(); ++j) {
-                if (key == ctx->kv[j].key) {
-                    GGML_LOG_ERROR("%s: duplicate key '%s' for tensors %zu and %" PRIi64 " \n", __func__, key.c_str(), j, i);
-                    ok = false;
-                }
+            if (ok && !seen_keys.insert(key).second) {
+                GGML_LOG_ERROR("%s: duplicate key '%s' for KV pair %" PRIi64 "\n", __func__, key.c_str(), i);
+                ok = false;
             }
             if (!ok) {
                 break;
@@ -636,6 +637,8 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
     }
 
     // read the tensor info
+    std::unordered_set<std::string> seen_tensor_names;
+
     for (int64_t i = 0; ok && i < n_tensors; ++i) {
         struct gguf_tensor_info info;
 
@@ -659,12 +662,10 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             ggml_set_name(&info.t, name.c_str());
 
             // make sure there are no duplicate tensor names
-            for (int64_t j = 0; ok && j < i; ++j) {
-                if (strcmp(info.t.name, ctx->info[j].t.name) == 0) {
-                    GGML_LOG_ERROR("%s: duplicate tensor name '%s' for tensors %" PRIi64 " and %" PRIi64 "\n", __func__, info.t.name, j, i);
-                    ok = false;
-                    break;
-                }
+            if (ok && !seen_tensor_names.insert(name).second) {
+                GGML_LOG_ERROR("%s: duplicate tensor name '%s' for tensor %" PRIi64 "\n", __func__, info.t.name, i);
+                ok = false;
+                break;
             }
         }
         if (!ok) {
