@@ -122,8 +122,8 @@ int op_repeat(struct htp_ops_context * octx) {
             return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
     }
 
     const uint32_t total_dst_rows  = dst->ne[1] * dst->ne[2] * dst->ne[3];

@@ -429,15 +429,23 @@ private:
             bool negate = false;
             if (is_identifier("not")) { ++current; negate = true; }
             auto test_id = parse_primary_expression();
-            // FIXME: tests can also be expressed like this: if x is eq 3
-            if (is(token::open_paren)) test_id = parse_call_expression(std::move(test_id));
+            if (is(token::open_paren)) {
+                test_id = parse_call_expression(std::move(test_id));
+            } else if (is(token::numeric_literal) || is(token::string_literal) || is(token::open_curly_bracket) || is(token::open_square_bracket) ||
+                    (is(token::identifier) && !is_identifier("and") && !is_identifier("or") && !is_identifier("else"))) {
+                size_t call_pos = current;
+                statements args;
+                args.push_back(parse_unary_expression());
+                test_id = mk_stmt<call_expression>(call_pos, std::move(test_id), std::move(args));
+            }
             operand = mk_stmt<test_expression>(start_pos, std::move(operand), negate, std::move(test_id));
         }
         return operand;
     }
 
     statement_ptr parse_filter_expression() {
-        auto operand = parse_call_member_expression();
+        // Filters/tests bind outside unary so -n|abs is (-n)|abs, not -(n|abs).
+        auto operand = parse_unary_expression();
         while (is(token::pipe)) {
             size_t start_pos = current;
             ++current; // consume pipe
@@ -446,6 +454,15 @@ private:
             operand = mk_stmt<filter_expression>(start_pos, std::move(operand), std::move(filter));
         }
         return operand;
+    }
+
+    statement_ptr parse_unary_expression() {
+        if (is(token::unary_operator)) {
+            size_t start_pos = current;
+            auto op = next();
+            return mk_stmt<unary_expression>(start_pos, op, parse_unary_expression());
+        }
+        return parse_call_member_expression();
     }
 
     statement_ptr parse_call_member_expression() {

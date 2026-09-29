@@ -167,16 +167,16 @@ void common_preset::apply_to_params(common_params & params, const std::set<std::
     }
 }
 
-static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_file(const std::string & path) {
+static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_file(const std::filesystem::path & path) {
     std::map<std::string, std::map<std::string, std::string>> parsed;
 
     if (!std::filesystem::exists(path)) {
-        throw std::runtime_error("preset file does not exist: " + path);
+        throw std::runtime_error("preset file does not exist: " + fs_path_to_utf8(path));
     }
 
     std::ifstream file(path);
     if (!file.good()) {
-        throw std::runtime_error("failed to open server preset file: " + path);
+        throw std::runtime_error("failed to open server preset file: " + fs_path_to_utf8(path));
     }
 
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -225,7 +225,7 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     common_peg_parse_context ctx(contents);
     const auto result = parser.parse(ctx);
     if (!result.success()) {
-        throw std::runtime_error("failed to parse server config file: " + path);
+        throw std::runtime_error("failed to parse server config file: " + fs_path_to_utf8(path));
     }
 
     std::string current_section = COMMON_PRESET_DEFAULT_NAME;
@@ -282,7 +282,7 @@ common_preset_context::common_preset_context(llama_example ex)
     key_to_opt = get_map_key_opt(ctx_params);
 }
 
-common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
+common_presets common_preset_context::load_from_ini(const std::filesystem::path & path, common_preset & global) const {
     common_presets out;
     auto ini_data = parse_ini_from_file(path);
 
@@ -323,7 +323,7 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                 }
                 LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
             } else if (ignore_unknown_keys) {
-                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), path.c_str());
+                LOG_WRN("ignoring option '%s' from %s: not supported by this program\n", key.c_str(), fs_path_to_utf8(path).c_str());
             } else {
                 throw std::runtime_error(string_format(
                     "option '%s' not recognized in preset '%s'",

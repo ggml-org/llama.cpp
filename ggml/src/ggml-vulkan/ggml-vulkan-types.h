@@ -51,6 +51,8 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 
 #include <cmath>
 
+#include <functional>
+
 #include <iomanip>
 
 #include <iostream>
@@ -386,10 +388,12 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
     NVIDIA_TURING,
+    QUALCOMM_ADRENO,
 };
 
 enum vk_conv_shapes {
@@ -550,6 +554,15 @@ static constexpr std::initializer_list<ggml_op> rms_norm_mul_rope_view_set_rows_
 static constexpr std::initializer_list<ggml_op> rms_norm_view_set_rows_pattern { GGML_OP_RMS_NORM, GGML_OP_VIEW, GGML_OP_SET_ROWS };
 
 static constexpr std::initializer_list<ggml_op> rope_view_set_rows_pattern { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS };
+
+// scale_out*sigmoid(scale_in*x) as the hc_post weights (qwen4exp hc_combine)
+static constexpr std::initializer_list<ggml_op> hc_post_gate_pattern { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE, GGML_OP_DSV4_HC_POST };
+
+static constexpr std::initializer_list<std::array<int, 3>> hc_post_gate_edges {
+    { 1, 0, 0 }, // sigmoid->src[0] == scale
+    { 2, 0, 1 }, // scale->src[0]   == sigmoid
+    { 3, 2, 2 }, // hc_post->src[2] == scale (post)
+};
 
 static constexpr std::initializer_list<std::array<int, 3>> topk_moe_early_softmax_norm_edges {
     { 1, 0, 0 }, // reshape->src[0]  == softmax
@@ -996,6 +1009,7 @@ struct vk_device_struct {
     bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
@@ -1011,6 +1025,8 @@ struct vk_device_struct {
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    bool disable_descriptor_reuse;
+    std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
@@ -1053,6 +1069,8 @@ struct vk_buffer_struct {
         }
         VK_LOG_DEBUG("~vk_buffer_struct(" << buffer << ", " << size << ")");
 
+        // bump before destroying, so a thread that sees the buffer gone also sees the new count
+        device->buffer_destroy_count.fetch_add(1, std::memory_order_release);
         device->device.freeMemory(device_memory);
         device->device.destroyBuffer(buffer);
     }
@@ -1264,6 +1282,9 @@ struct ggml_backend_vk_context {
 
     std::vector<vk::DescriptorPool> descriptor_pools;
     std::vector<vk::DescriptorSet> descriptor_sets;
+    // last bindings written to each set; descriptor_sets is append-only so an index always names the same set
+    std::vector<std::vector<vk::DescriptorBufferInfo>> descriptor_set_bindings;
+    uint64_t descriptor_set_bindings_destroy_count {};
     uint32_t descriptor_set_idx {};
     uint32_t pipeline_descriptor_set_requirements {};
 
@@ -1281,6 +1302,7 @@ struct ggml_backend_vk_context {
     bool fused_topk_moe_scale {};
     // QSA indexer gather+add+top_k fused into one radix-select
     bool fused_topk_qsa {};
+    bool fused_hc_post_gate {};
     rms_norm_mode fused_rms_norm_mode {RMS_NORM_COUNT};
 
     // for GGML_VK_PERF_LOGGER

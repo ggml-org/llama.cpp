@@ -181,6 +181,14 @@ cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Release
 ```
 
+Note that this also builds the CPU backend by default. On Windows on ARM, MSVC's
+support for the ARM NEON intrinsics used by the CPU backend may be incomplete, so
+a CUDA build produced entirely with MSVC might have a slower CPU backend. If CPU
+performance matters, try following the split build used in our release workflow
+([.github/workflows/release.yml](../.github/workflows/release.yml)): the CPU backend
+is built with clang (`cmake/arm64-windows-llvm.cmake`) and the CUDA backend with MSVC
+(`cmake/arm64-windows-msvc-cuda.cmake`), and the artifacts are merged afterwards.
+
 ### Non-Native Builds
 
 By default llama.cpp will be built for the hardware that is connected to the system at that time.
@@ -282,6 +290,13 @@ Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command
 Override default, speed-optimized compute types for cuBLAS matrix multiplications.
 Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
+#### GGML_CUDA_MMQ_PREC
+
+Override the activation precision that the model requests for NVFP4 and MXFP4 matrix multiplications.
+Currently supported values: `auto`, `q8`, `q4`.
+
+NVFP4 and MXFP4 layers marked as W4A16 request 8-bit activations, so on Blackwell those layers run through the W4A8 path instead of the native W4A4 path. Set `q4` to keep the native W4A4 path for faster prompt processing at the cost of accuracy, or `q8` to use the W4A8 path for every layer, `auto` uses per-tensor prec metadata (this is the same behavior as when the environment variable is not set).
+
 ### Unified Memory
 
 The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enable unified memory in Linux. This allows swapping to system RAM instead of crashing when the GPU VRAM is exhausted. In Windows this setting is available in the NVIDIA control panel as `System Memory Fallback`.
@@ -323,11 +338,11 @@ cmake --build build --config Release
 By default, all supported compute capabilities are enabled. To customize this behavior, you can specify the `MUSA_ARCHITECTURES` option in the CMake command:
 
 ```bash
-cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="21"
+cmake -B build -DGGML_MUSA=ON -DMUSA_ARCHITECTURES="31"
 cmake --build build --config Release
 ```
 
-This configuration enables only compute capability `2.1` (MTT S80) during compilation, which can help reduce compilation time.
+This configuration enables only compute capability `3.1` (MTT S5000) during compilation, which can help reduce compilation time.
 
 #### Compilation options
 
