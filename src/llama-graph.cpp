@@ -1522,6 +1522,10 @@ ggml_tensor * llm_graph_context::build_lora_mm(
         prec_policy->apply(res);
     }
 
+    if (w->type == GGML_TYPE_NVFP4) {
+        ggml_prec_set_acc(res, GGML_PREC_BF16);
+    }
+
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
     }
@@ -1556,6 +1560,10 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
 
     if (prec_policy) {
         prec_policy->apply(res);
+    }
+
+    if (w->type == GGML_TYPE_NVFP4) {
+        ggml_prec_set_acc(res, GGML_PREC_BF16);
     }
 
     if (w_s) {
