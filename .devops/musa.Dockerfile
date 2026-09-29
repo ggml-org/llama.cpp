@@ -1,9 +1,9 @@
 ARG UBUNTU_VERSION=22.04
 # This needs to generally match the container host's environment.
 # Target the MUSA build image
-ARG BASE_MUSA_DEV_CONTAINER=registry.mthreads.com/mcconline/inference/pytorch:2.9.1.post1-py3.10-musa5.2.0-mp31-devel-ubuntu${UBUNTU_VERSION}-amd64
+ARG BASE_MUSA_DEV_CONTAINER=registry.mthreads.com/mcconline/musa_sdk:5.2.0-devel-ubuntu${UBUNTU_VERSION}-s5000
 
-ARG BASE_MUSA_RUN_CONTAINER=${BASE_MUSA_DEV_CONTAINER}
+ARG BASE_MUSA_RUN_CONTAINER=registry.mthreads.com/mcconline/musa_sdk:5.2.0-runtime-ubuntu${UBUNTU_VERSION}-s5000
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
