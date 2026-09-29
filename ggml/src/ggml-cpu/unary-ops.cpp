@@ -44,6 +44,22 @@ static inline float op_hardswish(float x) {
     return x * fminf(1.0f, fmaxf(0.0f, (x + 3.0f) / 6.0f));
 }
 
+static inline float op_silu(float x) {
+    return x / (1.0f + expf(-x));
+}
+
+static inline float op_gelu(float x) {
+    return 0.5f * x * (1.0f + tanhf(0.79788456080286535587989211986876f * x * (1.0f + 0.044715f * x * x)));
+}
+
+static inline float op_gelu_erf(float x) {
+    return 0.5f * x * (1.0f + erff(x * 0.70710678118654752440084436210484f));
+}
+
+static inline float op_gelu_quick(float x) {
+    return x / (1.0f + expf(-1.702f * x));
+}
+
 static inline float op_sqr(float x) {
     return x * x;
 }
@@ -231,6 +247,17 @@ static void unary_op_functor(const ggml_compute_params * params, ggml_tensor * d
         fprintf(stderr, "%s: unsupported types: dst: %s, src0: %s\n", __func__,
             ggml_type_name(dst->type), ggml_type_name(src0->type));
         GGML_ABORT("fatal error");
+    }
+}
+
+// the F32/F16 versions of these ops are in ops.cpp
+void ggml_compute_forward_unary_bf16(const ggml_compute_params * params, ggml_tensor * dst) {
+    switch (ggml_get_unary_op(dst)) {
+        case GGML_UNARY_OP_SILU:       unary_op<op_silu>(params, dst);       break;
+        case GGML_UNARY_OP_GELU:       unary_op<op_gelu>(params, dst);       break;
+        case GGML_UNARY_OP_GELU_ERF:   unary_op<op_gelu_erf>(params, dst);   break;
+        case GGML_UNARY_OP_GELU_QUICK: unary_op<op_gelu_quick>(params, dst); break;
+        default:                       GGML_ABORT("fatal error");
     }
 }
 

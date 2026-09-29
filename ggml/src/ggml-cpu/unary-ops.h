@@ -29,6 +29,7 @@ void ggml_compute_forward_ceil(const struct ggml_compute_params * params, struct
 void ggml_compute_forward_round(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_trunc(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 void ggml_compute_forward_xielu(const struct ggml_compute_params * params, struct ggml_tensor * dst);
+void ggml_compute_forward_unary_bf16(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
 #ifdef __cplusplus
 }

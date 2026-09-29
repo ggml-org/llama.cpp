@@ -2218,6 +2218,10 @@ static void ggml_compute_forward_gelu(
             {
                 ggml_compute_forward_gelu_f16(params, dst);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_unary_bf16(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
@@ -2448,6 +2452,10 @@ static void ggml_compute_forward_gelu_erf(
             {
                 ggml_compute_forward_gelu_erf_f16(params, dst);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_unary_bf16(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
@@ -2567,6 +2575,10 @@ static void ggml_compute_forward_gelu_quick(
             {
                 ggml_compute_forward_gelu_quick_f16(params, dst);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_unary_bf16(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
@@ -2685,6 +2697,10 @@ static void ggml_compute_forward_silu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_silu_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_unary_bf16(params, dst);
             } break;
         default:
             {
@@ -2889,6 +2905,81 @@ void ggml_compute_forward_silu_back(
 
 // ggml_compute_forward_reglu
 
+// BF16 GLU: values are converted to F32 for the op
+static inline float op_glu_reglu(float x, float g) {
+    return (x > 0.f) ? x * g : 0.f;
+}
+
+static inline float op_glu_geglu(float x, float g) {
+    return ggml_gelu_f32(x) * g;
+}
+
+static inline float op_glu_swiglu(float x, float g) {
+    return (x / (1.0f + expf(-x))) * g;
+}
+
+static inline float op_glu_geglu_erf(float x, float g) {
+    return 0.5f * x * (1.0f + erff(x * SQRT_2_INV)) * g;
+}
+
+static inline float op_glu_geglu_quick(float x, float g) {
+    return ggml_gelu_quick_f32(x) * g;
+}
+
+template <float (*op)(float, float)>
+static void ggml_compute_forward_glu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
+    const int nr = ggml_nrows(src0);
+
+    GGML_ASSERT(dst->ne[0] == nc);
+    GGML_ASSERT(ggml_nrows(dst) == nr);
+
+    const int32_t swapped = ggml_get_op_params_i32(dst, 1);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        const ggml_bf16_t * src0_p = (const ggml_bf16_t *) (src0_d + i1*src0_o);
+        const ggml_bf16_t * src1_p = (const ggml_bf16_t *) (src1_d + i1*src1_o);
+        ggml_bf16_t       * dst_p  = (ggml_bf16_t *) ((char *) dst->data + i1*(dst->nb[1]));
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        for (int k = 0; k < nc; k++) {
+            dst_p[k] = GGML_FP32_TO_BF16(op(GGML_BF16_TO_FP32(src0_p[k]), GGML_BF16_TO_FP32(src1_p[k])));
+        }
+    }
+}
+
 static void ggml_compute_forward_reglu_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3022,6 +3113,10 @@ static void ggml_compute_forward_reglu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_reglu_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_glu_bf16<op_glu_reglu>(params, dst);
             } break;
         default:
             {
@@ -3166,6 +3261,10 @@ static void ggml_compute_forward_geglu(
             {
                 ggml_compute_forward_geglu_f16(params, dst);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_glu_bf16<op_glu_geglu>(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
@@ -3308,6 +3407,10 @@ static void ggml_compute_forward_swiglu(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_swiglu_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_glu_bf16<op_glu_swiglu>(params, dst);
             } break;
         default:
             {
@@ -3672,6 +3775,10 @@ static void ggml_compute_forward_geglu_erf(
             {
                 ggml_compute_forward_geglu_erf_f16(params, dst);
             } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_glu_bf16<op_glu_geglu_erf>(params, dst);
+            } break;
         default:
             {
                 GGML_ABORT("fatal error");
@@ -3814,6 +3921,10 @@ static void ggml_compute_forward_geglu_quick(
         case GGML_TYPE_F16:
             {
                 ggml_compute_forward_geglu_quick_f16(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_glu_bf16<op_glu_geglu_quick>(params, dst);
             } break;
         default:
             {
@@ -4746,6 +4857,44 @@ static void ggml_compute_forward_scale_f32(
     }
 }
 
+static void ggml_compute_forward_scale_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    float s; // scale factor
+    float b; // bias
+
+    memcpy(&s, (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&b, (float *) dst->op_params + 1, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int i1 = ir0; i1 < ir1; i1++) {
+        const ggml_bf16_t * x = (const ggml_bf16_t *) ((const char *) src0->data + i1*src0->nb[1]);
+        ggml_bf16_t       * y = (ggml_bf16_t *)       ((char *)       dst->data  + i1*dst->nb[1]);
+        for (int k = 0; k < nc; k++) {
+            y[k] = GGML_FP32_TO_BF16(s*GGML_BF16_TO_FP32(x[k]) + b);
+        }
+    }
+}
+
 void ggml_compute_forward_scale(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4756,6 +4905,10 @@ void ggml_compute_forward_scale(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_scale_f32(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_scale_bf16(params, dst);
             } break;
         default:
             {
