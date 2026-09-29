@@ -1,6 +1,7 @@
 import { ModelAuxSidecar, ModelDraftSidecar, SidecarForm } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
+import { sidecarFromTag } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 
 const { buildDownloadTag, isSidecarEntry } = ModelsService;
@@ -123,5 +124,17 @@ describe('isSidecarEntry', () => {
 	it('leaves plain model entries loadable', () => {
 		expect(isSidecarEntry('org/repo:Q4_0')).toBe(false);
 		expect(isSidecarEntry('org/repo')).toBe(false);
+	});
+});
+
+describe('sidecarFromTag', () => {
+	it('reads the token after the last dash', () => {
+		expect(sidecarFromTag('Q4_0-mtp')).toBe(ModelDraftSidecar.MTP);
+		expect(sidecarFromTag('mmproj')).toBe(ModelAuxSidecar.MMPROJ);
+	});
+
+	it('returns null for quant-only and unrelated tags', () => {
+		expect(sidecarFromTag('Q4_K_XL')).toBeNull();
+		expect(sidecarFromTag('UD-Q4_K_XL')).toBeNull();
 	});
 });
