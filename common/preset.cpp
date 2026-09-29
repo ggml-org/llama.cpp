@@ -167,6 +167,17 @@ void common_preset::apply_to_params(common_params & params, const std::set<std::
     }
 }
 
+// drop a matching outer " or '; do not unescape (Windows paths use '\')
+static std::string strip_matching_quotes(const std::string & value) {
+    if (value.size() >= 2) {
+        const char q = value.front();
+        if ((q == '"' || q == '\'') && value.back() == q) {
+            return value.substr(1, value.size() - 2);
+        }
+    }
+    return value;
+}
+
 static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_file(const std::string & path) {
     std::map<std::string, std::map<std::string, std::string>> parsed;
 
@@ -240,7 +251,7 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
             const std::string key = std::string(node.text);
             current_key = key;
         } else if (node.tag == "value" && !current_key.empty() && !current_section.empty()) {
-            parsed[current_section][current_key] = std::string(node.text);
+            parsed[current_section][current_key] = strip_matching_quotes(std::string(node.text));
             current_key.clear();
         }
     });
