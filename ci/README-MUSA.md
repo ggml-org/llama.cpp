@@ -27,7 +27,7 @@ docker run --privileged -it \
 Inside the container, execute the following commands:
 
 ```bash
-apt update -y && apt install -y bc cmake ccache git python3.10-venv time unzip wget
+apt update -y && apt install -y bc cmake ccache git python3.10-venv time unzip wget musa-mualg-5-2 musa-muthrust-5-2
 git config --global --add safe.directory /ws
 GG_BUILD_MUSA=1 bash ./ci/run.sh /ci-results /ci-cache
 ```

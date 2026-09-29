@@ -36,7 +36,9 @@ RUN apt-get update && \
     python3-pip \
     git \
     libssl-dev \
-    libgomp1
+    libgomp1 \
+    musa-mualg-5-2 \
+    musa-muthrust-5-2
 
 WORKDIR /app
 
@@ -85,6 +87,9 @@ RUN apt-get update \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
+
+# The MUSA runtime image does not register its library directory
+RUN echo "/usr/local/musa/lib" > /etc/ld.so.conf.d/musa-runtime.conf && ldconfig
 
 COPY --from=build /app/lib/ /app
 

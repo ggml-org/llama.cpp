@@ -156,7 +156,7 @@ jobs:
         id: depends
         run: |
           apt-get update
-          apt-get install -y build-essential git cmake libssl-dev jq python3-venv
+          apt-get install -y build-essential git cmake libssl-dev jq python3-venv musa-mualg-5-2 musa-muthrust-5-2
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
