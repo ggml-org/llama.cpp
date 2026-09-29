@@ -1920,6 +1920,16 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
 }
 
 void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+    // prefix-LM models (hrm-text with prefix_lm set): a token attends to every token of its own
+    // sequence that is in the cache or in the current ubatch. Generation appends one token per
+    // sequence per step, so generated tokens still see only earlier tokens. The result is
+    // bidirectional attention over the prompt and causal attention over the answer, which is the
+    // mask these models are trained with. The prompt has to be processed in one ubatch for this
+    // to hold; llama_context::decode warns when it is not.
+    if (hparams.hrm_prefix_lm) {
+        causal_attn = false;
+    }
+
     // fill the cell rows of each slice
     if (attn_mask.rows && attn_mask.rows->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(attn_mask.rows->buffer));
