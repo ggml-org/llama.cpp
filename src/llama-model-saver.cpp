@@ -506,6 +506,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_norm);
     add_tensor(model->hc_head_down);
     add_tensor(model->hc_head_up);
+    add_tensor(model->ctc_out_mid);
+    add_tensor(model->ctc_out_mid_b);
 
     // looped architectures alias physical tensors across cache slots; save each
     // tensor once. a different tensor with an existing name still asserts below
