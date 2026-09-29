@@ -2328,7 +2328,7 @@ class TextModel(ModelBase):
 
         # pooling before a classification head (e.g. ModernBertForSequenceClassification)
         if (classifier_pooling := self.hparams.get("classifier_pooling")) is not None:
-            if classifier_pooling not in mode_mapping:
+            if classifier_pooling not in ("cls", "mean"):
                 raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
             self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
 
