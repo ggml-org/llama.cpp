@@ -143,7 +143,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	/** Load/unload operations and the /models/sse status feed, composed here. */
 	private _status = new ModelStatusManager(this);
 
-	// Dedup concurrent fetch() callers - all awaiters share the same inflight promise.
+	// every caller awaits the same inflight promise
 	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
 	private inflightFetch: Promise<void> | null = null;
 
@@ -278,8 +278,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			return;
 		}
 
-		// Try a favorite model, but only one that exists on this backend: favorites
-		// are shared across backends, so a stored id may belong to another one
+		// favorites are shared across backends, so a stored id may belong to another one
 		const favorite = this.favoriteModelIds.values().next()?.value;
 		const favoriteOption = favorite
 			? availableModels.find((m) => m.id === favorite || m.model === favorite)
@@ -401,8 +400,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Select a model. `recordRecent` marks a pick the user made in the selector, so
-	 * automatic picks (startup default, conversation sync) stay out of the recency list.
+	 * Select a model. `recordRecent` keeps automatic picks out of the recency list.
 	 */
 	async selectModelById(modelId: string, options?: { recordRecent?: boolean }): Promise<void> {
 		if (!modelId || this.updating) return;
@@ -545,23 +543,22 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	}
 
 	/**
-	 * Warm the Hub record for the local repos, so a list can read the context and the
-	 * size the server only reports once a model is loaded. Best effort, and only for
-	 * installs that opted into the Hub.
+	 * Warm the Hub record of the local repos, so a list can read the context and size
+	 * the server reports only once a model is loaded.
 	 */
 	warmHubDetails(): void {
-		if (!settingsStore.config[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]) return;
+		if (!settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB]) return;
 
 		const repos: string[] = [];
 
 		for (const option of this.models) {
-			const repo = option.model.split(':')[0];
+			const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
 
 			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
 		}
 
-		// a large catalog would fire one request per repo on every load, so this warms
-		// the ones the lists mount first and lets the rest arrive on demand
+		// a large catalog would fire one request per repo on every load, so warm the ones
+		// the lists mount first and let the rest arrive on demand
 		for (const repo of repos.slice(0, MODEL_ROW_WINDOW)) {
 			void HuggingFaceService.getDetails(repo).catch(() => {});
 		}
@@ -582,9 +579,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			item,
 			parsed: ModelsService.parseModelId(item.id)
 		}));
-		// sidecar entries mark downloaded sidecar files, not loadable models; the
-		// router lists them under their own `<repo>:<quant>-<sidecar>` id, so pair
-		// the drafts with their repo here and drop the entries below
+		// sidecar entries mark downloaded sidecar files, not loadable models, and the router
+		// lists them under their own `<repo>:<quant>-<sidecar>` id: pair each draft with its
+		// repo here and drop the entries below
 		const draftSidecarsByRepo = new SvelteMap<string, ModelSidecarBadge[]>();
 
 		for (const { item, parsed } of entries) {

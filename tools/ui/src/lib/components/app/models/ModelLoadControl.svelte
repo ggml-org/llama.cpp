@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { CircleAlert, Eject, Loader2, Power, RotateCw } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, MODEL_LOAD_ICONS } from '$lib/constants';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -32,12 +31,12 @@
 
 <div class={['flex w-5 shrink-0 items-center justify-center', className]}>
 	{#if isLoading}
-		<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
+		<MODEL_LOAD_ICONS.loading class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 	{:else}
 		<!-- the state dot is what the row shows at rest; the action takes its place on hover -->
 		{#if showAction && revealOnHover}
 			{#if isFailed}
-				<CircleAlert
+				<MODEL_LOAD_ICONS.failed
 					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
 			{:else}
@@ -51,7 +50,7 @@
 			{/if}
 		{:else}
 			{#if isFailed}
-				<CircleAlert class="h-3.5 w-3.5 text-red-500" />
+				<MODEL_LOAD_ICONS.failed class="h-3.5 w-3.5 text-red-500" />
 			{:else}
 				<span
 					class="h-2 w-2 rounded-full {isSleeping
@@ -75,7 +74,7 @@
 			{#if isFailed}
 				<ActionIcon
 					class="h-5 w-5 text-red-500 hover:text-foreground"
-					icon={RotateCw}
+					icon={MODEL_LOAD_ICONS.retry}
 					iconSize="h-4 w-4"
 					onclick={() => modelsStore.status.load(option.model)}
 					stopPropagationOnClick
@@ -85,7 +84,7 @@
 			{:else if isLoaded || isSleeping}
 				<ActionIcon
 					class="h-5 w-5 hover:text-foreground"
-					icon={Eject}
+					icon={MODEL_LOAD_ICONS.unload}
 					iconSize="h-4 w-4"
 					onclick={() => modelsStore.status.unload(option.model)}
 					stopPropagationOnClick
@@ -95,7 +94,7 @@
 			{:else}
 				<ActionIcon
 					class="h-5 w-5 hover:text-foreground"
-					icon={Power}
+					icon={MODEL_LOAD_ICONS.load}
 					iconSize="h-4 w-4"
 					onclick={() => modelsStore.status.load(option.model)}
 					stopPropagationOnClick

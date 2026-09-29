@@ -65,8 +65,7 @@
 					<DropdownMenu.Trigger
 						{...props}
 						class={cn(
-							// the composer sits on a muted surface, so this keeps a lighter one:
-							// ghost brings no fill of its own for the variant to fight over
+							// ghost brings no fill of its own for the muted composer surface to fight over
 							buttonVariants({ variant: 'ghost' }),
 							'file-upload-button h-8 w-8 cursor-pointer rounded-full bg-background p-0 shadow-sm dark:bg-muted-foreground/15'
 						)}

@@ -60,12 +60,11 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  */
 export { default as Logo } from './Logo.svelte';
 
-/**
- * **CollapsibleSection** - Section with a trigger that expands in place
- *
- * The trigger can sit above or below the content, and the chevron can stay out
- * of sight while the section is open. Collapsed content unmounts after the
- * transition, so hidden rows never reach menu keyboard navigation.
- */
+/** Section with a trigger that expands in place. */
 export { default as CollapsibleSection } from './CollapsibleSection.svelte';
-export { default as GroupedList, type GroupedListGroup } from './GroupedList.svelte';
+export {
+	default as GroupedList,
+	type GroupedListGroup,
+	GroupedListUnit
+} from './GroupedList.svelte';
+export { default as CollapsibleRegion } from './CollapsibleRegion.svelte';

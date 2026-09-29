@@ -1,11 +1,9 @@
+import { ModelGroupKind, ModelsTableGroupKind } from '$lib/constants';
 import { ModelCapability, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
-import type { ModelModalities, ModelOption } from '$lib/types/models';
+import type { ModelOption } from '$lib/types/models';
 import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
-
-/** What a group folds, which decides its label. */
-export type ModelGroupKind = 'quants' | 'variants';
 
 /** One repo of the table, with the rows it ships as. */
 export interface ModelQuantGroup {
@@ -15,36 +13,6 @@ export interface ModelQuantGroup {
 	quants: ModelOption[];
 }
 
-/**
- * Kind of one collapsible block of the manager's table. A plain constant map, so
- * provider blocks can extend the union with their own string kinds.
- */
-export const ModelsTableGroupKind = {
-	FAVORITES: 'favorites',
-	HIDDEN: 'hidden',
-	LOADED: 'loaded',
-	LOCAL: 'local'
-} as const;
-
-export type ModelsTableGroupKind = (typeof ModelsTableGroupKind)[keyof typeof ModelsTableGroupKind];
-
-/** Column the manager's table can be ordered by. */
-export const ModelsTableSortKey = {
-	CONTEXT: 'context',
-	NAME: 'name',
-	STATUS: 'status'
-} as const;
-
-export type ModelsTableSortKey = (typeof ModelsTableSortKey)[keyof typeof ModelsTableSortKey];
-
-/** Header label of each manager section. */
-export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
-	[ModelsTableGroupKind.FAVORITES]: 'Favorites',
-	[ModelsTableGroupKind.HIDDEN]: 'Hidden models',
-	[ModelsTableGroupKind.LOADED]: 'Loaded models',
-	[ModelsTableGroupKind.LOCAL]: 'Local models'
-};
-
 /** One collapsible block of the manager's table. */
 export interface ModelsTableGroup {
 	/** One entry per repo, its quants hanging off it. */
@@ -53,12 +21,6 @@ export interface ModelsTableGroup {
 	kind: ModelsTableGroupKind;
 	label: string;
 }
-
-/** Modalities a model can accept, as the manager filter offers them. */
-export type ModalityKey = keyof ModelModalities;
-
-/** Modalities the manager filter offers, in display order. */
-export const MODALITY_KEYS: ModalityKey[] = ['vision', 'video', 'audio'];
 
 /** True when the model is loaded (or sleeping) and not mid-operation. */
 export function isModelRunning(option: ModelOption): boolean {
@@ -85,10 +47,7 @@ export function modelSupports(option: ModelOption, capability: ModelCapability):
 		: detectThinkingSupport(template);
 }
 
-/**
- * Context a model reports: the provider listing first, then whatever the Hub has
- * cached for it. 0 means nothing is known yet.
- */
+/** Context a model reports: the provider listing first, then the cached Hub record. */
 export function modelContextLength(option: ModelOption): number {
 	return (
 		option.contextLength ??
@@ -118,7 +77,7 @@ export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 			continue;
 		}
 
-		groups.set(key, { base: option, key, kind: 'quants', quants: [option] });
+		groups.set(key, { base: option, key, kind: ModelGroupKind.QUANTS, quants: [option] });
 	}
 
 	return Array.from(groups.values()).flatMap((group) => {
@@ -131,7 +90,7 @@ export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 				...group,
 				base: option,
 				key: `${group.key}::${option.id}`,
-				kind: 'variants' as const,
+				kind: ModelGroupKind.VARIANTS,
 				quants: [option]
 			}));
 		}
@@ -146,5 +105,5 @@ function groupKind(quants: ModelOption[]): ModelGroupKind {
 		(option) => (option.parsedId ?? ModelsService.parseModelId(option.model)).quantization
 	);
 
-	return isQuant ? 'quants' : 'variants';
+	return isQuant ? ModelGroupKind.QUANTS : ModelGroupKind.VARIANTS;
 }

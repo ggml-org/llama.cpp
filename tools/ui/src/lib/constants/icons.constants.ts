@@ -1,20 +1,32 @@
 /**
- * Icon mappings for file types, models and model modalities
+ * Icon and modality mappings for file types and models
  * Centralized configuration to ensure consistent icon usage across the app
  */
 
 import {
+	CircleAlert as LoadFailedIcon,
+	Eject as UnloadIcon,
 	Eye as VisionIcon,
 	File as FileIcon,
 	FileText as FileTextIcon,
+	FolderOpen as CwdCommandIcon,
 	Image as ImageIcon,
 	Lightbulb as ReasoningIcon,
+	Loader2 as LoadingIcon,
 	Mic as AudioIcon,
 	Package as ModelIcon,
+	Power as LoadIcon,
+	RotateCw as RetryIcon,
+	Sparkles as PromptCommandIcon,
 	Video as VideoIcon,
 	Wrench as ToolUseIcon
 } from '@lucide/svelte';
-import { FileTypeCategory, ModelCapability, ModelModality } from '$lib/enums';
+import {
+	ChatFormCommandAction,
+	FileTypeCategory,
+	ModelCapability,
+	ModelModality
+} from '$lib/enums';
 import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
 import type { Component } from 'svelte';
 
@@ -53,6 +65,21 @@ export const MODALITY_FLAG_KEYS: Record<
 	[ModelModality.VISION]: 'vision'
 };
 
+/** Modalities in the order the filters and the model cards list them. */
+export const MODALITY_ORDER: Exclude<ModelModality, ModelModality.TEXT>[] = [
+	ModelModality.VISION,
+	ModelModality.VIDEO,
+	ModelModality.AUDIO
+];
+
+/** Boolean flag a modality drives on the ModelModalities type. */
+export type ModalityKey = (typeof MODALITY_FLAG_KEYS)[keyof typeof MODALITY_FLAG_KEYS];
+
+/** Modality flags a model can carry, in display order. */
+export const MODALITY_KEYS: ModalityKey[] = MODALITY_ORDER.map(
+	(modality) => MODALITY_FLAG_KEYS[modality]
+);
+
 export const CAPABILITY_ICONS: Record<ModelCapability, Component> = {
 	[ModelCapability.REASONING]: ReasoningIcon,
 	[ModelCapability.TOOL_USE]: ToolUseIcon
@@ -68,6 +95,22 @@ export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabiliti
 	[ModelCapability.REASONING]: 'reasoning',
 	[ModelCapability.TOOL_USE]: 'tools'
 };
+
+/** Icons of the slash-command picker, one per chat-form command. */
+export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> = {
+	[ChatFormCommandAction.CWD]: CwdCommandIcon,
+	[ChatFormCommandAction.MODEL]: MODEL_ICON,
+	[ChatFormCommandAction.PROMPT]: PromptCommandIcon
+};
+
+/** Icons the model load control shows for its states and actions. */
+export const MODEL_LOAD_ICONS = {
+	failed: LoadFailedIcon,
+	load: LoadIcon,
+	loading: LoadingIcon,
+	retry: RetryIcon,
+	unload: UnloadIcon
+} as const;
 
 // Shared SVG icon strings for copy and preview buttons
 export const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;

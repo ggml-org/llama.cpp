@@ -15,10 +15,8 @@
 		searchClass?: string;
 		children: Snippet;
 		/**
-		 * Optional sticky footer. It sticks to the bottom of the dropdown content's
-		 * own scrollport, so it stays visible while the option list scrolls. For this
-		 * to work, DropdownMenu.Content must be the scroll container (keep its
-		 * overflow-y-auto and a max-height) and must not be `overflow-hidden`.
+		 * Optional sticky footer: it sticks to the bottom of DropdownMenu.Content's own
+		 * scrollport, which must stay the scroll container (overflow-y-auto + max-height).
 		 */
 		footer?: Snippet;
 	}
@@ -36,8 +34,7 @@
 		searchValue = $bindable('')
 	}: Props = $props();
 
-	// the search sticks to the top; its height is published so
-	// list section headers can stick right below it
+	// the search height is published so list headers can stick right below it
 	let stickyHeaderHeight = $state(0);
 </script>
 

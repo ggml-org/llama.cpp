@@ -116,8 +116,8 @@
 		{/if}
 
 		{#if hasBadges}
-			<!-- the badges do not shrink, so the group has to clip them: without this
-			     they paint over the row actions when the row is narrow -->
+			<!-- the badges do not shrink, so the group clips them instead of letting
+			     them paint over the row actions -->
 			<span
 				class="inline-flex min-w-0 items-center gap-1 overflow-hidden {wrap ? 'flex-wrap' : ''}"
 			>
@@ -170,8 +170,7 @@
 		{/if}
 	{/snippet}
 
-	<!-- overflow-hidden bounds the whole id: the badges, tags and capability icons do
-	     not shrink, so without it they spill past the row and over its actions -->
+	<!-- badges, tags and icons do not shrink, so overflow-hidden bounds the id -->
 	<span
 		class="flex min-w-0 items-center gap-1.5 overflow-hidden {wrap
 			? 'flex-wrap'
