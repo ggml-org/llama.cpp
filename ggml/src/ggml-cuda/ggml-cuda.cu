@@ -1865,6 +1865,12 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
+    // MMF needs full row tiles, small batches with other row counts are faster on MMVF than cuBLAS
+    if ((src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16) && ne11 <= MMVF_MAX_BATCH_SIZE
+            && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, /*ne11 =*/ 1)) {
+        ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
+        return;
+    }
     if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
