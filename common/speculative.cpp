@@ -37,29 +37,26 @@ static void spec_retune(
         std::vector<common_params_sampling> & cfg,
         const llama_model * model,
         llama_seq_id seq_id,
-        common_speculative_draft_params & dp,
-        bool probabilistic) {
-    // greedy drafting leaves no candidates behind, so the verifier falls back to sample-and-match
-    if (!probabilistic) {
-        dp.result_q = nullptr;
-    }
-
-    if (dp.result_q == nullptr || dp.sampling == nullptr) {
-        return;
-    }
-
+        float temp,
+        uint32_t seed) {
     if (cfg.size() != smpls.size()) {
+        const size_t n_old = cfg.size();
         cfg.resize(smpls.size());
+
+        // the initial sampler has no temperature, so no request may match the cache and skip a rebuild
+        for (size_t i = n_old; i < cfg.size(); ++i) {
+            cfg[i].temp = NAN;
+        }
     }
 
     auto & cur = cfg[seq_id];
 
-    if (cur.temp == dp.sampling->temp && cur.seed == dp.sampling->seed) {
+    if (cur.temp == temp && cur.seed == seed) {
         return;
     }
 
-    cur.temp = dp.sampling->temp;
-    cur.seed = dp.sampling->seed;
+    cur.temp = temp;
+    cur.seed = seed;
 
     common_params_sampling sparams;
     sparams.no_perf  = false;
@@ -368,7 +365,15 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
             n_drafting++;
             drafting[seq_id] = true;
-            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp, params.probabilistic);
+            // greedy drafting leaves no candidates behind, so the verifier falls back to sample-and-match
+            if (!params.probabilistic) {
+                dp.result_q = nullptr;
+            }
+
+            // result_q is only set when the caller wants rejection, so it also gates the retune
+            if (dp.result_q) {
+                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed);
+            }
 
             // a reset reseeds the chain, which breaks probabilistic drafting
             if (!dp.result_q) {
@@ -1658,7 +1663,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             n_drafting++;
             drafting[seq_id] = true;
-            spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp, params.probabilistic);
+            // greedy drafting leaves no candidates behind, so the verifier falls back to sample-and-match
+            if (!params.probabilistic) {
+                dp.result_q = nullptr;
+            }
+
+            // result_q is only set when the caller wants rejection, so it also gates the retune
+            if (dp.result_q) {
+                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed);
+            }
 
             // a reset reseeds the chain, which breaks probabilistic drafting
             if (!dp.result_q) {
