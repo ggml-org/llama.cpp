@@ -6,7 +6,13 @@
  * modelsStore and its status manager.
  */
 
-import { API_MODELS, LOCAL_BACKEND_ID, MODEL_ID, type ModelSidecar } from '$lib/constants';
+import {
+	API_MODELS,
+	LOCAL_BACKEND_ID,
+	MODEL_ID,
+	type ModelSidecar,
+	SIDECAR_TOKENS
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ModelSidecarFile, ParsedModelId } from '$lib/types/models';
 import {
@@ -84,11 +90,6 @@ export class ModelsService {
 		return apiPost<ApiModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
 	}
 
-	/**
-	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
-	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
-	 * loadable model, so the selector skips them.
-	 */
 	/**
 	 * Draft sidecars a listing carries as their own entries, keyed by the repo they
 	 * belong to. The router lists a downloaded sidecar as a model of its own, so this
