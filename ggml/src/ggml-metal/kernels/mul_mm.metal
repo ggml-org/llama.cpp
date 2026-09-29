@@ -252,8 +252,9 @@ kernel void kernel_mul_mm(
             }
         }
 
-        // B load (guard for NR1 < threadgroup width)
-        if ((short)(tiitg / NL1) < NR1) {
+        // B load: 2*NR0 threads cover NR0/2 rows of B, so only NR0 > 2*NR1 leaves threads idle.
+        // The NR0 test folds at pipeline specialization and drops the branch otherwise.
+        if (NR0 <= 2 * NR1 || (short)(tiitg / NL1) < NR1) {
             if (FC_mul_mm_bc_inp) {
                 for (short i = 0; i < 8; ++i) {
                     const short sx = (tiitg % NL1);
