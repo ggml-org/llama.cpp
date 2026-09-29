@@ -21,8 +21,8 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
     }
 
     // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
-    if (hparams.classifier_pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
-        hparams.classifier_pooling_type = LLAMA_POOLING_TYPE_MEAN;
+    if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+        hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
     }
 
     switch (hparams.n_layer()) {

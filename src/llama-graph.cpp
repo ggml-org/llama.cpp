@@ -3727,7 +3727,7 @@ void llm_graph_context::build_pooling(
             } break;
         case LLAMA_POOLING_TYPE_RANK:
             {
-                if (hparams.classifier_pooling_type == LLAMA_POOLING_TYPE_MEAN) {
+                if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_MEAN) {
                     // modern bert with classifier_pooling = "mean" builds mean first then applies prediction head and classifier
                     // https://github.com/huggingface/transformers/blob/main/src/transformers/models/modernbert/modular_modernbert.py#L1404-1411
                     ggml_tensor * inp_mean = build_inp_mean();
