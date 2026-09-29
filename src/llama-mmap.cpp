@@ -680,12 +680,20 @@ const bool llama_mmap::SUPPORTED  = false;
 #endif
 
 void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows) {
-#if defined(__linux__)
+#if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
     if (!tensor || !tensor->data || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer) || n_rows == 0) {
         return;
     }
 
+#if defined(_WIN32)
+    static const long page_size = [] {
+        SYSTEM_INFO info;
+        GetSystemInfo(&info);
+        return (long) info.dwPageSize;
+    }();
+#else
     static const long page_size = sysconf(_SC_PAGESIZE);
+#endif
     if (page_size <= 0) {
         return;
     }
@@ -697,6 +705,14 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
     std::sort(sorted.begin(), sorted.end());
 
     uintptr_t begin = 0, end = 0;
+#if defined(_WIN32)
+    // collect the ranges and prefetch them in one call, so the reads can be issued concurrently
+    std::vector<WIN32_MEMORY_RANGE_ENTRY> entries;
+    auto prefetch = [&]() {
+        entries.push_back({ (PVOID) begin, (SIZE_T) (end - begin) });
+        return true;
+    };
+#else
     auto prefetch = [&]() {
         if (madvise((void *) begin, end - begin, MADV_WILLNEED) != 0) {
             LLAMA_LOG_WARN("llama_prefetch_rows: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
@@ -704,6 +720,7 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
         }
         return true;
     };
+#endif
     for (const int32_t row : sorted) {
         GGML_ASSERT(row >= 0 && row < tensor->ne[1]);
         const uintptr_t pointer = base + (size_t) row * tensor->nb[1];
@@ -723,6 +740,12 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
     if (end) {
         prefetch();
     }
+#if defined(_WIN32)
+    if (!PrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
+        LLAMA_LOG_WARN("llama_prefetch_rows: PrefetchVirtualMemory failed: %s\n",
+                llama_format_win_err(GetLastError()).c_str());
+    }
+#endif
 #else
     GGML_UNUSED(tensor);
     GGML_UNUSED(rows);
