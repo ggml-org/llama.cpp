@@ -351,7 +351,7 @@ static bool parse_bool_value(const std::string & value) {
 static std::string get_default_local_path(const std::string & url) {
     auto f = string_split<std::string>(url, '#').front();
     f = string_split<std::string>(f, '?').front();
-    return fs_get_cache_file(string_split<std::string>(f, '/').back());
+    return fs_path_to_utf8(fs_get_cache_file(string_split<std::string>(f, '/').back()));
 }
 
 static bool spec_types_is_default(const common_params & params) {

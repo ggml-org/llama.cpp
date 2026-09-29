@@ -49,7 +49,7 @@
 #include <unistd.h>
 #endif
 
-#if defined(__linux__)
+#if !defined(_WIN32) && !defined(__APPLE__)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
@@ -912,13 +912,6 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
     return std::string(value.begin(), value.end());
 }
 
-// returns true if successful, false otherwise
-bool fs_create_directory_with_parents(const std::string & path) {
-    std::error_code ec;
-    std::filesystem::create_directories(std::filesystem::u8path(path), ec);
-    return !ec;
-}
-
 bool fs_is_directory(const std::string & path) {
     std::filesystem::path dir(path);
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
@@ -952,58 +945,41 @@ std::filesystem::path common_get_path_from_env(const std::string & name) {
 #endif
 }
 
-std::string fs_get_cache_directory() {
-    std::string cache_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        // Make sure to add trailing slash
-        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-    cache_directory = common_get_env("LLAMA_CACHE");
+std::filesystem::path fs_get_cache_directory() {
+    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    if (!cache_directory.empty()) {
+        return cache_directory;
+    }
+
+#if defined(_WIN32)
+    cache_directory = common_get_path_from_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-        defined(__OpenBSD__) || defined(__NetBSD__)
-        const std::string xdg_cache_home = common_get_env("XDG_CACHE_HOME");
-        const std::string home           = common_get_env("HOME");
-        if (!xdg_cache_home.empty()) {
-            cache_directory = xdg_cache_home;
-        } else if (!home.empty()) {
-            cache_directory = home + "/.cache/";
+        throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+    }
+#elif defined(__APPLE__)
+    cache_directory = common_get_path_from_env("HOME");
+    if (cache_directory.empty()) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    cache_directory /= "Library/Caches";
+#else
+    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    if (cache_directory.empty()) {
+        cache_directory = common_get_path_from_env("HOME");
+        if (!cache_directory.empty()) {
+            cache_directory /= ".cache";
         } else {
-#if defined(__linux__)
             /* no $HOME is defined, fallback to getpwuid */
-            struct passwd *pw = getpwuid(getuid());
-            if ((!pw) || (!pw->pw_dir)) {
+            const struct passwd * pw = getpwuid(getuid());
+            if (!pw || !pw->pw_dir || !*pw->pw_dir) {
                 throw std::runtime_error("Failed to find $HOME directory");
             }
-
-            cache_directory = std::string(pw->pw_dir) + std::string("/.cache/");
-#else /* defined(__linux__) */
-            throw std::runtime_error("Failed to find $HOME directory");
-#endif /* defined(__linux__) */
+            cache_directory = pw->pw_dir;
+            cache_directory /= ".cache";
         }
-#elif defined(__APPLE__)
-        cache_directory = common_get_env("HOME");
-        if (cache_directory.empty()) {
-            throw std::runtime_error("Failed to find $HOME directory");
-        }
-        cache_directory += "/Library/Caches/";
-#elif defined(_WIN32)
-        cache_directory = common_get_env("LOCALAPPDATA");
-        if (cache_directory.empty()) {
-            throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
-        }
-#elif defined(__EMSCRIPTEN__)
-        GGML_ABORT("not implemented on this platform");
-#else
-#  error Unknown architecture
-#endif
-        cache_directory = ensure_trailing_slash(cache_directory);
-        cache_directory += "llama.cpp";
     }
-    return ensure_trailing_slash(cache_directory);
+#endif
+    return cache_directory / "llama.cpp";
 }
 
 std::string fs_get_config_directory() {
@@ -1051,14 +1027,15 @@ std::string fs_get_config_directory() {
     return ensure_trailing_slash(config_directory);
 }
 
-std::string fs_get_cache_file(const std::string & filename) {
+std::filesystem::path fs_get_cache_file(const std::string & filename) {
     GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
-    std::string cache_directory = fs_get_cache_directory();
-    const bool success = fs_create_directory_with_parents(cache_directory);
-    if (!success) {
-        throw std::runtime_error("failed to create cache directory: " + cache_directory);
+    const std::filesystem::path cache_directory = fs_get_cache_directory();
+    std::error_code ec;
+    std::filesystem::create_directories(cache_directory, ec);
+    if (ec) {
+        throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
     }
-    return cache_directory + filename;
+    return cache_directory / std::filesystem::u8path(filename);
 }
 
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories) {

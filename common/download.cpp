@@ -943,7 +943,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string model_filename = repo;
         std::replace(model_filename.begin(), model_filename.end(), '/', '_');
         model_filename += "_" + tag + ".gguf";
-        std::string local_path = fs_get_cache_file(model_filename);
+        std::string local_path = fs_path_to_utf8(fs_get_cache_file(model_filename));
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
         common_download_opts opts;
