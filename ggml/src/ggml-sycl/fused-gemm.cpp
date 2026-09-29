@@ -698,11 +698,11 @@ bool ggml_sycl_fused_dequant_gemm_f16(ggml_type src0_type, const void * src0, co
     if (shape < 0) {
         return false;
     }
-    bool ok = false;
+    bool launched = false;
     fg_visit_shape(shape, [&](auto s) {
-        ok = fg_fused_run<decltype(s)>(src0_type, src0, src1_f16, dst, M, N, K, ldd, pool, stream);
+        launched = fg_fused_run<decltype(s)>(src0_type, src0, src1_f16, dst, M, N, K, ldd, pool, stream);
     });
-    return ok;
+    return launched;
 }
 
 template <typename S>
@@ -756,10 +756,10 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
     if (shape < 0) {
         return false;
     }
-    bool ok = false;
+    bool launched = false;
     fg_visit_shape(shape, [&](auto s) {
-        ok = fg_grouped_run<decltype(s)>(src0_type, src0_base, expert_stride, src1, dst, expert_row_offsets, n_as, M,
-                                         K, tiles, pool, stream);
+        launched = fg_grouped_run<decltype(s)>(src0_type, src0_base, expert_stride, src1, dst, expert_row_offsets, n_as, M,
+                                               K, tiles, pool, stream);
     });
-    return ok;
+    return launched;
 }
