@@ -1,3 +1,279 @@
+# Adaptive KV Streaming for llama.cpp V2
+
+V2 runs full-context Qwen3.8-27B on a bounded GPU KV working set. The complete KV history stays in pinned system RAM; resident GPU pages and one shared ring supply attention without dropping old tokens. V1 (`feature/kv-stream-phase-arena`) already had streaming, cross-layer prefetch, and a CUDA phase arena. V2 rebuilds those ideas on explicit memory ownership, stays closer to stock attention arithmetic, and adds long-context MTP without a second full GPU KV allocation.
+
+> [!WARNING]
+> This is experimental. The end-to-end path is currently qualified for one serial Qwen3.8-27B-style target with its embedded MTP head on one CUDA GPU, Flash Attention, Q8_0 K / Q4_0 V, and no mmproj. The memory APIs support more backends, but their streamed-attention execution paths are not implemented here.
+
+## Results and quick start
+
+The figure compares V2 with draft lengths 0-3, not V1 against V2. On an RTX 5070 Ti with Unsloth `UD-IQ4_XS`, 256/256 batch sizes, UVM off, and a fixed 2,240 MiB arena, a 256-token continuation at 256 Ki context measured 8.73 tokens/s without MTP and 19.12 tokens/s with draft length 3. At 32 Ki, the rates were 41.04 and 101.05 tokens/s. MTP costs some prefill speed and memory. These are single-run measurements for one prompt and machine, not general speed guarantees.
+
+![V2 decode and prefill throughput by MTP draft length](media/adaptive-kv-stream-v2-throughput-combined.png)
+
+[Vector SVG](media/adaptive-kv-stream-v2-throughput-combined.svg) | [Detailed plot with KV pool and MTP acceptance](media/adaptive-kv-stream-v2-mtp-sweep.png) ([SVG](media/adaptive-kv-stream-v2-mtp-sweep.svg))
+
+Build from the repository root:
+
+```sh
+cmake -S . -B build-v2 -DGGML_CUDA=ON -DGGML_CUDA_FA_ALL_QUANTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-v2 --target llama-server -j
+```
+
+Example for the embedded-MTP `UD-IQ4_XS` GGUF. The 2,240 MiB arena fit this test machine; choose a value that fits yours. It includes phase workspaces and the KV working set, not just KV. Model weights are outside it.
+
+```sh
+./build-v2/bin/llama-server \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --ctx-size 262144 --parallel 1 \
+  --batch-size 256 --ubatch-size 256 --n-gpu-layers 999 \
+  --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
+  --kv-stream-arena-mib 2240 --kv-stream-auxiliary-layers 1 \
+  --spec-type draft-mtp --spec-draft-n-max 3 \
+  --fit off --no-mmproj
+```
+
+Attached MTP **inherits the target's K/V types**: here its K is Q8_0 and V is Q4_0. Do not add `--cache-type-k-draft` or `--cache-type-v-draft` expecting a different attached-MTP quant; the shared 17-layer layout currently requires matching types. To disable MTP, remove the auxiliary-layer and two speculative flags.
+
+Recreate the fixed-arena sweep (8 Ki through 256 Ki, four MTP settings). `--no-manage-production` avoids touching the local `llm-llmster` container; omit it only if you want the script to manage that container. The included [article corpus](benchmarks/data/online-articles-262144-words.txt) is Wikipedia text under CC BY-SA 4.0 with article attributions, separate from the code license.
+
+```sh
+python3 benchmarks/run-fixed-span-sweep.py \
+  --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf \
+  --server ./build-v2/bin/llama-server \
+  --mtp-lengths 0,1,2,3 --arena-mib 2240 \
+  --output benchmarks/results/my-v2-sweep \
+  --no-manage-production
+```
+
+The script writes CSV, JSONL, logs, and a plot when Matplotlib is installed. `--auto-max-arena` instead probes the maximum for each context **and MTP mode**; those variable-budget results are not directly comparable to this fixed-budget figure.
+
+## KV data movement and attention
+
+Target and MTP have separate logical histories in pinned host RAM. Their GPU pages share one physical pool. For this model a page holds 256 token positions; K and V page sizes follow the selected quants.
+
+```mermaid
+flowchart LR
+    subgraph Host["Pinned host RAM - authoritative history"]
+        TH["Target KV"]
+        MH["MTP KV"]
+    end
+    subgraph GPU["Device-local arena - bounded working set"]
+        RES["Resident pages"]
+        RING["One shared ring"]
+        ATT["Attention"]
+        WR["KV writer"]
+    end
+    TH -- "H2D selected pages" --> RES
+    TH -- "H2D on demand" --> RING
+    MH -- "H2D during MTP lease" --> RES
+    MH -- "H2D during MTP lease" --> RING
+    RES --> ATT
+    RING --> ATT
+    WR -- "D2H target tail" --> TH
+    WR -- "D2H MTP tail" --> MH
+```
+
+When everything fits, attention uses resident pages directly. Under pressure, the policy trades resident pages for ring slots. It may first stream one or a few layers while other layers stay fully resident; as context grows, more pages can become streamed. Target and MTP never own the ring at the same time. The complete history remains available in host RAM, and the ring does not duplicate it permanently.
+
+```text
+physical KV budget = resident pages across layers + shared ring slots
+```
+
+The copy stream can fill free slots for later layers while the attention stream computes the current layer. It cannot prefetch a newly written tail until that tail exists. This timeline is illustrative; actual lookahead depends on free slots and dependencies.
+
+```mermaid
+sequenceDiagram
+    participant P as GPU KV producer
+    participant H as Pinned host KV
+    participant C as Copy stream
+    participant R as GPU ring
+    participant A as Attention stream
+    P-->>H: D2H publish changed tail when produced
+    par Compute current layer L
+        A->>A: Attend to ready L spans
+    and Prefetch future layer L+1
+        H-->>C: Stable older KV pages
+        C->>R: H2D into free slots
+        C-->>A: Ready fence for copied span
+    end
+    A->>R: Read L+1 spans when needed
+    Note over A,C: A late ready fence stalls only its consumer
+    A-->>C: Consumed fence after last reader
+    C->>R: Reuse slots for later spans
+```
+
+A ready fence prevents attention from reading an incomplete copy. A consumed fence prevents the copy stream from overwriting a still-used slot. The policy samples readiness misses, ring occupancy, and copy-stream time to adjust the resident/ring split with hysteresis. Its copy-busy percentage is **not** measured PCIe bandwidth divided by theoretical bandwidth; long contexts still pay for growing transfer and compute work.
+
+### Keep the stock attention order
+
+Streaming changes physical addresses, but it need not change the logical tile order. The kernel walks resident pages and up to two ring spans (before and after wrap) as one ordered attention history, then uses the stock-style final reduction. It does not normalize each chunk independently and merge approximate answers.
+
+```mermaid
+flowchart LR
+    A["Logical tile order"] --> B["Resident tiles"] --> C["Ring tiles before wrap"] --> D["Ring tiles after wrap"] --> E["Stock-style final reduction"]
+```
+
+TG1/TG2 extend the vector path; TG3/TG4 extend the matrix/Flash Attention path. Q8_0 K and Q4_0 V are converted in small tiles, not copied into another full FP16 cache. Wide prefill may gather a contiguous working view to keep stock-like arithmetic, which costs prefill speed. This is not a universal bit-identity claim: qualified TG3/TG4 span tests match stock, TG1/TG2 can have small floating-point differences, and matched 96 Ki/144 Ki greedy TG3 runs produced the same 256 token IDs as a separate stock build. Other configurations need their own tests.
+
+## Phase arena: give the same bytes different jobs
+
+Prefill needs a large graph and attention workspace; decode needs a larger KV working set. V2 holds one device-local parent allocation and lends bounded views to whichever phase is active. These are **alternative layouts of the same arena**, not two simultaneous allocations.
+
+```mermaid
+flowchart LR
+    P["One fixed GPU arena"] --> F["Prefill lease: large graph and gather workspace; smaller KV pool"]
+    F --> X["Drain GPU work; invalidate old graphs; release leases; commit and rebind"]
+    X --> D["Decode lease: smaller graph; larger KV resident/ring pool"]
+    D --> Y["Next request or MTP phase: repeat safe handoff"]
+    Y --> F
+```
+
+A view names a bounded slice; a lease keeps its parent alive; a completion fence proves the GPU stopped using that slice. The phase coordinator does not move the physical parent, and changing an arena layout does not itself move KV. The host cache lets a new resident mirror be rebuilt when the physical layout changes. Failure during a handoff cannot leave stale graph pointers silently active.
+
+Weights are outside this arena. `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` is optional for supported model buffers, but the arena remains device-local `cudaMalloc` even with UVM enabled. Other GPU programs therefore cannot rely on evicting this arena on demand.
+
+## MTP catch-up, prediction, and rollback
+
+The target has 16 full-attention layers; attached MTP is logical layer 17. MTP has its own host KV history but borrows the target's resident/ring pool. During its lease, resident MTP pages plus the ring-held nonresident suffix cover its full history. It loads that suffix once for a catch-up/draft phase, then gives the **entire ring** back to the target before verification. Clean resident MTP pages can be reused across rounds; a changed ring suffix may need reloading after the target has used the ring.
+
+Why can it be layer 17? The supported MTP head has one full-attention KV cache, not another copy of the target's recurrent blocks. Its K/V use the same quantization, head geometry, and token-page layout as the target's 16 attention layers; attachment rejects a mismatch. The physical policy can therefore count 16 target layers plus one separately identified MTP layer, using the same resident-page and ring-slot accounting. MTP keeps its own authoritative host history, so its GPU pages can be replaced and later reloaded without losing tokens. During catch-up and drafting, a complete-layer lease protects its ring slots; they become reusable by the target only after the MTP work and lease finish. Model weights and the target's recurrent state are not part of this KV eviction policy.
+
+```mermaid
+sequenceDiagram
+    participant T as Target
+    participant R as Shared GPU ring
+    participant H as MTP host KV
+    participant M as MTP
+    T->>T: Verify previous proposals
+    T-->>M: Confirmed tokens and acceptance count
+    M->>M: Trim rejected draft suffix
+    M->>R: Acquire protected layer-17 lease
+    H-->>R: H2D nonresident MTP suffix once
+    M->>M: Catch up on confirmed tokens
+    loop Up to requested draft length
+        M->>M: Predict next token
+        M-->>H: Publish changed KV tail
+    end
+    M->>R: Drain and release lease
+    R-->>T: Full ring available for target lookahead
+```
+
+Speculative target verification also needs a way back if it rejects a proposed token. The 48 recurrent target blocks keep their **current** state on the GPU. Candidate checkpoints are published through a bounded two-slot GPU stage into pinned host snapshots. On rejection, the chosen host checkpoint is restored to GPU state and the rejected KV suffix is discarded; accepted work is kept.
+
+```mermaid
+sequenceDiagram
+    participant T as Target recurrent state
+    participant S as Two-slot GPU stage
+    participant H as Pinned host snapshots
+    participant V as Verifier
+    T->>S: Capture candidate checkpoints during TG verification
+    S-->>H: D2H snapshots
+    T-->>V: Candidate logits
+    V-->>T: Accepted count
+    alt Proposal rejected
+        H-->>T: H2D restore selected checkpoint
+        T->>T: Truncate rejected KV suffix
+    else All proposals accepted
+        T->>T: Keep accepted state and KV
+    end
+```
+
+This replaces large persistent draft GPU allocations with smaller shared and phase-exclusive allocations, **not zero extra memory**:
+
+| At 262,144 tokens, Q8_0 K / Q4_0 V | Separate draft context | Attached V2 |
+| --- | --- | --- |
+| MTP KV | About 416 MiB extra persistent GPU KV | Separate pinned-host history; GPU pages share the 17-layer pool |
+| Draft prefill workspace | About 1.2 GiB peak request in a historical fit audit | Borrows the phase arena rather than coexisting at peak with target work |
+| Recurrent rollback | Extra device snapshots | For depth 3, about 449 MiB pinned host snapshots and 18.7 MiB GPU stage |
+
+The rows are not additive savings claims. Embedded MTP weights, resident MTP pages, active graph work, and copy traffic remain. In the plotted 2,240 MiB arena, the effective decode KV grant was about 2,228 MiB without MTP and 2,217-2,219 MiB with draft length 3. See the [MTP integration roadmap](MTP_ADAPTIVE_KV_ROADMAP.md) for design and qualification details.
+
+## Backend-neutral memory and streaming contracts
+
+"Backend-neutral" means ownership, layout validation, placement policy, and the MTP lease rules do not depend on a CUDA pointer or stream. It does **not** mean the attention kernels or asynchronous transfer code are portable. These are experimental fork-internal contracts, not stable upstream APIs.
+
+```mermaid
+flowchart TD
+    P["llama phase planner + adaptive KV policy"] --> A["GGML arena, views, leases"]
+    P --> S["Ordered KV span plan"]
+    M["MTP logical cache + ring lease owner"] --> A
+    M --> S
+    A --> V["Backend buffer views"]
+    S --> X["Backend copy, KV writer, attention hooks"]
+    X --> C["CUDA adapter: implemented"]
+    X -. "port and qualify" .-> O["Other accelerator adapters"]
+```
+
+### 1. Memory ownership and phase changes
+
+A backend creates a **view** of an existing allocation; the view has an offset and bound but does not copy the bytes. The common arena plans named regions within one parent allocation. A **lease** retains a committed region and its parent while a scheduler, KV pool, or graph uses it. Representative declarations are in [ggml-backend.h](ggml/include/ggml-backend.h) and [ggml-backend-memory.h](ggml/src/ggml-backend-memory.h):
+
+```cpp
+ggml_backend_buffer_t ggml_backend_buffer_view(ggml_backend_buffer_t buffer, size_t offset, size_t size);
+ggml_backend_memory_arena_t ggml_backend_memory_arena_new(ggml_backend_buffer_type_t buft, size_t capacity);
+bool ggml_backend_memory_arena_begin(ggml_backend_memory_arena_t arena, uint32_t flags);
+bool ggml_backend_memory_arena_commit(ggml_backend_memory_arena_t arena);
+ggml_backend_memory_lease_t ggml_backend_memory_arena_acquire(ggml_backend_memory_arena_t arena, uint64_t id);
+bool ggml_backend_sched_attach_memory_lease(ggml_backend_sched_t sched, ggml_backend_t backend, ggml_backend_memory_lease_t lease);
+```
+
+`begin`/`reserve`/`commit` changes the region map transactionally; the planner itself is metadata, not a page-migration engine. The lease keeps storage alive, but **does not prove queued GPU work finished**. At a phase change, [llama-memory-transition](src/llama-memory-transition.h) asks consumers to prepare, stop new work, drain work, invalidate captured graphs, release changed leases, commit the new layout, then bind and activate it. A graph or pointer from the old layout cannot be reused merely because the parent allocation has the same address. Persistent regions can remain bound when the new plan preserves them. See [Device Memory Infrastructure](DEVICE_MEMORY_INFRASTRUCTURE.md) for the fuller ownership model.
+
+### 2. Logical KV layout, policy, and physical execution
+
+[ggml-kv-stream.h](ggml/src/ggml-kv-stream.h) calculates K/V page offsets from the actual quant types, validates backend capabilities, and represents an attention history as **ordered spans**. Each span retains leases for its physical K/V buffers; the plan rejects gaps, overlaps, or insufficient coverage. The [adaptive policy](src/llama-kv-stream-policy.h) proposes resident/ring sizes from context length and feedback without moving bytes or launching a kernel:
+
+```cpp
+llama_kv_stream_policy_result llama_kv_stream_policy_step(
+    const llama_kv_stream_policy_config & config,
+    const llama_kv_stream_policy_state & previous,
+    const llama_kv_stream_policy_observation & observation,
+    llama_kv_stream_policy_decision & output);
+
+ggml_kv_stream_result ggml_kv_stream_span_plan_make(
+    const ggml_kv_stream_shape & shape,
+    const ggml_kv_stream_span_source * spans, size_t count,
+    size_t active_tokens, size_t query_tokens,
+    ggml_kv_stream_span_plan_t & output);
+```
+
+Only after the runtime accepts a proposal does it repartition the physical pool. The backend adapter supplies the operations that cannot be expressed as metadata: host registration, asynchronous H2D/D2H copies, ready/consumed fences, encoded KV writes, and attention over spans. The versioned, optional [copy-ops table](ggml/src/ggml-kv-stream-copy.h) includes `enqueue_span`, `acquire_span`, `release_span`, `fence_producer`, and `poll_feedback`. The [attention-ops table](ggml/src/ggml-kv-stream-device.h) advertises supported K/V pairs and exposes `spans`/`spans_workspace`. A [buffer-local execution hook](ggml/src/ggml-backend-execution.h) routes only supported KV-write and attention tensor operations to that owner; other tensor operations remain ordinary backend work. These are **private extension points**, not a claim that a generic GGML backend already implements them. Selected callback signatures show the handoff between common scheduling and backend execution:
+
+```cpp
+// ggml_kv_stream_copy_ops
+bool (*enqueue_span)(void *, size_t first_slot, const void * k, const void * v, size_t live_tokens, size_t padded_tokens);
+bool (*acquire_span)(void *, size_t first_slot, size_t count);
+bool (*release_span)(void *, size_t first_slot, size_t count);
+
+// ggml_kv_stream_partial_ops
+bool (*spans)(ggml_backend_t backend, const ggml_tensor * attention,
+    ggml_kv_stream_span_plan_t spans, ggml_backend_buffer_t workspace);
+```
+
+### 3. MTP uses the same contracts
+
+The target and MTP caches have different logical IDs and separate authoritative host histories. The common policy counts MTP as one more attention layer in the shared physical budget. A [complete-layer lease owner](src/llama-kv-stream-layer-lease.h) reserves its resident pages plus ring suffix, keeps the ring protected during catch-up and prediction, and exposes the same span plan to TG1-TG4 attention. Its key methods include:
+
+```cpp
+llama_kv_stream_complete_layer_lease_t acquire_populated(
+    ggml_backend_t backend, const llama_kv_stream_complete_layer_request & request,
+    const llama_kv_stream_logical_cache & cache, bool reuse_resident = false);
+std::shared_ptr<llama_kv_stream_ring_guard> hold_ring();
+bool adopt_truncated_prefix(llama_kv_stream_complete_layer_lease_t previous,
+    const llama_kv_stream_logical_cache & cache);
+```
+
+`hold_ring` blocks target lookahead from overwriting MTP slots; releasing both the MTP lease and ring guard gives the full ring back. `adopt_truncated_prefix` preserves valid bytes after rejection, and `publish_tail` extends a retained lease with newly committed rows. MTP catch-up, draft acceptance, and recurrent rollback stay in llama/common code above the backend; a new accelerator backend should not duplicate that policy. It **does** need compatible host storage, copy/fence semantics, KV writes, span attention, and recurrent state transfers for the live MTP path. The [MTP integration roadmap](MTP_ADAPTIVE_KV_ROADMAP.md) records those contracts and tests.
+
+Memory views exist for CPU, CUDA/HIP, OpenCL, SYCL, and Vulkan, but the current pinned-host registration and complete streamed-attention adapter are CUDA-specific. A backend port must advertise only real K/V pair support, preserve its own stock attention order, and pass view/lease, cancellation, graph-lifetime, numerical, and long-context tests. The [CUDA copy](ggml/src/ggml-cuda/kv-stream-copy.cu) and [attention](ggml/src/ggml-cuda/fattn.cu) code are examples, not portable kernels. The broader [consumer roadmap](DEVICE_MEMORY_CONSUMERS_ROADMAP.md) explains how phase grants and these hooks fit together.
+
+Current limits: one serial target/MTP pair on one CUDA GPU; Qwen3.8-style 256-token page geometry; Flash Attention and KV offload enabled; no parallel slots, multi-GPU split, mmproj, or automatic VRAM-pressure eviction. The example's Q8_0/Q4_0 and 256/256 settings are qualified; general layout code handling more types is not a promise that every model or quant combination is ready.
+
+---
+
+## Upstream llama.cpp README
+
 # llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
