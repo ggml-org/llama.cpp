@@ -7,7 +7,7 @@
  */
 
 import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID, type ModelSidecar, SIDECAR_TOKENS } from '$lib/constants';
+import { API_MODELS, MODEL_ID, type ModelSidecar } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
@@ -17,6 +17,7 @@ import {
 	extractSseDataPayload,
 	normalizeModelName,
 	sidecarFromFileToken,
+	sidecarFromTag,
 	splitSseRecords
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
@@ -94,11 +95,7 @@ export class ModelsService {
 
 		if (idx === MODEL_ID.NOT_FOUND) return false;
 
-		const tag = modelId.slice(idx + 1).toLowerCase();
-		const dash = tag.lastIndexOf(MODEL_ID.SEGMENT_SEPARATOR);
-		const token = dash === -1 ? tag : tag.slice(dash + 1);
-
-		return SIDECAR_TOKENS.includes(token);
+		return sidecarFromTag(modelId.slice(idx + 1)) !== null;
 	}
 
 	/**
