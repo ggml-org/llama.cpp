@@ -11,7 +11,7 @@
 /** Bytes in one mebibyte (MiB), used to convert a file size to MB. */
 export const MIB_BYTES = 1_048_576;
 
-/** MB in one GB. */
+/** MiB in one tier unit; the tiers below are binary sizes, i.e. GiB. */
 export const MB_PER_GB = 1024;
 
 /** Overhead multiplier applied to the file size when estimating weight memory. */
