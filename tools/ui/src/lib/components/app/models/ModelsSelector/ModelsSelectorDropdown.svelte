@@ -14,8 +14,8 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
-		MODEL_ID,
 		MODEL_ICON,
+		MODEL_ID,
 		SETTINGS_KEYS
 	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
@@ -455,8 +455,8 @@
 
 				{#if selectedOption}
 					<Tooltip.Content>
-							<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
-						</Tooltip.Content>
+						<p class="font-mono">{triggerTooltipLabel(selectedOption)}</p>
+					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
 		{/if}

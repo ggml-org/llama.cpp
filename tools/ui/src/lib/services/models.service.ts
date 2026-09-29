@@ -91,11 +91,6 @@ export class ModelsService {
 	}
 
 	/**
-	 * True when a router entry id is a sidecar-only entry, e.g. `org/model:Q4_0-mtp`
-	 * or `org/model:mmproj`. Such entries mark a downloaded sidecar file, not a
-	 * loadable model, so the selector skips them.
-	 */
-	/**
 	 * Draft sidecars a listing carries as their own entries, keyed by the repo they
 	 * belong to. The router lists a downloaded sidecar as a model of its own, so this
 	 * keeps the pairing that the model list itself is filtered to drop.
