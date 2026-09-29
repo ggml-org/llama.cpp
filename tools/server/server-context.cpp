@@ -289,6 +289,7 @@ struct server_slot {
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
     size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
+    size_t n_sent_tokens = 0;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -387,6 +388,7 @@ struct server_slot {
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
+        n_sent_tokens  = 0;
 
         if (can_speculate()) {
             spec_draft.clear();
@@ -1991,7 +1993,7 @@ private:
         slot.has_next_token = true;
 
         // check if there is incomplete UTF-8 character at the end
-        bool incomplete = validate_utf8(slot.generated.text) < slot.generated.text.size();
+        bool incomplete = !repair_generated_utf8(slot.generated.text, slot.n_sent_text);
 
         // search stop word and delete it
         if (!incomplete) {
@@ -2103,6 +2105,16 @@ private:
             SLT_DBG(slot, "%s", "stopped by EOS\n");
         }
 
+        if (incomplete && !slot.has_next_token) {
+            repair_generated_utf8(slot.generated_text, slot.n_sent_text, true);
+            result.text_to_send = slot.generated_text.substr(std::min(slot.n_sent_text, slot.generated_text.size()));
+            slot.n_sent_text = slot.generated_text.size();
+            slot.add_token(result);
+            if (slot.task->params.stream) {
+                send_partial_response(slot, result, false);
+            }
+        }
+
         SLT_DBG(slot, "n_gen = %d, n_remaining = %d, next token: %5d '%s'\n", (int) slot.stats.n_gen, slot.n_remaining(), result.tok, token_str.c_str());
 
         return slot.has_next_token; // continue
@@ -2207,7 +2219,12 @@ private:
             res->is_begin = true;
         } else {
             res->content = slot.generated.substr(slot.n_sent_text - tkn.text_to_send.size(), tkn.text_to_send.size());
-            res->tokens.assign(1, tkn.tok);
+            if (slot.task->params.return_tokens && !is_progress) {
+                res->tokens.assign(slot.generated_tokens.begin() + slot.n_sent_tokens, slot.generated_tokens.end());
+                slot.n_sent_tokens = slot.generated_tokens.size();
+            } else {
+                res->tokens = { tkn.tok };
+            }
         }
 
         res->n_decoded             = slot.stats.n_gen;

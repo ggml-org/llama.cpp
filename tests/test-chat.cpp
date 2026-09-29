@@ -8,6 +8,7 @@
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
 #include "../tools/server/server-chat.h"
+#include "../tools/server/server-common.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
@@ -7936,6 +7937,28 @@ static void test_reasoning_effort_caps() {
     assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
 }
 
+static void test_generated_utf8_repair() {
+    std::string split = "one \xE2\x81";
+    GGML_ASSERT(!repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81");
+    split += "\x84";
+    GGML_ASSERT(repair_generated_utf8(split, 4));
+    GGML_ASSERT(split == "one \xE2\x81\x84");
+
+    std::string malformed = "one \xE2\x81" "\n<think>";
+    GGML_ASSERT(repair_generated_utf8(malformed, 4));
+    GGML_ASSERT(malformed == "one \xEF\xBF\xBD" "\n<think>");
+    GGML_ASSERT(validate_utf8(malformed) == malformed.size());
+
+    std::string orphan = "x\x80" "y";
+    GGML_ASSERT(repair_generated_utf8(orphan, 0));
+    GGML_ASSERT(orphan == "x\xEF\xBF\xBD" "y");
+
+    std::string terminal = "x\xE2\x81";
+    GGML_ASSERT(repair_generated_utf8(terminal, 0, true));
+    GGML_ASSERT(terminal == "x\xEF\xBF\xBD");
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -8086,6 +8109,7 @@ int main(int argc, char ** argv) {
     } else
 #endif
     {
+        test_generated_utf8_repair();
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
         test_msg_token_delimiters_split();

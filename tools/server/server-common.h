@@ -289,6 +289,7 @@ void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
         const std::string & media_path);
+bool repair_generated_utf8(std::string & text, size_t first_unsent, bool final = false);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
