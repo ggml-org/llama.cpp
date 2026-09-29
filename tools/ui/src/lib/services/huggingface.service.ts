@@ -73,6 +73,17 @@ import type {
 } from '$lib/types/huggingface';
 import { sidecarFromFileToken } from '$lib/utils';
 
+/** Fetch failure carrying the HTTP status, so retry logic tests the code instead of the message. */
+class HfHttpStatusError extends Error {
+	status: number;
+
+	constructor(status: number, statusText: string) {
+		super(`API request failed: ${status} ${statusText}`);
+
+		this.status = status;
+	}
+}
+
 export class HuggingFaceService {
 	private static readonly BASE_URL = HF_API_MODELS_URL;
 
@@ -674,7 +685,7 @@ export class HuggingFaceService {
 					return this.fetchWithRetry(url, attempt + 1);
 				}
 
-				throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+				throw new HfHttpStatusError(response.status, response.statusText);
 			}
 
 			const data = await response.json();
@@ -691,7 +702,7 @@ export class HuggingFaceService {
 		} catch (error) {
 			const transient =
 				error instanceof TypeError ||
-				(error instanceof Error && error.message.startsWith('API request failed: 5'));
+				(error instanceof HfHttpStatusError && error.status >= HF_HTTP_SERVER_ERROR_MIN);
 
 			if (transient && attempt < HF_RETRY_ATTEMPTS) {
 				await this.delay(HF_RETRY_DELAY_MS * attempt);
