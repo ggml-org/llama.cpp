@@ -108,7 +108,7 @@ export {
 export { normalizeModelName, isValidModelName } from './model-names';
 
 // Sidecar token utilities
-export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from './sidecars';
+export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken, sidecarFromTag } from './sidecars';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';

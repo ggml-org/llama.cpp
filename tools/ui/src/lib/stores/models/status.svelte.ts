@@ -169,8 +169,11 @@ export class ModelStatusManager {
 		// localStorage; the progress snapshot is stale after a reload and stays null
 		try {
 			const raw = localStorage.getItem(PAUSED_MODEL_DOWNLOADS_LOCALSTORAGE_KEY);
+			const parsed: unknown = JSON.parse(raw ?? '[]');
 
-			for (const repoWithTag of JSON.parse(raw ?? '[]') as string[]) {
+			if (!Array.isArray(parsed)) return;
+
+			for (const repoWithTag of parsed.filter((id): id is string => typeof id === 'string')) {
 				this.pausedDownloads.set(repoWithTag, null);
 			}
 		} catch {
