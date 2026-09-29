@@ -3,7 +3,10 @@
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
 #include <algorithm>
+#include <string>
+#include <tuple>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 namespace mx = sycl::ext::oneapi::experimental::matrix;
@@ -14,45 +17,78 @@ namespace mx = sycl::ext::oneapi::experimental::matrix;
 static constexpr int FG_BK     = QK4_NL;
 static constexpr int FG_KSPLIT = 4;
 
-// Element traits of A and B. The A stage and the B pack compute in f32 and convert once, when they
-// write the element, so a wider type costs no extra pass.
-template <typename TA> struct fg_elem;
+// Element traits of one joint_matrix operand type. The A stage and the B pack compute in f32 and
+// convert once, in registers, when they write the element, so any type costs the same one pass.
+//   store: storage in SLM (A) and in the packed B buffer
+//   mtype: matrix_type in matrix_combinations
+//   src:   ggml type that needs no conversion into this type (GGML_TYPE_COUNT: none)
+//   slow:  XMX throughput class, 0 is fastest. f16 and bf16 share the DPAS rate; tf32 does half the
+//          K per instruction. B60, Qwen3-30B-A3B pp512: f16 1108, bf16 1000, tf32 751 t/s
+template <typename T> struct fg_elem;
 
 template <> struct fg_elem<sycl::half> {
     using store = sycl::half;
     using pair  = sycl::half2;
+    static constexpr mx::matrix_type mtype = mx::matrix_type::fp16;
+    static constexpr ggml_type       src   = GGML_TYPE_F16;
+    static constexpr int             mant  = 10;
+    static constexpr int             slow  = 0;
     static store cvt(float x) { return (store) x; }
     static pair make(float x, float y) { return pair((store) x, (store) y); }
 };
 
-// tf32 is kept in f32 storage; round to nearest even so the result is not worse than f16. Plain bit
-// ops, not round_to_tf32: that needs a SPIR-V extension the DG2 AOT target rejects.
-static inline float fg_round_tf32(float x) {
+// tf32 rounds to nearest even with plain bit ops: round_to_tf32 needs a SPIR-V extension that the
+// DG2 AOT target rejects
+static inline uint32_t fg_round_bits(float x, int drop) {
     const uint32_t u = sycl::bit_cast<uint32_t>(x);
     if ((u & 0x7f800000u) == 0x7f800000u) {
-        return x; // inf or nan
+        return (u & 0x7fffffu) ? u | (1u << drop) : u; // nan stays nan
     }
-    return sycl::bit_cast<float>((u + 0xfffu + ((u >> 13) & 1)) & ~0x1fffu);
+    return u + ((1u << (drop - 1)) - 1) + ((u >> drop) & 1);
 }
 
+struct alignas(4) fg_bf16x2 {
+    sycl::ext::oneapi::bfloat16 x, y;
+};
+
+template <> struct fg_elem<sycl::ext::oneapi::bfloat16> {
+    using store = sycl::ext::oneapi::bfloat16;
+    using pair  = fg_bf16x2;
+    static constexpr mx::matrix_type mtype = mx::matrix_type::bf16;
+    static constexpr ggml_type       src   = GGML_TYPE_BF16;
+    static constexpr int             mant  = 7;
+    static constexpr int             slow  = 0;
+    static store cvt(float x) { return store(x); }
+    static pair make(float x, float y) { return { cvt(x), cvt(y) }; }
+};
+
+// tf32 keeps f32 range and f16 mantissa, in f32 storage
 template <> struct fg_elem<mx::precision::tf32> {
     using store = float;
     using pair  = sycl::float2;
-    static store cvt(float x) { return fg_round_tf32(x); }
-    static pair make(float x, float y) { return pair(fg_round_tf32(x), fg_round_tf32(y)); }
+    static constexpr mx::matrix_type mtype = mx::matrix_type::tf32;
+    static constexpr ggml_type       src   = GGML_TYPE_COUNT;
+    static constexpr int             mant  = 10;
+    static constexpr int             slow  = 1;
+    static store cvt(float x) { return sycl::bit_cast<float>(fg_round_bits(x, 13) & ~0x1fffu); }
+    static pair make(float x, float y) { return pair(cvt(x), cvt(y)); }
 };
 
-// One joint_matrix combination (A/B element type, TM x TN x TK, sub-group size) and the tiling
-// built on it. A sub-group owns SG_ROWS rows of A (at least 16) and BN (at least 32) columns of B.
-template <typename TA, int TM_, int TN_, int TK_, int SG_> struct fg_shape {
-    using ta = TA;
-    using E  = fg_elem<TA>;
-    using ts = typename E::store;
+// One joint_matrix combination (A type, B type, TM x TN x TK, sub-group size; C and D are f32) and
+// the tiling built on it. A sub-group owns SG_ROWS rows of A (at least 16) and BN (at least 32)
+// columns of B. A and B may differ: the device lists the pairs it supports.
+template <typename TA, typename TB, int TM_, int TN_, int TK_, int SG_> struct fg_combo {
+    using ta  = TA;
+    using tb  = TB;
+    using EA  = fg_elem<TA>;
+    using EB  = fg_elem<TB>;
+    using tsa = typename EA::store;
+    using tsb = typename EB::store;
     static constexpr int TM = TM_;
     static constexpr int TN = TN_;
     static constexpr int TK = TK_;
     static constexpr int SG = SG_;
-    static constexpr int VNNI    = 4 / sizeof(ts);   // K rows of B packed in one 32-bit word
+    static constexpr int VNNI    = 4 / sizeof(tsb);  // K rows of B packed in one 32-bit word
     static constexpr int SG_ROWS = TM > 16 ? TM : 16;
     static constexpr int RPL     = SG_ROWS / SG;     // A rows one lane decodes per k step
     static constexpr int MT      = SG_ROWS / TM;
@@ -60,21 +96,23 @@ template <typename TA, int TM_, int TN_, int TK_, int SG_> struct fg_shape {
     static constexpr int NT      = BN / TN;
     static constexpr int WG_SIZE = FG_KSPLIT * SG;
     static constexpr mx::layout b_layout = VNNI == 1 ? mx::layout::row_major : mx::layout::ext_intel_packed;
-    static constexpr bool is_tf32 = std::is_same_v<TA, mx::precision::tf32>;
+    // a 64-wide N is mostly padding here and a 32x64 f32 accumulator needs 128 registers per lane,
+    // so it spills: 13x slower on B60
+    static constexpr bool efficient = TN <= 32;
     static_assert(SG_ROWS % SG == 0 && SG_ROWS % TM == 0 && BN % TN == 0 && FG_BK % TK == 0, "bad tile");
     static_assert(BN <= GGML_SYCL_FG_MAX_N, "header gate must cover the tile width");
 };
 
-// One bit of GGML_SYCL_XMX_GATHER_SHAPES per shape. f16 shapes come from the appendix of
-// sycl_ext_oneapi_matrix; tf32 is the promoted fallback. fp16 data never needs it on known hardware.
-using fg_f16_8x16x16  = fg_shape<sycl::half, 8, 16, 16, 16>;   // Xe2, Xe3, Xe-HPC
-using fg_f16_16x16x16 = fg_shape<sycl::half, 16, 16, 16, 16>;  // Xe2, Xe3, Xe-HPC
-using fg_f16_32x64x16 = fg_shape<sycl::half, 32, 64, 16, 16>;  // Xe2, Xe3, Xe-HPC
-using fg_f16_32x64x32 = fg_shape<sycl::half, 32, 64, 32, 16>;  // Xe2, Xe3, Xe-HPC
-using fg_f16_8x8x16   = fg_shape<sycl::half, 8, 8, 16, 8>;     // Xe-HPG (DG2, Arc A), ARL-H
-using fg_tf32_8x16x8  = fg_shape<mx::precision::tf32, 8, 16, 8, 16>; // Xe2, Xe3, Xe-HPC
+using fg_half = sycl::half;
+using fg_bf16 = sycl::ext::oneapi::bfloat16;
+using fg_tf32 = mx::precision::tf32;
 
-// A spir64_gen AOT build (GGML_SYCL_XMX_AOT_SG) drops the shapes of the other sub-group size
+// One bit of GGML_SYCL_XMX_GATHER_SHAPES per combination. Only combinations some device lists in
+// matrix_combinations are built (appendix of sycl_ext_oneapi_matrix and the runtime's own list).
+template <typename F> static void fg_visit_combo(int idx, F && f);
+static constexpr int FG_N_COMBOS = 8;
+
+// A spir64_gen AOT build (GGML_SYCL_XMX_AOT_SG) drops the combinations of the other sub-group size
 // entirely: ocloc rejects even an empty kernel that asks for a sub-group size it lacks.
 template <int SG> static constexpr bool fg_listed() {
 #if defined(GGML_SYCL_XMX_AOT_SG)
@@ -84,34 +122,30 @@ template <int SG> static constexpr bool fg_listed() {
 #endif
 }
 
-template <typename S, typename F> static void fg_call_shape(F && f) {
+template <typename S, typename F> static void fg_call_combo(F && f) {
     if constexpr (fg_listed<S::SG>()) {
         f(S{});
     }
 }
 
-template <typename F> static void fg_visit_shape(int idx, F && f) {
+template <typename F> static void fg_visit_combo(int idx, F && f) {
     switch (idx) {
-        case 0: fg_call_shape<fg_f16_8x16x16>(f);  break;
-        case 1: fg_call_shape<fg_f16_16x16x16>(f); break;
-        case 2: fg_call_shape<fg_f16_32x64x16>(f); break;
-        case 3: fg_call_shape<fg_f16_32x64x32>(f); break;
-        case 4: fg_call_shape<fg_f16_8x8x16>(f);   break;
-        case 5: fg_call_shape<fg_tf32_8x16x8>(f);  break;
-        default: GGML_ABORT("bad XMX shape %d", idx);
+        case 0: fg_call_combo<fg_combo<fg_half, fg_half, 8, 16, 16, 16>>(f);  break; // Xe2, Xe3, Xe-HPC
+        case 1: fg_call_combo<fg_combo<fg_half, fg_half, 16, 16, 16, 16>>(f); break; // Xe2, Xe3, Xe-HPC
+        case 2: fg_call_combo<fg_combo<fg_half, fg_half, 32, 64, 16, 16>>(f); break; // Xe2, Xe3, Xe-HPC
+        case 3: fg_call_combo<fg_combo<fg_half, fg_half, 32, 64, 32, 16>>(f); break; // Xe2, Xe3, Xe-HPC
+        case 4: fg_call_combo<fg_combo<fg_half, fg_half, 8, 8, 16, 8>>(f);    break; // Xe-HPG (Arc A), ARL-H
+        case 5: fg_call_combo<fg_combo<fg_tf32, fg_tf32, 8, 16, 8, 16>>(f);   break; // Xe2, Xe3, Xe-HPC
+        case 6: fg_call_combo<fg_combo<fg_bf16, fg_bf16, 8, 16, 16, 16>>(f);  break; // Xe2, Xe3, Xe-HPC
+        case 7: fg_call_combo<fg_combo<fg_bf16, fg_bf16, 8, 8, 16, 8>>(f);    break; // Xe-HPG (Arc A), ARL-H
+        default: GGML_ABORT("bad XMX combination %d", idx);
     }
 }
-static constexpr int FG_N_SHAPES = 6;
-
-// Preference order: f16 before the promoted tf32, then the largest M x K. M and K are the weight
-// dims and always full; N is the routed-token dim, narrow per expert and padded to BN. 32x64 tiles
-// come last: a 64-wide N is mostly padding here and the 32x64 f32 accumulator alone needs 128
-// registers per lane, so they spill (13x slower on B60). Devices that list them list 8x16 too.
-static constexpr int fg_shape_order[FG_N_SHAPES] = { 1, 0, 4, 5, 3, 2 };
 
 // AOT with -fsycl-targets=intel_gpu_*: compile each tile body only for targets with its sub-group
-// size, since IGC fails on the other ones. JIT compiles all of them; only a shape the device
-// reports is ever launched.
+// size, since IGC fails on the other ones. A JIT build keeps them all, but each combination lands in
+// its own device image (joint_matrix is an optional kernel feature) and only a combination the
+// device reports is launched, so the runtime never asks IGC for the others.
 #if defined(__SYCL_DEVICE_ONLY__)
 #    if __SYCL_TARGET_INTEL_GPU_ACM_G10__ || __SYCL_TARGET_INTEL_GPU_ACM_G11__ || __SYCL_TARGET_INTEL_GPU_ACM_G12__ || \
         __SYCL_TARGET_INTEL_GPU_ARL_H__
@@ -144,11 +178,11 @@ static size_t grouped_gemm_packed_capacity(size_t size) {
     return capacity;
 }
 
-// the device lists S with an f32 accumulator
-template <typename S> static bool fg_device_has_shape(const std::vector<mx::combination> & combinations) {
-    const mx::matrix_type ab = S::is_tf32 ? mx::matrix_type::tf32 : mx::matrix_type::fp16;
+// the device lists S with an f32 accumulator and output
+template <typename S> static bool fg_device_has_combo(const std::vector<mx::combination> & combinations) {
     for (const auto & c : combinations) {
-        if (c.atype == ab && c.btype == ab && c.ctype == mx::matrix_type::fp32 && c.dtype == mx::matrix_type::fp32 &&
+        if (c.atype == S::EA::mtype && c.btype == S::EB::mtype && c.ctype == mx::matrix_type::fp32 &&
+            c.dtype == mx::matrix_type::fp32 &&
             (c.max_msize >= (size_t) S::TM || c.msize == (size_t) S::TM) &&
             (c.max_nsize >= (size_t) S::TN || c.nsize == (size_t) S::TN) &&
             (c.max_ksize >= (size_t) S::TK || c.ksize == (size_t) S::TK)) {
@@ -158,46 +192,96 @@ template <typename S> static bool fg_device_has_shape(const std::vector<mx::comb
     return false;
 }
 
-static const char * fg_shape_name(int idx) {
-    static const char * names[FG_N_SHAPES] = {
-        "f16 8x16x16 sg16", "f16 16x16x16 sg16", "f16 32x64x16 sg16", "f16 32x64x32 sg16", "f16 8x8x16 sg8",
-        "tf32 8x16x8 sg16",
-    };
-    return names[idx];
+template <typename T> static const char * fg_type_name() {
+    return std::is_same_v<T, fg_half> ? "f16" : std::is_same_v<T, fg_bf16> ? "bf16" : "tf32";
 }
 
-// First shape in preference order that the device reports, that this build compiled for it, and
-// that GGML_SYCL_XMX_GATHER_SHAPES allows. -1 if none.
-static int fg_pick_shape(const sycl::device & dev) {
-    std::vector<mx::combination> combinations;
-    std::vector<size_t>          sg_sizes;
-    try {
-        combinations = dev.get_info<sycl::ext::oneapi::experimental::info::device::matrix_combinations>();
-        sg_sizes     = dev.get_info<sycl::info::device::sub_group_sizes>();
-    } catch (const sycl::exception &) {
-        return -1;
+static std::string fg_combo_name(int idx) {
+    std::string name;
+    fg_visit_combo(idx, [&](auto s) {
+        using S = decltype(s);
+        name = std::string(fg_type_name<typename S::ta>()) + "x" + fg_type_name<typename S::tb>() + " " +
+               std::to_string(S::TM) + "x" + std::to_string(S::TN) + "x" + std::to_string(S::TK) + " sg" +
+               std::to_string(S::SG);
+    });
+    return name;
+}
+
+// Combinations this build has kernels for and the device lists, one bit each. Cached per device:
+// on a mixed box the first caller's verdict is not the others'.
+static int fg_device_combos(const sycl::device & dev) {
+    static std::mutex                            mtx;
+    static std::unordered_map<sycl::device, int> known;
+    std::lock_guard<std::mutex>                  lock(mtx);
+    const auto                                   it = known.find(dev);
+    if (it != known.end()) {
+        return it->second;
     }
     int available = 0;
-    for (int idx = 0; idx < FG_N_SHAPES; ++idx) {
-        fg_visit_shape(idx, [&](auto s) {
-            using S = decltype(s);
-            const bool sg_ok = std::find(sg_sizes.begin(), sg_sizes.end(), (size_t) S::SG) != sg_sizes.end();
-            if (sg_ok && fg_device_has_shape<S>(combinations)) {
-                available |= 1 << idx;
+    try {
+        const auto combinations = dev.get_info<sycl::ext::oneapi::experimental::info::device::matrix_combinations>();
+        const auto sg_sizes     = dev.get_info<sycl::info::device::sub_group_sizes>();
+        for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+            fg_visit_combo(idx, [&](auto s) {
+                using S = decltype(s);
+                const bool sg_ok = std::find(sg_sizes.begin(), sg_sizes.end(), (size_t) S::SG) != sg_sizes.end();
+                if (sg_ok && fg_device_has_combo<S>(combinations)) {
+                    available |= 1 << idx;
+                }
+            });
+        }
+    } catch (const sycl::exception &) {
+        available = 0;
+    }
+    GGML_LOG_INFO("%s: %s: XMX dequant-GEMM combinations available 0x%x, allowed 0x%x\n", __func__,
+                  dev.get_info<sycl::info::device::name>().c_str(), available, g_ggml_sycl_xmx_gather_shapes);
+    known.emplace(dev, available);
+    return available;
+}
+
+// Rank of combination S for a src1 of type src1_type, lower is better. Order:
+//  1. throughput: a tile that does not spill, then the fastest type class of A and B
+//  2. B type equal to the src1 type, so the pack is a plain copy
+//  3. B at least as precise as f16
+//  4. the device's native DPAS tile (8 x SG x 32 bytes of K), then the largest M x K
+// A costs nothing to convert: the A stage emits any type at the same cost.
+template <typename S> static int64_t fg_rank(ggml_type src1_type) {
+    const int64_t spills  = !S::efficient;
+    const int64_t slow    = std::max(S::EA::slow, S::EB::slow);
+    const int64_t convert = S::EB::src != src1_type;
+    const int64_t lossy   = S::EB::mant < 10;
+    const int64_t foreign = !(S::TM == 8 && S::TN == S::SG);
+    const int64_t mk      = 1024 - S::TM * S::TK;
+    return ((((spills * 2 + slow) * 2 + convert) * 2 + lossy) * 2 + foreign) * 2048 + mk;
+}
+
+// Best allowed combination for this call, or -1 if none
+static int fg_pick_combo(dpct::queue_ptr stream, ggml_type src1_type) {
+    const sycl::device dev     = stream->get_device();
+    const int          allowed = fg_device_combos(dev) & g_ggml_sycl_xmx_gather_shapes;
+    int                best    = -1;
+    int64_t            best_rank = 0;
+    for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+        if (!(allowed & (1 << idx))) {
+            continue;
+        }
+        fg_visit_combo(idx, [&](auto s) {
+            const int64_t rank = fg_rank<decltype(s)>(src1_type);
+            if (best < 0 || rank < best_rank) {
+                best      = idx;
+                best_rank = rank;
             }
         });
     }
-    int picked = -1;
-    for (int idx : fg_shape_order) {
-        if (available & g_ggml_sycl_xmx_gather_shapes & (1 << idx)) {
-            picked = idx;
-            break;
-        }
+    // log each distinct decision once
+    static std::mutex                                 mtx;
+    static std::set<std::tuple<size_t, int, int>> seen;
+    std::lock_guard<std::mutex>                       lock(mtx);
+    if (seen.emplace(std::hash<sycl::device>{}(dev), (int) src1_type, best).second) {
+        GGML_LOG_INFO("%s: src1 %s -> %s\n", __func__, ggml_type_name(src1_type),
+                      best >= 0 ? fg_combo_name(best).c_str() : "none (library GEMM)");
     }
-    GGML_LOG_INFO("%s: %s: available 0x%x, allowed 0x%x, using %s\n", __func__,
-                  dev.get_info<sycl::info::device::name>().c_str(), available, g_ggml_sycl_xmx_gather_shapes & 0xffff,
-                  picked >= 0 ? fg_shape_name(picked) : "none (XMX dequant-GEMM off)");
-    return picked;
+    return best;
 }
 
 // src1 [N][K] -> packed [K/V][Npad][V] so B tiles load straight from global memory
@@ -447,16 +531,17 @@ static __dpct_inline__ void fg_stage_a(const block_iq1_m * __restrict__ xrow, co
 template <typename S, typename block_q_t>
 static void fused_dequant_gemm_tile(
     const block_q_t * __restrict__ x,
-    const typename S::ts * __restrict__ packed_b,
+    const typename S::tsb * __restrict__ packed_b,
     float * __restrict__ dst,
     const int M, const int Npad, const int K, const int ldd,
     const int b0, const int n0, const int n1,
-    sycl::local_accessor<typename S::ts, 1> tile_a,
+    sycl::local_accessor<typename S::tsa, 1> tile_a,
     sycl::local_accessor<float, 1> tile_c,
     const sycl::nd_item<2> & item) {
     if constexpr (fg_built<S::SG>()) {
-        using E  = typename S::E;
+        using EA = typename S::EA;
         using TA = typename S::ta;
+        using TB = typename S::tb;
         const auto sg     = item.get_sub_group();
         const int  sg_id  = sg.get_group_id()[0];
         const int  lane   = sg.get_local_id()[0];
@@ -477,13 +562,13 @@ static void fused_dequant_gemm_tile(
         // lane decodes rows lane, lane + SG, ... of the sub-group's SG_ROWS
         const block_q_t *     xrow[S::RPL];
         bool                  row_ok[S::RPL];
-        typename E::pair *    a[S::RPL];
+        typename EA::pair *   a[S::RPL];
 #pragma unroll
         for (int r = 0; r < S::RPL; ++r) {
             const int row = m0 + r * S::SG + lane;
             row_ok[r] = row < M;
             xrow[r]   = x + (size_t) (row_ok[r] ? row : 0) * (K / fg_block_traits<block_q_t>::qk);
-            a[r]      = (typename E::pair *) &tile_a[a_base + (r * S::SG + lane) * FG_BK];
+            a[r]      = (typename EA::pair *) &tile_a[a_base + (r * S::SG + lane) * FG_BK];
         }
 
         const auto b_ptr = sycl::address_space_cast<sycl::access::address_space::global_space,
@@ -496,11 +581,11 @@ static void fused_dequant_gemm_tile(
 #pragma unroll
             for (int r = 0; r < S::RPL; ++r) {
                 if (row_ok[r]) {
-                    fg_stage_a<E>(xrow[r], kb, a[r]);
+                    fg_stage_a<EA>(xrow[r], kb, a[r]);
                 } else {
 #pragma unroll
                     for (int j = 0; j < FG_BK / 2; ++j) {
-                        a[r][j] = E::make(0.0f, 0.0f);
+                        a[r][j] = EA::make(0.0f, 0.0f);
                     }
                 }
             }
@@ -509,7 +594,7 @@ static void fused_dequant_gemm_tile(
 #pragma unroll
             for (int kt = 0; kt < FG_BK / S::TK; ++kt) {
                 const int kq0 = (kb * FG_BK + kt * S::TK) / S::VNNI;
-                mx::joint_matrix<sycl::sub_group, TA, mx::use::b, S::TK, S::TN, S::b_layout> sub_b[S::NT];
+                mx::joint_matrix<sycl::sub_group, TB, mx::use::b, S::TK, S::TN, S::b_layout> sub_b[S::NT];
 #pragma unroll
                 for (int nt = 0; nt < S::NT; ++nt) {
                     mx::joint_matrix_load(sg, sub_b[nt], b_ptr + (size_t) kq0 * b_stride + (b0 + nt * S::TN) * S::VNNI, b_stride);
@@ -560,11 +645,11 @@ static void fused_dequant_gemm_tile(
 }
 
 template <typename S, typename block_q_t>
-static void fused_dequant_gemm_launch(const void * src0, const typename S::ts * packed, float * dst, const int M,
+static void fused_dequant_gemm_launch(const void * src0, const typename S::tsb * packed, float * dst, const int M,
                                       const int N, const int Npad, const int K, const int ldd,
                                       const int64_t groups_n, const int64_t groups_m, dpct::queue_ptr stream) {
     stream->submit([&](sycl::handler & cgh) {
-        sycl::local_accessor<typename S::ts, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
+        sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(groups_n, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
@@ -579,11 +664,11 @@ static void fused_dequant_gemm_launch(const void * src0, const typename S::ts * 
 // grouped: work-group (t, mt) is tile t of the schedule; its B columns sit at t * BN
 template <typename S, typename block_q_t>
 static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t expert_stride,
-                                        const ggml_sycl_gg_tile * tiles_ptr, const typename S::ts * packed, float * dst,
+                                        const ggml_sycl_gg_tile * tiles_ptr, const typename S::tsb * packed, float * dst,
                                         const int M, const int Npad, const int K, const int64_t n_tiles,
                                         const int64_t groups_m, dpct::queue_ptr stream) {
     stream->submit([&](sycl::handler & cgh) {
-        sycl::local_accessor<typename S::ts, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
+        sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
         cgh.parallel_for(
             sycl::nd_range<2>(sycl::range<2>(n_tiles, groups_m * S::WG_SIZE), sycl::range<2>(1, S::WG_SIZE)),
@@ -600,9 +685,9 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
 // src1 f32 rows -> packed [K/V][n_tiles*BN][V], tile t holds its rows [n0, n1) at columns t*BN..,
 // zero past n1. The column runs fastest so a sub-group writes one contiguous run.
 template <typename S>
-static void grouped_gemm_pack_b(const float * y, typename S::ts * packed, const ggml_sycl_gg_tile * tiles, int Npad,
+static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const ggml_sycl_gg_tile * tiles, int Npad,
                                 int K, dpct::queue_ptr stream) {
-    using E        = typename S::E;
+    using E        = typename S::EB;
     constexpr int V = S::VNNI;
     const int kqs   = K / V;
     stream->parallel_for(sycl::range<1>((size_t) Npad * kqs), [=](sycl::id<1> id) {
@@ -612,7 +697,7 @@ static void grouped_gemm_pack_b(const float * y, typename S::ts * packed, const 
         const ggml_sycl_gg_tile tile = tiles[n / S::BN];
         const int    row = tile.n0 + n % S::BN;
         // one guarded load run per work-item, as a per-element select costs ~1.5% prefill
-        typename S::ts vals[V] = {};
+        typename S::tsb vals[V] = {};
         if (row < tile.n1) {
             const float * src = y + (size_t) row * K + V * kq;
 #pragma unroll
@@ -620,7 +705,7 @@ static void grouped_gemm_pack_b(const float * y, typename S::ts * packed, const 
                 vals[v] = E::cvt(src[v]);
             }
         }
-        typename S::ts * out = packed + ((size_t) kq * Npad + n) * V;
+        typename S::tsb * out = packed + ((size_t) kq * Npad + n) * V;
 #pragma unroll
         for (int v = 0; v < V; ++v) {
             out[v] = vals[v];
@@ -646,37 +731,24 @@ template <typename F> static bool fg_visit_type(ggml_type type, F && f) {
     }
 }
 
-// Shape index for the device, or -1. Cached per device, not once: on a mixed box the first
-// caller's verdict is not the others'.
-static int fg_device_shape(dpct::queue_ptr stream) {
-    static std::mutex                            mtx;
-    static std::unordered_map<sycl::device, int> known;
-    const sycl::device                           dev = stream->get_device();
-    std::lock_guard<std::mutex>                  lock(mtx);
-    const auto                                   it = known.find(dev);
-    if (it != known.end()) {
-        return it->second;
-    }
-    const int idx = fg_pick_shape(dev);
-    known.emplace(dev, idx);
-    return idx;
-}
-
-bool ggml_sycl_fused_dequant_gemm_f16_device_ok(dpct::queue_ptr stream) {
-    return fg_device_shape(stream) >= 0;
-}
-
 template <typename S>
-static bool fg_fused_run(ggml_type src0_type, const void * src0, const sycl::half * src1_f16, float * dst, int64_t M,
-                         int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
+static bool fg_fused_run(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type, float * dst,
+                         int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool, dpct::queue_ptr stream) {
     const int64_t groups_n = (N + S::BN - 1) / S::BN;
     const int64_t groups_m = (M + S::SG_ROWS - 1) / S::SG_ROWS;
     const int     Npad     = (int) (groups_n * S::BN);
 
-    ggml_sycl_pool_alloc<typename S::ts> packed_b(pool, (size_t) K * Npad);
-    fused_gemm_pack_b<typename S::E>(src1_f16, packed_b.get(), (int) N, Npad, (int) K, stream);
+    // src1 is read in its own type: one pass, converted in registers only if B differs
+    ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, (size_t) K * Npad);
+    if (src1_type == GGML_TYPE_F16) {
+        fused_gemm_pack_b<typename S::EB>((const sycl::half *) src1, packed_b.get(), (int) N, Npad, (int) K, stream);
+    } else if (src1_type == GGML_TYPE_BF16) {
+        fused_gemm_pack_b<typename S::EB>((const fg_bf16 *) src1, packed_b.get(), (int) N, Npad, (int) K, stream);
+    } else {
+        fused_gemm_pack_b<typename S::EB>((const float *) src1, packed_b.get(), (int) N, Npad, (int) K, stream);
+    }
 
-    const typename S::ts * packed = packed_b.get();
+    const typename S::tsb * packed = packed_b.get();
     return fg_visit_type(src0_type, [&](auto tag) {
         using block_q_t = typename decltype(tag)::type;
         fused_dequant_gemm_launch<S, block_q_t>(src0, packed, dst, (int) M, (int) N, Npad, (int) K, (int) ldd,
@@ -684,23 +756,26 @@ static bool fg_fused_run(ggml_type src0_type, const void * src0, const sycl::hal
     });
 }
 
-bool ggml_sycl_fused_dequant_gemm_f16(ggml_type src0_type, const void * src0, const sycl::half * src1_f16, float * dst,
-                                      int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
-                                      dpct::queue_ptr stream) {
+bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type,
+                                  float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
+                                  dpct::queue_ptr stream) {
     // every BN columns dequantize A again, so wide N is left to the library GEMM
     if (!ggml_sycl_xmx_gather_type_enabled(src0_type)) {
         return false;
     }
-    if (!ggml_sycl_fused_dequant_gemm_f16_shape_ok(src0_type, M, N, K, ldd)) {
+    if (src1_type != GGML_TYPE_F32 && src1_type != GGML_TYPE_F16 && src1_type != GGML_TYPE_BF16) {
         return false;
     }
-    const int shape = fg_device_shape(stream);
-    if (shape < 0) {
+    if (!ggml_sycl_fused_dequant_gemm_shape_ok(src0_type, M, N, K, ldd)) {
+        return false;
+    }
+    const int combo = fg_pick_combo(stream, src1_type);
+    if (combo < 0) {
         return false;
     }
     bool launched = false;
-    fg_visit_shape(shape, [&](auto s) {
-        launched = fg_fused_run<decltype(s)>(src0_type, src0, src1_f16, dst, M, N, K, ldd, pool, stream);
+    fg_visit_combo(combo, [&](auto s) {
+        launched = fg_fused_run<decltype(s)>(src0_type, src0, src1, src1_type, dst, M, N, K, ldd, pool, stream);
     });
     return launched;
 }
@@ -724,10 +799,10 @@ static bool fg_grouped_run(ggml_type src0_type, const void * src0_base, size_t e
     ggml_sycl_pool_alloc<ggml_sycl_gg_tile> tiles_dev(pool, n_tiles);
     SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(tiles_dev.get(), tiles.data(), n_tiles * sizeof(ggml_sycl_gg_tile))));
 
-    ggml_sycl_pool_alloc<typename S::ts> packed_b(pool, grouped_gemm_packed_capacity((size_t) K * Npad));
+    ggml_sycl_pool_alloc<typename S::tsb> packed_b(pool, grouped_gemm_packed_capacity((size_t) K * Npad));
     grouped_gemm_pack_b<S>(src1, packed_b.get(), tiles_dev.get(), Npad, (int) K, stream);
 
-    const typename S::ts *    packed    = packed_b.get();
+    const typename S::tsb *   packed    = packed_b.get();
     const ggml_sycl_gg_tile * tiles_ptr = tiles_dev.get();
     const char *              src0_dd   = (const char *) src0_base;
     return fg_visit_type(src0_type, [&](auto tag) {
@@ -737,11 +812,11 @@ static bool fg_grouped_run(ggml_type src0_type, const void * src0_base, size_t e
     });
 }
 
-bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_base, size_t expert_stride,
-                                        const float * src1, float * dst, const int64_t * expert_row_offsets,
-                                        int64_t n_as, int64_t M, int64_t K, int64_t total_rows,
-                                        std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
-                                        dpct::queue_ptr stream) {
+bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, const void * src0_base, size_t expert_stride,
+                                    const float * src1, float * dst, const int64_t * expert_row_offsets,
+                                    int64_t n_as, int64_t M, int64_t K, int64_t total_rows,
+                                    std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
+                                    dpct::queue_ptr stream) {
     int64_t n_active = 0;
     for (int64_t e = 0; e < n_as; ++e) {
         n_active += expert_row_offsets[e + 1] > expert_row_offsets[e];
@@ -749,17 +824,17 @@ bool ggml_sycl_grouped_dequant_gemm_f16(ggml_type src0_type, const void * src0_b
     if (!ggml_sycl_xmx_gather_type_enabled(src0_type)) {
         return false;
     }
-    if (!ggml_sycl_grouped_dequant_gemm_f16_shape_ok(src0_type, M, K, total_rows, n_active)) {
+    if (!ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, n_active)) {
         return false;
     }
-    const int shape = fg_device_shape(stream);
-    if (shape < 0) {
+    const int combo = fg_pick_combo(stream, GGML_TYPE_F32);
+    if (combo < 0) {
         return false;
     }
     bool launched = false;
-    fg_visit_shape(shape, [&](auto s) {
-        launched = fg_grouped_run<decltype(s)>(src0_type, src0_base, expert_stride, src1, dst, expert_row_offsets, n_as, M,
-                                               K, tiles, pool, stream);
+    fg_visit_combo(combo, [&](auto s) {
+        launched = fg_grouped_run<decltype(s)>(src0_type, src0_base, expert_stride, src1, dst, expert_row_offsets, n_as,
+                                               M, K, tiles, pool, stream);
     });
     return launched;
 }
