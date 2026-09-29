@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { isLocalOption } from './ModelsManager/utils';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { nearViewport } from '$lib/utils';
@@ -22,7 +21,7 @@
 	$effect(() => {
 		fetched = null;
 
-		if (reported || !isNearViewport || !isLocalOption(option)) return;
+		if (reported || !isNearViewport) return;
 
 		// a local GGUF carries its trained context in the model metadata
 		const repo = option.model.split(':')[0] ?? '';

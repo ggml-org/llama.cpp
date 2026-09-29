@@ -23,6 +23,12 @@ export const DIALOG_SUBMENU_CONTENT = 'w-60';
 export const CHAT_INPUT_FOCUS_SELECTOR =
 	'[data-slot="input-area"] textarea, [data-slot="input-area"] [contenteditable="true"]';
 
+/**
+ * Selects the search input inside an open dropdown-menu's content, to focus it
+ * after the menu mounts (bits-ui's default auto-focus can yank page scroll).
+ */
+export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-content"] input';
+
 /** Filter controls above the model table: one box, one height, one fill. */
 export const FILTER_TRIGGER_CLASS = `
     h-8

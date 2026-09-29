@@ -1,6 +1,5 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
-	import { modelDraftsFor } from '../ModelsManager/utils';
 	import {
 		ModelAvatar,
 		ModelCapabilities,
@@ -13,8 +12,6 @@
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
-	import { getBackend } from '$lib/utils/api-base';
-	import { getBackendCapabilities } from '$lib/utils/backend';
 
 	interface Props {
 		option: ModelOption;
@@ -44,9 +41,6 @@
 		showRepoOrgAvatar = false
 	}: Props = $props();
 
-	// row actions follow the backend that serves the row, not the selected one
-	let rowBackend = $derived(getBackend(option.backendId));
-	let canLoad = $derived(rowBackend ? getBackendCapabilities(rowBackend).loadUnload : false);
 	let currentRouterModels = $derived(modelsStore.routerModels);
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
@@ -102,7 +96,6 @@
 		aliases={option.aliases}
 		class="min-w-0 flex-1"
 		draftSidecars={option.draftSidecars}
-		drafts={modelDraftsFor(option)}
 		hideCapabilities
 		hideModalities
 		{hideOrgName}
@@ -119,15 +112,7 @@
 	<div class="flex shrink-0 items-center gap-1">
 		<ModelRowActions {isFav} {option} />
 
-		<ModelLoadControl
-			{canLoad}
-			{isFailed}
-			{isLoaded}
-			{isLoading}
-			{isSleeping}
-			{option}
-			showBackendMark
-		/>
+		<ModelLoadControl {isFailed} {isLoaded} {isLoading} {isSleeping} {option} />
 	</div>
 
 	{#if isLoading}
