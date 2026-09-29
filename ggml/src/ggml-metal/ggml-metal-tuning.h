@@ -188,9 +188,8 @@ struct mm_tile_key_t {
     int8_t  dtype;      // ggml_type of src0
     int8_t  N0_b;       // out-feat (ne01) bucket, or MM_TILE_BUCKET_ANY when collapsed
     int8_t  tokens_b;   // token (ne11) bucket (never collapsed)
-    int8_t  _pad[4];
 };
-static_assert(sizeof(mm_tile_key_t) == 8, "mm_tile_key_t must be 8 bytes for memcmp");
+static_assert(sizeof(mm_tile_key_t) == 4, "mm_tile_key_t must have no padding for memcmp");
 
 struct mm_tile_entry_t {
     mm_tile_key_t key;

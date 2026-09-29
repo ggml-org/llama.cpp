@@ -476,7 +476,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 for (const auto & _b : bks) { all_bp.insert(all_bp.end(), _b.bp.begin(), _b.bp.end()); }
                 sanity_row(all_bp, bestD, "L2");
                 snprintf(rbuf, sizeof(rbuf),
-                    "    { { %s, %s, -1, %d, {0,0,0,0} }, { %d, %d } },",
+                    "    { { %s, %s, -1, %d }, { %d, %d } },",
                     dev_token, dtype_token.c_str(), tb, cands[bestD].nr0, cands[bestD].nr1);
                 dtype_tile_rows.emplace_back(rbuf);
             }
@@ -487,7 +487,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 sanity_row(b->bp, b->Ti, "L1");
                 if (tb == 0) { tok0_L1[b->bN0] = b->Ti; }
                 snprintf(rbuf, sizeof(rbuf),
-                    "    { { %s, %s, %d, %d, {0,0,0,0} }, { %d, %d } },",
+                    "    { { %s, %s, %d, %d }, { %d, %d } },",
                     dev_token, dtype_token.c_str(), b->bN0, tb, cands[b->Ti].nr0, cands[b->Ti].nr1);
                 dtype_tile_rows.emplace_back(rbuf);
             }
@@ -541,7 +541,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 if (sw < NE11_MM_MIN_DEFAULT) { sw_by_b[b] = sw; sw_rows_b.insert(b); }
             }
             for (int b : sw_rows_b) {
-                snprintf(rbuf, sizeof(rbuf), "    { %s, %s, %d, %d, {0,0,0,0} },",
+                snprintf(rbuf, sizeof(rbuf), "    { %s, %s, %d, %d },",
                          dev_token, dtype_token.c_str(), b, sw_by_b[b]);
                 switch_rows.emplace_back(rbuf);
             }
