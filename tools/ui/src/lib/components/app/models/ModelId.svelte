@@ -95,6 +95,7 @@
 
 	let hasBadges = $derived(
 		parsed.sidecar ||
+			uniqueDraftSidecars.length > 0 ||
 			(parsed.params && !hideParameters) ||
 			(parsed.quantization && !resolvedHideQuantization) ||
 			primaryAlias ||
