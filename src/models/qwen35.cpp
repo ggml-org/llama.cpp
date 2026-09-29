@@ -377,14 +377,13 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     cb(beta, "beta_sigmoid", il);
 
     ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
-    // the decay gate is computed in F32, as in the reference
-    if (alpha->type != GGML_TYPE_F32) {
-        alpha = ggml_cast(ctx0, alpha, GGML_TYPE_F32);
-    }
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
-    ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
+    // the decay gate is computed in F32, as in the reference
+    ggml_tensor * alpha_biased = alpha->type == GGML_TYPE_F32 ?
+        ggml_add     (ctx0, alpha, model.layers[il].ssm_dt) :
+        ggml_add_cast(ctx0, alpha, model.layers[il].ssm_dt, GGML_TYPE_F32);
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
     cb(alpha_softplus, "a_softplus", il);
 

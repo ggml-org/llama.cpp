@@ -3675,8 +3675,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         }
     }
 
-    // multi-(add or mul)
-    if (node->op == GGML_OP_ADD || node->op == GGML_OP_MUL) {
+    // multi-(add or mul), not for type-changing ops
+    if ((node->op == GGML_OP_ADD || node->op == GGML_OP_MUL) && node->src[0]->type == node->type) {
         int     n_fuse = 0;
         ggml_op ops[8];
         std::fill(ops, ops + 8, node->op);
@@ -5570,9 +5570,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MUL:
         case GGML_OP_DIV:
             if (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16 || op->type == GGML_TYPE_BF16) {
-                return op->type == GGML_TYPE_BF16 &&
+                return (op->type == GGML_TYPE_BF16 &&
                     ((op->src[0]->type == GGML_TYPE_BF16 && (op->src[1]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_F32)) ||
-                     (op->src[0]->type == GGML_TYPE_F32  && op->src[1]->type == GGML_TYPE_F32));
+                     (op->src[0]->type == GGML_TYPE_F32  && op->src[1]->type == GGML_TYPE_F32))) ||
+                    (op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_BF16 && op->src[1]->type == GGML_TYPE_F32);
             }
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                    (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
