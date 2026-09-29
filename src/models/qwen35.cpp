@@ -132,6 +132,8 @@ std::unique_ptr<llm_graph_context> llama_model_qwen35::build_arch_graph(const ll
 
 llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_params & params) :
     llm_build_delta_net_base(params), model(model) {
+    act_type = llm_graph_act_type_from_env();
+
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -143,6 +145,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inpL;
 
     inpL = build_inp_embd(model.tok_embd);
+
+    if (act_type != GGML_TYPE_F32) {
+        inpL = ggml_cast(ctx0, inpL, act_type);
+    }
 
     cb(inpL, "model.input_embed", -1);
 
@@ -172,8 +178,8 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         }
 
         if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
-            cur   = ggml_get_rows(ctx0, cur,   inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            cur   = build_act(ggml_get_rows(ctx0, cur,   inp_out_ids));
+            inpSA = build_act(ggml_get_rows(ctx0, inpSA, inp_out_ids));
         }
 
         // Residual connection
@@ -205,6 +211,11 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 
+    // outputs are read back as F32
+    if (cur->type != GGML_TYPE_F32) {
+        cur = ggml_cast(ctx0, cur, GGML_TYPE_F32);
+    }
+
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
@@ -214,6 +225,9 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
+
+    // logits stay F32
+    act_type = GGML_TYPE_F32;
 
     // LM head
     cur = build_lora_mm(model.output, cur, model.output_s);
@@ -363,6 +377,10 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     cb(beta, "beta_sigmoid", il);
 
     ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
+    // the decay gate is computed in F32, as in the reference
+    if (alpha->type != GGML_TYPE_F32) {
+        alpha = ggml_cast(ctx0, alpha, GGML_TYPE_F32);
+    }
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
     cb(alpha, "alpha", il);
 
@@ -388,7 +406,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
     cb(state, "state_predelta", il);
 
-    ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
+    ggml_tensor * conv_output_proper = build_act(ggml_ssm_conv(ctx0, conv_input, conv_kernel));
     cb(conv_output_proper, "conv_output_raw", il);
 
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_proper);
@@ -433,6 +451,14 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
     //v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
+    // the unfused GDN path is F32 only
+    if (act_type != GGML_TYPE_F32 && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
+        q_conv = ggml_cast(ctx0, q_conv, GGML_TYPE_F32);
+        k_conv = ggml_cast(ctx0, k_conv, GGML_TYPE_F32);
+        v_conv = ggml_cast(ctx0, v_conv, GGML_TYPE_F32);
+        beta   = ggml_cast(ctx0, beta,   GGML_TYPE_F32);
+    }
+
     // if head keys and value keys are different, repeat to force tensors into matching shapes
     // note: need explicit repeat only if we are not using the fused GDN.
     if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
@@ -446,6 +472,9 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     cb(v_conv, "v_conv_predelta", il);
 
     ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
+    if (act_type != GGML_TYPE_F32) {
+        output = ggml_cast(ctx0, output, act_type);
+    }
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
     ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);

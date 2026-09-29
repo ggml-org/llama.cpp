@@ -1512,6 +1512,35 @@ ggml_tensor * llm_graph_context::build_cvec(
     return cvec->apply_to(ctx0, cur, il);
 }
 
+ggml_type llm_graph_act_type_from_env() {
+    static const ggml_type type = [] {
+        const char * env = getenv("LLAMA_ACT_BF16");
+        const bool bf16 = env != nullptr && atoi(env) != 0;
+        if (bf16) {
+            LLAMA_LOG_INFO("%s: LLAMA_ACT_BF16 set, intermediate activations are stored as BF16\n", __func__);
+        }
+        return bf16 ? GGML_TYPE_BF16 : GGML_TYPE_F32;
+    }();
+    return type;
+}
+
+ggml_tensor * llm_graph_context::build_act(ggml_tensor * cur) const {
+    if (act_type == GGML_TYPE_F32 || cur->type != GGML_TYPE_F32) {
+        return cur;
+    }
+
+    // only a new result that nothing reads yet can change its type
+    GGML_ASSERT(cur->op != GGML_OP_NONE && cur->view_src == nullptr && cur->data == nullptr && ggml_is_contiguous(cur));
+
+    cur->type  = act_type;
+    cur->nb[0] = ggml_type_size(act_type);
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        cur->nb[i] = cur->nb[i - 1]*cur->ne[i - 1];
+    }
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
@@ -1525,6 +1554,8 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
     }
+
+    res = build_act(res);
 
     for (const auto & lora : *loras) {
         llama_adapter_lora_weight * lw = lora.first->get_weight(w);
@@ -1792,7 +1823,12 @@ ggml_tensor * llm_graph_context::build_ffn(
     GGML_ASSERT(!gate_s || !gate || gate->type != GGML_TYPE_NVFP4 || !has_lora(gate));
     GGML_ASSERT(!down_s || !down || down->type != GGML_TYPE_NVFP4 || !has_lora(down));
 
-    ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
+    // with non-F32 activations, apply the scale before the matmul result is stored
+    const bool up_s_mm   = act_type != GGML_TYPE_F32 && up_s   && !up_b;
+    const bool gate_s_mm = act_type != GGML_TYPE_F32 && gate_s && !gate_b;
+    const bool down_s_mm = act_type != GGML_TYPE_F32 && down_s && !down_b;
+
+    ggml_tensor * tmp = up ? build_lora_mm(up, cur, up_s_mm ? up_s : nullptr) : cur;
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
@@ -1800,7 +1836,7 @@ ggml_tensor * llm_graph_context::build_ffn(
         cb(tmp, "ffn_up_b", il);
     }
 
-    if (up_s) {
+    if (up_s && !up_s_mm) {
         tmp = ggml_mul(ctx0, tmp, up_s);
         cb(tmp, "ffn_up_s", il);
     }
@@ -1809,12 +1845,12 @@ ggml_tensor * llm_graph_context::build_ffn(
         switch (type_gate) {
             case LLM_FFN_SEQ:
                 {
-                    cur = build_lora_mm(gate, tmp);
+                    cur = build_lora_mm(gate, tmp, gate_s_mm ? gate_s : nullptr);
                     cb(cur, "ffn_gate", il);
                 } break;
             case LLM_FFN_PAR:
                 {
-                    cur = build_lora_mm(gate, cur);
+                    cur = build_lora_mm(gate, cur, gate_s_mm ? gate_s : nullptr);
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -1824,7 +1860,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             cb(cur, "ffn_gate_b", il);
         }
 
-        if (gate_s) {
+        if (gate_s && !gate_s_mm) {
             cur = ggml_mul(ctx0, cur, gate_s);
             cb(cur, "ffn_gate_s", il);
         }
@@ -1932,7 +1968,7 @@ ggml_tensor * llm_graph_context::build_ffn(
     }
 
     if (down) {
-        cur = build_lora_mm(down, cur);
+        cur = build_lora_mm(down, cur, down_s_mm ? down_s : nullptr);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_prec_set_acc(cur, GGML_PREC_F32);
@@ -1947,7 +1983,7 @@ ggml_tensor * llm_graph_context::build_ffn(
         cur = ggml_add(ctx0, cur, down_b);
     }
 
-    if (down_s) {
+    if (down_s && !down_s_mm) {
         cur = ggml_mul(ctx0, cur, down_s);
         cb(cur, "ffn_down_s", il);
     }
@@ -2657,6 +2693,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         GGML_ASSERT(n_kv_max >= 0 && n_kv_max <= INT32_MAX);
         ggml_flash_attn_ext_set_n_kv_max(cur, static_cast<int32_t>(n_kv_max));
         ggml_prec_set_acc(cur, GGML_PREC_F32);
+
+        if (v_mla == nullptr) {
+            cur = build_act(cur);
+        }
 
         if (v_mla) {
 #if 0

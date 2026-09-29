@@ -1580,6 +1580,8 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * gate_scale = nullptr;
     ggml_glu_op glu_op;
     float glu_limit = 0.0f;
+    bool dst_bf16    = false; // dst is BF16, strides are still in elements
+    bool x_bias_bf16 = false; // x_bias is BF16 (e.g. a fused residual add), only for MUL_MAT
 };
 
 struct ggml_cuda_kernel_launch_params {

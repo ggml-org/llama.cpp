@@ -4009,7 +4009,7 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
     GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
-    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
+    GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16 || b->type == GGML_TYPE_BF16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
 
     GGML_ASSERT(ggml_is_contiguous_rows(a));
@@ -6379,11 +6379,12 @@ struct ggml_tensor * ggml_gated_delta_net(
     GGML_ASSERT(ggml_is_contiguous(beta));
     GGML_ASSERT(ggml_is_contiguous(state));
 
-    GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(k->type == GGML_TYPE_F32);
-    GGML_ASSERT(v->type == GGML_TYPE_F32);
+    // q, k, v and beta may be BF16 (F32 math in the kernel), g and state are always F32
+    GGML_ASSERT(q->type == GGML_TYPE_F32 || q->type == GGML_TYPE_BF16);
+    GGML_ASSERT(k->type == q->type);
+    GGML_ASSERT(v->type == q->type);
     GGML_ASSERT(g->type == GGML_TYPE_F32);
-    GGML_ASSERT(beta->type == GGML_TYPE_F32);
+    GGML_ASSERT(beta->type == q->type);
     GGML_ASSERT(state->type == GGML_TYPE_F32);
 
     const int64_t S_v      = v->ne[0];

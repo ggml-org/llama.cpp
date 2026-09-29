@@ -4,6 +4,7 @@
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
+#include "convert.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -755,8 +756,63 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     return f16_extra.end - (uintptr_t) dst->data;
 }
 
+static void ggml_cuda_flash_attn_ext_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+
+static void ggml_cuda_set_cont_f32(ggml_tensor & t, void * data) {
+    t.type  = GGML_TYPE_F32;
+    t.data  = data;
+    t.nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        t.nb[i] = t.nb[i - 1]*t.ne[i - 1];
+    }
+}
+
+// the kernels read F32 Q and write F32 dst, so BF16 Q/dst are staged through F32 buffers
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
+
+    const ggml_tensor * Q = dst->src[0];
+    if (Q->type != GGML_TYPE_BF16 && dst->type != GGML_TYPE_BF16) {
+        ggml_cuda_flash_attn_ext_impl(ctx, dst);
+        return;
+    }
+    GGML_ASSERT(Q->type == GGML_TYPE_F32 || Q->type == GGML_TYPE_BF16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_BF16);
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    cudaStream_t stream = ctx.stream();
+
+    ggml_tensor Q_f32   = *Q;
+    ggml_tensor dst_f32 = *dst;
+    ggml_cuda_pool_alloc<float> Q_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<float> dst_alloc(ctx.pool());
+
+    if (Q->type == GGML_TYPE_BF16) {
+        GGML_ASSERT(Q->nb[0] == ggml_type_size(Q->type));
+        Q_alloc.alloc(ggml_nelements(Q));
+        const size_t ts = ggml_type_size(Q->type);
+        ggml_get_to_fp32_nc_cuda(GGML_TYPE_BF16)(Q->data, Q_alloc.get(), Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3],
+            Q->nb[1]/ts, Q->nb[2]/ts, Q->nb[3]/ts, stream);
+        ggml_cuda_set_cont_f32(Q_f32, Q_alloc.get());
+        dst_f32.src[0] = &Q_f32;
+    }
+
+    if (dst->type == GGML_TYPE_BF16) {
+        // the kernels may put F16 copies of K/V right after dst, reserve that space too
+        ggml_cuda_set_cont_f32(dst_f32, nullptr);
+        const size_t nbytes = ggml_cuda_flash_attn_ext_get_alloc_size(ctx.device, &dst_f32) + 256;
+        dst_alloc.alloc((nbytes + sizeof(float) - 1)/sizeof(float));
+        dst_f32.data = dst_alloc.get();
+    }
+
+    ggml_cuda_flash_attn_ext_impl(ctx, &dst_f32);
+
+    if (dst->type == GGML_TYPE_BF16) {
+        ggml_get_to_bf16_cuda(GGML_TYPE_F32)(dst_alloc.get(), (nv_bfloat16 *) dst->data, ggml_nelements(dst), stream);
+    }
+}
+
+static void ggml_cuda_flash_attn_ext_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");

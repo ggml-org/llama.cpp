@@ -92,13 +92,16 @@ static __global__ void rope_norm(const T *            x,
         } else if constexpr (std::is_same_v<half, D>) {
             half2 v = make_half2(x0, x1);
             ggml_cuda_memcpy_1<4>(dst + idst, &v);
+        } else if constexpr (std::is_same_v<nv_bfloat16, D>) {
+            nv_bfloat162 v = ggml_cuda_cast<nv_bfloat162>(make_float2(x0, x1));
+            ggml_cuda_memcpy_1<4>(dst + idst, &v);
         }
     };
     if (i0 < n_offs || i0 >= n_offs + n_dims) {
         if (inplace) {
             return;
         }
-        store_coaelsced(x[ix + 0], x[ix + 1]);
+        store_coaelsced(ggml_cuda_cast<float>(x[ix + 0]), ggml_cuda_cast<float>(x[ix + 1]));
         return;
     }
 
@@ -113,8 +116,8 @@ static __global__ void rope_norm(const T *            x,
 
     rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, iw, ext_factor, attn_factor, cos_theta, sin_theta);
 
-    const float x0 = x[ix + 0];
-    const float x1 = x[ix + 1];
+    const float x0 = ggml_cuda_cast<float>(x[ix + 0]);
+    const float x1 = ggml_cuda_cast<float>(x[ix + 1]);
 
     store_coaelsced(x0 * cos_theta - x1 * sin_theta, x0 * sin_theta + x1 * cos_theta);
 }
@@ -189,8 +192,8 @@ static __global__ void rope_neox(const T *            x,
     rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, iw, ext_factor, attn_factor, cos_theta, sin_theta);
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is n_offs + iw/2 = i0/2 + n_offs/2
-    const float x0 = x[ix + n_offs/2 + 0];
-    const float x1 = x[ix + n_offs/2 + n_dims/2];
+    const float x0 = ggml_cuda_cast<float>(x[ix + n_offs/2 + 0]);
+    const float x1 = ggml_cuda_cast<float>(x[ix + n_offs/2 + n_dims/2]);
 
     dst[idst + n_offs/2 + 0]          = ggml_cuda_cast<D>(x0 * cos_theta - x1 * sin_theta);
     dst[idst + n_offs/2 + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
@@ -283,11 +286,11 @@ static __global__ void rope_multi(const T *            x,
     rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, iw, ext_factor, attn_factor, cos_theta, sin_theta);
 
     // idst/ix point at channel i0/2; the first channel of the rotated pair is n_offs + iw/2 = i0/2 + n_offs/2
-    const float x0 = x[ix + n_offs/2 + 0];
-    const float x1 = x[ix + n_offs/2 + n_dims/2];
+    const float x0 = ggml_cuda_cast<float>(x[ix + n_offs/2 + 0]);
+    const float x1 = ggml_cuda_cast<float>(x[ix + n_offs/2 + n_dims/2]);
 
-    dst[idst + n_offs/2 + 0]        = x0*cos_theta - x1*sin_theta;
-    dst[idst + n_offs/2 + n_dims/2] = x0*sin_theta + x1*cos_theta;
+    dst[idst + n_offs/2 + 0]        = ggml_cuda_cast<T>(x0*cos_theta - x1*sin_theta);
+    dst[idst + n_offs/2 + n_dims/2] = ggml_cuda_cast<T>(x0*sin_theta + x1*cos_theta);
 }
 
 template <bool forward, bool has_ff, typename T>
@@ -557,8 +560,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
     }
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
     // When not fused, src0 and dst types must match
     // When fused (ROPE+VIEW+SET_ROWS), src0 may be F32 and dst may be F16
     GGML_ASSERT(src0->type == dst->type || (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16));
@@ -644,6 +646,11 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
                                                 s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
                                                 ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
                                                 set_rows_stride, inplace, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst_type == GGML_TYPE_BF16) {
+            rope_neox_cuda<forward, nv_bfloat16, nv_bfloat16>((const nv_bfloat16 *) src0_d, (nv_bfloat16 *) dst_d, ne00, ne01, ne02, s01, s02,
+                                                s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
+                                                ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
+                                                set_rows_stride, inplace, stream);
         } else {
             GGML_ABORT("fatal error");
         }
@@ -654,6 +661,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
                                      corr_dims, freq_factors, sections, is_imrope, inplace, stream);
         } else if (src0->type == GGML_TYPE_F16) {
             rope_multi_cuda<forward>((const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, s03, s1,
+                                     s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base, ext_factor, attn_factor,
+                                     corr_dims, freq_factors, sections, is_imrope, inplace, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            rope_multi_cuda<forward>((const nv_bfloat16 *) src0_d, (nv_bfloat16 *) dst_d, ne00, ne01, ne02, s01, s02, s03, s1,
                                      s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base, ext_factor, attn_factor,
                                      corr_dims, freq_factors, sections, is_imrope, inplace, stream);
         } else {
@@ -684,6 +695,11 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
                                                  set_rows_stride, inplace, stream);
         } else if (src0->type == GGML_TYPE_F16 && dst_type == GGML_TYPE_F16) {
             rope_norm_cuda<forward, half, half>((const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02,
+                                                s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
+                                                ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
+                                                set_rows_stride, inplace, stream);
+        } else if (src0->type == GGML_TYPE_BF16 && dst_type == GGML_TYPE_BF16) {
+            rope_norm_cuda<forward, nv_bfloat16, nv_bfloat16>((const nv_bfloat16 *) src0_d, (nv_bfloat16 *) dst_d, ne00, ne01, ne02, s01, s02,
                                                 s03, s1, s2, s3, n_dims, n_offs, nr, pos, freq_scale, freq_base,
                                                 ext_factor, attn_factor, corr_dims, freq_factors, row_indices,
                                                 set_rows_stride, inplace, stream);

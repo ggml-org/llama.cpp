@@ -984,6 +984,9 @@ struct llm_graph_qkv {
     ggml_tensor * v; // [n_embd_head, n_head_kv, n_tokens]
 };
 
+// LLAMA_ACT_BF16=1 -> BF16, else F32
+ggml_type llm_graph_act_type_from_env();
+
 struct llm_graph_context {
     const llm_arch arch;
 
@@ -1041,10 +1044,16 @@ struct llm_graph_context {
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 
+    // storage type of intermediate activations, set by the model graph (experimental, see build_act)
+    ggml_type act_type = GGML_TYPE_F32;
+
     llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
+
+    // store a new F32 op result as act_type, the op still computes in F32
+    ggml_tensor * build_act(ggml_tensor * cur) const;
 
     //
     // common
