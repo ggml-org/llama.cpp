@@ -20,8 +20,8 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
     }
 
-    // GGUFs without this key use mean (gte-reranker-modernbert-base)
-    if (!ml.get_key(LLM_KV_CLASSIFIER_POOLING_TYPE, hparams.classifier_pooling_type, false)) {
+    // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
+    if (hparams.classifier_pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         hparams.classifier_pooling_type = LLAMA_POOLING_TYPE_MEAN;
     }
 

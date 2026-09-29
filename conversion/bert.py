@@ -619,10 +619,6 @@ class ModernBertModel(BertModel):
         # llama.cpp graph can pick the matching activation.
         if hidden_act := self.hparams.get("hidden_activation"):
             self.gguf_writer.add_hidden_act(hidden_act)
-        if self.hf_arch == "ModernBertForSequenceClassification":
-            # transformers defaults to "cls"
-            pooling_types = {"cls": gguf.PoolingType.CLS, "mean": gguf.PoolingType.MEAN}
-            self.gguf_writer.add_classifier_pooling_type(pooling_types[self.hparams.get("classifier_pooling", "cls")])
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
