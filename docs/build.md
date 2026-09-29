@@ -118,12 +118,12 @@ Check [BLIS.md](./backend/BLIS.md) for more information.
 
 ### AMD AOCL-BLAS
 
-Link against AMD AOCL-BLAS on EPYC or Ryzen for large F32 prompt GEMMs. This is not the ZenDNN backend; see [ZenDNN.md](./backend/ZenDNN.md).
+Link against AMD AOCL-BLAS on EPYC or Ryzen for large F32 prompt GEMMs.
 
 Source `amd-libs.cfg` from your AOCL install (MT tree by default), then build (CMake 3.27+ recommended for the `AOCL` / `AOCL_mt` vendors):
 
 ```bash
-source /opt/aocl/5.3.0/aocc/MT/amd-libs.cfg   # adjust path; ST tree uses .../ST/amd-libs.cfg
+source /opt/aocl/<version>/aocc/MT/amd-libs.cfg   # adjust path; ST tree uses .../ST/amd-libs.cfg
 cmake -B build -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=AOCL_mt -DBLAS_INCLUDE_DIRS="${AOCL_ROOT}/include" -DGGML_NATIVE=ON
 cmake --build build --config Release
 ```
