@@ -70,7 +70,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
             auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
             auto response_format = p.rule("response-format",
                 recipient + p.literal("<|message|>") +
-                (p.literal("```json") + p.space() + response_json + p.space() + p.literal("```") | response_json));
+                ((p.literal("```json") + p.space() + response_json + p.space() + p.literal("```")) | response_json));
 
             return p.zero_or_more(start + analysis) + start + response_format;
         }
