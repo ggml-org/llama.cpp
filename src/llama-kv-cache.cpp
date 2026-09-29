@@ -1245,44 +1245,6 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
     return layers[ikv].k;
 }
 
-llama_kv_cache::kpool_access::kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd) : ctx(ctx) {
-    GGML_ASSERT(k->ne[0] == 3*n_embd);
-
-    const int64_t n_cells = k->ne[1]*k->ne[2];
-
-    // Pool indices can refer to other streams. Revisit these full-storage views if that changes:
-    // https://github.com/ggml-org/llama.cpp/pull/27773#discussion_r4130905603
-    key_gate = ggml_view_2d(ctx, k, 2*n_embd, n_cells, k->nb[1], 0);
-    pooled   = ggml_view_2d(ctx, k,   n_embd, n_cells, k->nb[1], ggml_row_size(k->type, 2*n_embd));
-}
-
-ggml_tensor * llama_kv_cache::kpool_access::gather_key_gate(ggml_tensor * idxs) const {
-    return ggml_get_rows(ctx, key_gate, idxs);
-}
-
-ggml_tensor * llama_kv_cache::kpool_access::scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const {
-    return ggml_set_rows(ctx, pooled, values, idxs);
-}
-
-ggml_tensor * llama_kv_cache::kpool_access::gather_pooled(ggml_tensor * idxs) const {
-    return ggml_get_rows(ctx, pooled, idxs);
-}
-
-llama_kv_cache::kpool_access llama_kv_cache::get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const {
-    const int32_t ikv = map_layer_ids.at(il);
-
-    return kpool_access(ctx, layers[ikv].k, n_embd);
-}
-
-ggml_tensor * llama_kv_cache::gather_k_rows(ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const {
-    const int32_t ikv = map_layer_ids.at(il);
-    ggml_tensor * k = layers[ikv].k;
-    GGML_ASSERT(k->ne[0] == n_embd);
-
-    ggml_tensor * rows = ggml_view_2d(ctx, k, k->ne[0], k->ne[1]*k->ne[2], k->nb[1], 0);
-    return ggml_get_rows(ctx, rows, ggml_reshape_1d(ctx, idxs, n_rows));
-}
-
 const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
@@ -2909,14 +2871,6 @@ ggml_type llama_kv_cache_context::type_v() const {
 
 ggml_tensor * llama_kv_cache_context::get_k(ggml_context * ctx, int32_t il) const {
     return kv->get_k(ctx, il, n_kv, sinfos[i_cur]);
-}
-
-llama_kv_cache_context::kpool_access llama_kv_cache_context::get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const {
-    return kv->get_kpool_access(ctx, il, n_embd);
-}
-
-ggml_tensor * llama_kv_cache_context::gather_k_rows(ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const {
-    return kv->gather_k_rows(ctx, idxs, n_rows, n_embd, il);
 }
 
 ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) const {

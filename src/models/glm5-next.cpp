@@ -598,7 +598,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
     ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
 
-    auto kpool_cache = mctx_lid->get_kpool_access(ctx0, il, n_embd_indexer);
+    auto kpool_cache = mctx_hyb->get_kpool_access(ctx0, il, n_embd_indexer);
     const int64_t n_kv = mctx_lid->get_n_kv();
 
     // Pool the entries completed by this ubatch. The last one is a dummy when the ubatch completes none.
@@ -772,7 +772,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
         ggml_tensor * sel_idx = sel; // I32 [n_sel, n_tokens]
         const int64_t n_sel = sel_idx->ne[0];
 
-        ggml_tensor * k_g = mctx_mla->gather_k_rows(ctx0, sel_idx, n_sel*n_tokens, kv_lora_rank, il);
+        ggml_tensor * k_g = mctx_hyb->gather_mla_rows(ctx0, sel_idx, n_sel*n_tokens, kv_lora_rank, il);
         k_g = ggml_reshape_4d(ctx0, k_g, kv_lora_rank, n_sel, 1, n_tokens); // F32 [kv_lora_rank, n_sel, 1, n_tokens]
         cb(k_g, "kv_gathered", il);
 

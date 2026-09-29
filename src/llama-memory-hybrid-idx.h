@@ -147,6 +147,22 @@ private:
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
 public:
+    class kpool_access {
+    public:
+        ggml_tensor * gather_key_gate(ggml_tensor * idxs) const;
+        ggml_tensor * scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const;
+        ggml_tensor * gather_pooled(ggml_tensor * idxs) const;
+
+    private:
+        friend class llama_memory_hybrid_idx_context;
+
+        kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd);
+
+        ggml_context * ctx;
+        ggml_tensor  * key_gate;
+        ggml_tensor  * pooled;
+    };
+
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
 
     // used for errors
@@ -191,6 +207,8 @@ public:
     uint32_t get_n_kpool    () const; // Padded pool count, where the last pool is always unused.
     uint32_t get_n_kpool_new() const; // Exact count of pools completed by the current ubatch.
     bool get_kpool_cache_safe() const;
+    kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
+    ggml_tensor * gather_mla_rows(ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const;
     void set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
                          ggml_tensor * gather_mask, bool gather, ggml_tensor * new_pool_idxs, ggml_tensor * new_pool_rep,
                          const llama_ubatch * ubatch) const;

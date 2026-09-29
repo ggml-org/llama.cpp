@@ -928,6 +928,46 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
     mem->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias, causal_attn);
 }
 
+llama_memory_hybrid_idx_context::kpool_access::kpool_access(ggml_context * ctx, ggml_tensor * k, int64_t n_embd) : ctx(ctx) {
+    GGML_ASSERT(k->ne[0] == 3*n_embd);
+
+    const int64_t n_cells = k->ne[1]*k->ne[2];
+
+    // Pool indices can refer to other streams. Revisit these full-storage views if that changes:
+    // https://github.com/ggml-org/llama.cpp/pull/27773#discussion_r4130905603
+    key_gate = ggml_view_2d(ctx, k, 2*n_embd, n_cells, k->nb[1], 0);
+    pooled   = ggml_view_2d(ctx, k,   n_embd, n_cells, k->nb[1], ggml_row_size(k->type, 2*n_embd));
+}
+
+ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_key_gate(ggml_tensor * idxs) const {
+    return ggml_get_rows(ctx, key_gate, idxs);
+}
+
+ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::scatter_pooled(ggml_tensor * values, ggml_tensor * idxs) const {
+    return ggml_set_rows(ctx, pooled, values, idxs);
+}
+
+ggml_tensor * llama_memory_hybrid_idx_context::kpool_access::gather_pooled(ggml_tensor * idxs) const {
+    return ggml_get_rows(ctx, pooled, idxs);
+}
+
+llama_memory_hybrid_idx_context::kpool_access llama_memory_hybrid_idx_context::get_kpool_access(
+        ggml_context * ctx, int32_t il, int64_t n_embd) const {
+    GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
+
+    return kpool_access(ctx, mem->get_mem_idx()->get_k_storage(il), n_embd);
+}
+
+ggml_tensor * llama_memory_hybrid_idx_context::gather_mla_rows(
+        ggml_context * ctx, ggml_tensor * idxs, int64_t n_rows, int64_t n_embd, int32_t il) const {
+    GGML_ASSERT(mem != nullptr);
+    ggml_tensor * k = mem->get_mem_attn()->get_k_storage(il);
+    GGML_ASSERT(k->ne[0] == n_embd);
+
+    ggml_tensor * rows = ggml_view_2d(ctx, k, k->ne[0], k->ne[1]*k->ne[2], k->nb[1], 0);
+    return ggml_get_rows(ctx, rows, ggml_reshape_1d(ctx, idxs, n_rows));
+}
+
 // k-pool DSA indexer (glm5-next)
 
 // Sizes only, used by the full cache context so get_n_kpool() works during graph reserve.
