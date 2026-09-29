@@ -266,8 +266,7 @@ static dsv4_state_tensors dsv4_build_state_snapshot(
 static constexpr int64_t DSV4_CSA_RATIO  = 4;
 static constexpr int64_t DSV4_HCA_RATIO  = 128;
 
-template <typename Base>
-ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_mean(ggml_tensor * x) const {
+ggml_tensor * llama_model_deepseek4::graph::build_hc_mean(ggml_tensor * x) const {
     const int64_t hc = x->ne[1];
 
     ggml_tensor * acc = ggml_view_2d(ctx0, x, x->ne[0], x->ne[2], x->nb[2], 0);
@@ -287,8 +286,7 @@ static ggml_tensor * dsv4_hc_affine(
     return x;
 }
 
-template <typename Base>
-ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_pre(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * weights,
         int           il) const {
@@ -315,8 +313,7 @@ ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_pre(
     return result;
 }
 
-template <typename Base>
-ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_sinkhorn(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
         ggml_tensor * comb,
         int           il) const {
     GGML_UNUSED(il);
@@ -353,8 +350,7 @@ ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_sinkhorn(
     return comb;
 }
 
-template <typename Base>
-ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_pre(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * hc_fn,
         ggml_tensor * hc_scale,
@@ -412,8 +408,7 @@ ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_pre(
     return result;
 }
 
-template <typename Base>
-ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_post(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_post(
         ggml_tensor * x,
         ggml_tensor * residual,
         ggml_tensor * post,
@@ -449,10 +444,6 @@ ggml_tensor * llama_model_deepseek4::graph_base<Base>::build_hc_post(
 
     return out;
 }
-
-// instantiate the mHC helpers for deepseek4 (and dflash) and glm5-next
-template struct llama_model_deepseek4::graph_base<llm_graph_context>;
-template struct llama_model_deepseek4::graph_base<llm_build_delta_net_base>;
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
         ggml_tensor * x,
@@ -1229,7 +1220,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
 }
 
 llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    graph_base<>(params) {
+    llm_graph_context(params) {
     ggml_tensor * cur;
 
     ggml_tensor * inp = build_inp_embd(model.tok_embd);
