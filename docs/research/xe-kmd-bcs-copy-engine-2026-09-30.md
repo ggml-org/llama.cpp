@@ -66,6 +66,8 @@ kernel journal, devcoredump capture, `timeout 600`.
 | X7D `N-xe-x7d-neopatch-ceon-off` | patched master, blitter ON, mmap, clean bench | off, mmap | clean: 363.5 / 48.23 / 266.0 +- 51 / 41.48 (host load 7-19 from a foreign compile) |
 | X7E `N-xe-x7e-neopatch-ceon-auto` | patched master, blitter ON, mmap, clean bench | auto, mmap | clean, no reset; t/s void (host load 11-31, swapping): 266.0 / 5.3 +- 3.9 / 192 / 1.9; X7B's instrumented 12.7 +- 0.3 is the usable auto-placement decode figure |
 | X7F `N-xe-x7F-neopatch-hardened` | hardened patch (errno read at once, writable flag restored on a failed retry), blitter ON, instrumented as X7B | auto | **clean**, 4 rows, 0 failed binds, 0 `EPERM`, 239 340 userptr imports all succeeded, no kernel message: 219.4 +- 44.4 / 13.26 / 228.8 / 12.42 (instrumented; first row noisy) |
+| X7G `N-xe-x7G-pkg-be85a8d685-retry` | installed package `intel-compute-runtime-git 22.43.24558.r13063.gbe85a8d685-1` (NEO master `be85a8d685` + gaema 010-040 + the retry patch as 050), blitter ON, instrumented | auto | **clean**, 4 rows, 0 failed binds, 0 `EPERM`, 239 364 userptr imports, no kernel message; t/s void (host load 21-36, AOCC kernel build) |
+| X7H `N-xe-x7H-pkg-be85a8d685-noretry` | same package, `RetryUserptrBindReadOnly=0` (control) | auto | **stall**: 3 rows then the 600 s watchdog (exit 124), 20 363 `EPERM` binds each followed by the sweep and a staging fallback (40 726 lines), no reset within the window (silent-stall form, as X6) |
 | X4d `N-xe-x4d-mmap-ceoff` | copy engine OFF, `--moe-cache off`, clean (control, same boot) | off, mmap | clean: 325.1 +- 18.4 / 49.2 +- 0.6 / 274.4 +- 3.1 / 41.9 +- 0.3 |
 
 Instrumented t/s are not benchmark numbers (NEO logs several MB/s of text).
@@ -250,6 +252,15 @@ the writable flag when the read-only retry fails, and documents the `EPERM` orig
 bind path returns `EPERM`, and the SVM prefetch path maps it to `ENODATA`). Rebuilt and
 re-run as X7F: same picture as X7B, 0 failed binds, 239 340 userptr imports, no kernel
 message.
+
+Installed (17:00, other session): the patch ships as `050-neo-retry-userptr-bind-readonly-on-eperm.patch`
+in `~/projects/intel-compute-runtime-git` on top of NEO master `be85a8d685` and the gaema
+patches 010-040 (`intel-compute-runtime-git 22.43.24558.r13063.gbe85a8d685-1`; `strings`
+finds `RetryUserptrBindReadOnly`). A/B on that exact library with the blitter on: X7G
+(patch on) clean, X7H (`RetryUserptrBindReadOnly=0`) stalls at the watchdog with 20 363
+`EPERM` binds. So the fix holds on newer master and next to the gaema patches; the fork
+default stays until a release carries it, and the production unit keeps
+`UR_L0_USE_COPY_ENGINE=0`.
 
 ## Side result: the FA kernels spill, and a large-GRF knob (2026-09-30, 10:50-11:20)
 
