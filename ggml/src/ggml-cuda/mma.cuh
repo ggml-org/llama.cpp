@@ -961,7 +961,7 @@ namespace ggml_cuda_mma {
             : "l"(xs0 + offset_ij));
 #elif defined(VOLTA_MMA_AVAILABLE)
 #pragma unroll
-        for (int o = 0; o < 8; o += 4) {
+        for (int o = 0; o < t.ne; o += 4) {
             const int offset_ij = offset + t.get_i(o) * stride + o;
             ggml_cuda_memcpy_1<4*sizeof(T)>(t.x + o, swizzle<stride>(xs0, offset_ij, t.get_i(o)));
         }
