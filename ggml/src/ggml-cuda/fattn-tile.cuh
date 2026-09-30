@@ -950,28 +950,19 @@ static __global__ void flash_attn_tile(
 
     __syncthreads();
 
-    // Main loop over KV cache:
+    // Main loop over KV cache with fixed trip count + skip-continue:
+    // Fixed upper bound (ne11) allows compiler to fully unroll the loop.
+    // Block-uniform `continue` skips invalid KV tiles for causal masking.
     const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
-    if (ncols2 == 1) {
-        // Branch with out-of-bounds checks.
-        int k_VKQ_0 = blockIdx.y*nbatch_fa;
-        while (k_VKQ_0 < k_VKQ_max - nbatch_fa) {
+    for (int k_VKQ_0 = blockIdx.y*nbatch_fa; k_VKQ_0 < ne11; k_VKQ_0 += gridDim.y*nbatch_fa) {
+        if (k_VKQ_0 >= k_VKQ_max) continue;   // skip-continue: block-uniform
+        if (k_VKQ_0 + nbatch_fa <= k_VKQ_max) {
             constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
                 stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
-            k_VKQ_0 += gridDim.y*nbatch_fa;
-        }
-        if (k_VKQ_0 < k_VKQ_max) {
+        } else {
             constexpr bool oob_check = true;
-            flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
-                (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
-                stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
-        }
-    } else {
-        // Branch without out-of-bounds checks.
-        for (int k_VKQ_0 = blockIdx.y*nbatch_fa; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*nbatch_fa) {
-            constexpr bool oob_check = false;
             flash_attn_tile_iter<warp_size, nwarps, ncols1, ncols2, DKQ, DV, nbatch_fa, nbatch_K, use_logit_softcap, oob_check>
                 (Q_tmp, K_h2, V_h2, maskh, ne01, logit_softcap, slope, KQ, KV_tmp,
                 stride_K2, stride_V2, stride_mask, KQ_max, KQ_sum, VKQ, k_VKQ_0, k_VKQ_max, col_Q_0);
