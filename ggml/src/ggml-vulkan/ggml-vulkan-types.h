@@ -48,43 +48,24 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include <algorithm>
-
 #include <cmath>
-
 #include <functional>
-
 #include <iomanip>
-
 #include <iostream>
-
 #include <tuple>
-
 #include <vector>
-
 #include <deque>
-
 #include <sstream>
-
 #include <utility>
-
 #include <memory>
-
 #include <limits>
-
 #include <map>
-
 #include <set>
-
 #include <unordered_map>
-
 #include <shared_mutex>
-
 #include <mutex>
-
 #include <future>
-
 #include <condition_variable>
-
 #include <thread>
 
 #if defined(_MSC_VER)
@@ -110,9 +91,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include "ggml-impl.h"
-
 #include "ggml-backend-impl.h"
-
 #include "ggml-vulkan-shaders.hpp"
 
 #if !defined(VK_KHR_shader_bfloat16)
