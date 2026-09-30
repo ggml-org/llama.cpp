@@ -9,7 +9,7 @@ using mmvf_y_t = std::conditional_t<std::is_same_v<T, ggml_fp8_e4m3_t>, nv_bfloa
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 static __device__ __forceinline__ nv_bfloat162 mmvf_f8x2_e4m3_to_bf162(__nv_fp8x2_storage_t x) {
-#if defined(FP8_AVAILABLE)
+#if defined(FP8_AVAILABLE) && CUDART_VERSION >= 13020
     return static_cast<nv_bfloat162>(__nv_cvt_fp8x2_to_bf162raw(x, __NV_E4M3));
 #else
     return make_bfloat162(
