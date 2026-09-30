@@ -536,6 +536,14 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     target_link_libraries(test-sycl-stress-deep PRIVATE llama-common ggml-sycl)
     add_test(NAME test-sycl-stress-deep COMMAND test-sycl-stress-deep)
 
+    # xe KMD runtime defaults: pure sysfs/env logic, no GPU needed (see the note below
+    # about linking `ggml` explicitly for the include path).
+    add_executable(test-sycl-xe-defaults test-sycl-xe-defaults.cpp)
+    target_link_libraries(test-sycl-xe-defaults PRIVATE ggml ggml-sycl)
+    target_include_directories(test-sycl-xe-defaults PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+    add_test(NAME test-sycl-xe-defaults COMMAND test-sycl-xe-defaults)
+    set_property(TEST test-sycl-xe-defaults PROPERTY LABELS sycl)
+
     add_executable(test-sycl-turbo-correctness test-sycl-turbo-correctness.cpp)
     target_link_libraries(test-sycl-turbo-correctness PRIVATE llama llama-common ggml-cpu ggml-sycl)
     add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
