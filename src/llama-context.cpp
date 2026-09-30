@@ -111,6 +111,7 @@ llama_context::llama_context(
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
+    cparams.encoder_chunk_size      = params.encoder_chunk_size;
     cparams.yarn_ext_factor         = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
     cparams.yarn_attn_factor        = params.yarn_attn_factor >= 0.0f ? params.yarn_attn_factor : hparams.yarn_attn_factor;
     cparams.yarn_beta_fast          = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
@@ -317,6 +318,9 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
+    if (cparams.encoder_chunk_size > 0) {
+        LLAMA_LOG_INFO("%s: encoder_chunk_size    = %u\n", __func__, cparams.encoder_chunk_size);
+    }
 
     if (cparams.n_ctx_seq < hparams.n_ctx_train) {
         LLAMA_LOG_INFO("%s: n_ctx_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
@@ -1470,6 +1474,14 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
+    if (model.arch == LLM_ARCH_T5GEMMA2 &&
+        (batch_inp.tokens.size() > cparams.n_batch ||
+         batch_inp.tokens.size() > cparams.n_ubatch)) {
+        LLAMA_LOG_ERROR(
+            "%s: T5Gemma2 full encoder sequence must fit one ubatch (%zu > %u)\n",
+            __func__, batch_inp.tokens.size(), cparams.n_ubatch);
+        return -1;
+    }
 
     const auto & hparams = model.hparams;
 
@@ -1503,6 +1515,35 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         synchronize();
     }
     embd_seq.clear();
+    if (model.arch == LLM_ARCH_T5GEMMA2) {
+        cross.v_embd.clear();
+        cross.seq_ids_enc.clear();
+        cross.n_embd = 0;
+        cross.n_enc = 0;
+        cross.encoder_chunk_size = cparams.encoder_chunk_size;
+        cross.seq_id = -1;
+        cross.ready = false;
+        cross.decoded = false;
+
+        if (ubatch.token == nullptr || ubatch.n_seqs_unq != 1) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 encoder requires one token sequence\n", __func__);
+            return -1;
+        }
+        bool saw_pad = false;
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            if (ubatch.pos[i] != (llama_pos) i) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 encoder positions must be contiguous from zero\n", __func__);
+                return -1;
+            }
+            if (ubatch.token[i] == 0) {
+                saw_pad = true;
+            } else if (saw_pad) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 encoder supports right padding only\n", __func__);
+                return -1;
+            }
+        }
+    }
+
 
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
@@ -1649,6 +1690,41 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         }
     }
 
+    if (model.arch == LLM_ARCH_T5GEMMA2 && t_embd) {
+        if (t_embd->type != GGML_TYPE_F32) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 pooled encoder state must be F32, got %s\n",
+                __func__, ggml_type_name(t_embd->type));
+            return -3;
+        }
+
+        synchronize();
+        cross.n_embd = t_embd->ne[0];
+        cross.n_enc  = t_embd->ne[1];
+        cross.v_embd.resize(cross.n_embd*cross.n_enc);
+        ggml_backend_tensor_get(
+            t_embd, cross.v_embd.data(), 0, ggml_nbytes(t_embd));
+
+        const auto & batch = balloc->get_batch();
+        cross.seq_ids_enc.assign(cross.n_enc, {});
+        for (int64_t chunk = 0; chunk < cross.n_enc; ++chunk) {
+            const int64_t begin = chunk*cparams.encoder_chunk_size;
+            const int64_t end = std::min<int64_t>(
+                begin + cparams.encoder_chunk_size, batch.n_tokens);
+            for (int64_t i = begin; i < end; ++i) {
+                if (batch.token[i] == 0) {
+                    continue;
+                }
+                for (int s = 0; s < batch.n_seq_id[i]; ++s) {
+                    cross.seq_ids_enc[chunk].insert(batch.seq_id[i][s]);
+                }
+            }
+        }
+        cross.ready = true;
+        cross.decoded = false;
+        cross.seq_id = ubatch.seq_id_unq[0];
+    }
+
     return 0;
 }
 
@@ -1705,6 +1781,164 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 }
 
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (!memory && model.arch == LLM_ARCH_T5GEMMA2) {
+        if (!cross.ready) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 decode requires a successful llama_encode call first\n", __func__);
+            return -1;
+        }
+        if (cross.decoded && cparams.encoder_chunk_size != 1) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 incremental decode is not supported; call llama_encode again\n", __func__);
+            return -1;
+        }
+        if (batch_inp.tokens.empty()) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 decoder requires a non-empty token batch\n", __func__);
+            return -1;
+        }
+        const auto & vocab = model.vocab;
+        const auto & hparams = model.hparams;
+        if (batch_inp.tokens[0].seq_ids.size() != 1) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 decoder requires one sequence\n", __func__);
+            return -1;
+        }
+        const llama_seq_id input_seq_id = *batch_inp.tokens[0].seq_ids.begin();
+        for (const auto & token : batch_inp.tokens) {
+            if (token.has_embd || token.seq_ids.size() != 1 || *token.seq_ids.begin() != input_seq_id) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 decoder requires one token sequence\n", __func__);
+                return -1;
+            }
+        }
+        std::unique_ptr<llama_batch_ext> padded;
+        const llama_batch_ext * decode_batch = &batch_inp;
+        const size_t n_tokens_padded = (batch_inp.tokens.size() + 7)/8*8;
+        if (n_tokens_padded != batch_inp.tokens.size()) {
+            padded = std::make_unique<llama_batch_ext>(batch_inp);
+            while (padded->tokens.size() < n_tokens_padded) {
+                const llama_pos pos = padded->tokens.size();
+                const int32_t index = padded->add_token(input_seq_id);
+                if (index < 0 || !padded->set_token_id(index, 0) || !padded->set_token_pos(index, &pos)) {
+                    LLAMA_LOG_ERROR("%s: T5Gemma2 padded decoder sequence exceeds batch capacity\n", __func__);
+                    return -1;
+                }
+            }
+            decode_batch = padded.get();
+        }
+        if (!balloc->init(*decode_batch, vocab, false)) {
+            LLAMA_LOG_ERROR("%s: failed to initialize T5Gemma2 decoder batch\n", __func__);
+            return -1;
+        }
+
+        const uint32_t n_tokens_all = balloc->get_n_tokens();
+        const uint32_t n_outputs_all = balloc->get_n_outputs();
+        if (n_tokens_all > cparams.n_batch || n_tokens_all > cparams.n_ubatch) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 full decoder sequence must fit one ubatch (%u > %u)\n",
+                __func__, n_tokens_all, cparams.n_ubatch);
+            return -1;
+        }
+        if (n_outputs_all < 1 || (!cparams.embeddings && n_outputs_all != 1)) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 decoder requires output rows (one for logits), got %u\n",
+                __func__, n_outputs_all);
+            return -1;
+        }
+
+        const llama_ubatch ubatch = balloc->split_simple(n_tokens_all);
+        if (ubatch.n_seqs_unq != 1) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 decoder requires one sequence\n", __func__);
+            return -1;
+        }
+        if (ubatch.seq_id_unq[0] != cross.seq_id) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 decoder sequence ID %d does not match encoded sequence ID %d\n",
+                __func__, ubatch.seq_id_unq[0], cross.seq_id);
+            return -1;
+        }
+        if (ubatch.token[0] != hparams.dec_start_token_id) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 decoder must start with token %d, got %d\n",
+                __func__, hparams.dec_start_token_id, ubatch.token[0]);
+            return -1;
+        }
+        bool saw_pad = false;
+        int32_t last_non_pad = -1;
+        int32_t output_index = -1;
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            if (ubatch.pos[i] != (llama_pos) i) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 decoder positions must be contiguous from zero\n", __func__);
+                return -1;
+            }
+            if (ubatch.token[i] == 0) {
+                saw_pad = true;
+            } else if (saw_pad) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 decoder supports right padding only\n", __func__);
+                return -1;
+            } else {
+                last_non_pad = i;
+            }
+            if (ubatch.output[i]) {
+                if (ubatch.token[i] == 0) {
+                    LLAMA_LOG_ERROR("%s: T5Gemma2 output rows cannot select PAD tokens\n", __func__);
+                    return -1;
+                }
+                output_index = i;
+            }
+        }
+        if (last_non_pad < 0 || (!cparams.embeddings && output_index != last_non_pad)) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 logits row must be the last non-PAD token (%d), got %d\n",
+                __func__, last_non_pad, output_index);
+            return -1;
+        }
+
+        if (output_reserve(n_outputs_all) < n_outputs_all) {
+            LLAMA_LOG_ERROR("%s: could not reserve T5Gemma2 logits output\n", __func__);
+            return -2;
+        }
+        n_outputs = n_outputs_all;
+        sched_reserve();
+
+        ggml_status status;
+        const auto * res = process_ubatch(
+            ubatch, LLM_GRAPH_TYPE_DECODER, nullptr, status);
+        if (!res) {
+            switch (status) {
+                case GGML_STATUS_ABORTED:      return  2;
+                case GGML_STATUS_ALLOC_FAILED: return -2;
+                case GGML_STATUS_FAILED:       return -3;
+                case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+            }
+        }
+
+        auto * t_logits = res->get_logits();
+        auto * t_embd = res->get_embd();
+        if (cparams.embeddings) {
+            if (t_embd == nullptr || embd.data == nullptr) {
+                LLAMA_LOG_ERROR("%s: T5Gemma2 decoder graph produced no embeddings\n", __func__);
+                return -3;
+            }
+            ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
+            ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0,
+                n_outputs_all*hparams.n_embd_out()*sizeof(float));
+        } else if (t_logits == nullptr || logits.data == nullptr) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 decoder graph produced no logits\n", __func__);
+            return -3;
+        }
+        if (t_logits != nullptr) {
+            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+            ggml_backend_tensor_get_async(backend_res, t_logits, logits.data, 0,
+                n_outputs_all*vocab.n_tokens()*sizeof(float));
+        }
+
+        auto & out_ids = balloc->get_out_ids();
+        for (int64_t i = 0; i < n_outputs; ++i) {
+            output_ids[out_ids[i]] = i;
+        }
+        cross.decoded = true;
+        n_queued_tokens += n_tokens_all;
+        return 0;
+    }
+
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -3745,6 +3979,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,
+        /*.encoder_chunk_size          =*/ 0,
     };
 
     return result;
@@ -3766,6 +4001,29 @@ llama_context * llama_init_from_model(
     if (params.n_ctx == 0 && model->hparams.n_ctx_train == 0) {
         LLAMA_LOG_ERROR("%s: n_ctx and model->hparams.n_ctx_train cannot both be zero\n", __func__);
         return nullptr;
+    }
+
+    // Vocab-only contexts never build a forward graph. Keep tokenizer tools
+    // usable without requiring inference-only T5Gemma2 context parameters.
+    if (model->arch == LLM_ARCH_T5GEMMA2 && !model->hparams.vocab_only) {
+        if (params.encoder_chunk_size != 1 && params.encoder_chunk_size != 4) {
+            LLAMA_LOG_ERROR(
+                "%s: T5Gemma2 requires encoder_chunk_size=1 (unpooled) or 4 (KaLM), got %u\n",
+                __func__, params.encoder_chunk_size);
+            return nullptr;
+        }
+        if (params.n_seq_max != 1) {
+            LLAMA_LOG_ERROR("%s: KaLM reranker v1 requires n_seq_max=1\n", __func__);
+            return nullptr;
+        }
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+            LLAMA_LOG_ERROR("%s: T5Gemma2 Flash Attention is not supported in Stage 4-5\n", __func__);
+            return nullptr;
+        }
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+            LLAMA_LOG_INFO("%s: disabling automatic Flash Attention for T5Gemma2 Stage 4-5\n", __func__);
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        }
     }
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && model->arch == LLM_ARCH_GROK) {

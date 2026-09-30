@@ -270,6 +270,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Step3p7ForConditionalGeneration": "step3",
     "T5EncoderModel": "t5",
     "T5ForConditionalGeneration": "t5",
+    "T5Gemma2ForConditionalGeneration": "t5gemma2",
+    "T5Gemma2Model": "t5gemma2",
     "T5WithLMHeadModel": "t5",
     "TalkieForCausalLM": "talkie",
     "UMT5ForConditionalGeneration": "t5",

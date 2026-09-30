@@ -422,6 +422,10 @@ extern "C" {
         // a source/target/parent context
         // can be utilized in various ways, for example by sharing results or llama_memory between 2 contexts
         struct llama_context * ctx_other;
+
+        // Number of consecutive encoder token states pooled before decoder
+        // cross-attention. KaLM reranker v1 requires an explicit value of 4.
+        uint32_t encoder_chunk_size;
     };
 
     struct llama_model_tensor_override {

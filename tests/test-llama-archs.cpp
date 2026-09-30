@@ -9,6 +9,7 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-model.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -184,6 +185,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+
+    if (arch == LLM_ARCH_T5GEMMA2) {
+        ms.add_kv(LLM_KV_DECODER_BLOCK_COUNT,    n_layer);
+        ms.add_kv(LLM_KV_DECODER_START_TOKEN_ID, uint32_t(2));
+        ms.add_kv(LLM_KV_EMBEDDING_SCALE,        std::sqrt(float(n_embd)));
+        ms.add_kv(LLM_KV_ATTENTION_SCALE,        1.0f/std::sqrt(float(n_embd_head)));
+        ms.add_kv(LLM_KV_HIDDEN_ACT,             "gelu_pytorch_tanh");
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,     10000.0f);
+    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -498,6 +508,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (!model) {
         throw std::runtime_error("failed to create llama model");
     }
+    if (model->arch == LLM_ARCH_T5GEMMA2) {
+        ctx_params.encoder_chunk_size = 1;
+    }
     llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
@@ -510,10 +523,13 @@ static std::vector<float> get_logits(
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
+    const bool t5gemma2 = model->arch == LLM_ARCH_T5GEMMA2;
     llama_batch batch = llama_batch_init(n_ctx, 0, 1);
     GGML_ASSERT(n_tokens <= n_ctx);
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
-        common_batch_add(batch, tokens[pos], pos, {0}, true);
+        // T5Gemma2 accepts right padding only; keep this fixture unpadded.
+        const llama_token token = t5gemma2 && tokens[pos] == 0 ? 1 : tokens[pos];
+        common_batch_add(batch, token, pos, {0}, true);
     }
     batch.n_tokens = n_tokens;
     if (encode) {
@@ -522,14 +538,20 @@ static std::vector<float> get_logits(
             throw std::runtime_error("failed to encode batch");
         }
     }
+    if (t5gemma2) {
+        batch.token[0] = llama_model_decoder_start_token(model);
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            batch.logits[i] = i == n_tokens - 1;
+        }
+    }
     if (llama_decode(lctx, batch)) {
         llama_batch_free(batch);
         throw std::runtime_error("failed to decode batch");
     }
 
     std::vector<float> ret;
-    ret.reserve(n_tokens*n_vocab);
-    for (uint32_t i = 0; i < n_tokens; i++) {
+    ret.reserve((t5gemma2 ? 1 : n_tokens)*n_vocab);
+    for (uint32_t i = t5gemma2 ? n_tokens - 1 : 0; i < n_tokens; i++) {
         const float * logits_ith = llama_get_logits_ith(lctx, i);
         for (uint32_t j = 0; j < n_vocab; j++) {
             ret.push_back(logits_ith[j]);
@@ -821,7 +843,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             continue;
         }
 
-        const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
+        const bool encode = arch == LLM_ARCH_T5 || arch == LLM_ARCH_T5GEMMA2 || arch == LLM_ARCH_DREAM || arch == LLM_ARCH_LLADA || arch == LLM_ARCH_LLADA_MOE || arch == LLM_ARCH_RND1;
         for (bool moe : {false, true}) {
             if (moe && !moe_implemented(arch)) {
                 continue;

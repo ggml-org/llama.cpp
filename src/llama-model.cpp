@@ -218,6 +218,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_t5(params);
         case LLM_ARCH_T5ENCODER:
             return new llama_model_t5encoder(params);
+        case LLM_ARCH_T5GEMMA2:
+            return new llama_model_t5gemma2(params);
         case LLM_ARCH_JAIS:
             return new llama_model_jais(params);
         case LLM_ARCH_JAIS2:
@@ -2067,6 +2069,9 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_embd                = %u\n",     __func__, hparams.n_embd);
         LLAMA_LOG_INFO("%s: n_embd_out            = %u\n",     __func__, hparams.n_embd_out());
         LLAMA_LOG_INFO("%s: n_layer               = %u\n",     __func__, hparams.n_layer());
+        if (hparams.dec_n_layer > 0) {
+            LLAMA_LOG_INFO("%s: n_layer_dec           = %u\n", __func__, hparams.dec_n_layer);
+        }
         LLAMA_LOG_INFO("%s: n_layer_all           = %u\n",     __func__, hparams.n_layer_all);
         LLAMA_LOG_INFO("%s: n_head                = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_head(il);    }, hparams.n_layer_all).c_str());
         LLAMA_LOG_INFO("%s: n_head_kv             = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_head_kv(il); }, hparams.n_layer_all).c_str());
@@ -2085,6 +2090,12 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: f_max_alibi_bias      = %.1e\n",   __func__, hparams.f_max_alibi_bias);
         LLAMA_LOG_INFO("%s: f_logit_scale         = %.1e\n",   __func__, hparams.f_logit_scale);
         LLAMA_LOG_INFO("%s: f_attn_scale          = %.1e\n",   __func__, hparams.f_attention_scale);
+        if (hparams.f_embedding_scale != 0.0f) {
+            LLAMA_LOG_INFO("%s: f_embedding_scale     = %f\n", __func__, hparams.f_embedding_scale);
+        }
+        if (hparams.dec_start_token_id != LLAMA_TOKEN_NULL) {
+            LLAMA_LOG_INFO("%s: decoder start token   = %d\n", __func__, hparams.dec_start_token_id);
+        }
         LLAMA_LOG_INFO("%s: f_attn_value_scale    = %.4f\n",   __func__, hparams.f_attn_value_scale);
         LLAMA_LOG_INFO("%s: n_ff                  = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_ff(il); }, hparams.n_layer_all).c_str());
         LLAMA_LOG_INFO("%s: n_expert              = %u\n",     __func__, hparams.n_expert);
@@ -2362,6 +2373,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_LLADA:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
+        case LLM_ARCH_T5GEMMA2:
             {
                 res = nullptr;
             } break;
@@ -3167,6 +3179,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_MAPLE:
         case LLM_ARCH_HRM_TEXT:
+        case LLM_ARCH_T5GEMMA2:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_DFLASH:
@@ -3304,6 +3317,7 @@ bool llama_model_has_encoder(const llama_model * model) {
     switch (model->arch) {
         case LLM_ARCH_T5:
         case LLM_ARCH_T5ENCODER:
+        case LLM_ARCH_T5GEMMA2:
         case LLM_ARCH_EAGLE3:
         case LLM_ARCH_DFLASH:    return true;
         default:                 return false;
