@@ -1021,21 +1021,10 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     const block_q8_0 * GGML_RESTRICT y0 = &y[ib];
                     const block_q8_0 * GGML_RESTRICT y1 = &y[ib + 1];
 
-                    memcpy(&qh0, x0->qh, sizeof(qh0));
-                    memcpy(&qh1, x1->qh, sizeof(qh1));
-
-                    tmp0[0] = table_b2b_1[(qh0 >>  0) & 0xFF];
-                    tmp0[1] = table_b2b_1[(qh0 >>  8) & 0xFF];
-                    tmp0[2] = table_b2b_1[(qh0 >> 16) & 0xFF];
-                    tmp0[3] = table_b2b_1[(qh0 >> 24)       ];
-
-                    tmp1[0] = table_b2b_1[(qh1 >>  0) & 0xFF];
-                    tmp1[1] = table_b2b_1[(qh1 >>  8) & 0xFF];
-                    tmp1[2] = table_b2b_1[(qh1 >> 16) & 0xFF];
-                    tmp1[3] = table_b2b_1[(qh1 >> 24)       ];
-
-                    const svint8_t qhbits0 = svld1_s8(p32, (const int8_t *) tmp0);
-                    const svint8_t qhbits1 = svld1_s8(p32, (const int8_t *) tmp1);
+                    svbool_t qhbits0p = *((const svbool_t*)(x0->qh));
+                    svbool_t qhbits1p = *((const svbool_t*)(x1->qh));
+                    const svint8_t qhbits0 = svdup_n_s8_z(~qhbits0p, 0x10);
+                    const svint8_t qhbits1 = svdup_n_s8_z(~qhbits1p, 0x10);
 
                     const svuint8_t qx0r = svld1rq_u8(p32, x0->qs);
                     const svuint8_t qx1r = svld1rq_u8(p32, x1->qs);
