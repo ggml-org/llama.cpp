@@ -685,6 +685,12 @@ void llama_prefetch(std::vector<llama_memory_range> ranges) {
     }
 
 #if defined(_WIN32)
+    using prefetch_virtual_memory_t = BOOL (WINAPI *)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+    static const auto pPrefetchVirtualMemory = (prefetch_virtual_memory_t) (void *) GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "PrefetchVirtualMemory");
+    if (!pPrefetchVirtualMemory) {
+        return;
+    }
+
     static const long page_size = [] {
         SYSTEM_INFO info;
         GetSystemInfo(&info);
@@ -741,7 +747,7 @@ void llama_prefetch(std::vector<llama_memory_range> ranges) {
         prefetch();
     }
 #if defined(_WIN32)
-    if (!entries.empty() && !PrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
+    if (!entries.empty() && !pPrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
         LLAMA_LOG_WARN("llama_prefetch: PrefetchVirtualMemory failed: %s\n",
                 llama_format_win_err(GetLastError()).c_str());
     }
