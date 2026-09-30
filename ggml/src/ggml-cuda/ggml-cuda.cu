@@ -58,6 +58,9 @@
 #include "ggml-cuda/topk-moe.cuh"
 #include "ggml-cuda/unary.cuh"
 #include "ggml-cuda/upscale.cuh"
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_MM_Q)
+#include "ggml-musa/mudnn.cuh"
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_MM_Q
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
 #include "ggml-cuda/gated_delta_net.cuh"
@@ -782,6 +785,11 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_MM_Q)
+    if (offset == 0 && size == ggml_nbytes(tensor) && ggml_is_quantized(tensor->type)) {
+        mudnnQuantMulMatCacheRepack(ctx->device, cudaStreamPerThread, tensor);
+    }
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_MM_Q
 }
 
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -800,6 +808,12 @@ static void ggml_backend_cuda_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
     CUDA_CHECK(cudaMemcpy2DAsync(
         (char *) tensor->data + offset, stride_tensor, data, stride_data, size, n_copies, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_MM_Q)
+    if (offset == 0 && ggml_is_quantized(tensor->type) &&
+        (n_copies - 1) * stride_tensor + size == ggml_nbytes(tensor)) {
+        mudnnQuantMulMatCacheRepack(ctx->device, cudaStreamPerThread, tensor);
+    }
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_MM_Q
 }
 
 static void ggml_backend_cuda_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data,
@@ -915,6 +929,9 @@ static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_t
             size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
     }
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_MM_Q)
+    size += mudnnQuantMulMatCacheSize(tensor);
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_MM_Q
 
     return size;
 }
@@ -1859,6 +1876,12 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_MM_Q)
+    if (src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        mudnnMulMatQuant(ctx, src0, src1, dst)) {
+        return;
+    }
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_MM_Q
     if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;

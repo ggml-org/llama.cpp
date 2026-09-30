@@ -37,10 +37,24 @@ if (MUSAToolkit_FOUND)
     file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
 
-    if (GGML_MUSA_MUDNN_COPY)
-        file(GLOB   SRCS "../ggml-musa/*.cu")
+    # mudnn.cu holds the shared muDNN helpers and mudnn-quant.cu only the GGML_MUSA_MUDNN_MM_Q
+    # path, so each file is added for the options that actually need it.
+    if (GGML_MUSA_MUDNN_COPY OR GGML_MUSA_MUDNN_MM_Q)
+        set(SRCS "../ggml-musa/mudnn.cu")
         list(APPEND GGML_SOURCES_MUSA ${SRCS})
+    endif()
+
+    if (GGML_MUSA_MUDNN_MM_Q)
+        set(SRCS "../ggml-musa/mudnn-quant.cu")
+        list(APPEND GGML_SOURCES_MUSA ${SRCS})
+    endif()
+
+    if (GGML_MUSA_MUDNN_COPY)
         add_compile_definitions(GGML_MUSA_MUDNN_COPY)
+    endif()
+
+    if (GGML_MUSA_MUDNN_MM_Q)
+        add_compile_definitions(GGML_MUSA_MUDNN_MM_Q)
     endif()
 
     ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR}/../ggml-cuda SRCS)
@@ -99,7 +113,7 @@ if (MUSAToolkit_FOUND)
         # endif()
     else()
         target_link_libraries(ggml-musa PRIVATE MUSA::musart MUSA::mublas)
-        if (GGML_MUSA_MUDNN_COPY)
+        if (GGML_MUSA_MUDNN_COPY OR GGML_MUSA_MUDNN_MM_Q)
             target_link_libraries(ggml-musa PRIVATE mudnn)
         endif()
     endif()

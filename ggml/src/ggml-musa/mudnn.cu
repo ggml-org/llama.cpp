@@ -1,12 +1,12 @@
 #include <mutex>
-#include <mudnn.h>
+#include <mudnncxx/mudnn.h>
 
 #include "mudnn.cuh"
 
 namespace mudnn = musa::dnn;
 
 // Returns a human-readable error string for mudnn::Status
-const char* mudnnGetErrorString(mudnn::Status err) {
+const char* mudnn_status_to_string(mudnn::Status err) {
     switch (err) {
         case mudnn::Status::SUCCESS:
             return "Success";
@@ -29,25 +29,22 @@ const char* mudnnGetErrorString(mudnn::Status err) {
     }
 }
 
-// Error checking macro for MUDNN calls
-#define MUDNN_CHECK(err) CUDA_CHECK_GEN(err, mudnn::Status::SUCCESS, mudnnGetErrorString)
-
 namespace {
     // Thread-safe cache for mudnn::Handle objects per device
     std::unordered_map<int, std::unique_ptr<mudnn::Handle>> handle_cache;
     std::mutex handle_cache_mutex;
+}
 
-    mudnn::Handle* get_cached_handle(int device_id) {
-        std::lock_guard<std::mutex> lock(handle_cache_mutex);
-        auto it = handle_cache.find(device_id);
-        if (it != handle_cache.end()) {
-            return it->second.get();
-        }
-        auto handle = std::make_unique<mudnn::Handle>(device_id);
-        mudnn::Handle* handle_ptr = handle.get();
-        handle_cache[device_id] = std::move(handle);
-        return handle_ptr;
+mudnn::Handle* get_cached_handle(int device_id) {
+    std::lock_guard<std::mutex> lock(handle_cache_mutex);
+    auto it = handle_cache.find(device_id);
+    if (it != handle_cache.end()) {
+        return it->second.get();
     }
+    auto handle = std::make_unique<mudnn::Handle>(device_id);
+    mudnn::Handle* handle_ptr = handle.get();
+    handle_cache[device_id] = std::move(handle);
+    return handle_ptr;
 }
 
 // Extracts dimensions and strides from a ggml_tensor
