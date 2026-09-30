@@ -86,10 +86,13 @@ int main() {
     CHECK(ggml_sycl_xe_copy_engine_default(true, nullptr, "1") == nullptr);
     CHECK(ggml_sycl_xe_copy_engine_default(true, "", "") != nullptr);
     CHECK(ggml_sycl_xe_copy_engine_default(false, nullptr, nullptr) == nullptr);
-    const char * o = ggml_sycl_xe_copy_offload_default(true, nullptr);
+    const char * o = ggml_sycl_xe_copy_offload_default(true, nullptr, nullptr, nullptr);
     CHECK(o != nullptr && strcmp(o, "1") == 0);
-    CHECK(ggml_sycl_xe_copy_offload_default(true, "0") == nullptr);
-    CHECK(ggml_sycl_xe_copy_offload_default(false, nullptr) == nullptr);
+    CHECK(ggml_sycl_xe_copy_offload_default(true, "0", nullptr, nullptr) == nullptr);
+    CHECK(ggml_sycl_xe_copy_offload_default(true, nullptr, "1", nullptr) == nullptr);  // explicit v1 wins
+    CHECK(ggml_sycl_xe_copy_offload_default(true, nullptr, nullptr, "0") == nullptr);
+    CHECK(ggml_sycl_xe_copy_offload_default(true, nullptr, "", "") != nullptr);
+    CHECK(ggml_sycl_xe_copy_offload_default(false, nullptr, nullptr, nullptr) == nullptr);
 
     // Applying against the fake trees must change the process environment as decided,
     // including an empty existing value, and must leave explicit values alone.
@@ -107,6 +110,11 @@ int main() {
     CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(xe_root));
     CHECK(strcmp(getenv("UR_L0_USE_COPY_ENGINE"), "1") == 0);
     CHECK(strcmp(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"), "0") == 0);
+    // An explicit v1 override alone must not be undone by the v2 default.
+    setenv("UR_L0_USE_COPY_ENGINE", "1", 1);
+    unsetenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD");
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(xe_root));
+    CHECK(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD") == nullptr);
     unsetenv("UR_L0_USE_COPY_ENGINE");
     unsetenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD");
     CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(i915_root));

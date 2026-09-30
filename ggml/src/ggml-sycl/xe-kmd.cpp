@@ -84,8 +84,9 @@ const char * ggml_sycl_xe_copy_engine_default(bool intel_on_xe, const char * ur_
     return "0";
 }
 
-const char * ggml_sycl_xe_copy_offload_default(bool intel_on_xe, const char * v2_value) {
-    if (!intel_on_xe || env_is_set(v2_value)) {
+const char * ggml_sycl_xe_copy_offload_default(bool intel_on_xe, const char * v2_value, const char * ur_value,
+                                                const char * pi_value) {
+    if (!intel_on_xe || env_is_set(v2_value) || env_is_set(ur_value) || env_is_set(pi_value)) {
         return nullptr;
     }
     return "1";
@@ -100,7 +101,9 @@ bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root) {
     const bool  on_xe = ggml_sycl_intel_gpu_on_xe(drm_sysfs_root, &bdf);
     const char * v1 = ggml_sycl_xe_copy_engine_default(on_xe, getenv("UR_L0_USE_COPY_ENGINE"),
                                                        getenv("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE"));
-    const char * v2 = ggml_sycl_xe_copy_offload_default(on_xe, getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"));
+    const char * v2 = ggml_sycl_xe_copy_offload_default(on_xe, getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"),
+                                                        getenv("UR_L0_USE_COPY_ENGINE"),
+                                                        getenv("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE"));
     if (v1 == nullptr && v2 == nullptr) {
         return false;
     }
@@ -118,7 +121,9 @@ bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root) {
     }
     GGML_LOG_INFO("%s: Intel GPU %s is bound to the xe kernel driver: defaulting %s%s%s "
                   "(copies on the compute queue; blitter copies hang/reset on DG2, see docs/backend/SYCL.md). "
-                  "Set UR_L0_USE_COPY_ENGINE=1 to override; --prefetch-experts-slots needs that override.\n",
+                  "Override with UR_L0_USE_COPY_ENGINE=1 (Level Zero v1 adapter) or "
+                  "UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0 (v2 adapter); that can bring the blitter failure back. "
+                  "--prefetch-experts-slots needs the override.\n",
                   __func__, bdf.c_str(), v1 != nullptr ? "UR_L0_USE_COPY_ENGINE=0" : "",
                   (v1 != nullptr && v2 != nullptr) ? " and " : "",
                   v2 != nullptr ? "UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1" : "");

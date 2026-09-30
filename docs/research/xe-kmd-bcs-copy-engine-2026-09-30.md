@@ -34,9 +34,12 @@ Ornith-1.5-35B-A3B Q4_K_M with `--fit`, so roughly half of the routed experts st
 host-resident and `ggml_backend_sched` uploads the used experts every token
 (`ggml/src/ggml-backend.cpp`, `copy_experts`).
 
-Earlier evidence (09-29, four coredumps, fix ladder, UR trace, tracer runs) is in
-`docs/xe-fix-docs/` and `~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/`. New runs
-from this session are under `/mnt/nvme1/oneapi-ab/N-xe-x*/` and use `scratchpad/xn.sh`:
+Earlier evidence (09-29, four coredumps, fix ladder, UR trace, tracer runs) and the raw
+outputs of every run cited here are maintainer-local and not part of this tree: the 09-29
+archive under `~/research-llama.cpp/sycl-oneapi-benchmarks-2026-09-29/` (a copy sits in the
+maintainer's checkout as `docs/xe-fix-docs/`, uncommitted), the new runs under
+`/mnt/nvme1/oneapi-ab/N-xe-x*/`. The numbers, register values and log excerpts quoted in this
+document are the committed record. The instrumented runner (`xn.sh`, scratch script) did:
 unit stopped, `perf record -a -k CLOCK_MONOTONIC -e xe:...` (scheduling
 enable/disable/done, userptr invalidate, rebind worker, evict, reset, timedout, CAT error),
 NEO `NEOReadDebugKeys=1 LogAllocationStdout=1 LogAllocationType=1 LogAllocationMemoryPool=1

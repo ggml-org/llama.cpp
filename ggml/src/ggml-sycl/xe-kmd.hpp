@@ -25,8 +25,11 @@ const char * ggml_sycl_xe_copy_engine_default(bool intel_on_xe, const char * ur_
 
 // Same decision for the Level Zero v2 adapter, which ignores the variables
 // above and keeps copies off the copy engines with
-// UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1.
-const char * ggml_sycl_xe_copy_offload_default(bool intel_on_xe, const char * v2_value);
+// UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1. An explicit v1 setting (either of the
+// variables above) also disables this default: the user is managing copy-engine
+// policy and a v1 override must not be silently undone on a v2 system.
+const char * ggml_sycl_xe_copy_offload_default(bool intel_on_xe, const char * v2_value, const char * ur_value,
+                                                const char * pi_value);
 
 // Applies both defaults to the process environment for the given sysfs root.
 // Exposed for the unit test; production code calls the once-only wrapper.

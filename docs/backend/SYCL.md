@@ -829,7 +829,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 | UR_L0_USE_COPY_ENGINE | adapter default, or 0 | Unified Runtime Level Zero (v1 adapter) knob: 0 routes USM copies to the compute queue instead of the blitter (bcs). On Linux, when an Intel GPU is bound to the `xe` kernel driver and neither this variable nor `SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE` is set (empty counts as unset), ggml-sycl sets it to 0 at startup and logs one line (see Known Issues). Set it to 1 explicitly to keep the blitter; `--prefetch-experts-slots` needs the blitter. |
-| UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD | 0 (default) or 1 | The same control for the Level Zero v2 adapter (`SYCL_UR_USE_LEVEL_ZERO_V2=1`, default on Xe2+), which ignores `UR_L0_USE_COPY_ENGINE`. ggml-sycl sets it to 1 on xe under the same rule. |
+| UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD | 0 (default) or 1 | The same control for the Level Zero v2 adapter (`SYCL_UR_USE_LEVEL_ZERO_V2=1`, default on Xe2+), which ignores `UR_L0_USE_COPY_ENGINE`. ggml-sycl sets it to 1 on xe unless it, `UR_L0_USE_COPY_ENGINE` or the `SYCL_PI_` alias is set. To keep the blitter on the v2 adapter set it to 0 explicitly; on v1 set `UR_L0_USE_COPY_ENGINE=1`. Either override can bring the blitter failure back on DG2. |
 | UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE | 1 (default) or 0 | Same as above but only for in-order queues, which is every queue ggml-sycl creates. |
 | SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE | alias | Older alias for UR_L0_USE_COPY_ENGINE; an explicit value here also disables the automatic xe default. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
@@ -1032,9 +1032,12 @@ intel/compute-runtime issues #973 and #1010, different victim.
 
 Defaults and workarounds:
 
-- ggml-sycl now sets `UR_L0_USE_COPY_ENGINE=0` itself when it finds an Intel GPU bound to
-  `xe` (logged at startup). Copies run on the compute queue; decode on real text was within
-  1 % of the blitter path on this workload. Override with `UR_L0_USE_COPY_ENGINE=1`.
+- ggml-sycl now sets `UR_L0_USE_COPY_ENGINE=0` (v1 adapter) and
+  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` (v2 adapter) itself when it finds an Intel GPU
+  bound to `xe` (logged at startup). Copies run on the compute queue; decode on real text
+  was within 1 % of the blitter path on this workload. Override with
+  `UR_L0_USE_COPY_ENGINE=1` on the v1 adapter or `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0` on
+  the v2 adapter; overriding reintroduces the failure described above.
 - `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
   passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
 - The runtime fix: `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
