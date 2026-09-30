@@ -98,9 +98,6 @@ template <typename Ts> struct matrix_info_t {
     std::int64_t           groupsize_info;
 };
 
-// Defined in ggml-sycl/xe-kmd.cpp; runs before the first SYCL runtime call below.
-void ggml_sycl_apply_xe_kmd_defaults();
-
 namespace dpct
 {
     typedef sycl::queue *queue_ptr;
@@ -1039,10 +1036,6 @@ namespace dpct
         }
         dev_mgr()
         {
-            // Process-wide runtime defaults (xe KMD copy-engine routing) must be in the
-            // environment before the Level Zero adapter initializes on the next line.
-            ggml_sycl_apply_xe_kmd_defaults();
-
             sycl::device default_device =
                 sycl::device(sycl::default_selector_v);
 

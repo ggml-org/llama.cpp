@@ -13,10 +13,14 @@
   suspend turns the halt into `Engine reset: engine_class=bcs` after the GuC's 640 ms
   preempt timeout. Same sweep as intel/compute-runtime #973 (A770, per-dispatch private
   surface, fixed in 26.35) and #1010 (B70, private surface, open); a third victim.
-- **Fork default (this PR):** ggml-sycl sets `UR_L0_USE_COPY_ENGINE=0` at startup when an
-  Intel GPU is bound to `xe` and the user has not set the variable. Copies run on the
+- **Fork default (this PR):** ggml-sycl sets `UR_L0_USE_COPY_ENGINE=0` (and the v2
+  adapter's `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1`) at startup when a DG2 GPU is bound
+  to `xe`; each variable is skipped when already set, both when any copy-engine variable
+  asks for copy engines (a value other than 0 on the v1 family, 0 on the v2 variable);
+  `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0` turns the hook off. Gated to DG2 because that is where the failure was measured; #1010 shows the
+  same sweep on Battlemage with a different trigger and victim, unmeasured here. Copies run on the
   compute queue, which uses direct submission and is unaffected. Real-text decode on the
-  production placement was within 1 % of the blitter path (32.78 vs 32.38 t/s, 09-29).
+  production placement was 1.2 % below the blitter path (32.38 vs 32.78 t/s, 09-29).
 - **Kept the blitter:** `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1`
   passed one full run (X5) but decodes at 8.7 t/s instead of 14.5 on the random-token
   bench. Not a production candidate; useful as a second confirmation of the mechanism.
@@ -61,6 +65,7 @@ kernel journal, devcoredump capture, `timeout 600`.
 | X7C `N-xe-x7c-neopatch-rt-ceon` | patched master, blitter ON, mmap, real text (production flags) | off, mmap | clean: pp 221.3, tg 33.00 t/s, no kernel message |
 | X7D `N-xe-x7d-neopatch-ceon-off` | patched master, blitter ON, mmap, clean bench | off, mmap | clean: 363.5 / 48.23 / 266.0 +- 51 / 41.48 (host load 7-19 from a foreign compile) |
 | X7E `N-xe-x7e-neopatch-ceon-auto` | patched master, blitter ON, mmap, clean bench | auto, mmap | clean, no reset; t/s void (host load 11-31, swapping): 266.0 / 5.3 +- 3.9 / 192 / 1.9; X7B's instrumented 12.7 +- 0.3 is the usable auto-placement decode figure |
+| X7F `N-xe-x7F-neopatch-hardened` | hardened patch (errno read at once, writable flag restored on a failed retry), blitter ON, instrumented as X7B | auto | **clean**, 4 rows, 0 failed binds, 0 `EPERM`, 239 340 userptr imports all succeeded, no kernel message: 219.4 +- 44.4 / 13.26 / 228.8 / 12.42 (instrumented; first row noisy) |
 | X4d `N-xe-x4d-mmap-ceoff` | copy engine OFF, `--moe-cache off`, clean (control, same boot) | off, mmap | clean: 325.1 +- 18.4 / 49.2 +- 0.6 / 274.4 +- 3.1 / 41.9 +- 0.3 |
 
 Instrumented t/s are not benchmark numbers (NEO logs several MB/s of text).
@@ -237,6 +242,13 @@ staging copies (a CPU memcpy of every 4-23 MB expert group) disappear as well.
 This is the change to send upstream; the fork default (`UR_L0_USE_COPY_ENGINE=0`) stays
 until a release carries it.
 
+Review hardening (13:00): the patch now reads errno right after the failing bind, restores
+the writable flag when the read-only retry fails, and documents the `EPERM` origin
+(`mm/hmm.c`, a write request on a range without `VM_WRITE`; nothing else in the 7.3-rc5 xe
+bind path returns `EPERM`, and the SVM prefetch path maps it to `ENODATA`). Rebuilt and
+re-run as X7F: same picture as X7B, 0 failed binds, 239 340 userptr imports, no kernel
+message.
+
 ## Side result: the FA kernels spill, and a large-GRF knob (2026-09-30, 10:50-11:20)
 
 IGC shader dumps (`IGC_ShaderDumpEnable=1`, `SYCL_CACHE_PERSISTENT=0`, IGC 2.41.5,
@@ -251,7 +263,10 @@ oracle is green with these kernels executing, so no miscompile is observed here.
 
 `GGML_SYCL_FA_LARGE_GRF` (0 off, 1 tile kernels, 2 tile and vec) passes
 `sycl::ext::intel::experimental::grf_size<256>` as a kernel property in
-`lauch_kernel` (`ggml/src/ggml-sycl/fattn-common.hpp`). Paired product campaign
+`lauch_kernel` (`ggml/src/ggml-sycl/fattn-common.hpp`). The 256-GRF instantiations are
+compiled only with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF: every FA kernel would carry
+a second device image, and an AOT build would compile each twice); other builds warn and
+ignore the variable. Paired product campaign
 (`scripts/bench-a770-fork-unique.py --campaign product`, q8_0/q8_0, 4 repetitions, sample 0
 discarded, sole tenancy, no kernel message) of the compile-time equivalent of mode 2
 against the default build, `/mnt/nvme1/oneapi-ab/grf256-*`:
@@ -276,7 +291,22 @@ mode 1, measured on one binary (`e4bf0b239`) with env-only arms, same protocol
 | Llama 3.1 8B (d=128) | 0 | 1005.6 +- 19.1 -> 1107.8 +- 8.1 (+10.2 %) | 46.9 -> 46.9 (flat) |
 | | 8192 | 210.9 -> 210.9 (flat) | 36.4 -> 36.4 (flat) |
 
-Mode 1 keeps the short-context prefill gain and costs nothing on decode. It stays opt-in:
+Both campaigns above ran with the occupancy heuristic unchanged (`max_wg_per_cu` = 16 for
+the 256-GRF launches too). The knob now halves it for large-GRF launches; mode 1 rerun
+with that change, same protocol, one binary with the variants compiled in
+(`/mnt/nvme1/oneapi-ab/grfmode1occ-*`, `all_cells_valid: true`, no kernel message):
+
+| model | depth | pp512 off -> mode 1 | tg128 off -> mode 1 |
+|---|--:|--:|--:|
+| Ornith IQ2_M (d=256) | 0 | 266.5 +- 2.6 -> 273.0 +- 4.2 (+2.4 % +- 1.1) | 53.4 -> 53.3 (flat) |
+| | 8192 | 265.3 -> 265.0 (flat) | 46.4 -> 46.4 (flat) |
+| Llama 3.1 8B (d=128) | 0 | 998.4 +- 9.7 -> 1098.3 +- 8.2 (+10.0 % +- 0.9) | 46.9 -> 46.9 (flat) |
+| | 8192 | 211.1 -> 211.2 (flat) | 36.4 -> 36.4 (flat) |
+
+The occupancy change moves nothing outside the CIs: the tile kernels at prefill are not
+occupancy-bound at either target. Mode 1 keeps the short-context prefill gain and costs
+nothing on decode. It stays opt-in (and, since the review, the 256-GRF instantiations are
+compiled only with `-DGGML_SYCL_FA_LARGE_GRF=ON`):
 the gain is confined to prefill below the MKL gate (n_kv < 1024), and one host, one
 compiler version. A first mode-1 product was rejected by the harness only because the
 binary predated the fix commit it was compared against (provenance gate); the rows above

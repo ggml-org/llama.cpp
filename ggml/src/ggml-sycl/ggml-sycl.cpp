@@ -421,7 +421,6 @@ ze_result_t get_zes_init_res() {
 #endif
 
 void initialize_sycl_begining() {
-    ggml_sycl_apply_xe_kmd_defaults();
 #ifdef GGML_SYCL_SUPPORT_LEVEL_ZERO_API
     //must be called in initialization stage, before any other Level Zero API calls
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
@@ -594,6 +593,8 @@ static void ggml_check_sycl() try {
 #endif
         GGML_LOG_INFO("  GGML_SYCL_FA_FORCE_VEC_STANDARD: %d\n",
             g_ggml_sycl_fa_force_vec_standard);
+        GGML_LOG_INFO("  GGML_SYCL_FA_LARGE_GRF: %d (256-GRF FA variants compiled: %d)\n",
+                      ggml_sycl_get_env("GGML_SYCL_FA_LARGE_GRF", 0), (int) GGML_SYCL_FA_LARGE_GRF_VARIANTS);
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
         GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n", ggml_sycl_ffn_fusion_enabled());
@@ -8512,10 +8513,7 @@ static ggml_backend_t ggml_backend_sycl_init_private_stream(ggml_backend_dev_t d
         const std::string platform = dq.get_device().get_platform().get_info<sycl::info::platform::name>();
         // runtime (not ggml) variables with string values: "0" disables, while "lower:upper"
         // selects an engine range, so an integer parse would misread e.g. "0:0"
-        auto env_is_zero = [](const char * name) {
-            const char * v = getenv(name);
-            return v != nullptr && strcmp(v, "0") == 0;
-        };
+        auto env_is_zero = [](const char * name) { return ggml_sycl_env_is_zero(getenv(name)); };
         const char * reason = nullptr;
         if (dq.get_backend() != sycl::backend::ext_oneapi_level_zero) {
             reason = "not a Level Zero device";
@@ -8524,7 +8522,11 @@ static ggml_backend_t ggml_backend_sycl_init_private_stream(ggml_backend_dev_t d
         } else if (env_is_zero("UR_L0_USE_COPY_ENGINE") || env_is_zero("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE") ||
                    env_is_zero("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE") ||
                    env_is_zero("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE")) {
-            reason = "copies are routed to the compute engine";
+            reason = ggml_sycl_xe_kmd_defaults_applied()
+                         ? "copies are routed to the compute engine by the xe KMD default (DG2 blitter "
+                           "failure, docs/backend/SYCL.md); --prefetch-experts-slots needs "
+                           "UR_L0_USE_COPY_ENGINE=1, which brings that failure back"
+                         : "copies are routed to the compute engine";
         }
         if (reason != nullptr) {
             GGML_LOG_WARN("%s: no private stream on SYCL%d: %s\n", __func__, dev_ctx->device, reason);

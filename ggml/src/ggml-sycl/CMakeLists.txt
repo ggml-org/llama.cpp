@@ -329,6 +329,17 @@ else()
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 
+# 256-GRF variants of the flash-attention kernels (runtime knob GGML_SYCL_FA_LARGE_GRF).
+# Off by default: every FA kernel would carry a second device image (and an AOT build
+# would compile each twice). Opt in at build time to use the knob.
+option(GGML_SYCL_FA_LARGE_GRF "ggml: compile the 256-GRF variants of the SYCL FA kernels" OFF)
+if (GGML_SYCL_FA_LARGE_GRF)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=1)
+else()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=0)
+endif()
+message(STATUS "GGML_SYCL_FA_LARGE_GRF ${GGML_SYCL_FA_LARGE_GRF}")
+
 
 if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)

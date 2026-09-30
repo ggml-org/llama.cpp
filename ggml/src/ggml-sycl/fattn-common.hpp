@@ -11,10 +11,27 @@
 // 0 (default) compiler choice, 1 tile kernels only, 2 tile and vec kernels. The FA
 // tile kernels spill 8-15 KB per thread at 128 GRF on DG2 (IGC 2.41 shader dumps,
 // 2026-09-30); the vec kernels spill less and lose more from the halved occupancy.
-static int ggml_sycl_fa_large_grf_mode() {
+// The 256-GRF instantiations exist only when GGML_SYCL_FA_LARGE_GRF_VARIANTS is 1
+// (CMake option GGML_SYCL_FA_LARGE_GRF, default OFF: every FA kernel would carry a
+// second device image, and an AOT build would compile each twice).
+#ifndef GGML_SYCL_FA_LARGE_GRF_VARIANTS
+#    define GGML_SYCL_FA_LARGE_GRF_VARIANTS 0
+#endif
+inline int ggml_sycl_fa_large_grf_mode() {
     static const int mode = [] {
         const int v = ggml_sycl_get_env("GGML_SYCL_FA_LARGE_GRF", 0);
-        return (v < 0 || v > 2) ? 0 : v;
+        if (v < 0 || v > 2) {
+            GGML_LOG_WARN("%s: ignoring invalid GGML_SYCL_FA_LARGE_GRF=%d (0, 1 or 2)\n", __func__, v);
+            return 0;
+        }
+#if !GGML_SYCL_FA_LARGE_GRF_VARIANTS
+        if (v != 0) {
+            GGML_LOG_WARN("%s: GGML_SYCL_FA_LARGE_GRF=%d ignored: built without the 256-GRF FA variants "
+                          "(CMake GGML_SYCL_FA_LARGE_GRF=OFF)\n", __func__, v);
+            return 0;
+        }
+#endif
+        return v;
     }();
     return mode;
 }
@@ -1299,8 +1316,15 @@ void launch_fattn(
 
     const dpct::dim3 block_dim(warp_size, nwarps, 1);
 
-    // Max. number of active blocks limited by occupancy.
+    const int  grf_mode  = ggml_sycl_fa_large_grf_mode();
+    const bool large_grf = grf_mode == 2 || (grf_mode == 1 && tile_route);
+
+    // Max. number of active blocks limited by occupancy; a 256-GRF kernel gets half the
+    // thread slots per Xe-core.
     int max_blocks_per_sm = ggml_sycl_info().devices[id].max_wg_per_cu;
+    if (large_grf) {
+        max_blocks_per_sm = std::max(1, max_blocks_per_sm / 2);
+    }
     int parallel_blocks = max_blocks_per_sm;
     dpct::dim3 blocks_num;
     if (stream_k) {
@@ -1411,9 +1435,12 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-    const int  grf_mode  = ggml_sycl_fa_large_grf_mode();
-    const bool large_grf = grf_mode == 2 || (grf_mode == 1 && tile_route);
+#if GGML_SYCL_FA_LARGE_GRF_VARIANTS
     auto launch = large_grf ? lauch_kernel<fattn_kernel, warp_size, true> : lauch_kernel<fattn_kernel, warp_size, false>;
+#else
+    GGML_ASSERT(!large_grf);
+    auto launch = lauch_kernel<fattn_kernel, warp_size, false>;
+#endif
     launch(
         blocks_num, block_dim, main_stream, (unsigned int) nbytes_shared, (const char *) Q->data, K_data, V_data,
         mask ? ((const char *) mask->data) : nullptr, sinks ? ((const char *) sinks->data) : nullptr, KV_max.ptr,

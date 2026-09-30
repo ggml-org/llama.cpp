@@ -8,7 +8,6 @@
 // the SYCL device kernel for ggml_innerq_compute_k_squared_profile_sycl.
 
 #include "ggml-innerq.h"
-#include "xe-kmd.hpp"
 
 #include <sycl/sycl.hpp>
 
@@ -69,8 +68,6 @@ extern "C" void ggml_innerq_compute_k_squared_profile_sycl(
     // and return. The C reference is the binding correctness oracle.
     sycl::queue q;
     try {
-        // Direct queue outside dpct::dev_mgr: apply the xe KMD runtime defaults first.
-        ggml_sycl_apply_xe_kmd_defaults();
         q = sycl::queue{sycl::default_selector{}};
     } catch (...) {
         // No SYCL device available; fall back to the C reference.
