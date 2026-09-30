@@ -71,6 +71,8 @@ export {
 
 export { ModelAuxSidecar, ModelCapability, ModelDraftSidecar, ModelModality } from './model.enums';
 
+export { ModelDownloadStopRequest } from './model.enums';
+
 export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './server.enums';
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';

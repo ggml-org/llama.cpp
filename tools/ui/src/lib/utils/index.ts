@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -108,7 +108,7 @@ export {
 export { normalizeModelName, isValidModelName } from './model-names';
 
 // Sidecar token utilities
-export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from './sidecars';
+export { isAuxSidecar, isDraftSidecar, sidecarFromFileToken, sidecarFromTag } from './sidecars';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';

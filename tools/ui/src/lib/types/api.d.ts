@@ -139,6 +139,14 @@ export interface ApiModelsSseData {
 }
 
 /**
+ * Per-file size snapshot reported by the download_progress SSE envelope.
+ * Keys are file URLs, values are byte counters (done <= total).
+ */
+export interface ApiModelsSseDownloadProgressData {
+	progress: Record<string, { done: number; total: number }>;
+}
+
+/**
  * Event kind multiplexed on the /models/sse feed.
  * Only the status_* events carry a status payload, models_reload signals a
  * full list refresh, model_remove drops a row, download_* drive download UI.
@@ -150,7 +158,26 @@ export interface ApiModelsSseData {
 export interface ApiModelsSseEvent {
 	model: string;
 	event: ServerModelsSseEventType;
-	data: ApiModelsSseData;
+	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData;
+}
+
+/**
+ * Request body for POST /models (model download).
+ * `model` is a HuggingFace repo id, optionally suffixed with `:<tag>` to
+ * pin a quantization or sidecar file (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+ */
+export interface ApiModelsDownloadRequest {
+	model: string;
+}
+
+/**
+ * Response from POST /models and DELETE /models. The POST endpoint returns
+ * immediately; the download itself runs in the background and emits events
+ * on /models/sse.
+ */
+export interface ApiModelsDownloadResponse {
+	success: boolean;
+	error?: { code: number; message: string; type: string };
 }
 
 export interface ApiModelDetails {
