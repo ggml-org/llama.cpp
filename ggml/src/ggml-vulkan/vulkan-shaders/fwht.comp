@@ -11,8 +11,9 @@
 
 layout(constant_id = 0) const uint BLOCK_SIZE = 32;
 layout(constant_id = 1) const uint N = 128;
+layout(constant_id = 2) const uint ROWS = 4;
 
-layout(local_size_x_id = 0, local_size_y = 4, local_size_z = 1) in;
+layout(local_size_x_id = 0, local_size_y_id = 2, local_size_z = 1) in;
 
 layout(push_constant) uniform parameter
 {
@@ -32,7 +33,7 @@ layout(binding = 1, std430) writeonly buffer D { float data_d[]; };
 const uint EL_W = N / BLOCK_SIZE;
 
 #ifdef FWHT_SHMEM
-shared float shmem[4 * N];
+shared float shmem[ROWS * N];
 #endif
 
 void main() {
