@@ -976,11 +976,24 @@ inline static void ggml_vec_gelu_f16(const int n, ggml_fp16_t * y, const ggml_fp
     }
 }
 
+inline static void ggml_vec_gelu_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(ggml_gelu_f32(GGML_BF16_TO_FP32(x[i])));
+    }
+}
+
 inline static void ggml_vec_gelu_erf_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
         float xi = GGML_CPU_FP16_TO_FP32(x[i]);
         float res = 0.5f*xi*(1.0f + erff(xi*SQRT_2_INV));
         y[i] = GGML_CPU_FP32_TO_FP16(res);
+    }
+}
+
+inline static void ggml_vec_gelu_erf_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x) {
+    for (int i = 0; i < n; ++i) {
+        float xi = GGML_BF16_TO_FP32(x[i]);
+        y[i] = GGML_FP32_TO_BF16(0.5f*xi*(1.0f + erff(xi*SQRT_2_INV)));
     }
 }
 
@@ -1022,6 +1035,12 @@ inline static void ggml_vec_gelu_quick_f16(const int n, ggml_fp16_t * y, const g
     const uint16_t * i16 = (const uint16_t *) x;
     for (int i = 0; i < n; ++i) {
         y[i] = ggml_table_gelu_quick_f16[i16[i]];
+    }
+}
+
+inline static void ggml_vec_gelu_quick_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(ggml_gelu_quick_f32(GGML_BF16_TO_FP32(x[i])));
     }
 }
 
@@ -1375,6 +1394,12 @@ inline static void ggml_vec_silu_f16(const int n, ggml_fp16_t * y, const ggml_fp
     }
 }
 
+inline static void ggml_vec_silu_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(ggml_silu_f32(GGML_BF16_TO_FP32(x[i])));
+    }
+}
+
 inline static float ggml_silu_backward_f32(float x, float dy) {
     const float s = 1.0f/(1.0f + expf(-x));
     return dy*s*(1.0f + x*(1.0f - s));
@@ -1411,6 +1436,13 @@ inline static void ggml_vec_reglu_f16 (const int n, ggml_fp16_t * y, const ggml_
     }
 }
 
+inline static void ggml_vec_reglu_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x, const ggml_bf16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float v = GGML_BF16_TO_FP32(x[i]);
+        y[i] = GGML_FP32_TO_BF16((v > 0.f) ? v * GGML_BF16_TO_FP32(g[i]) : 0.f);
+    }
+}
+
 #ifdef GGML_GELU_FP16
 inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, const float * g) {
     uint16_t t;
@@ -1442,6 +1474,12 @@ inline static void ggml_vec_geglu_f16(const int n, ggml_fp16_t * y, const ggml_f
     }
 }
 
+inline static void ggml_vec_geglu_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x, const ggml_bf16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(ggml_gelu_f32(GGML_BF16_TO_FP32(x[i])) * GGML_BF16_TO_FP32(g[i]));
+    }
+}
+
 void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * g);
 
 inline static void ggml_vec_swiglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
@@ -1449,6 +1487,14 @@ inline static void ggml_vec_swiglu_f16(const int n, ggml_fp16_t * y, const ggml_
         float xi = GGML_CPU_FP16_TO_FP32(x[i]);
         float gi = GGML_CPU_FP16_TO_FP32(g[i]);
         y[i] = GGML_CPU_FP32_TO_FP16((xi/(1.0f + expf(-xi))) * gi);
+    }
+}
+
+inline static void ggml_vec_swiglu_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x, const ggml_bf16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float xi = GGML_BF16_TO_FP32(x[i]);
+        float gi = GGML_BF16_TO_FP32(g[i]);
+        y[i] = GGML_FP32_TO_BF16((xi/(1.0f + expf(-xi))) * gi);
     }
 }
 
@@ -1464,6 +1510,14 @@ inline static void ggml_vec_geglu_erf_f16(const int n, ggml_fp16_t * y, const gg
         float xi = GGML_CPU_FP16_TO_FP32(x[i]);
         float gi = GGML_CPU_FP16_TO_FP32(g[i]);
         y[i] = GGML_CPU_FP32_TO_FP16(0.5f * xi * (1.0f + erff(xi*SQRT_2_INV)) * gi);
+    }
+}
+
+inline static void ggml_vec_geglu_erf_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x, const ggml_bf16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float xi = GGML_BF16_TO_FP32(x[i]);
+        float gi = GGML_BF16_TO_FP32(g[i]);
+        y[i] = GGML_FP32_TO_BF16(0.5f * xi * (1.0f + erff(xi*SQRT_2_INV)) * gi);
     }
 }
 
@@ -1489,6 +1543,12 @@ inline static void ggml_vec_geglu_quick_f16(const int n, ggml_fp16_t * y, const 
     for (int i = 0; i < n; ++i) {
         float v = GGML_CPU_FP16_TO_FP32(g[i]);
         y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(ggml_table_gelu_quick_f16[i16[i]]) * v);
+    }
+}
+
+inline static void ggml_vec_geglu_quick_bf16(const int n, ggml_bf16_t * y, const ggml_bf16_t * x, const ggml_bf16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = GGML_FP32_TO_BF16(ggml_gelu_quick_f32(GGML_BF16_TO_FP32(x[i])) * GGML_BF16_TO_FP32(g[i]));
     }
 }
 
