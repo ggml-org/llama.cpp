@@ -53,6 +53,8 @@ kernel journal, devcoredump capture, `timeout 600`.
 | X4b `N-xe-x4b-pinned-ceoff` | copy engine OFF, `--moe-cache off --load-mode none`, clean | off, pinned | clean: **366.0 +- 7.6 / 49.4 +- 0.4 / 304.2 +- 2.0 / 42.3 +- 0.1** |
 | X4c `N-xe-x4c-pinned-ceon` | `--moe-cache off --load-mode none`, clean | off, pinned | clean: 363.8 +- 6.7 / 47.9 +- 1.3 / 302.4 +- 2.5 / 41.6 +- 0.2 |
 | X6 `N-xe-x6-noscratch` | `DisableScratchPages=1` (key had no effect: VM flags still `0xb`) | auto | **silent stall**, 0 rows, watchdog 420 s, 1832 `EPERM` binds, no suspend arrived so no reset |
+| X7A `N-xe-x7A-neomaster` | NEO master `8ae033266e` (built, `ZE_ENABLE_ALT_DRIVERS`), `RetryUserptrBindReadOnly=0` | auto | **stall after 2 rows**, watchdog 420 s, 16 681 `EPERM` binds and sweeps, no suspend so no reset |
+| X7B `N-xe-x7B-neomaster` | same build, read-only retry on (patch below) | auto | **clean**, 4 rows, 0 failed binds, 0 sweeps, 118 783 userptr imports all succeeded: 261.2 / 12.73 / 226.0 / 12.09 (instrumented) |
 | X4d `N-xe-x4d-mmap-ceoff` | copy engine OFF, `--moe-cache off`, clean (control, same boot) | off, mmap | clean: 325.1 +- 18.4 / 49.2 +- 0.6 / 274.4 +- 3.1 / 41.9 +- 0.3 |
 
 Instrumented t/s are not benchmark numbers (NEO logs several MB/s of text).
@@ -206,6 +208,29 @@ the queues; that is harmless while the blitter is not in use.
   temperature-0 output on this stack is not run-to-run reproducible, which predates this
   change (see the standing decision on batch invariance in `CLAUDE.md`).
 
+## NEO master and a fix for the trigger (X7)
+
+NEO master `8ae033266e` (2026-09-24) was built DG2-only against the installed IGC 2.41.5
+(`/mnt/ssd1/build/neo-git-build`, spec 1.19 headers overlaid; the full platform set
+segfaults `ocloc` on Xe3 built-ins with this IGC) and loaded through the Level Zero loader
+with `ZE_ENABLE_ALT_DRIVERS`, so the stable package stayed installed. Master carries the
+#973 fix (`3d7a21dca9`, already in 26.35) and `fc761069e4` "check all contexts completion
+before command buffer reuse" (2026-09-23); the eviction sweep files are unchanged. X7A shows
+master still fails the same way: 16 681 `EPERM` userptr binds, each running the sweep, stall
+after two rows.
+
+`docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch` (11 lines in
+`Drm::bindBufferObject` plus a debug key): when a userptr bind fails with `EPERM` and the
+buffer object is not already read-only, retry it with `DRM_XE_VM_BIND_FLAG_READONLY` before
+running `evictUnusedAllocations()`. A read-only host range is only ever a copy source for
+the GPU, so the read-only mapping is the correct one; `EPERM` was never memory exhaustion.
+X7B with the patch: 0 failed binds, 0 sweeps, 0 staging fallbacks, clean at 8k depth with
+the blitter on, and prefill 261 vs 197 t/s in X7A because the `INTERNAL_HOST_MEMORY`
+staging copies (a CPU memcpy of every 4-23 MB expert group) disappear as well.
+`NEOReadDebugKeys=1 RetryUserptrBindReadOnly=0` restores the old behaviour for A/B runs.
+This is the change to send upstream; the fork default (`UR_L0_USE_COPY_ENGINE=0`) stays
+until a release carries it.
+
 ## Not claimed
 
 - The exact task-count/tag comparison that misjudges the in-flight command buffer is
@@ -220,6 +245,9 @@ the queues; that is harmless while the blitter is not in use.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
   are for the `auto` placement only.
 - The 7.3-rc5 kernel was booted for this session; rc1 vs rc5 was not compared for speed.
+- X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
+  path and leaves the sweep itself untouched, so #1010's transient-EBUSY trigger on
+  Battlemage is not addressed by it.
 - Temperature-0 outputs differ run to run (also between the 09-29 pair), so the real-text
   runs verify stability and throughput, not bit-identical output.
 - `--load-mode none` gains are from one boot, quiet host, random-token bench plus one

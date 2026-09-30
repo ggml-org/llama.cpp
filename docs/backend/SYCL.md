@@ -1036,6 +1036,12 @@ Defaults and workarounds:
   1 % of the blitter path on this workload. Override with `UR_L0_USE_COPY_ENGINE=1`.
 - `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
   passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
+- The runtime fix: `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
+  against intel/compute-runtime master makes NEO retry the userptr bind read-only on `EPERM`
+  instead of running the eviction sweep. With it the blitter path ran clean with zero failed
+  binds (and prefill +33 %, since the staging fallback copies disappear too). NEO master as
+  of `8ae033266e` still fails without it. Build DG2-only and load it with
+  `ZE_ENABLE_ALT_DRIVERS=/path/to/libze_intel_gpu.so.1` to test without replacing the package.
 - `--load-mode none` puts the CPU-placed weights in pinned `SYCL_Host` memory: no userptr
   binds, no failing bind, no sweep. Measured +12 % prefill on the Ornith fit, decode flat,
   and clean with the blitter on. Costs an owned RAM copy instead of shared page cache.
