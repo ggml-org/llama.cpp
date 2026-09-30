@@ -1,4 +1,5 @@
 #include "binbcast.cuh"
+#include "convert.cuh"
 #include <cstdint>
 #include <utility>
 
@@ -82,14 +83,14 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     for (uint32_t i0 = i0s; i0 < ne0; i0 += s0) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 
-        float result = src0_row ? (float) src0_row[size_t(i0)*s00] : 0.0f;
+        float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
         if constexpr (sizeof...(src1_ptrs) > 0) {
-            result = (..., (result = bin_op(result, (float)src1s[i_src1 + size_t(i10)*s10])));
+            result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
         } else {
-            result = bin_op(result, (float)src1[i_src1 + size_t(i10)*s10]);
+            result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
         }
 
-        dst_row[i0] = (dst_t) result;
+        dst_row[i0] = ggml_cuda_cast<dst_t>(result);
 
         // protect i0 from overflow
         if (ne0 - i0 <= s0) {
@@ -154,14 +155,14 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const uint32_t i10 = fastmodulo(i0, ne10);
 
     ggml_cuda_pdl_sync();
-    float result = src0_row ? (float) src0_row[size_t(i0)*s00] : 0.0f;
+    float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
     if constexpr (sizeof...(src1_ptrs) > 0) {
-        result = (..., (result = bin_op(result, (float)src1s[i_src1 + size_t(i10)*s10])));
+        result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
     } else {
-        result = bin_op(result, (float)src1[i_src1 + size_t(i10)*s10]);
+        result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
     }
 
-    dst_row[i0] = (dst_t) result;
+    dst_row[i0] = ggml_cuda_cast<dst_t>(result);
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>

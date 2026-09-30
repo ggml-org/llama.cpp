@@ -124,7 +124,7 @@ static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
     }
 
     ggml_cuda_pdl_sync();
-    dst[i] = (T)op((float)x[i]);
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[i])));
 }
 
 template <float (*op)(float), typename T>
@@ -274,7 +274,7 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
 
     ggml_cuda_pdl_sync();
-    dst[i] = (T)(op((float)x[j0]) * (float)g[j1]);
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[j0])) * ggml_cuda_cast<float>(g[j1]));
 }
 
 template <float (*op)(float), typename T>
