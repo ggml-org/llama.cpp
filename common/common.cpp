@@ -49,7 +49,7 @@
 #include <unistd.h>
 #endif
 
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32)
 #include <sys/types.h>
 #include <pwd.h>
 #endif
@@ -912,6 +912,29 @@ std::string fs_path_to_utf8(const std::filesystem::path & path) {
     return std::string(value.begin(), value.end());
 }
 
+void fs_write_atomic(const std::filesystem::path & path, const std::string & data) {
+    std::error_code ec;
+    std::filesystem::path path_tmp = path;
+    path_tmp += ".tmp";
+
+    if (path.has_parent_path()) {
+        std::filesystem::create_directories(path.parent_path(), ec);
+    }
+
+    std::ofstream file(path_tmp, std::ios::binary);
+    file << data;
+    file.close();
+
+    if (!file.fail()) {
+        std::filesystem::rename(path_tmp, path, ec);
+    }
+
+    if (file.fail() || ec) {
+        std::filesystem::remove(path_tmp, ec);
+        throw std::runtime_error("failed to write file: " + fs_path_to_utf8(path));
+    }
+}
+
 bool fs_is_directory(const std::string & path) {
     std::filesystem::path dir(path);
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
@@ -945,86 +968,55 @@ std::filesystem::path common_get_path_from_env(const std::string & name) {
 #endif
 }
 
+#if !defined(_WIN32)
+static std::filesystem::path get_home_directory() {
+    std::filesystem::path home = common_get_path_from_env("HOME");
+    if (!home.empty()) {
+        return home;
+    }
+    const struct passwd * pw = getpwuid(getuid());
+    if (!pw || !pw->pw_dir || !*pw->pw_dir) {
+        throw std::runtime_error("Failed to find $HOME directory");
+    }
+    return pw->pw_dir;
+}
+#endif
+
 std::filesystem::path fs_get_cache_directory() {
     std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
-
 #if defined(_WIN32)
     cache_directory = common_get_path_from_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
-    cache_directory = common_get_path_from_env("HOME");
-    if (cache_directory.empty()) {
-        throw std::runtime_error("Failed to find $HOME directory");
-    }
-    cache_directory /= "Library/Caches";
+    cache_directory = get_home_directory() / "Library/Caches";
 #else
     cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
-        cache_directory = common_get_path_from_env("HOME");
-        if (!cache_directory.empty()) {
-            cache_directory /= ".cache";
-        } else {
-            /* no $HOME is defined, fallback to getpwuid */
-            const struct passwd * pw = getpwuid(getuid());
-            if (!pw || !pw->pw_dir || !*pw->pw_dir) {
-                throw std::runtime_error("Failed to find $HOME directory");
-            }
-            cache_directory = pw->pw_dir;
-            cache_directory /= ".cache";
-        }
+        cache_directory = get_home_directory() / ".cache";
     }
 #endif
     return cache_directory / "llama.cpp";
 }
 
-std::string fs_get_config_directory() {
-    std::string config_directory = "";
-    auto ensure_trailing_slash = [](std::string p) {
-        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
-            p += DIRECTORY_SEPARATOR;
-        }
-        return p;
-    };
-#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
-        defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
-    const std::string home            = common_get_env("HOME");
-    if (!xdg_config_home.empty()) {
-        config_directory = xdg_config_home;
-    } else if (!home.empty()) {
-        config_directory = home + "/.config/";
-    } else {
-#if defined(__linux__)
-        /* no $HOME is defined, fallback to getpwuid */
-        struct passwd *pw = getpwuid(getuid());
-        if ((!pw) || (!pw->pw_dir)) {
-            throw std::runtime_error("Failed to find $HOME directory");
-        }
-
-        config_directory = std::string(pw->pw_dir) + std::string("/.config/");
-#else
-        throw std::runtime_error("Failed to find $HOME directory");
-#endif
-    }
-#elif defined(_WIN32)
-    config_directory = common_get_env("APPDATA");
+std::filesystem::path fs_get_config_directory() {
+    std::filesystem::path config_directory;
+#if defined(_WIN32)
+    config_directory = common_get_path_from_env("APPDATA");
     if (config_directory.empty()) {
         throw std::runtime_error("Failed to find %APPDATA% directory");
     }
-#elif defined(__EMSCRIPTEN__)
-    // caller decides what to do when there is no config directory
-    throw std::runtime_error("not implemented on this platform");
 #else
-#  error Unknown architecture
+    config_directory = common_get_path_from_env("XDG_CONFIG_HOME");
+    if (config_directory.empty()) {
+        config_directory = get_home_directory() / ".config";
+    }
 #endif
-    config_directory = ensure_trailing_slash(config_directory);
-    config_directory += "llama.cpp";
-    return ensure_trailing_slash(config_directory);
+    return config_directory / "llama.cpp";
 }
 
 std::filesystem::path fs_get_cache_file(const std::string & filename) {

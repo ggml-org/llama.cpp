@@ -916,7 +916,7 @@ bool fs_is_directory(const std::string & path);
 
 std::filesystem::path fs_get_cache_directory();
 std::filesystem::path fs_get_cache_file(const std::string & filename);
-std::string fs_get_config_directory();
+std::filesystem::path fs_get_config_directory();
 
 struct common_file_info {
     std::string path;
@@ -928,6 +928,8 @@ std::vector<common_file_info> fs_list(const std::string & path, bool include_dir
 
 // fs open, also handle UTF8 on Windows
 std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
+
+void fs_write_atomic(const std::filesystem::path & path, const std::string & data);
 
 //
 // TTY utils
