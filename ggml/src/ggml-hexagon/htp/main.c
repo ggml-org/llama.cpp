@@ -851,12 +851,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_SIGMOID:
         case HTP_OP_UNARY_SILU:
         case HTP_OP_UNARY_GELU:
+        case HTP_OP_UNARY_GELU_ERF:
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
         case HTP_OP_UNARY_TANH:
         case HTP_OP_UNARY_ABS:
         case HTP_OP_UNARY_LOG:
         case HTP_OP_UNARY_RELU:
+        case HTP_OP_UNARY_STEP:
         case HTP_OP_L2_NORM:
             return op_unary(octx);
 
@@ -865,6 +867,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GLU_SWIGLU_CLAMP:
         case HTP_OP_GLU_GEGLU:
         case HTP_OP_GLU_GEGLU_QUICK:
+        case HTP_OP_GLU_GEGLU_ERF:
             return op_activations(octx);
 
         case HTP_OP_SOFTMAX:
@@ -882,6 +885,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_GET_ROWS:
             return op_get_rows(octx);
 
+        case HTP_OP_SUM:
+            return op_sum(octx);
+
         case HTP_OP_SUM_ROWS:
             return op_sum_rows(octx);
 
@@ -897,6 +903,9 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_TOP_K:
             return op_top_k(octx);
+
+        case HTP_OP_ARGMAX:
+            return op_argmax(octx);
 
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);

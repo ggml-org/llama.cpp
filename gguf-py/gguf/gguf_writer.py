@@ -520,6 +520,12 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
+    def add_tensor_extra_prec_a4(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+        if len(tensor_names) != len(values):
+            raise ValueError("tensor_extra prec_a4 names and values must have the same length")
+        self.add_array(Keys.General.TENSOR_EXTRA_NAME, list(tensor_names))
+        self.add_array(Keys.General.TENSOR_EXTRA_PREC_A4, list(values))
+
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
 
@@ -1324,6 +1330,9 @@ class GGUFWriter:
 
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
+
+    def add_classifier_pooling_type(self, value: PoolingType) -> None:
+        self.add_uint32(Keys.Classifier.POOLING_TYPE.format(arch=self.arch), value.value)
 
     # for vision models
 

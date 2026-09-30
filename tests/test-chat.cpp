@@ -1217,6 +1217,16 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
     assert_msg_equals(tc.expect, msg_accum, true);
 
+    // A response format must be enforced by an eager grammar
+    if (!tc.params.json_schema.empty()) {
+        if (parser.params_.grammar.empty()) {
+            throw std::runtime_error("json_schema is set but no grammar was produced");
+        }
+        if (parser.params_.grammar_lazy) {
+            throw std::runtime_error("json_schema is set but the grammar is lazy");
+        }
+    }
+
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
         auto grammar = build_grammar(parser.params_.grammar);
@@ -6382,6 +6392,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_content("You invoke it like this:\n" + call_markup)
+            .run();
+
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
         // Tool markup inside the analysis channel is reasoning, not a call
