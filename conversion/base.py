@@ -2331,6 +2331,10 @@ class TextModel(ModelBase):
             if classifier_pooling not in ("cls", "mean"):
                 raise NotImplementedError(f"Unsupported classifier_pooling: {classifier_pooling}")
             self.gguf_writer.add_classifier_pooling_type(mode_mapping[classifier_pooling])
+        if (classifier_activation := self.hparams.get("classifier_activation")) is not None:
+            if classifier_activation not in ("gelu", "silu"):
+                raise NotImplementedError(f"Unsupported classifier_activation: {classifier_activation}")
+            self.gguf_writer.add_classifier_activation(classifier_activation)
 
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer

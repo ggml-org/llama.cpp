@@ -1321,6 +1321,11 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_CLASSIFIER_POOLING_TYPE, hparams.pooling_type_cls, false);
+    std::string act_cls;
+    if (ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        hparams.llm_ffn_op_cls = act_cls == "gelu" ? LLM_FFN_GELU : act_cls == "silu" ? LLM_FFN_SILU : LLM_FFN_NONE;
+        GGML_ASSERT(hparams.llm_ffn_op_cls != LLM_FFN_NONE && "unsupported classifier activation");
+    }
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
     GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,    hparams.n_layer_nextn,   false);

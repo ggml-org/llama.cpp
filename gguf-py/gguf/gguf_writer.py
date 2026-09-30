@@ -1334,6 +1334,9 @@ class GGUFWriter:
     def add_classifier_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.Classifier.POOLING_TYPE.format(arch=self.arch), value.value)
 
+    def add_classifier_activation(self, value: str) -> None:
+        self.add_string(Keys.Classifier.ACTIVATION.format(arch=self.arch), value)
+
     # for vision models
 
     def add_clip_has_vision_encoder(self, value: bool) -> None:

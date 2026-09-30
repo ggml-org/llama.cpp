@@ -25,6 +25,11 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
     }
 
+    // GGUFs without a classifier activation use gelu
+    if (hparams.llm_ffn_op_cls == LLM_FFN_NONE) {
+        hparams.llm_ffn_op_cls = LLM_FFN_GELU;
+    }
+
     switch (hparams.n_layer()) {
         case 12:
             type = LLM_TYPE_47M; break; // granite-embedding-small

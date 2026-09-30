@@ -3744,8 +3744,10 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    if (arch == LLM_ARCH_MODERN_BERT) {
+                    if (hparams.llm_ffn_op_cls == LLM_FFN_GELU) {
                         cur = ggml_gelu(ctx0, cur);
+                    } else if (hparams.llm_ffn_op_cls == LLM_FFN_SILU) {
+                        cur = ggml_silu(ctx0, cur);
                     } else {
                         cur = ggml_tanh(ctx0, cur);
                     }

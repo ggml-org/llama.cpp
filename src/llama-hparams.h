@@ -362,6 +362,7 @@ struct llama_hparams {
     // llm_ffn_op_type_from_string() in llama-model.cpp, mirroring how
     // rope_scaling_type_train is handled.
     enum llm_ffn_op_type llm_ffn_op;
+    enum llm_ffn_op_type llm_ffn_op_cls; // activation of the classifier head (RANK), LLM_FFN_NONE when unset
 
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
