@@ -2030,10 +2030,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
 
         if (extracted_all_tokens) {
-            GGML_ASSERT(ubatch.data && ubatch.data->batch_ids.size() == ubatch.n_tokens);
+            GGML_ASSERT(ubatch.data && ubatch.data->batch_idxs.size() == ubatch.n_tokens);
             GGML_ASSERT(embd_token_ids.size() == (size_t) n_tokens_prev);
-            const auto & batch_ids = ubatch.data->batch_ids;
-            embd_token_ids.insert(embd_token_ids.end(), batch_ids.begin(), batch_ids.end());
+            const auto & batch_idxs = ubatch.data->batch_idxs;
+            embd_token_ids.insert(embd_token_ids.end(), batch_idxs.begin(), batch_idxs.end());
         }
 
         if (has_samplers) {
