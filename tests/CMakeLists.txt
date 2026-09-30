@@ -537,12 +537,15 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     add_test(NAME test-sycl-stress-deep COMMAND test-sycl-stress-deep)
 
     # xe KMD runtime defaults: pure sysfs/env logic, no GPU needed (see the note below
-    # about linking `ggml` explicitly for the include path).
-    add_executable(test-sycl-xe-defaults test-sycl-xe-defaults.cpp)
-    target_link_libraries(test-sycl-xe-defaults PRIVATE ggml ggml-sycl)
-    target_include_directories(test-sycl-xe-defaults PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
-    add_test(NAME test-sycl-xe-defaults COMMAND test-sycl-xe-defaults)
-    set_property(TEST test-sycl-xe-defaults PROPERTY LABELS sycl)
+    # about linking `ggml` explicitly for the include path). Linux only: the probe is a
+    # stub elsewhere and the test builds a fake sysfs tree with symlinks.
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(test-sycl-xe-defaults test-sycl-xe-defaults.cpp)
+        target_link_libraries(test-sycl-xe-defaults PRIVATE ggml ggml-sycl)
+        target_include_directories(test-sycl-xe-defaults PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+        add_test(NAME test-sycl-xe-defaults COMMAND test-sycl-xe-defaults)
+        set_property(TEST test-sycl-xe-defaults PROPERTY LABELS sycl)
+    endif()
 
     add_executable(test-sycl-turbo-correctness test-sycl-turbo-correctness.cpp)
     target_link_libraries(test-sycl-turbo-correctness PRIVATE llama llama-common ggml-cpu ggml-sycl)

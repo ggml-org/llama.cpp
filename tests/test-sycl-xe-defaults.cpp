@@ -1,9 +1,11 @@
 // CPU-only test for the xe KMD runtime defaults (ggml/src/ggml-sycl/xe-kmd.cpp).
-// Builds a fake /sys/class/drm tree; never touches the SYCL runtime.
+// Builds a fake /sys/class/drm tree; never touches the SYCL runtime. Registered
+// on Linux only (tests/CMakeLists.txt): the probe is a stub elsewhere.
 
 #include "ggml-sycl/xe-kmd.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -84,6 +86,32 @@ int main() {
     CHECK(ggml_sycl_xe_copy_engine_default(true, nullptr, "1") == nullptr);
     CHECK(ggml_sycl_xe_copy_engine_default(true, "", "") != nullptr);
     CHECK(ggml_sycl_xe_copy_engine_default(false, nullptr, nullptr) == nullptr);
+    const char * o = ggml_sycl_xe_copy_offload_default(true, nullptr);
+    CHECK(o != nullptr && strcmp(o, "1") == 0);
+    CHECK(ggml_sycl_xe_copy_offload_default(true, "0") == nullptr);
+    CHECK(ggml_sycl_xe_copy_offload_default(false, nullptr) == nullptr);
+
+    // Applying against the fake trees must change the process environment as decided,
+    // including an empty existing value, and must leave explicit values alone.
+    const std::string xe_root = (base / "mixed").string();
+    const std::string i915_root = (base / "i915").string();
+    setenv("UR_L0_USE_COPY_ENGINE", "", 1);
+    unsetenv("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE");
+    unsetenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD");
+    CHECK(ggml_sycl_apply_xe_kmd_defaults_in(xe_root));
+    CHECK(getenv("UR_L0_USE_COPY_ENGINE") != nullptr && strcmp(getenv("UR_L0_USE_COPY_ENGINE"), "0") == 0);
+    CHECK(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD") != nullptr &&
+          strcmp(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"), "1") == 0);
+    setenv("UR_L0_USE_COPY_ENGINE", "1", 1);
+    setenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD", "0", 1);
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(xe_root));
+    CHECK(strcmp(getenv("UR_L0_USE_COPY_ENGINE"), "1") == 0);
+    CHECK(strcmp(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"), "0") == 0);
+    unsetenv("UR_L0_USE_COPY_ENGINE");
+    unsetenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD");
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(i915_root));
+    CHECK(getenv("UR_L0_USE_COPY_ENGINE") == nullptr);
+    CHECK(getenv("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD") == nullptr);
 
     fs::remove_all(base);
 
