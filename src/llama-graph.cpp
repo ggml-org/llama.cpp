@@ -1,6 +1,7 @@
 #include "llama-graph.h"
 
 #include "llama-impl.h"
+#include "llama-lazy-reader.h"
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
@@ -65,6 +66,49 @@ static bool can_reuse_kq_mask(
 }
 
 // impl
+
+ggml_tensor * llm_graph_lazy_rows::build(ggml_context * ctx0, ggml_tensor * table,
+                                         const llama_lazy_reader * reader, int64_t n_rows) {
+    this->table = table;
+    this->reader = reader;
+
+    if (!reader) {
+        t = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+        ggml_set_input(t);
+
+        return ggml_get_rows(ctx0, table, t);
+    }
+
+    t = ggml_new_tensor_2d(ctx0, table->type, table->ne[0], n_rows);
+    ggml_set_input(t);
+    t_indices = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+    ggml_set_input(t_indices);
+    identity.resize(n_rows);
+    for (int64_t i = 0; i < n_rows; ++i) {
+        identity[i] = (int32_t) i;
+    }
+
+    return ggml_get_rows(ctx0, t, t_indices);
+}
+
+void llm_graph_lazy_rows::set_rows(const int32_t * idx, int64_t n) {
+    GGML_ASSERT(can_reuse(n));
+
+    if (!reader) {
+        ggml_backend_tensor_set(t, idx, 0, n*ggml_element_size(t));
+        return;
+    }
+
+    staging.resize(n*ggml_row_size(table->type, table->ne[0]));
+    reader->gather(table, idx, n, staging.data());
+
+    ggml_backend_tensor_set(t, staging.data(), 0, staging.size());
+    ggml_backend_tensor_set(t_indices, identity.data(), 0, n*sizeof(int32_t));
+}
+
+bool llm_graph_lazy_rows::can_reuse(int64_t n_rows) const {
+    return t && n_rows == (reader ? t->ne[1] : t->ne[0]);
+}
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     if (ubatch->token) {
@@ -1485,6 +1529,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
+    lazy_reader_ctx  (params.lazy_reader),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),
@@ -1497,6 +1542,10 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     gf               (res->get_gf()) {
         res->set_params(params);
     }
+
+const llama_lazy_reader * llm_graph_context::lazy_reader(const ggml_tensor * t) const {
+    return lazy_reader_ctx && lazy_reader_ctx->has(t) ? lazy_reader_ctx : nullptr;
+}
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     if (cb_func) {

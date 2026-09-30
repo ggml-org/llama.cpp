@@ -215,10 +215,16 @@ extern "C" {
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
     LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
 
+    // For eligible tensors marked by the model architecture:
+    // Mode                 | tensor <= 4 GiB     | tensor > 4 GiB
+    // ---------------------|---------------------|--------------------
+    // LLAMA_LAZY_MODE_OFF  | load in full        | load in full
+    // LLAMA_LAZY_MODE_AUTO | load in full        | read rows on demand
+    // LLAMA_LAZY_MODE_ON   | read rows on demand | read rows on demand
     enum llama_lazy_mode {
-        LLAMA_LAZY_MODE_OFF  = 0, // always read the whole tensor up front
-        LLAMA_LAZY_MODE_AUTO = 1, // lazy only for marked tensors larger than 4 GiB (requires mmap)
-        LLAMA_LAZY_MODE_ON   = 2, // read the rows of tensors marked by the arch on demand (requires mmap)
+        LLAMA_LAZY_MODE_OFF  = 0,
+        LLAMA_LAZY_MODE_AUTO = 1,
+        LLAMA_LAZY_MODE_ON   = 2,
     };
 
     enum llama_context_type {
