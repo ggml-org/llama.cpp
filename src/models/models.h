@@ -9,6 +9,38 @@
 #include <map>
 
 class llama_memory_hybrid_idx_context;
+class llama_dsv4_comp_state;
+struct dsv41_rope_cfg;
+
+// The compressor state of a DeepSeek-V4 style compressed stream, as the graph sees it.
+struct dsv4_state_tensors {
+    ggml_tensor * kv;
+    ggml_tensor * score;
+};
+
+// Shared by the DeepSeek-V4 and V4.1 graphs, which run the same compressed stream machinery.
+float dsv4_rope_attn_factor(float freq_scale, float ext_factor);
+
+ggml_tensor * dsv4_view_2d(
+        ggml_context * ctx,
+        ggml_tensor  * t,
+        int64_t        ne0,
+        int64_t        ne1,
+        int64_t        i0);
+
+dsv4_state_tensors dsv4_build_state_restore(
+        ggml_context * ctx,
+        const llm_graph_input_dsv4::comp_input & inp,
+        const llama_dsv4_comp_state * state,
+        int32_t il);
+
+dsv4_state_tensors dsv4_build_state_snapshot(
+        ggml_context * ctx,
+        const llm_graph_input_dsv4::comp_input & inp,
+        const llama_dsv4_comp_state * state,
+        ggml_tensor * source_kv,
+        ggml_tensor * source_score,
+        int32_t il);
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/28068
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {
@@ -1200,6 +1232,16 @@ struct llama_model_deepseek4 : public llama_model_base {
         graph(const llm_graph_params & params) : llm_graph_context(params) {}
         graph(const llama_model & model, const llm_graph_params & params);
 
+        void build_hc_mixes(
+                ggml_tensor *  x,
+                ggml_tensor *  hc_fn,
+                ggml_tensor *  hc_scale,
+                ggml_tensor *  hc_base,
+                ggml_tensor ** pre,
+                ggml_tensor ** post,
+                ggml_tensor ** comb,
+                int il) const;
+
         ggml_tensor * build_hc_pre(
                 ggml_tensor * x,
                 ggml_tensor * hc_fn,
@@ -1250,9 +1292,11 @@ struct llama_model_deepseek4 : public llama_model_base {
                 ggml_tensor * state_read_idxs,
                 ggml_tensor * comp_pos,
                 ggml_tensor * norm,
+                int64_t ratio,
                 int64_t n_embd_head,
                 const char * name,
-                int il) const;
+                int il,
+                ggml_tensor ** pre_rope = nullptr) const;
 
         ggml_tensor * build_overlap_compressed_kv_from_state(
                 ggml_tensor * kv_state,
@@ -1321,6 +1365,74 @@ struct llama_model_deepseek4 : public llama_model_base {
 
     struct graph_mtp : public graph {
         graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+// DeepSeek-V4.1. Same machinery as V4, minus the hash layers, the MTP block and the learned
+// hyper-connection head, plus the engram n-gram tables. See src/models/deepseek41.cpp.
+struct llama_model_deepseek41 : public llama_model_deepseek4 {
+    llama_model_deepseek41(const struct llama_model_params & params) : llama_model_deepseek4(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    // engram hash constants, read from the file
+    // these live here rather than in hparams because the token map alone is half a megabyte
+    uint32_t engram_n_layer = 0;
+    uint32_t engram_pad_id  = 0;   // already through the token map, as the reference stores it
+
+    std::vector<uint64_t> engram_multipliers; // [engram_n_layer][engram_max_ngram_size]
+    std::vector<uint64_t> engram_primes;      // [engram_n_layer][engram_max_ngram_size - 1][engram_n_head]
+    std::vector<uint64_t> engram_offsets;     // same layout as engram_primes
+    std::vector<int32_t>  engram_token_map;   // [n_vocab], folds case and accents together
+
+    // The shared stream layer roles live in hparams as dsv41_kv_source and friends, because the
+    // KV cache needs them to alias a reader's storage onto its source's. See load_arch_tensors.
+
+    // position of layer il in the engram constants, or -1 if that layer has no engram
+    int engram_index(int il) const;
+
+    struct graph : public llama_model_deepseek4::graph {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // gather the n-gram rows of layer il: [engram_key_length * n_hash_cols, n_tokens]
+        ggml_tensor * build_inp_engram(
+                const llama_model & model,
+                int il);
+
+        ggml_tensor * build_engram(
+                const llama_model & model,
+                ggml_tensor * x,
+                ggml_tensor * emb,
+                int il) const;
+
+        struct dsv41_rope_cfg rope_cfg(int il) const;
+
+        ggml_tensor * build_attention_tail(
+                const llama_model & model,
+                ggml_tensor * out,
+                ggml_tensor * inp_pos,
+                int64_t nt,
+                int il) const;
+
+        // which compressed positions this layer's queries attend to
+        ggml_tensor * build_indexer_top_k(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                const llm_graph_input_dsv4::comp_input & inp_comp,
+                ggml_tensor * qr,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention_v41(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

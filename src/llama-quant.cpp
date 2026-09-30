@@ -312,6 +312,11 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
 
+    // DeepSeek-V4.1 engram gate scales: one value per channel, applied with ggml_mul, which has
+    // no quantized path. They are two vectors per engram layer, so keeping them costs nothing.
+    quantize &= name.find("engram_q.weight") == std::string::npos;
+    quantize &= name.find("engram_k.weight") == std::string::npos;
+
     // these are not too big so keep them as it is
     quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
