@@ -55,6 +55,9 @@ kernel journal, devcoredump capture, `timeout 600`.
 | X6 `N-xe-x6-noscratch` | `DisableScratchPages=1` (key had no effect: VM flags still `0xb`) | auto | **silent stall**, 0 rows, watchdog 420 s, 1832 `EPERM` binds, no suspend arrived so no reset |
 | X7A `N-xe-x7A-neomaster` | NEO master `8ae033266e` (built, `ZE_ENABLE_ALT_DRIVERS`), `RetryUserptrBindReadOnly=0` | auto | **stall after 2 rows**, watchdog 420 s, 16 681 `EPERM` binds and sweeps, no suspend so no reset |
 | X7B `N-xe-x7B-neomaster` | same build, read-only retry on (patch below) | auto | **clean**, 4 rows, 0 failed binds, 0 sweeps, 118 783 userptr imports all succeeded: 261.2 / 12.73 / 226.0 / 12.09 (instrumented) |
+| X7C `N-xe-x7c-neopatch-rt-ceon` | patched master, blitter ON, mmap, real text (production flags) | off, mmap | clean: pp 221.3, tg 33.00 t/s, no kernel message |
+| X7D `N-xe-x7d-neopatch-ceon-off` | patched master, blitter ON, mmap, clean bench | off, mmap | clean: 363.5 / 48.23 / 266.0 +- 51 / 41.48 (host load 7-19 from a foreign compile) |
+| X7E `N-xe-x7e-neopatch-ceon-auto` | patched master, blitter ON, mmap, clean bench | auto, mmap | clean, no reset; t/s void (host load 11-31, swapping): 266.0 / 5.3 +- 3.9 / 192 / 1.9; X7B's instrumented 12.7 +- 0.3 is the usable auto-placement decode figure |
 | X4d `N-xe-x4d-mmap-ceoff` | copy engine OFF, `--moe-cache off`, clean (control, same boot) | off, mmap | clean: 325.1 +- 18.4 / 49.2 +- 0.6 / 274.4 +- 3.1 / 41.9 +- 0.3 |
 
 Instrumented t/s are not benchmark numbers (NEO logs several MB/s of text).
@@ -245,7 +248,8 @@ until a release carries it.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
   are for the `auto` placement only.
 - The 7.3-rc5 kernel was booted for this session; rc1 vs rc5 was not compared for speed.
-- X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
+- X7D/X7E ran while another process compiled on the host (load up to 31, swap active);
+  their pass/fail stands, their decode numbers do not. X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
   path and leaves the sweep itself untouched, so #1010's transient-EBUSY trigger on
   Battlemage is not addressed by it.
 - Temperature-0 outputs differ run to run (also between the 09-29 pair), so the real-text
