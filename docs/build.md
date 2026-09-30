@@ -118,7 +118,7 @@ Check [BLIS.md](./backend/BLIS.md) for more information.
 
 ### AMD AOCL-BLAS
 
-Link against AMD AOCL-BLAS on EPYC or Ryzen for large F32 prompt GEMMs.
+For AMD CPU inference, the [ZenDNN backend](#zendnn) is recommended. AOCL-BLAS is also available as a vendor option for the generic `GGML_BLAS` backend.
 
 Source `amd-libs.cfg` from your AOCL install (MT tree by default), then build (CMake 3.27+ recommended for the `AOCL` / `AOCL_mt` vendors):
 

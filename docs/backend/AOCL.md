@@ -1,9 +1,12 @@
 # AMD AOCL-BLAS
 
+> [!NOTE]
+> The [ZenDNN backend](ZenDNN.md) is the recommended path for inference on AMD CPUs. Refer to its documentation for the currently supported operations and data types. This page covers AOCL-BLAS as a vendor option for the generic `GGML_BLAS` backend.
+
 AOCL-BLAS is AMD's BLAS library, optimized for AMD EPYC and Ryzen CPUs.
 llama.cpp can link against it through the existing BLAS backend (`GGML_BLAS`).
 
-AOCL-BLAS is used for large prompt GEMMs. It does not change token-generation speed.
+The BLAS backend can use AOCL-BLAS for eligible large prompt GEMMs and generally does not participate in token generation.
 F32 weights are passed to `cblas_sgemm` directly. Other types are converted to F32 first, so a quantized model can be slower than the native CPU kernels.
 See [BLAS Build](../build.md#blas-build).
 
@@ -107,7 +110,7 @@ On each large BLAS `MUL_MAT`, the backend calls `bli_thread_set_num_threads()` w
 
 `BLIS_NUM_THREADS` is **not** a reliable way to cap BLIS here: the per-GEMM `bli_thread_set_num_threads()` call overrides it. To use fewer cores, lower `--threads` and/or `--threads-batch`.
 
-A moderate thread count is a better starting point than one thread per logical CPU. On a large socket, 128 threads can be slower and less stable than 32 or 64. Nested OpenMP (ggml type conversion, then BLIS GEMM, both using OpenMP) can still oversubscribe even though those two steps are sequential.
+Thread scaling depends on the CPU, NUMA layout, model, and batch size. Benchmark the thread counts used for deployment. Nested OpenMP (ggml type conversion, then BLIS GEMM, both using OpenMP) can still oversubscribe even though those two steps are sequential.
 
 On a multi-socket machine, bind the process to one NUMA node. To skip SMT, bind to that node's physical cores only (check `lscpu -e`; on many AMD layouts the first range is the physical cores and a higher range is the sibling threads):
 
@@ -124,7 +127,6 @@ Keep the sourced AOCL env (or `LD_LIBRARY_PATH`) set when running binaries, or d
 - `--list-devices` prints the description `AOCL-BLAS` (`BLAS: AOCL-BLAS`). Upstream BLIS (`FLAME`) still prints `BLIS`.
 - `llama-bench` reports the backend as `BLAS` for this build and `CPU` for a build with `-DGGML_BLAS=OFF`.
 - `test-backend-ops -b BLAS` checks that BLAS GEMMs match the CPU reference.
-- Compare prompt processing (`llama-bench -n 0`) against the CPU-only build. Try F32 weights and a large `-ub` (512 or more). Quantized models can be slower. Generation (`-p 0`) should be largely unchanged. Try more than one `--threads` value; a very high count can regress.
 
 ### Notes
 
