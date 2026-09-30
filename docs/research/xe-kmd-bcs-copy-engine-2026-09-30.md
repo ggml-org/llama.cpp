@@ -2,12 +2,17 @@
 
 ## Decision
 
-- **Root cause established (NEO, not kernel, not llama.cpp):** intel-compute-runtime
-  26.35.39758 submits the blitter's work through the KMD with per-flush residency, and its
-  unused-allocation eviction unbinds the copy command buffer while that job is still
-  pending. The blitter then executes zeros (scratch page) up to the next mapped allocation,
-  halts on an invalid instruction, the host stalls, and the next LR-mode suspend turns the
-  halt into `Engine reset: engine_class=bcs` after the GuC's 640 ms preempt timeout.
+- **Root cause established (NEO, not kernel, not llama.cpp):** on xe, every userptr
+  `VM_BIND` of the mmap'd GGUF pages fails with `EPERM` (the mapping is `r--s`; NEO binds
+  userptrs writable; `mm/hmm.c` refuses a write request on a read-only range). NEO treats
+  the failure as memory exhaustion and runs `evictUnusedAllocations()`
+  (`Drm::bindBufferObject` retry path), which unbinds the blitter's KMD-submitted command
+  buffer while that job is still pending, then falls back to an `INTERNAL_HOST_MEMORY`
+  staging copy. The blitter executes zeros (scratch page) up to the next mapped
+  allocation, halts on an invalid instruction, the host stalls, and the next LR-mode
+  suspend turns the halt into `Engine reset: engine_class=bcs` after the GuC's 640 ms
+  preempt timeout. Same sweep as intel/compute-runtime #973 (A770, per-dispatch private
+  surface, fixed in 26.35) and #1010 (B70, private surface, open); a third victim.
 - **Fork default (this PR):** ggml-sycl sets `UR_L0_USE_COPY_ENGINE=0` at startup when an
   Intel GPU is bound to `xe` and the user has not set the variable. Copies run on the
   compute queue, which uses direct submission and is unaffected. Real-text decode on the
@@ -47,6 +52,7 @@ kernel journal, devcoredump capture, `timeout 600`.
 | X4 `N-xe-x4-pinned-ceon` | `--moe-cache off --load-mode none` | off, pinned | clean (instrumented): 362.8 / 48.7 / 300.8 / 41.9 |
 | X4b `N-xe-x4b-pinned-ceoff` | copy engine OFF, `--moe-cache off --load-mode none`, clean | off, pinned | clean: **366.0 +- 7.6 / 49.4 +- 0.4 / 304.2 +- 2.0 / 42.3 +- 0.1** |
 | X4c `N-xe-x4c-pinned-ceon` | `--moe-cache off --load-mode none`, clean | off, pinned | clean: 363.8 +- 6.7 / 47.9 +- 1.3 / 302.4 +- 2.5 / 41.6 +- 0.2 |
+| X6 `N-xe-x6-noscratch` | `DisableScratchPages=1` (key had no effect: VM flags still `0xb`) | auto | **silent stall**, 0 rows, watchdog 420 s, 1832 `EPERM` binds, no suspend arrived so no reset |
 | X4d `N-xe-x4d-mmap-ceoff` | copy engine OFF, `--moe-cache off`, clean (control, same boot) | off, mmap | clean: 325.1 +- 18.4 / 49.2 +- 0.6 / 274.4 +- 3.1 / 41.9 +- 0.3 |
 
 Instrumented t/s are not benchmark numbers (NEO logs several MB/s of text).
@@ -75,6 +81,14 @@ in `clock-anchor.txt` (epoch = mono + 1790730047.6946).
    for the blitter. BO-121 was allocated at 488.428 and had been bound/unbound 503 times in
    2.4 s (269 cycles under 1 ms, minimum 0.126 ms); the older command buffer BO-66 cycled
    at a 12 ms median.
+   The sweep that unbound BO-121 has a trigger: the userptr created at .868135 has no
+   successful bind line; its `VM_BIND` failed (`result: -1, errno: 1(Operation not
+   permitted)` on stderr), NEO ran the eviction sweep, the retry failed too, the userptr
+   was closed (.868270) and a 17.7 MB `INTERNAL_HOST_MEMORY` staging copy took its place
+   (.868769). Whole run: 1832 failed binds, all `EPERM`, 1832 fallback allocations, 977
+   imports that succeeded; every fallback allocation is preceded by 6-13 unbinds within
+   3 ms. X5: 28 540 failed binds, survived because the blitter ring is always-resident.
+   X4 (pinned): 0 failed binds, 0 sweeps.
 4. 504.575: `scheduling_disable` for both queues again (no userptr event this time; the
    candidates are a BO validate/evict through `xe_bo_trigger_rebind`, whose
    `xe_vma_evict` tracepoint fires only after the wait, or a REMAP bind). The compute queue
@@ -91,9 +105,10 @@ in `clock-anchor.txt` (epoch = mono + 1790730047.6946).
    above the unmapped batch: with scratch pages the unmapped 16 MB read as zeros
    (`MI_NOOP`), the parser walked up to the constant surface and halted on its second
    dword. `RING_DMA_FADD = ACTHD + 0x200` is the prefetch.
-7. After the reset every `VM_BIND` returns `EPERM` (banned VM); NEO maps that to
-   `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`, which is what `set_tensor_async` reported all
-   along. It was never memory.
+7. The `EPERM` lines on stderr are the read-only-mapping failures above, present from
+   model load onward; they are not a symptom of the reset. What turned into
+   `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` after the reset is not attributed (the abort
+   came from the next `set_tensor_async` on the banned queue). It was never device memory.
 
 The four 09-29 coredumps carry the same registers (`ESR 1`, second-level batch, ACTHD at
 the first mapped allocation above a NEO batch region: three at `0xd556a9db0004` with
@@ -111,7 +126,13 @@ buffer occupied that slot in that process). Four of five 09-29 resets were logge
 the device, unbind it unless some engine has it `isUsedByOsContext(ctx)` with
 `getTaskCount(ctx) > *tagAddress` (or it is always-resident or locked). It is invoked on a
 bind failure (`Drm::bindBufferObject`, retried after eviction), on an exec failure
-(`BufferObject::exec`), and in the direct-submission-light retry path. On i915 a premature
+(`BufferObject::exec`), and in the direct-submission-light retry path. Here the trigger is
+the bind-failure path, thousands of times per run, because `allocateGraphicsMemoryForNonSvmHostPtr`
+imports every pageable copy source as a userptr (staging is skipped whenever the copy has
+a wait event, which UR's event chaining always adds) and xe rejects the bind of the
+read-only file mapping. The defect proper is that the sweep does not treat the blitter
+CSR's just-submitted command buffer as in flight; which side of the
+`getTaskCount > tag` comparison is stale was not observed with symbols. On i915 a premature
 unbind is harmless because execbuf holds every object of the job until it completes; on xe
 `VM_BIND` is decoupled from `EXEC`, so an unbind removes the mapping under a queued job.
 The compute queue is not exposed: DG2's direct submission (`hw_info_dg2.cpp`, CCS only)
@@ -136,8 +157,9 @@ premature unbind), not a proof of safety.
 With mmap off the loader's CPU buffer list resolves the fit's CPU-placed tensors to
 `SYCL_Host` (`sycl::malloc_host`), because the only thing forcing them back to `CPU_Mapped`
 is the mmap guard in `src/llama-model-loader.cpp` (`use_mmap && buft == host buft`). The
-copy source is then a USM allocation NEO already knows: no userptr import, no per-copy
-`VM_BIND`/unbind, no MMU-notifier exposure.
+copy source is then a USM allocation NEO already knows: no userptr import, no failing
+`VM_BIND`, hence no eviction sweep, no staging fallback and no MMU-notifier exposure. That
+is why X4 passes with the copy engine on: it removes the trigger, not only the cost.
 
 Instrumented run, copy engine ON, production placement (`--moe-cache off`):
 
@@ -189,7 +211,10 @@ the queues; that is harmless while the blitter is not in use.
 - The exact task-count/tag comparison that misjudges the in-flight command buffer is
   inferred from NEO source and the 126 us bind-to-unbind gap, not observed with NEO
   symbols. A NEO developer can confirm with `ResidencyDebugEnable`.
-- What issued the second suspend (504.575) is unknown; it only matters for timing.
+- What issued the second suspend (504.575) is unknown; it only matters for timing. Without
+  a suspend the failure is a silent stall until the watchdog (X6, and the 09-29 hangs).
+- A loud reproduction with scratch pages off was not achieved: NEO's `DisableScratchPages=1`
+  left the VM created with `SCRATCH_PAGE` on this build.
 - X5 is one pass on one host; the earlier `UR_L0_USE_DRIVER_COUNTER_BASED_EVENTS=0` run
   also passed once and was not a fix.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
@@ -202,8 +227,10 @@ the queues; that is harmless while the blitter is not in use.
 
 ## Upstream report draft (intel/compute-runtime)
 
-Title: xe KMD, DG2: blitter command buffer unbound while its job is pending; engine halts,
-later `Engine reset: engine_class=bcs` after preempt timeout.
+Title: xe KMD, DG2: `evictUnusedAllocations()` after a failed userptr VM_BIND (EPERM,
+file-backed source) unbinds the copy engine's in-flight command buffer; blitter halts,
+later `Engine reset: engine_class=bcs` after preempt timeout. Same sweep as #973 and #1010,
+different victim; reproduced on 26.35.39758.10 which carries the #973 fix.
 
 Environment: Arc A770 (`8086:56a0`), Linux 7.3-rc1 and 7.3-rc5 xe (`xe.force_probe=56a0`),
 intel-compute-runtime 26.35.39758.10, level-zero-loader 1.32.0, oneAPI 2026.1.4 SYCL/UR
@@ -215,13 +242,16 @@ host memory with kernels stalls after seconds to minutes. The host spins in
 engine_class=bcs ... state=0x29` and `Timedout job`, all binds return `EPERM`, and the
 application gets `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY`.
 
-Evidence: device coredump with `RING_ESR=0x1`, `batch_addr` inside a 64 KB
-`COMMAND_BUFFER` allocation that `PrintBOBindingResult` shows unbound 126 us after it was
-bound for the submission; `ACTHD` at the first mapped allocation above that batch
+Evidence: `PrintBOBindingResult` shows every userptr bind of the mmap'd source failing
+with `EPERM` (1832 per 75 s run, each followed by the sweep and an `INTERNAL_HOST_MEMORY`
+fallback); device coredump with `RING_ESR=0x1`, `batch_addr` inside a 64 KB
+`COMMAND_BUFFER` allocation that the sweep unbound 126 us after it was bound for the
+submission; `ACTHD` at the first mapped allocation above that batch
 (`CONSTANT_SURFACE`), `IPEHR=0xfffff000`; xe tracepoints showing the reset is the 640 ms
 preempt timeout of a suspend request made a minute after the stall. Not reproducible with
-`UR_L0_USE_COPY_ENGINE=0` (compute queue, direct submission) or with
-`DirectSubmissionOverrideBlitterSupport=1`.
+`UR_L0_USE_COPY_ENGINE=0` (compute queue, direct submission), with
+`DirectSubmissionOverrideBlitterSupport=1` (ring always-resident), or with the copy
+source in USM host memory (no failing bind, no sweep).
 
 Reproducer: llama.cpp SYCL build, an MoE model with experts left on the host (`--fit`),
 `llama-bench -p 512 -n 64 -d 0,8192` on the copy-engine default; fails in 12 of 15 runs.

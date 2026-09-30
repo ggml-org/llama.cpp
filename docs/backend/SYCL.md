@@ -828,7 +828,8 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
-| UR_L0_USE_COPY_ENGINE | adapter default, or 0 | Unified Runtime Level Zero knob: 0 routes USM copies to the compute queue instead of the blitter (bcs). On Linux, when an Intel GPU is bound to the `xe` kernel driver and neither this variable nor `SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE` is set, ggml-sycl sets it to 0 at startup and logs one line (see Known Issues). Set it to 1 explicitly to keep the blitter; `--prefetch-experts-slots` needs the blitter. |
+| UR_L0_USE_COPY_ENGINE | adapter default, or 0 | Unified Runtime Level Zero (v1 adapter) knob: 0 routes USM copies to the compute queue instead of the blitter (bcs). On Linux, when an Intel GPU is bound to the `xe` kernel driver and neither this variable nor `SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE` is set (empty counts as unset), ggml-sycl sets it to 0 at startup and logs one line (see Known Issues). Set it to 1 explicitly to keep the blitter; `--prefetch-experts-slots` needs the blitter. |
+| UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD | 0 (default) or 1 | The same control for the Level Zero v2 adapter (`SYCL_UR_USE_LEVEL_ZERO_V2=1`, default on Xe2+), which ignores `UR_L0_USE_COPY_ENGINE`. ggml-sycl sets it to 1 on xe under the same rule. |
 | UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE | 1 (default) or 0 | Same as above but only for in-order queues, which is every queue ggml-sycl creates. |
 | SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE | alias | Older alias for UR_L0_USE_COPY_ENGINE; an explicit value here also disables the automatic xe default. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
@@ -1018,13 +1019,15 @@ followed by `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` from `ggml_backend_sycl_set_t
 (the VM is banned after the reset, so every later `VM_BIND` fails). Measured on kernel
 7.3-rc1 and 7.3-rc5 with intel-compute-runtime 26.35.39758: 12 failures in 15 long-context
 runs with the blitter, 0 in 10 without it. Mechanism, from device coredumps, xe tracepoints
-and NEO allocation logs (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): NEO submits
-the blitter's work through the KMD with per-flush residency, and its unused-allocation
-eviction unbinds the copy command buffer while that job is still pending. With scratch pages
-enabled the blitter parses zeros up to the next mapped allocation and halts on an invalid
-instruction; the next LR-mode suspend (any userptr invalidation or eviction) then cannot
-preempt it and the GuC resets the engine after the 640 ms preempt timeout. The compute queue
-uses direct submission (allocations stay bound) and is not affected.
+and NEO allocation logs (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): on xe every
+userptr bind of the mmap'd model pages fails with `EPERM` (read-only file mapping, NEO asks
+for write access); NEO answers each failure with an unused-allocation eviction sweep, and
+that sweep unbinds the blitter's KMD-submitted command buffer while its job is still
+pending. With scratch pages enabled the blitter parses zeros up to the next mapped
+allocation and halts on an invalid instruction; the next LR-mode suspend then cannot
+preempt it and the GuC resets the engine after the 640 ms preempt timeout. The compute
+queue uses direct submission (allocations stay bound) and is not affected. Same sweep as
+intel/compute-runtime issues #973 and #1010, different victim.
 
 Defaults and workarounds:
 
@@ -1033,5 +1036,8 @@ Defaults and workarounds:
   1 % of the blitter path on this workload. Override with `UR_L0_USE_COPY_ENGINE=1`.
 - `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
   passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
-- The i915 driver does not hit this: it pins userptr pages and never suspends contexts for
-  rebinds, and its execbuf keeps batch buffers alive for the job's lifetime.
+- `--load-mode none` puts the CPU-placed weights in pinned `SYCL_Host` memory: no userptr
+  binds, no failing bind, no sweep. Measured +12 % prefill on the Ornith fit, decode flat,
+  and clean with the blitter on. Costs an owned RAM copy instead of shared page cache.
+- The i915 driver does not hit this: its userptr binds of file-backed pages succeed, so
+  the sweep never runs, and execbuf keeps batch buffers alive for the job's lifetime.
