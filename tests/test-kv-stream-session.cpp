@@ -21,13 +21,15 @@ struct session_inputs {
 int main(int argc, char ** argv) {
     const bool physical_map_only = argc > 1 && !std::strcmp(argv[1],"--cuda-physical-map");
     const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
-    const bool cuda = physical_map_only || guard_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool page_boundary_only = argc > 1 && !std::strcmp(argv[1],"--cuda-mtp-page-boundary");
+    const bool cuda = physical_map_only || guard_only || page_boundary_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
     testing t;
     if (guard_only) t.set_filter("guarded_target_session_preserves_mtp_ring_and_releases_for_replan");
     if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
+    if (page_boundary_only) t.set_filter("speculative_page_boundary_reconstruction_reopens_mtp_admission");
     t.test("unsupported_and_missing_session_dependencies_are_rejected", [&](testing & t) {
         fixture f(backend.get(),cuda);
         t.assert_true(!llama_kv_stream_session::create(backend.get(),f.content,{f.policy,33,4,false},nullptr,nullptr,nullptr));
@@ -140,6 +142,40 @@ int main(int argc, char ** argv) {
         t.assert_true(!session->restore(0));
         session->abort();
         t.assert_true(!session->restore(513));
+    });
+    if (cuda) t.test("speculative_page_boundary_reconstruction_reopens_mtp_admission", [&](testing & t) {
+        for (size_t committed : {size_t(510), size_t(511), size_t(512)}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,769,false,2,2,7);
+            f.policy.layers=3;
+            f.policy.caches={{f.host->cache_id(),2},{999,1}};
+            f.policy.initial_ring_slots=1;
+            block_workspace writer(f,32768,19), attention(f,f.host->layout().bytes,29);
+            auto session=llama_kv_stream_session::create(backend.get(),f.content,
+                {f.policy,1,4,false},f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(committed))) return;
+            for (size_t active=committed+1;active<=committed+3;++active) {
+                session_inputs kv(backend.get(),1);
+                block_inputs input(f,active,1);
+                if (!t.assert_true(session->begin(active,1,true))) return;
+                for (uint32_t layer=0;layer<2;++layer) {
+                    if (!t.assert_true(session->produce(layer,kv.k,kv.v) &&
+                            session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+                }
+                t.assert_equal(active,session->tokens());
+            }
+            t.assert_equal(uint32_t(3),session->policy().decode_active_pages);
+            session->abort();
+            if (!t.assert_true(f.content->invalidate_suffix(committed) && session->reconstruct(committed))) return;
+            t.assert_equal(committed,session->tokens());
+            if (!t.assert_true(session->reserve_complete_layer(2,committed+3))) return;
+            const auto view=session->binding_view();
+            auto owner=llama_kv_stream_layer_lease_owner::create(view.lease,
+                {view.config,session->policy(),committed+3,view.revision,f.content->generation(),committed});
+            if (!t.assert_true(bool(owner))) return;
+            auto * lease=owner->acquire({2,1,view.revision,f.content->generation(),999,committed});
+            t.assert_true(lease != nullptr);
+            llama_kv_stream_complete_layer_lease_free(lease);
+        }
     });
     if (cuda) t.test("two_token_decode_uses_bounded_resume_workspace", [&](testing & t) {
         constexpr size_t active=25601;

@@ -389,7 +389,8 @@ llama_kv_stream_policy_result llama_kv_stream_policy_layout_make(
     const uint64_t active_wide = ceil_div(active_tokens, uint64_t(c.shape.page_tokens));
     if (active_wide > UINT32_MAX) return {status::overflow, {}};
     const uint32_t active = uint32_t(active_wide);
-    if (s.decode_active_pages && s.decode_active_pages != active) return {status::invalid_observation, {}};
+    // A truncated logical frontier can reuse a larger physical decode placement.
+    if (s.decode_active_pages && active > s.decode_active_pages) return {status::invalid_observation, {}};
     try {
         llama_kv_stream_policy_layout next;
         const size_t page_tokens = size_t(c.shape.page_tokens);

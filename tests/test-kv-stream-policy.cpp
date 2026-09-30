@@ -632,6 +632,52 @@ int main() {
     });
 
 
+    t.test("shorter_logical_frontier_reuses_concentrated_physical_layout", [](testing & t) {
+        auto c = config(160);
+        llama_kv_stream_policy_state state;
+        if (!start(t,c,state)) return;
+        seed(state,12);
+        llama_kv_stream_policy_layout full, shorter;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c,state,12*256,full).status == status::success)) return;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(c,state,11*256,shorter).status == status::success)) return;
+        t.assert_equal(full.ring.bytes,shorter.ring.bytes);
+        t.assert_equal(full.conversion_offset,shorter.conversion_offset);
+        for (size_t i=0;i<full.layers.size();++i) {
+            t.assert_equal(full.layers[i].offset,shorter.layers[i].offset);
+            t.assert_equal(full.layers[i].capacity_pages,shorter.layers[i].capacity_pages);
+            t.assert_equal(full.layers[i].planes.bytes,shorter.layers[i].planes.bytes);
+            t.assert_true(shorter.layers[i].streamed_pages <= full.layers[i].streamed_pages);
+        }
+        llama_kv_stream_policy_decision decision;
+        t.assert_true(llama_kv_stream_policy_reserve_layer(
+            c,state,11*256,12*256,15,decision).status == status::success);
+        t.assert_true(llama_kv_stream_policy_layout_make(c,state,13*256,shorter).status == status::invalid_observation);
+    });
+
+    t.test("mtp_reservation_reuses_production_shaped_page_crossing_layout", [](testing & t) {
+        auto c=config(5457,17);
+        c.caches={{101,16},{202,1}};
+        llama_kv_stream_policy_state state;
+        if (!start(t,c,state)) return;
+        state.resident_pages_per_layer=309;
+        state.ring_slots=state.budget.pages-309*17;
+        seed(state,493);
+        llama_kv_stream_policy_layout full,shorter;
+        if (!t.assert_true(llama_kv_stream_policy_layout_make(
+                c,state,125955,full).status == status::success &&
+                llama_kv_stream_policy_layout_make(
+                c,state,125952,shorter).status == status::success)) return;
+        t.assert_equal(full.layers[16].offset,shorter.layers[16].offset);
+        t.assert_equal(full.layers[16].capacity_pages,shorter.layers[16].capacity_pages);
+        llama_kv_stream_policy_decision decision;
+        if (!t.assert_true(llama_kv_stream_policy_reserve_layer(
+                c,state,125952,125955,16,decision).status == status::success)) return;
+        t.assert_true(llama_kv_stream_policy_layout_make(
+            c,decision.next,125952,shorter).status == status::success);
+        t.assert_true(decision.next.ring_slots >=
+            493-shorter.layers[16].capacity_pages);
+    });
+
     t.test("geometric_overlap_deficit_grows_even_when_copy_is_saturated", [](testing & t) {
         auto c = config(630);
         llama_kv_stream_policy_state s;
