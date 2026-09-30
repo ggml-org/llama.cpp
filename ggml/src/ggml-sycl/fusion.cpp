@@ -64,7 +64,7 @@ static bool ggml_sycl_should_fuse_mul_mat_glu(const ggml_tensor * gate, const gg
     return true;
 }
 
-// the unary ops the fused unary+mul kernels in element_wise.cpp have a functor for
+// the unary ops the fused unary chains in element_wise.cpp have a functor for
 static bool ggml_sycl_fused_unary_has_kernel(ggml_unary_op unary_op) {
     return unary_op == GGML_UNARY_OP_SILU || unary_op == GGML_UNARY_OP_SIGMOID ||
            unary_op == GGML_UNARY_OP_SOFTPLUS;

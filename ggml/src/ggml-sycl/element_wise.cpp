@@ -452,17 +452,21 @@ static void unary_mul_sycl(const T * x, const T * g, T * dst, const int64_t k, c
     });
 }
 
-// Fused ADD(bias) + UNARY + MUL(scale), with bias and scale broadcast over dim 0:
-//   dst[i] = op(a[i] + bias[i % ne0]) * scale[i % ne0]
-// `a` and `dst` are contiguous and indexed flat; `bias` and `scale` are one contiguous row
-// of ne0 elements each. This is the delta-net alpha gate, softplus(alpha + dt) * a_coeff.
-// Once n_tokens > 1 the gate's operands stop being same-shape, which is exactly when the
-// UNARY + MUL fusion above declines and all three ops fall back to standalone launches.
+// ADD(bias) + UNARY + MUL(scale) with both broadcast over dim 0, the delta-net alpha gate:
+// dst[i] = op(a[i] + bias[i % ne0]) * scale[i % ne0]. k == ne0 makes that the flat index.
 template<typename F>
-static void add_unary_mul_kernel(const float * a, const float * bias, const float * scale, float * dst,
-                                 const int64_t k, const sycl::uint3 ne0_fd, const sycl::nd_item<1> &item_ct1, F op) {
+static void add_unary_mul_flat_kernel(const float * a, const float * bias, const float * scale, float * dst,
+                                      const int64_t k, const sycl::nd_item<1> &item_ct1, F op) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const uint32_t h = fast_div_modulo((uint32_t) i, ne0_fd).y();
+        dst[i] = op(a[i] + bias[i]) * scale[i];
+    }
+}
+
+template<typename F>
+static void add_unary_mul_bcast_kernel(const float * a, const float * bias, const float * scale, float * dst,
+                                       const int64_t k, const sycl::uint3 ne0_fd, const sycl::nd_item<1> &item_ct1, F op) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const uint32_t h = fastmodulo((uint32_t) i, ne0_fd);
         dst[i] = op(a[i] + bias[h]) * scale[h];
     }
 }
@@ -473,11 +477,18 @@ static void add_unary_mul_sycl(const float * a, const float * bias, const float 
     const size_t            num_blocks = ceil_div((size_t) k, (size_t) SYCL_GLU_BLOCK_SIZE);
     const sycl::nd_range<1> range(num_blocks * sycl::range<1>(SYCL_GLU_BLOCK_SIZE), sycl::range<1>(SYCL_GLU_BLOCK_SIZE));
 
+    if (k == ne0) {
+        main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            add_unary_mul_flat_kernel(a, bias, scale, dst, k, item_ct1, op);
+        });
+        return;
+    }
+
     // 32-bit fastdiv, exact only below 2^31; ggml_sycl_can_fuse() already declined past that
     GGML_ASSERT(k < ((int64_t) 1 << 31));
     const sycl::uint3 ne0_fd = init_fastdiv_values((uint32_t) ne0);
     main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-        add_unary_mul_kernel(a, bias, scale, dst, k, ne0_fd, item_ct1, op);
+        add_unary_mul_bcast_kernel(a, bias, scale, dst, k, ne0_fd, item_ct1, op);
     });
 }
 
@@ -1024,9 +1035,8 @@ static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_ten
     });
 }
 
-// Hands `launch` the functor for the unary op of a fused unary+mul chain. These are the
-// ops ggml_sycl_can_fuse() accepts for the fusions below; anything else it has declined,
-// so reaching the default here is a dispatcher bug.
+// Hands `launch` the functor for the unary op of a fused unary chain. Anything else
+// ggml_sycl_can_fuse() has already declined, so the default is a dispatcher bug.
 template<typename F>
 static void dispatch_fused_unary_op(ggml_unary_op uop, F && launch) {
     switch (uop) {
@@ -1034,7 +1044,7 @@ static void dispatch_fused_unary_op(ggml_unary_op uop, F && launch) {
         case GGML_UNARY_OP_SIGMOID:  launch([](float v) { return op_sigmoid(v); });  break;
         case GGML_UNARY_OP_SOFTPLUS: launch([](float v) { return op_softplus(v); }); break;
         default:
-            GGML_ABORT("fused unary+mul: unsupported unary op %s", ggml_unary_op_name(uop));
+            GGML_ABORT("fused unary chain: unsupported unary op %s", ggml_unary_op_name(uop));
     }
 }
 
@@ -1078,13 +1088,12 @@ void ggml_sycl_op_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor *
     dispatch_fused_unary_op(ggml_get_unary_op(unary_node), dispatch_type);
 }
 
-// dst = op(a + bias) * scale for an ADD + UNARY + MUL chain whose bias and scale
-// broadcast over dim 0, written straight to the MUL output. One launch covers the three
-// ops, and the intermediate add and unary results never reach HBM. Preconditions come
-// from ggml_sycl_can_fuse(); re-asserted here.
+// dst = op(a + bias) * scale for an ADD + UNARY + MUL chain whose bias and scale broadcast
+// over dim 0. Preconditions come from ggml_sycl_can_fuse(); re-asserted here.
 void ggml_sycl_op_add_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor * add_node,
                                       ggml_tensor * unary_node, ggml_tensor * mul_node) {
-    scope_op_debug_print scope_dbg_print(__func__, mul_node, /*num_src=*/3);
+    // the dst-arity convention the other fusions follow; a and bias live on add_node
+    scope_op_debug_print scope_dbg_print(__func__, mul_node, /*num_src=*/2);
 
     const ggml_tensor * a     = add_node->src[0];
     const ggml_tensor * bias  = add_node->src[1];
