@@ -43,8 +43,10 @@ const char * ggml_sycl_xe_copy_engine_default(bool dg2_on_xe, bool v1_set, bool 
 const char * ggml_sycl_xe_copy_offload_default(bool dg2_on_xe, bool v2_set, bool user_wants_copy_engine);
 
 // Applies both defaults to the process environment for the given sysfs root unless
-// GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0. Exposed for the unit test; production code
-// calls the once-only wrapper. Returns true when at least one variable was set.
+// GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0. Also drops empty copy-engine variables on any
+// GPU, since the Level Zero adapter aborts on them. Exposed for the unit test;
+// production code calls the once-only wrapper. Returns true when at least one
+// default was set.
 bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root);
 
 // Applies the defaults once per process. Must run before the first SYCL runtime

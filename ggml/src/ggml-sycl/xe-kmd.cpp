@@ -141,6 +141,18 @@ static void mirror_alias_into_empty_ur(const char * ur_name, const char * pi_nam
     }
 }
 
+// The v1 adapter parses the FOR_* variables with stoi() in a static initializer, so an
+// empty value aborts the process when the adapter is loaded; UR_L0_USE_COPY_ENGINE is
+// parsed the same way at the first queue creation. Empty means unset to this hook, so
+// drop such values instead of leaving the abort in place.
+static void unset_if_empty(const char * name) {
+    const char * v = getenv(name);
+    if (v != nullptr && v[0] == '\0') {
+        unsetenv(name);
+        GGML_LOG_WARN("%s: unset empty %s (the Level Zero adapter aborts on an empty value)\n", __func__, name);
+    }
+}
+
 static const char * plain_getenv(const char * name) {
     return getenv(name);
 }
@@ -159,6 +171,10 @@ bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root) {
     }
     mirror_alias_into_empty_ur(UR_COPY_ENGINE, PI_COPY_ENGINE);
     mirror_alias_into_empty_ur(UR_COPY_ENGINE_INO, PI_COPY_ENGINE_INO);
+    for (const char * n : { UR_COPY_ENGINE, PI_COPY_ENGINE, UR_COPY_ENGINE_INO, PI_COPY_ENGINE_INO,
+                            UR_COPY_ENGINE_D2D, UR_COPY_ENGINE_FILL, UR_V2_NO_OFFLOAD }) {
+        unset_if_empty(n);
+    }
     std::string bdf;
     uint16_t    device_id = 0;
     const bool  dg2_on_xe = ggml_sycl_intel_gpu_on_xe(drm_sysfs_root, &bdf, &device_id) && ggml_sycl_is_dg2(device_id);
@@ -174,8 +190,8 @@ bool ggml_sycl_apply_xe_kmd_defaults_in(const std::string & drm_sysfs_root) {
     // KMD: NEO 26.35 answers the failing userptr binds of read-only file mappings
     // with an eviction sweep that unbinds the blitter's command buffer while its
     // job is pending (docs/backend/SYCL.md, Known Issues). Keep copies on the
-    // compute queue unless the user asked otherwise. overwrite=1 is safe because
-    // the policy check above already treated an empty value as unset.
+    // compute queue unless the user asked otherwise. Empty values were dropped
+    // above, so overwrite=1 only ever replaces nothing.
     //
     // setenv() is not thread-safe against concurrent getenv() in other threads;
     // this runs from the first SYCL initialization, normally at program start,
@@ -211,7 +227,7 @@ void ggml_sycl_apply_xe_kmd_defaults() {
 namespace {
 struct ggml_sycl_xe_kmd_loader {
     ggml_sycl_xe_kmd_loader() { ggml_sycl_apply_xe_kmd_defaults(); }
-} const g_ggml_sycl_xe_kmd_loader;
+} const g_ggml_sycl_xe_kmd_loader [[maybe_unused]];
 }  // namespace
 
 bool ggml_sycl_xe_kmd_defaults_applied() {

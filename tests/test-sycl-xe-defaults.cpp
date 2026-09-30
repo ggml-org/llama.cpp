@@ -219,6 +219,26 @@ int main() {
     CHECK(ggml_sycl_apply_xe_kmd_defaults_in(dg2_root));
     CHECK(env("UR_L0_USE_COPY_ENGINE") == nullptr);
     CHECK(env_eq("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD", "1"));
+    // Empty FOR_* variables abort the adapter at load; they are dropped on every GPU.
+    clear_copy_env();
+    setenv("UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY", "", 1);
+    setenv("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE", "", 1);
+    CHECK(ggml_sycl_apply_xe_kmd_defaults_in(dg2_root));
+    CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY") == nullptr);
+    CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE") == nullptr);
+    CHECK(env_eq("UR_L0_USE_COPY_ENGINE", "0"));
+    clear_copy_env();
+    setenv("UR_L0_USE_COPY_ENGINE_FOR_FILL", "", 1);
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(bmg_root));
+    CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_FILL") == nullptr);
+    // Empty UR in-order variable next to its set alias: mirrored, and the alias asks for
+    // copy engines, so no default is applied.
+    clear_copy_env();
+    setenv("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE", "", 1);
+    setenv("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE", "1", 1);
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(dg2_root));
+    CHECK(env_eq("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE", "1"));
+    CHECK(env("UR_L0_USE_COPY_ENGINE") == nullptr);
     // Not DG2, or not xe: nothing set.
     clear_copy_env();
     CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(bmg_root));
