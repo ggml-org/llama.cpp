@@ -262,69 +262,9 @@ finds `RetryUserptrBindReadOnly`). A/B on that exact library with the blitter on
 default stays until a release carries it, and the production unit keeps
 `UR_L0_USE_COPY_ENGINE=0`.
 
-## Side result: the FA kernels spill, and a large-GRF knob (2026-09-30, 10:50-11:20)
-
-IGC shader dumps (`IGC_ShaderDumpEnable=1`, `SYCL_CACHE_PERSISTENT=0`, IGC 2.41.5,
-`/mnt/ssd1/igc-dumps`) of the oracle and a production real-text run: 23 of 173 kernels use
-`GRAPH_COLORING_SPILL_FF_RA`, 21 of them FA kernels at 128 GRF. Production (q8_0 KV,
-d=256): `flash_attn_tile<256,256,4,8>` 15 392 B spill / 55k spill refs,
-`flash_attn_tile<256,256,2,8>` 10 848 B / 26k, `flash_attn_ext_vec<256,1,q8_0,q8_0>`
-8 160 B / 1.9k (the decode kernel); `mul_mat_vec_q6_K` under 200 B. Spills are legacy
-`send.dc0` hword scratch block messages (writes at SIMD8 with descriptor `0x020F00xx`, fills
-at SIMD16 with `0x021C00xx`), the pattern the gaema IGC fork's vISA patches target; the
-oracle is green with these kernels executing, so no miscompile is observed here.
-
-`GGML_SYCL_FA_LARGE_GRF` (0 off, 1 tile kernels, 2 tile and vec) passes
-`sycl::ext::intel::experimental::grf_size<256>` as a kernel property in
-`lauch_kernel` (`ggml/src/ggml-sycl/fattn-common.hpp`). The 256-GRF instantiations are
-compiled only with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF: every FA kernel would carry
-a second device image, and an AOT build would compile each twice); other builds warn and
-ignore the variable. Paired product campaign
-(`scripts/bench-a770-fork-unique.py --campaign product`, q8_0/q8_0, 4 repetitions, sample 0
-discarded, sole tenancy, no kernel message) of the compile-time equivalent of mode 2
-against the default build, `/mnt/nvme1/oneapi-ab/grf256-*`:
-
-| model | depth | pp512 default -> 256 GRF | tg128 default -> 256 GRF |
-|---|--:|--:|--:|
-| Ornith IQ2_M (d=256, 41 layers) | 0 | 266.0 +- 1.4 -> 274.9 +- 0.5 (+3.3 %) | 53.5 -> 53.4 (flat) |
-| | 2048 | 299.0 -> 298.8 (flat) | 52.9 -> 52.8 (flat) |
-| | 8192 | 265.2 -> 265.3 (flat) | 46.6 +- 0.1 -> 48.3 +- 0.0 (+3.6 %) |
-| Llama 3.1 8B Q4_K_M (d=128) | 0 | 1004.0 +- 2.0 -> 1098.0 +- 13.9 (+9.4 %) | 47.0 -> 47.7 (+1.5 %) |
-| | 8192 | 210.8 -> 211.3 (flat) | 36.5 +- 0.0 -> 34.8 +- 0.0 (-4.5 %) |
-
-Reading: the prefill gain is the tile kernel's spill traffic; the d=128 decode loss at depth
-is the vec kernel at half occupancy for a kernel that spilled little. Hence the tile-only
-mode 1, measured on one binary (`e4bf0b239`) with env-only arms, same protocol
-(`/mnt/nvme1/oneapi-ab/grfmode1-*`, `all_cells_valid: true`):
-
-| model | depth | pp512 off -> mode 1 | tg128 off -> mode 1 |
-|---|--:|--:|--:|
-| Ornith IQ2_M (d=256) | 0 | 267.7 +- 2.6 -> 274.5 +- 0.3 (+2.5 %) | 53.5 -> 53.5 (flat) |
-| | 8192 | 267.3 +- 2.4 -> 265.1 +- 2.0 (-0.8 %, within noise) | 46.6 -> 46.5 (flat) |
-| Llama 3.1 8B (d=128) | 0 | 1005.6 +- 19.1 -> 1107.8 +- 8.1 (+10.2 %) | 46.9 -> 46.9 (flat) |
-| | 8192 | 210.9 -> 210.9 (flat) | 36.4 -> 36.4 (flat) |
-
-Both campaigns above ran with the occupancy heuristic unchanged (`max_wg_per_cu` = 16 for
-the 256-GRF launches too). The knob now halves it for large-GRF launches; mode 1 rerun
-with that change, same protocol, one binary with the variants compiled in
-(`/mnt/nvme1/oneapi-ab/grfmode1occ-*`, `all_cells_valid: true`, no kernel message):
-
-| model | depth | pp512 off -> mode 1 | tg128 off -> mode 1 |
-|---|--:|--:|--:|
-| Ornith IQ2_M (d=256) | 0 | 266.5 +- 2.6 -> 273.0 +- 4.2 (+2.4 % +- 1.1) | 53.4 -> 53.3 (flat) |
-| | 8192 | 265.3 -> 265.0 (flat) | 46.4 -> 46.4 (flat) |
-| Llama 3.1 8B (d=128) | 0 | 998.4 +- 9.7 -> 1098.3 +- 8.2 (+10.0 % +- 0.9) | 46.9 -> 46.9 (flat) |
-| | 8192 | 211.1 -> 211.2 (flat) | 36.4 -> 36.4 (flat) |
-
-The occupancy change moves nothing outside the CIs: the tile kernels at prefill are not
-occupancy-bound at either target. Mode 1 keeps the short-context prefill gain and costs
-nothing on decode. It stays opt-in (and, since the review, the 256-GRF instantiations are
-compiled only with `-DGGML_SYCL_FA_LARGE_GRF=ON`):
-the gain is confined to prefill below the MKL gate (n_kv < 1024), and one host, one
-compiler version. A first mode-1 product was rejected by the harness only because the
-binary predated the fix commit it was compared against (provenance gate); the rows above
-are from the relinked binary. Oracle (default sweep with turbo FA,
-and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
+The IGC shader-dump side result (FA kernels spilling at 128 GRF) and the
+`GGML_SYCL_FA_LARGE_GRF` knob it led to are a separate change:
+`docs/research/sycl-fa-large-grf-2026-09-30.md` on branch `sycl-fa-large-grf`.
 
 ## Not claimed
 
@@ -340,9 +280,6 @@ and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
   are for the `auto` placement only.
 - The 7.3-rc5 kernel was booted for this session; rc1 vs rc5 was not compared for speed.
-- The large-GRF numbers are one campaign per model and mode on one host with IGC 2.41.5;
-  the standing "global large-GRF is a dead end" decision is untouched (this is per-kernel,
-  opt-in).
 - X7D/X7E ran while another process compiled on the host (load up to 31, swap active);
   their pass/fail stands, their decode numbers do not. X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
   path and leaves the sweep itself untouched, so #1010's transient-EBUSY trigger on
@@ -351,8 +288,6 @@ and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
   runs verify stability and throughput, not bit-identical output.
 - `--load-mode none` gains are from one boot, quiet host, random-token bench plus one
   real-text prompt; the production unit still runs mmap until the user changes it.
-- The mode-2 large-GRF table predates the occupancy change (half the work-groups per
-  Xe-core for 256-GRF launches); only mode 1 was re-measured after it.
 - Timestamps in the X1 narrative mix kernel-journal wall-clock times with perf
   `CLOCK_MONOTONIC` times; `clock-anchor.txt` in each run directory ties the two.
 - The DG2-behind-another-Intel-node ordering case and the alias/empty-value handling are

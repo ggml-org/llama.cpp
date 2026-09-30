@@ -21,27 +21,6 @@
 #include "fattn.hpp"
 #include "fattn-onednn.hpp"
 #include "fattn-sparse.hpp"
-
-bool ggml_sycl_fa_large_grf_variants() {
-    return GGML_SYCL_FA_LARGE_GRF_VARIANTS != 0;
-}
-
-int ggml_sycl_fa_large_grf_mode() {
-    static const int mode = [] {
-        const int v = ggml_sycl_get_env("GGML_SYCL_FA_LARGE_GRF", 0);
-        if (v < 0 || v > 2) {
-            GGML_LOG_WARN("ggml_sycl_fa_large_grf_mode: ignoring invalid GGML_SYCL_FA_LARGE_GRF=%d (0, 1 or 2)\n", v);
-            return 0;
-        }
-        if (v != 0 && !ggml_sycl_fa_large_grf_variants()) {
-            GGML_LOG_WARN("ggml_sycl_fa_large_grf_mode: GGML_SYCL_FA_LARGE_GRF=%d ignored: built without the 256-GRF "
-                          "FA variants (CMake GGML_SYCL_FA_LARGE_GRF=OFF)\n", v);
-            return 0;
-        }
-        return v;
-    }();
-    return mode;
-}
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>

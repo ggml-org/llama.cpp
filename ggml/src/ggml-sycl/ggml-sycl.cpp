@@ -90,7 +90,6 @@
 #include "ggml-sycl/conv2d-transpose.hpp"
 #include "ggml-sycl/turbo-wht.hpp"
 #include "ggml-sycl/xe-kmd.hpp"
-#include "ggml-sycl/fattn.hpp"
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/ssm_scan.hpp"
@@ -595,8 +594,6 @@ static void ggml_check_sycl() try {
 #endif
         GGML_LOG_INFO("  GGML_SYCL_FA_FORCE_VEC_STANDARD: %d\n",
             g_ggml_sycl_fa_force_vec_standard);
-        GGML_LOG_INFO("  GGML_SYCL_FA_LARGE_GRF: %d (effective mode; 256-GRF FA variants compiled: %d)\n",
-                      ggml_sycl_fa_large_grf_mode(), (int) ggml_sycl_fa_large_grf_variants());
         GGML_LOG_INFO("  GGML_SYCL_FA_Q8_GQA_TILE: %d\n",
             g_ggml_sycl_fa_q8_gqa_tile);
         GGML_LOG_INFO("  GGML_SYCL_FFN_FUSION: %d\n", ggml_sycl_ffn_fusion_enabled());

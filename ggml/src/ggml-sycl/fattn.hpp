@@ -17,13 +17,6 @@
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-// GGML_SYCL_FA_LARGE_GRF, validated: 0 off, 1 tile kernels, 2 tile and vec kernels; 0
-// when the build carries no 256-GRF variants. Cached after the first call, which logs
-// an invalid or unusable value once.
-int ggml_sycl_fa_large_grf_mode();
-// True when the 256-GRF FA instantiations were compiled (CMake GGML_SYCL_FA_LARGE_GRF).
-bool ggml_sycl_fa_large_grf_variants();
-
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst);
 
 // Reports if flash attention runs this node with oneDNN or oneMKL
