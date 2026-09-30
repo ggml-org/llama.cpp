@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-impl.h"
 
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
@@ -435,10 +436,40 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_build_forward_expand(gf, cur);
 }
 
+class llm_graph_input_gemma4_ple : public llm_graph_input_i {
+public:
+    llm_graph_input_gemma4_ple(const llama_model & model) : model(model) {}
+
+    void set_input(const llama_ubatch * ubatch) override {
+        ggml_tensor * ple = model.per_layer_tok_embd;
+
+        const bool prefetch = model.can_prefetch.count(ple);
+
+        if (ubatch->token) {
+            if (prefetch) {
+                llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
+            }
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
+        } else if (prefetch) {
+            // [TAG_GEMMA4_IMG_PADDING]
+            const int32_t padding = 0;
+            llama_prefetch_rows(ple, &padding, 1);
+        }
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return params.ubatch.token ? tokens && tokens->ne[0] == params.ubatch.n_tokens : tokens == nullptr;
+    }
+
+    ggml_tensor * tokens = nullptr;
+
+    const llama_model & model;
+};
+
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model);
 
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);
@@ -451,9 +482,8 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
-
-        res->add_input(std::move(inp));
     } else {
+        // [TAG_GEMMA4_IMG_PADDING]
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
         const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
@@ -467,6 +497,7 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, 1);
         cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
+    res->add_input(std::move(inp));
     return inp_per_layer;
 }
 
