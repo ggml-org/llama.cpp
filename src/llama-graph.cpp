@@ -3744,13 +3744,7 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    if (hparams.llm_ffn_op_cls == LLM_FFN_GELU) {
-                        cur = ggml_gelu(ctx0, cur);
-                    } else if (hparams.llm_ffn_op_cls == LLM_FFN_SILU) {
-                        cur = ggml_silu(ctx0, cur);
-                    } else {
-                        cur = ggml_tanh(ctx0, cur);
-                    }
+                    cur = ggml_unary(ctx0, cur, hparams.act_cls != GGML_UNARY_OP_COUNT ? hparams.act_cls : GGML_UNARY_OP_TANH);
                     if (cls_norm) {
                         // head norm
                         cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);

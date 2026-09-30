@@ -25,9 +25,9 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
     }
 
-    // GGUFs without a classifier activation use gelu
-    if (hparams.llm_ffn_op_cls == LLM_FFN_NONE) {
-        hparams.llm_ffn_op_cls = LLM_FFN_GELU;
+    // GGUFs without a classifier activation keep the tanh approximation of gelu
+    if (hparams.act_cls == GGML_UNARY_OP_COUNT) {
+        hparams.act_cls = GGML_UNARY_OP_GELU;
     }
 
     switch (hparams.n_layer()) {
