@@ -1797,7 +1797,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     n_queued_tokens += n_tokens_all;
 
     output_swaps.clear();
-    embd_token_ids.clear();
+    embd_batch_idxs.clear();
 
     sched_reserve();
 
@@ -2031,9 +2031,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
         if (extracted_all_tokens) {
             GGML_ASSERT(ubatch.data && ubatch.data->batch_idxs.size() == ubatch.n_tokens);
-            GGML_ASSERT(embd_token_ids.size() == (size_t) n_tokens_prev);
+            GGML_ASSERT(embd_batch_idxs.size() == (size_t) n_tokens_prev);
             const auto & batch_idxs = ubatch.data->batch_idxs;
-            embd_token_ids.insert(embd_token_ids.end(), batch_idxs.begin(), batch_idxs.end());
+            embd_batch_idxs.insert(embd_batch_idxs.end(), batch_idxs.begin(), batch_idxs.end());
         }
 
         if (has_samplers) {
@@ -2363,10 +2363,10 @@ void llama_context::output_reorder() {
     output_swaps.clear();
 
     // Layer inputs and unmasked NextN embeddings contain all token rows, independent of logits selection.
-    for (size_t i = 0; i < embd_token_ids.size(); ++i) {
-        while (embd_token_ids[i] != (int32_t) i) {
-            const int32_t j = embd_token_ids[i];
-            GGML_ASSERT(j >= 0 && (size_t) j < embd_token_ids.size());
+    for (size_t i = 0; i < embd_batch_idxs.size(); ++i) {
+        while (embd_batch_idxs[i] != (int32_t) i) {
+            const int32_t j = embd_batch_idxs[i];
+            GGML_ASSERT(j >= 0 && (size_t) j < embd_batch_idxs.size());
             if (embd_nextn.has_data() && !cparams.embeddings_nextn_masked) {
                 for (size_t k = 0; k < n_embd_out; ++k) {
                     std::swap(embd_nextn.data[i*n_embd_out + k], embd_nextn.data[j*n_embd_out + k]);
@@ -2379,10 +2379,10 @@ void llama_context::output_reorder() {
                     }
                 }
             }
-            std::swap(embd_token_ids[i], embd_token_ids[j]);
+            std::swap(embd_batch_idxs[i], embd_batch_idxs[j]);
         }
     }
-    embd_token_ids.clear();
+    embd_batch_idxs.clear();
 }
 
 //
