@@ -166,7 +166,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         //n_vocab = 4096; // must be >= the hard-coded codec head size (3072)
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
-        n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
+        n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
     }
 
     uint32_t n_head_kv = n_head;
@@ -384,10 +384,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     }
 
     if (arch == LLM_ARCH_HRM_TEXT) {
-        // 8 cache slots alias 2 physical blocks: 1 low-stack layer + 1 high-stack layer
+        // 6 cache slots alias 2 physical blocks: 1 low-stack layer + 1 high-stack layer
         ms.add_kv(LLM_KV_HRM_LAYERS_PER_STACK, uint32_t(1));
         ms.add_kv(LLM_KV_HRM_H_CYCLES,         uint32_t(2));
-        ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(3));
+        ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(2));
     }
 
     if (arch == LLM_ARCH_MAPLE) {
