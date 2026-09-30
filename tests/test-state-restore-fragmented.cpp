@@ -49,15 +49,15 @@ int main(int argc, char ** argv) {
 
     // interleave the 3 sequences:
     // 01201230123...
-    llama_batch batch = llama_batch_init(params.n_parallel*tokens.size(), 0, 1);
+    common_batch batch(ctx);
     for (size_t i = 0; i < tokens.size(); i++) {
         for (int s = 0; s < params.n_parallel; ++s) {
-            common_batch_add(batch, tokens[i], i, {s}, false);
+            batch.add(tokens[i], i, s, false);
         }
     }
-    batch.logits[batch.n_tokens - 1] = true;
+    batch.set_output(batch.size() - 1, true);
 
-    if (llama_decode(ctx, batch)) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         fprintf(stderr, "%s : failed to decode seq 0\n", __func__);
         return 1;
     }
@@ -91,7 +91,6 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s : FAILED to restore seq state into fragmented cache (got %zu, expected %zu)\n",
                 __func__, nset, seq_state.size());
         fprintf(stderr, "%s : This is the bug - state restore fails with fragmented KV cache\n", __func__);
-        llama_batch_free(batch);
         return 1;
     }
     fprintf(stderr, "%s : restored state into seq 1, %zu bytes\n", __func__, nset);
@@ -105,13 +104,12 @@ int main(int argc, char ** argv) {
     auto next_token = llama_sampler_sample(smpl, ctx, -1);
     auto next_token_str = common_token_to_piece(ctx, next_token);
 
-    common_batch_clear(batch);
-    common_batch_add(batch, next_token, (int)tokens.size(), {1}, true);
+    batch.clear();
+    batch.add(next_token, (int)tokens.size(), 1, true);
 
-    if (llama_decode(ctx, batch)) {
+    if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         fprintf(stderr, "%s : failed to decode with restored state\n", __func__);
         llama_sampler_free(smpl);
-        llama_batch_free(batch);
         return 1;
     }
 
@@ -119,7 +117,6 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "%s : SUCCESS - state restore works with fragmented KV cache\n", __func__);
 
     llama_sampler_free(smpl);
-    llama_batch_free(batch);
 
     return 0;
 }

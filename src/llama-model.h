@@ -734,6 +734,9 @@ struct llama_model {
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 
+    // which tensors can be prefetched - driven by TENSOR_READ_LAZY
+    std::unordered_set<const ggml_tensor *> can_prefetch;
+
     // statically allocated context for assigning
     struct llama_meta_device_get_split_state_userdata get_split_state_ud;
 
