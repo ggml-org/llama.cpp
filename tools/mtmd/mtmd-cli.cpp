@@ -529,6 +529,10 @@ int main(int argc, char ** argv) {
             console::readline(line, false);
             if (g_is_interrupted) break;
             console::set_display(DISPLAY_TYPE_RESET);
+            // a submitted line always ends with a newline, an empty read is EOF
+            if (line.empty()) {
+                break;
+            }
             line = string_strip(line);
             if (line.empty()) {
                 continue;
