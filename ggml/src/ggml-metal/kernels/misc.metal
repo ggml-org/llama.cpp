@@ -114,8 +114,14 @@ kernel void kernel_roll_f32(
     }
 }
 
-template <typename T>
-kernel void kernel_pad_impl(
+constant bool FC_pad_circular [[function_constant(FC_PAD + 0)]];
+
+// circular means on a torus, so the coordinates wrap around
+static inline int32_t wrap_around(int32_t coord, int32_t size) {
+    return (coord + size) % size;
+}
+
+kernel void kernel_pad_f32(
     constant ggml_metal_kargs_pad & args,
     device  const char * src0,
     device        char * dst,
@@ -127,12 +133,40 @@ kernel void kernel_pad_impl(
     const int32_t k0 = tgpig.x/args.ne1;
     const int32_t i1 = tgpig.x - k0*args.ne1;
 
-    const int32_t i03 = i3;
-    const int32_t i02 = i2;
-    const int32_t i01 = i1;
+    const int32_t ne00 = args.ne00;
+    const int32_t ne01 = args.ne01;
+    const int32_t ne02 = args.ne02;
+    const int32_t ne03 = args.ne03;
 
-    device const T * src0_ptr = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
-    device       T * dst_ptr  = (device       T *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
+    int32_t i01 = i1 - args.lp1;
+    int32_t i02 = i2 - args.lp2;
+    int32_t i03 = i3 - args.lp3;
+
+    if (FC_pad_circular) {
+        i01 = wrap_around(i01, ne01);
+        i02 = wrap_around(i02, ne02);
+        i03 = wrap_around(i03, ne03);
+    }
+
+    device float * dst_ptr = (device float *) (dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1);
+
+    // the row lies in the padded region, so no source row backs it
+    if (i01 < 0 || i01 >= ne01 ||
+        i02 < 0 || i02 >= ne02 ||
+        i03 < 0 || i03 >= ne03) {
+        for (int32_t l0 = 0; l0 < 1024; l0 += ntg.x) {
+            const int32_t i0 = k0*1024 + tpitg.x + l0;
+            if (i0 >= args.ne0) {
+                break;
+            }
+
+            dst_ptr[i0] = 0.0f;
+        }
+
+        return;
+    }
+
+    device const char * src0_row = src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01;
 
     for (int32_t l0 = 0; l0 < 1024; l0 += ntg.x) {
         const int32_t i0 = k0*1024 + tpitg.x + l0;
@@ -140,18 +174,15 @@ kernel void kernel_pad_impl(
             break;
         }
 
-        if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-            dst_ptr[i0] = src0_ptr[i0];
-        } else {
-            dst_ptr[i0] = 0.0f;
+        int32_t i00 = i0 - args.lp0;
+
+        if (FC_pad_circular) {
+            i00 = wrap_around(i00, ne00);
         }
+
+        dst_ptr[i0] = i00 >= 0 && i00 < ne00 ? *((device const float *) (src0_row + i00*args.nb00)) : 0.0f;
     }
 }
-
-typedef decltype(kernel_pad_impl<float>) kernel_pad_t;
-
-template [[host_name("kernel_pad_f32")]]   kernel kernel_pad_t kernel_pad_impl<float>;
-template [[host_name("kernel_pad_f32_4")]] kernel kernel_pad_t kernel_pad_impl<float4>;
 
 // TODO: this is slow - optimize
 kernel void kernel_pad_reflect_1d_f32(
@@ -510,18 +541,18 @@ typedef decltype(kernel_fwht<64, half>)  kernel_fwht_f16_t;
 template [[host_name("kernel_fwht_f32_64")]]  kernel kernel_fwht_f32_t kernel_fwht<64,  float>;
 template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_f32_t kernel_fwht<128, float>;
 template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_f32_t kernel_fwht<256, float>;
-template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_f32_t kernel_fwht<512, float>;
 
 template [[host_name("kernel_fwht_f16_64")]]  kernel kernel_fwht_f16_t kernel_fwht<64,  half>;
 template [[host_name("kernel_fwht_f16_128")]] kernel kernel_fwht_f16_t kernel_fwht<128, half>;
 template [[host_name("kernel_fwht_f16_256")]] kernel kernel_fwht_f16_t kernel_fwht<256, half>;
-template [[host_name("kernel_fwht_f16_512")]] kernel kernel_fwht_f16_t kernel_fwht<512, half>;
 
+template [[host_name("kernel_fwht_f32_512")]]  kernel kernel_fwht_f32_t kernel_fwht_tg<512,  GGML_METAL_FWHT_TG_NT, float>;
 template [[host_name("kernel_fwht_f32_1024")]] kernel kernel_fwht_f32_t kernel_fwht_tg<1024, GGML_METAL_FWHT_TG_NT, float>;
 template [[host_name("kernel_fwht_f32_2048")]] kernel kernel_fwht_f32_t kernel_fwht_tg<2048, GGML_METAL_FWHT_TG_NT, float>;
 template [[host_name("kernel_fwht_f32_4096")]] kernel kernel_fwht_f32_t kernel_fwht_tg<4096, GGML_METAL_FWHT_TG_NT, float>;
 template [[host_name("kernel_fwht_f32_8192")]] kernel kernel_fwht_f32_t kernel_fwht_tg<8192, GGML_METAL_FWHT_TG_NT, float>;
 
+template [[host_name("kernel_fwht_f16_512")]]  kernel kernel_fwht_f16_t kernel_fwht_tg<512,  GGML_METAL_FWHT_TG_NT, half>;
 template [[host_name("kernel_fwht_f16_1024")]] kernel kernel_fwht_f16_t kernel_fwht_tg<1024, GGML_METAL_FWHT_TG_NT, half>;
 template [[host_name("kernel_fwht_f16_2048")]] kernel kernel_fwht_f16_t kernel_fwht_tg<2048, GGML_METAL_FWHT_TG_NT, half>;
 template [[host_name("kernel_fwht_f16_4096")]] kernel kernel_fwht_f16_t kernel_fwht_tg<4096, GGML_METAL_FWHT_TG_NT, half>;

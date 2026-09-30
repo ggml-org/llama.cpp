@@ -276,28 +276,28 @@ inline static void ggml_vec_dot_f16_unroll(const int n, const int xs, float * GG
             const int np = 0;
         #endif
     #else
-        const int np = (n & ~(GGML_F16_STEP - 1));
+        const int np = (n & ~(GGML_F16_DOT_STEP - 1));
 
-        GGML_F16_VEC sum[GGML_VEC_DOT_UNROLL][GGML_F16_ARR] = { { GGML_F16_VEC_ZERO } };
+        GGML_F16_DOT_VEC sum[GGML_VEC_DOT_UNROLL][GGML_F16_DOT_ARR] = { { GGML_F16_DOT_VEC_ZERO } };
 
-        GGML_F16_VEC ax[GGML_F16_ARR];
-        GGML_F16_VEC ay[GGML_F16_ARR];
+        GGML_F16_DOT_VEC ax[GGML_F16_DOT_ARR];
+        GGML_F16_DOT_VEC ay[GGML_F16_DOT_ARR];
 
-        for (int i = 0; i < np; i += GGML_F16_STEP) {
-            for (int j = 0; j < GGML_F16_ARR; j++) {
-                ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+        for (int i = 0; i < np; i += GGML_F16_DOT_STEP) {
+            for (int j = 0; j < GGML_F16_DOT_ARR; j++) {
+                ay[j] = GGML_F16_DOT_VEC_LOAD(y + i + j*GGML_F16_DOT_EPR, j);
 
                 for (int k = 0; k < GGML_VEC_DOT_UNROLL; ++k) {
-                    ax[j] = GGML_F16_VEC_LOAD(x[k] + i + j*GGML_F16_EPR, j);
+                    ax[j] = GGML_F16_DOT_VEC_LOAD(x[k] + i + j*GGML_F16_DOT_EPR, j);
 
-                    sum[k][j] = GGML_F16_VEC_FMA(sum[k][j], ax[j], ay[j]);
+                    sum[k][j] = GGML_F16_DOT_VEC_FMA(sum[k][j], ax[j], ay[j]);
                 }
             }
         }
 
         // reduce sum0..sum3 to sum0
         for (int k = 0; k < GGML_VEC_DOT_UNROLL; ++k) {
-            GGML_F16_VEC_REDUCE(sumf[k], sum[k]);
+            GGML_F16_DOT_VEC_REDUCE(sumf[k], sum[k]);
         }
     #endif
 #else

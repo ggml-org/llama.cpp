@@ -225,6 +225,11 @@ static enum ggml_status ggml_backend_zdnn_buffer_init_tensor(ggml_backend_buffer
         return GGML_STATUS_SUCCESS;
     }
 
+    // reject empty tensors to avoid zDNN crash
+    if (ggml_is_empty(tensor)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
     ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
 
     const int64_t tsize = ggml_nbytes(tensor);
@@ -438,15 +443,13 @@ static ggml_backend_i ggml_backend_zdnn_i = {
 };
 
 static ggml_guid_t ggml_backend_zdnn_guid(void) {
-    static const char * guid_str = "IBM-ZDNN-ACCELER";
-    return reinterpret_cast<ggml_guid_t>((void *)guid_str);
+    static char guid_str[] = "IBM-ZDNN-ACCELER";
+    return reinterpret_cast<ggml_guid_t>(guid_str);
 }
 
 bool ggml_backend_is_zdnn(ggml_backend_t backend) {
     return backend != NULL &&
            ggml_guid_matches(backend->guid, ggml_backend_zdnn_guid());
-
-    GGML_UNUSED(backend);
 }
 
 //
@@ -483,7 +486,7 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->description = ggml_backend_zdnn_device_get_description(dev);
     props->type        = ggml_backend_zdnn_device_get_type(dev);
     ggml_backend_zdnn_device_get_memory(dev, &props->memory_free, &props->memory_total);
-    props->caps = (ggml_backend_dev_caps) {
+    props->caps = {
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ false,
@@ -500,7 +503,7 @@ static ggml_backend_t ggml_backend_zdnn_device_init(ggml_backend_dev_t dev, cons
     }
 
     ggml_backend_t backend = (ggml_backend *)malloc(sizeof(ggml_backend));
-    *backend = (ggml_backend) {
+    *backend = {
         /* .guid       = */ ggml_backend_zdnn_guid(),
         /* .iface      = */ ggml_backend_zdnn_i,
         /* .device     = */ dev,
@@ -619,13 +622,13 @@ ggml_backend_reg_t ggml_backend_zdnn_reg(void) {
     atexit(ggml_zdnn_cleanup);
 
     {
-        g_ggml_backend_zdnn_reg = (ggml_backend_reg) {
+        g_ggml_backend_zdnn_reg = {
             /* .api_version = */ GGML_ZDNN_VERSION,
             /* .iface       = */ ggml_backend_zdnn_reg_i,
             /* .context     = */ NULL
         };
 
-        g_ggml_backend_zdnn_device = (ggml_backend_device) {
+        g_ggml_backend_zdnn_device = {
             /* .iface       = */ ggml_backend_zdnn_device_i,
             /* .reg         = */ &g_ggml_backend_zdnn_reg,
             /* .context     = */ &g_ggml_ctx_dev_main

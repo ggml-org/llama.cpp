@@ -228,7 +228,6 @@ int main(int argc, char ** argv) {
                 common_batch_add(batch_tgt, draft[i], n_past + i, { seq_id }, true);
             }
 
-            //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
 
             llama_decode(ctx_tgt, batch_tgt);
         }
