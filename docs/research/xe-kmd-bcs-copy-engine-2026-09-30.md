@@ -263,7 +263,21 @@ against the default build, `/mnt/nvme1/oneapi-ab/grf256-*`:
 
 Reading: the prefill gain is the tile kernel's spill traffic; the d=128 decode loss at depth
 is the vec kernel at half occupancy for a kernel that spilled little. Hence the tile-only
-mode 1; its campaign is recorded below when finished. Oracle (default sweep with turbo FA,
+mode 1, measured on one binary (`e4bf0b239`) with env-only arms, same protocol
+(`/mnt/nvme1/oneapi-ab/grfmode1-*`, `all_cells_valid: true`):
+
+| model | depth | pp512 off -> mode 1 | tg128 off -> mode 1 |
+|---|--:|--:|--:|
+| Ornith IQ2_M (d=256) | 0 | 267.7 +- 2.6 -> 274.5 +- 0.3 (+2.5 %) | 53.5 -> 53.5 (flat) |
+| | 8192 | 267.3 +- 2.4 -> 265.1 +- 2.0 (-0.8 %, within noise) | 46.6 -> 46.5 (flat) |
+| Llama 3.1 8B (d=128) | 0 | 1005.6 +- 19.1 -> 1107.8 +- 8.1 (+10.2 %) | 46.9 -> 46.9 (flat) |
+| | 8192 | 210.9 -> 210.9 (flat) | 36.4 -> 36.4 (flat) |
+
+Mode 1 keeps the short-context prefill gain and costs nothing on decode. It stays opt-in:
+the gain is confined to prefill below the MKL gate (n_kv < 1024), and one host, one
+compiler version. A first mode-1 product was rejected by the harness only because the
+binary predated the fix commit it was compared against (provenance gate); the rows above
+are from the relinked binary. Oracle (default sweep with turbo FA,
 and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
 
 ## Not claimed
@@ -280,9 +294,9 @@ and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
   are for the `auto` placement only.
 - The 7.3-rc5 kernel was booted for this session; rc1 vs rc5 was not compared for speed.
-- The large-GRF numbers are one campaign per model on one host; mode 1 (tile only) is not
-  yet measured; the standing "global large-GRF is a dead end" decision is untouched (this is
-  per-kernel).
+- The large-GRF numbers are one campaign per model and mode on one host with IGC 2.41.5;
+  the standing "global large-GRF is a dead end" decision is untouched (this is per-kernel,
+  opt-in).
 - X7D/X7E ran while another process compiled on the host (load up to 31, swap active);
   their pass/fail stands, their decode numbers do not. X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
   path and leaves the sweep itself untouched, so #1010's transient-EBUSY trigger on
