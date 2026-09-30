@@ -911,7 +911,7 @@ static __device__ __forceinline__ int ggml_cuda_round_to_nearest_even(float x) {
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
-    // TODO: Check how incoming NaNs are treated (i.e. is sign-bit preserved)? 
+    // TODO: Check how incoming NaNs are treated (i.e. is sign-bit preserved)?
     return __nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E4M3);
 #else
     const uint8_t sign = signbit(x) ? 0x80 : 0;
