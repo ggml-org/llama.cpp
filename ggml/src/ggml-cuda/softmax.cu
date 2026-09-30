@@ -142,6 +142,105 @@ static __global__ void soft_max_f32(
     }
 }
 
+// Vector of 4 consecutive mask elements -> float. The mask row is assumed to be contiguous in
+// its first dimension (same assumption as soft_max_f32 above).
+template <typename T>
+static __device__ __forceinline__ void soft_max_load_f32(const T * __restrict__ p, float v[4]) {
+    if constexpr (std::is_same_v<T, float>) {
+        const float4 f = *reinterpret_cast<const float4 *>(p);
+        v[0] = f.x; v[1] = f.y; v[2] = f.z; v[3] = f.w;
+    } else {
+        v[0] = t2f32<T>(p[0]);
+        v[1] = t2f32<T>(p[1]);
+        v[2] = t2f32<T>(p[2]);
+        v[3] = t2f32<T>(p[3]);
+    }
+}
+
+// Vectorized softmax: one block per row and 4 consecutive columns per thread, with the row kept
+// in registers across both reductions. The row is therefore read from global memory exactly once
+// and written once, instead of one element per thread with a shared-memory round trip, which is
+// instruction bound for the small rows produced by attention.
+// Preconditions (checked by the caller): 4 | ncols, ncols <= 4*CUDA_SOFT_MAX_BLOCK_SIZE,
+// 16 B aligned x/dst, no sinks, mask == nullptr or contiguous in dim 0.
+template <typename T, bool has_mask>
+static __global__ void soft_max_f32_vec(
+        const float * __restrict__ x, const T * __restrict__ mask, float * __restrict__ dst, const soft_max_params p) {
+    const int ncols = (int) p.ncols;
+    const int tid   = threadIdx.x;
+
+    const int64_t i03 = blockIdx.z;
+    const int64_t i02 = blockIdx.y;
+    const int64_t i01 = blockIdx.x;
+
+    const int64_t rowx = i01 + i02 * (int64_t) gridDim.x + i03 * (int64_t) gridDim.x * gridDim.y;
+
+    const float * __restrict__ xr = x + rowx * ncols;
+    float * __restrict__ dr = dst + rowx * ncols;
+
+    const int col0 = tid * 4;
+
+    float vals[4];
+    if (has_mask) {
+        const int64_t i12 = i02 % p.ne12;
+        const int64_t i13 = i03 % p.ne13;
+        const T * __restrict__ mr = mask + (i01 * p.nb11 + i12 * p.nb12 + i13 * p.nb13) / (int64_t) sizeof(T);
+        const float slope = get_alibi_slope(p.max_bias, i02, p.n_head_log2, p.m0, p.m1);
+
+        if (col0 < ncols) {
+            const float4 xv = *reinterpret_cast<const float4 *>(xr + col0);
+            soft_max_load_f32<T>(mr + col0, vals);
+            vals[0] = xv.x * p.scale + slope * vals[0];
+            vals[1] = xv.y * p.scale + slope * vals[1];
+            vals[2] = xv.z * p.scale + slope * vals[2];
+            vals[3] = xv.w * p.scale + slope * vals[3];
+        } else {
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                vals[i] = -INFINITY;
+            }
+        }
+    } else {
+        if (col0 < ncols) {
+            const float4 xv = *reinterpret_cast<const float4 *>(xr + col0);
+            vals[0] = xv.x * p.scale;
+            vals[1] = xv.y * p.scale;
+            vals[2] = xv.z * p.scale;
+            vals[3] = xv.w * p.scale;
+        } else {
+#pragma unroll
+            for (int i = 0; i < 4; ++i) {
+                vals[i] = -INFINITY;
+            }
+        }
+    }
+
+    extern __shared__ float data_soft_max_f32_vec[];
+    float * buf_iw = data_soft_max_f32_vec;
+
+    float max_val = fmaxf(fmaxf(vals[0], vals[1]), fmaxf(vals[2], vals[3]));
+    max_val = block_reduce<block_reduce_method::MAX, 0>(max_val, buf_iw);
+
+    float tmp = 0.0f;
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        vals[i] = expf(vals[i] - max_val);
+        tmp += vals[i];
+    }
+
+    if (blockDim.x > WARP_SIZE) {
+        // sync is needed as we reuse buf_iw across block_reduce invocations
+        __syncthreads();
+    }
+    tmp = block_reduce<block_reduce_method::SUM, 0>(tmp, buf_iw);
+
+    if (col0 < ncols) {
+        const float inv_sum = 1.0f / tmp;
+        *reinterpret_cast<float4 *>(dr + col0) =
+            make_float4(vals[0] * inv_sum, vals[1] * inv_sum, vals[2] * inv_sum, vals[3] * inv_sum);
+    }
+}
+
 // TODO: Template to allow keeping ncols in registers if they fit
 static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __restrict__ x,
                                                                 float * __restrict__ dst,
@@ -345,6 +444,24 @@ static void soft_max_f32_cuda(const float *                                x,
     const int id       = ggml_cuda_get_device();
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 
+    // Vectorized path: one block per row, 4 consecutive columns per thread, values held in
+    // registers between the two reductions (single global read + single global write).
+    const bool vec_ok = sinks == nullptr &&
+                        params.ncols % 4 == 0 && params.ncols >= 128 && params.ncols <= 4*CUDA_SOFT_MAX_BLOCK_SIZE &&
+                        ((uintptr_t) x   % 16) == 0 && ((uintptr_t) dst % 16) == 0;
+
+    if (vec_ok) {
+        const int nthread = (int) (((params.ncols/4 + WARP_SIZE - 1)/WARP_SIZE)*WARP_SIZE);
+        const dim3 block_dims_vec(nthread, 1, 1);
+        const size_t nbytes_shared_vec = WARP_SIZE*sizeof(float);
+        if (mask != nullptr) {
+            soft_max_f32_vec<T, true><<<block_nums, block_dims_vec, nbytes_shared_vec, stream>>>(x, mask, dst, params);
+        } else {
+            soft_max_f32_vec<T, false><<<block_nums, block_dims_vec, nbytes_shared_vec, stream>>>(
+                x, (const T *) nullptr, dst, params);
+        }
+        return;
+    }
 
     if (nbytes_shared <= smpbo) {
         launch_soft_max_kernels<32, 64, 128, 256, 512, 1024, 2048, 4096>(x, mask, sinks, dst, params, stream, block_dims, block_nums, nbytes_shared);

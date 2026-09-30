@@ -426,6 +426,57 @@ static bool ggml_cuda_cpy_as_memcpy_2d(const ggml_tensor * src0, const ggml_tens
     return spitch >= width && dpitch >= width;
 }
 
+// Copy of rows that are contiguous in their first dimension on both sides, i.e. a permutation that
+// leaves dim 0 in place (for example the (0, 2, 1, 3) transpose of the attention scores). Both the
+// read and the write of a row are then sequential, so each thread can move a full 16 B vector and
+// the generic per-element index computation (which costs several 64 bit divisions per element) is
+// replaced by one division per row.
+template <typename T, int vec>
+static __global__ void cpy_rows_vec(
+        const char * __restrict__ cx, char * __restrict__ cdst,
+        const int64_t ne0, const int64_t nrows,
+        const int64_t ne1, const int64_t ne2,
+        const int64_t nb1s, const int64_t nb2s, const int64_t nb3s,
+        const int64_t nb1d, const int64_t nb2d, const int64_t nb3d) {
+    static_assert(vec*sizeof(T) == 16, "vector must be 16 bytes wide");
+
+    const int64_t i0 = ((int64_t) blockIdx.x*blockDim.x + threadIdx.x)*vec;
+
+    if (i0 >= ne0) {
+        return;
+    }
+
+    for (int64_t r = blockIdx.y; r < nrows; r += gridDim.y) {
+        const int64_t i1  = r % ne1;
+        const int64_t i23 = r / ne1;
+        const int64_t i2  = i23 % ne2;
+        const int64_t i3  = i23 / ne2;
+
+        const int64_t off_s = i1*nb1s + i2*nb2s + i3*nb3s;
+        const int64_t off_d = i1*nb1d + i2*nb2d + i3*nb3d;
+
+        *reinterpret_cast<uint4 *>(cdst + off_d + i0*sizeof(T)) =
+            *reinterpret_cast<const uint4 *>(cx + off_s + i0*sizeof(T));
+    }
+}
+
+template <typename T, int vec>
+static void ggml_cpy_rows_vec_cuda(const char * cx, char * cdst,
+        const int64_t ne0, const int64_t nrows, const int64_t ne1, const int64_t ne2,
+        const int64_t nb1s, const int64_t nb2s, const int64_t nb3s,
+        const int64_t nb1d, const int64_t nb2d, const int64_t nb3d, cudaStream_t stream) {
+    const int64_t nquad = (ne0 + vec - 1)/vec;
+    const int64_t gx    = (nquad + CUDA_CPY_BLOCK_SIZE - 1)/CUDA_CPY_BLOCK_SIZE;
+    const int64_t gy    = nrows < 65535 ? nrows : 65535;
+
+    dim3 dimGrid((unsigned int) gx, (unsigned int) gy, 1);
+    dim3 dimBlock(CUDA_CPY_BLOCK_SIZE, 1, 1);
+
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(dimGrid, dimBlock, 0, stream);
+    ggml_cuda_kernel_launch(cpy_rows_vec<T, vec>, launch_params, cx, cdst, ne0, nrows, ne1, ne2,
+        nb1s, nb2s, nb3s, nb1d, nb2d, nb3d);
+}
+
 void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
@@ -461,6 +512,18 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) &&
         src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
 
+    // both sides are contiguous in dim 0, so rows can be copied with 16 B vectors when every row
+    // starts on a 16 B boundary (see cpy_rows_vec)
+    const int64_t cpy_esz = ggml_element_size(src0);
+    const int64_t cpy_vec = cpy_esz == 4 ? 4 : (cpy_esz == 2 ? 8 : 0);
+    const bool rows_vec_ok = cpy_vec > 0 && src0->type == src1->type &&
+        src0->ne[0] == src1->ne[0] && src0->ne[1] == src1->ne[1] &&
+        src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3] &&
+        nb00 == cpy_esz && nb10 == cpy_esz && ne00 % cpy_vec == 0 &&
+        ((uintptr_t) src0_ddc % 16) == 0 && ((uintptr_t) src1_ddc % 16) == 0 &&
+        (nb01 % 16) == 0 && (nb02 % 16) == 0 && (nb03 % 16) == 0 &&
+        (nb11 % 16) == 0 && (nb12 % 16) == 0 && (nb13 % 16) == 0;
+
     size_t mc_width = 0, mc_height = 0, mc_spitch = 0, mc_dpitch = 0;
 
     if (src0->type == src1->type && contiguous_srcs) {
@@ -476,6 +539,17 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     } else if (ggml_cuda_cpy_as_memcpy_2d(src0, src1, mc_width, mc_height, mc_spitch, mc_dpitch)) {
         CUDA_CHECK(cudaMemcpy2DAsync(src1_ddc, mc_dpitch, src0_ddc, mc_spitch,
                                      mc_width, mc_height, cudaMemcpyDeviceToDevice, main_stream));
+    } else if (rows_vec_ok) {
+        // a permutation that leaves dim 0 in place: both sides can be streamed with 16 B accesses
+        if (ggml_element_size(src0) == 4) {
+            ggml_cpy_rows_vec_cuda<float, 4>
+                (src0_ddc, src1_ddc, ne00, src0->ne[1]*src0->ne[2]*src0->ne[3], src0->ne[1], src0->ne[2],
+                 nb01, nb02, nb03, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_rows_vec_cuda<half, 8>
+                (src0_ddc, src1_ddc, ne00, src0->ne[1]*src0->ne[2]*src0->ne[3], src0->ne[1], src0->ne[2],
+                 nb01, nb02, nb03, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
         if (can_be_transposed) {
             ggml_cpy_scalar_cuda<float, float, true>

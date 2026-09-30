@@ -276,8 +276,57 @@ static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, 
     dst[i] = (T)(op((float)x[j0]) * (float)g[j1]);
 }
 
+// Vectorized GLU for f32 operands whose rows are contiguous: a 2D grid (column quads x rows) keeps
+// the 64 bit div/mod that unary_gated_op_kernel needs for the row index out of the inner loop and
+// lets every thread move 16 B per operand. This is the layout of the split (fused gate/up) form and
+// of separate gate/up tensors, i.e. what transformer FFNs feed in.
+template <float (*op)(float)>
+static __global__ void unary_gated_op_kernel_vec_f32(
+        const float * __restrict__ x, const float * __restrict__ g, float * __restrict__ dst,
+        const int64_t nrows, const int64_t n, const int64_t o0, const int64_t o1) {
+    ggml_cuda_pdl_lc();
+    ggml_cuda_pdl_sync();
+
+    for (int64_t r = blockIdx.y; r < nrows; r += gridDim.y) {
+        const int64_t c = ((int64_t) blockIdx.x*blockDim.x + threadIdx.x)*4;
+
+        if (c >= n) {
+            return;
+        }
+
+        const float4 xv = *reinterpret_cast<const float4 *>(x + r*o0 + c);
+        const float4 gv = *reinterpret_cast<const float4 *>(g + r*o1 + c);
+
+        *reinterpret_cast<float4 *>(dst + r*n + c) = make_float4(
+            op(xv.x)*gv.x, op(xv.y)*gv.y, op(xv.z)*gv.z, op(xv.w)*gv.w);
+    }
+}
+
 template <float (*op)(float), typename T>
 static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
+    if constexpr (std::is_same_v<T, float>) {
+        // n is the row length and o0/o1 are the row strides in elements; when both rows are
+        // contiguous every row starts at a 16 B boundary and the vectorized form can be used
+        const bool vec_ok = n > 0 && n % 4 == 0 && o0 % 4 == 0 && o1 % 4 == 0 &&
+                            ((uintptr_t) x   % 16) == 0 &&
+                            ((uintptr_t) g   % 16) == 0 &&
+                            ((uintptr_t) dst % 16) == 0;
+
+        if (vec_ok) {
+            const int64_t nrows = k / n;
+            const int64_t nquad = (n + 3)/4;
+            const int64_t gx    = (nquad + CUDA_GLU_BLOCK_SIZE - 1)/CUDA_GLU_BLOCK_SIZE;
+            const int64_t gy    = nrows < 65535 ? nrows : 65535;
+
+            if (gx <= INT_MAX && gy > 0) {
+                const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(
+                    dim3((unsigned int) gx, (unsigned int) gy, 1), CUDA_GLU_BLOCK_SIZE, 0, stream);
+                ggml_cuda_kernel_launch(unary_gated_op_kernel_vec_f32<op>, launch_params, x, g, dst, nrows, n, o0, o1);
+                return;
+            }
+        }
+    }
+
     const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream);
     ggml_cuda_kernel_launch(unary_gated_op_kernel<op, T>, launch_params, x, g, dst, k, n, o0, o1);
