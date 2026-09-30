@@ -768,7 +768,7 @@ class F8_E4M3(__Quant, qtype=GGMLQuantizationType.F8_E4M3):
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
         bits = blocks.astype(np.uint8)
-        sign = np.where(bits & 0x80, -1.0, 1.0)
+        sign = np.where(bits & 0x80, np.float32(-1.0), np.float32(1.0))
         magnitude = bits & 0x7F
         exponent = magnitude >> 3
         mantissa = magnitude & 0x07
@@ -777,8 +777,8 @@ class F8_E4M3(__Quant, qtype=GGMLQuantizationType.F8_E4M3):
             np.ldexp(mantissa.astype(np.float32), -9),
             np.ldexp(1.0 + mantissa.astype(np.float32) / 8.0, exponent.astype(np.int32) - 7),
         )
-        values = np.where(magnitude == 0x7F, np.nan, values)
-        return sign * values
+        values = np.where(magnitude == 0x7F, np.nan, sign * values)
+        return values.astype(np.float32, copy=False)
 
 
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
