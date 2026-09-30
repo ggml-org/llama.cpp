@@ -6,6 +6,17 @@
 #include <string>
 #include <vector>
 
+// fill the batch with tokens at consecutive positions starting from pos_0, output logits only for the last one
+static void batch_set_tokens(llama_batch_ext * batch, const llama_token * tokens, int32_t n_tokens, llama_pos pos_0) {
+    llama_batch_ext_clear(batch);
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        const int32_t idx = llama_batch_ext_add_token(batch, 0, tokens[i]);
+        const llama_pos pos = pos_0 + i;
+        llama_batch_ext_set_pos(batch, idx, &pos);
+    }
+    llama_batch_ext_set_output_logits(batch, n_tokens - 1, true);
+}
+
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
     printf("\n    %s -m model.gguf [-c context_size] [-ngl n_gpu_layers]\n", argv[0]);
@@ -96,6 +107,8 @@ int main(int argc, char ** argv) {
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.8f));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
+    llama_batch_ext * batch = llama_batch_ext_init(ctx);
+
     // helper function to evaluate a prompt and generate a response
     auto generate = [&](const std::string & prompt) {
         std::string response;
@@ -109,20 +122,25 @@ int main(int argc, char ** argv) {
             GGML_ABORT("failed to tokenize the prompt\n");
         }
 
-        // prepare a batch for the prompt
-        llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
+        // the tokens to evaluate next: the prompt, then the sampled token
+        const llama_token * tokens = prompt_tokens.data();
+        int n_tokens = prompt_tokens.size();
+
         llama_token new_token_id;
         while (true) {
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
             int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
-            if (n_ctx_used + batch.n_tokens > n_ctx) {
+            if (n_ctx_used + n_tokens > n_ctx) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");
                 exit(0);
             }
 
-            int ret = llama_decode(ctx, batch);
+            // positions continue from the memory
+            batch_set_tokens(batch, tokens, n_tokens, n_ctx_used);
+
+            int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch);
             if (ret != 0) {
                 GGML_ABORT("failed to decode, ret = %d\n", ret);
             }
@@ -147,7 +165,8 @@ int main(int argc, char ** argv) {
             response += piece;
 
             // prepare the next batch with the sampled token
-            batch = llama_batch_get_one(&new_token_id, 1);
+            tokens   = &new_token_id;
+            n_tokens = 1;
         }
 
         return response;
@@ -201,6 +220,7 @@ int main(int argc, char ** argv) {
     for (auto & msg : messages) {
         free(const_cast<char *>(msg.content));
     }
+    llama_batch_ext_free(batch);
     llama_sampler_free(smpl);
     llama_free(ctx);
     llama_model_free(model);

@@ -845,7 +845,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
     GGML_ASSERT(n_batch < n_ctx || n_batch % n_ctx == 0);
     GGML_ASSERT(params.n_ctx == n_seq * n_ctx);
 
-    llama_batch batch = llama_batch_init(std::min(n_batch, n_ctx*n_seq), 0, 1);
+    common_batch batch(ctx);
 
     std::vector<float> logits;
     if (params.compute_ppl && num_batches > 1) {
@@ -872,7 +872,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
             const int batch_size  = std::min(end - batch_start, n_batch);
 
             // clear the batch
-            common_batch_clear(batch);
+            batch.clear();
 
             for (int seq = 0; seq < n_seq_batch; seq++) {
                 int seq_start = batch_start + seq*n_ctx;
@@ -889,16 +889,15 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
                     //       and also for the perplexity calculation.
                     // TODO: only get outputs when (params.process_output || params.compute_ppl)
                     //       (not possible when this skips FFN computation of the last layer)
-                    common_batch_add(batch, tokens[seq_start + k], j*n_batch + k, { seq }, true);
+                    batch.add(tokens[seq_start + k], j*n_batch + k, seq, true);
                 }
 
                 // restore the original token in case it was set to BOS
                 tokens[seq_start] = token_org;
             }
 
-            if (llama_decode(ctx, batch)) {
+            if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 LOG_ERR("%s : failed to eval\n", __func__);
-                llama_batch_free(batch);
                 return false;
             }
 
@@ -960,7 +959,6 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
         }
     }
 
-    llama_batch_free(batch);
 
     return true;
 }
