@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -23,7 +24,56 @@ namespace mudnn = musa::dnn;
 #define MUDNN_MM_Q_KQUANT    256
 #define MUDNN_MM_Q_THREADS   256
 
+// Smallest token count the path accepts: 1 admits decode.
+#define MUDNN_MM_Q_MIN_TOKENS 1
+
+// The INT8 route pays a fixed cost per call that mmvq does not -- the activation quantisation plus
+// muDNN's own setup. On the smallest shapes it floors at ~29 us against ~16 us for mmvq, so it only
+// pays off once the call carries enough weight traffic to bury that. The second and later tokens of
+// a batch reuse the same INT8 rows, so what has to clear the floor is bytes * tokens, not the batch
+// alone (which is what excluded decode) and not the weight size alone (which would also drop the
+// small-weight rows that the batched path wins today).
+//
+// Measured crossover at the real Qwen3.8-27B / Qwen3-0.6B shapes, mmvq vs this path, M=1..512:
+//   4.3 MB x 1   =   4.3 MB*token   0.53x   (below the floor: keep mmvq)
+//   1.2 MB x 8   =   9.4 MB*token   1.20x   (above it)
+//   1.8 MB x 8   =  14.2 MB*token   1.36x
+//  17.7 MB x 1   =  17.7 MB*token   1.29x
+//  50.1 MB x 1   =  50.1 MB*token   1.81x
+//  1043 MB x 1   = 1043 MB*token    1.97x
+#define MUDNN_MM_Q_MIN_WORK_MB 8
+
 namespace {
+
+// Smallest token count accepted, and smallest weight traffic per call. Both are overridable once
+// per process so a single binary can bracket the thresholds without a rebuild.
+int mq_min_tokens() {
+    static const int value = [] {
+        const char * env = getenv("GGML_MUSA_MUDNN_MM_Q_MIN_BATCH");
+        if (env != nullptr && *env != '\0') {
+            const int parsed = atoi(env);
+            if (parsed >= 1) {
+                return parsed;
+            }
+        }
+        return (int) MUDNN_MM_Q_MIN_TOKENS;
+    }();
+    return value;
+}
+
+size_t mq_min_work_bytes() {
+    static const size_t value = [] {
+        const char * env = getenv("GGML_MUSA_MUDNN_MM_Q_MIN_WORK_MB");
+        if (env != nullptr && *env != '\0') {
+            const long parsed = atol(env);
+            if (parsed >= 0) {
+                return (size_t) parsed << 20;
+            }
+        }
+        return (size_t) MUDNN_MM_Q_MIN_WORK_MB << 20;
+    }();
+    return value;
+}
 
 // Scratch buffers are kept per device and only grow: the CUDA pool hands out fresh VMM mappings,
 // which cost far more than the re-encoding itself once the operands are tens of megabytes.
@@ -326,7 +376,12 @@ bool mudnnMulMatQuant(
     const int64_t ne01 = src0->ne[1];
     const int64_t ne10 = src0->ne[0];
     const int64_t ne11 = src1->ne[1];
-    if (ne11 < MUDNN_MM_Q_MIN_BATCH || ne01 < MUDNN_MM_Q_MIN_BATCH || ne10 < MUDNN_MM_Q_MIN_BATCH) {
+    const int64_t min_tokens = mq_min_tokens();
+    if (ne11 < min_tokens || ne01 < MUDNN_MM_Q_MIN_BATCH || ne10 < MUDNN_MM_Q_MIN_BATCH) {
+        return false;
+    }
+    // The first token pays for the call; every further token reuses the same INT8 weight rows.
+    if ((uint64_t) ggml_nbytes(src0) * (uint64_t) ne11 < (uint64_t) mq_min_work_bytes()) {
         return false;
     }
     if (ne10 % MUDNN_MM_Q_KQUANT != 0) {
