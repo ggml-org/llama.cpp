@@ -1,5 +1,5 @@
 // thread safety test
-// - Loads a copy of the same model on each GPU, plus a copy on the CPU
+// - Loads a copy of the same model on each GPU, plus a copy on the CPU, all in parallel
 // - Creates n_parallel (--parallel) contexts per model
 // - Runs inference in parallel on each context
 
@@ -51,30 +51,43 @@ int main(int argc, char ** argv) {
     //const int num_models = std::max(1, gpu_dev_count);
     const int num_contexts = std::max(1, params.n_parallel);
 
-    std::vector<llama_model_ptr> models;
+    std::vector<llama_model_ptr> models(num_models);
+    std::vector<std::thread> load_threads;
     std::vector<std::thread> threads;
     std::atomic<bool> failed = false;
 
     for (int m = 0; m < num_models; ++m) {
-        auto mparams = common_model_params_to_llama(params);
+        load_threads.emplace_back([&, m]() {
+            auto mparams = common_model_params_to_llama(params);
 
-        if (m < gpu_dev_count) {
-            mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
-            mparams.devices = gpus[m].data();
-        } else if (m == gpu_dev_count) {
-            mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
-            mparams.main_gpu = -1; // CPU model
-        } else {
-            mparams.split_mode = LLAMA_SPLIT_MODE_LAYER;
-        }
+            if (m < gpu_dev_count) {
+                mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
+                mparams.devices = gpus[m].data();
+            } else if (m == gpu_dev_count) {
+                mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
+                mparams.main_gpu = -1; // CPU model
+            } else {
+                mparams.split_mode = LLAMA_SPLIT_MODE_LAYER;
+            }
 
-        llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
-        if (model == NULL) {
-            LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
-            return 1;
-        }
+            llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+            if (model == NULL) {
+                LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+                failed.store(true);
+                return;
+            }
 
-        models.emplace_back(model);
+            models[m].reset(model);
+        });
+    }
+
+    for (auto & thread : load_threads) {
+        thread.join();
+    }
+
+    if (failed) {
+        LOG_ERR("One or more models failed to load.\n");
+        return 1;
     }
 
     for  (int m = 0; m < num_models; ++m) {
