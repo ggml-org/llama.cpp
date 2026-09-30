@@ -161,6 +161,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
         }
     }
 
+    // decision branches fork from the prompt with llama_memory_seq_cp; a unified KV cache lets
+    // them share the prompt's cells instead of copying them between per-sequence streams
+    if (params.n_seq_decision > 0 && !params.kv_unified) {
+        SRV_INF("--decision-seqs %d: enabling the unified KV cache\n", params.n_seq_decision);
+        params.kv_unified = true;
+    }
+
     // size the KV pool from --kv-unified-per-slot, unless the user pinned it with -c
     // or with -c 0 for max context
     const bool ctx_pool_auto_sized = params.kv_unified_per_slot > 0 &&
@@ -227,6 +234,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         routes.post_embeddings             = models_routes->proxy_post;
         routes.post_embeddings_oai         = models_routes->proxy_post;
         routes.post_rerank                 = models_routes->proxy_post;
+        routes.post_decision               = models_routes->proxy_post;
         routes.post_tokenize               = models_routes->proxy_post;
         routes.post_detokenize             = models_routes->proxy_post;
         routes.post_apply_template         = models_routes->proxy_post;
@@ -274,6 +282,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.post("/reranking",                ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/rerank",                ex_wrapper(routes.post_rerank));
     ctx_http.post("/v1/reranking",             ex_wrapper(routes.post_rerank));
+    ctx_http.post("/decision",                 ex_wrapper(routes.post_decision));
+    ctx_http.post("/v1/decision",              ex_wrapper(routes.post_decision));
     ctx_http.post("/tokenize",                 ex_wrapper(routes.post_tokenize));
     ctx_http.post("/detokenize",               ex_wrapper(routes.post_detokenize));
     ctx_http.post("/apply-template",           ex_wrapper(routes.post_apply_template));
