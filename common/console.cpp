@@ -1019,6 +1019,7 @@ namespace console {
                     line.clear();
                     pop_cursor();
                 }
+                line += '\n';
                 has_more = false;
             }
         } else {
@@ -1064,7 +1065,7 @@ namespace console {
         if (!line.empty()) {
             char last = line.back();
             if (last == '/') { // Always return control on '/' symbol
-                line.pop_back();
+                line.back() = '\n';
                 return false;
             }
             if (last == '\\') { // '\\' changes the default action
