@@ -105,7 +105,7 @@ def test_router_disconnect_stops_child_generation():
                     break
                 time.sleep(0.05)
             else:
-                pytest.fail("child did not begin generating")
+                raise AssertionError("child did not begin generating")
 
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline:
@@ -113,7 +113,7 @@ def test_router_disconnect_stops_child_generation():
                 break
             time.sleep(0.05)
         else:
-            pytest.fail("child kept generating after router client disconnected")
+            raise AssertionError("child kept generating after router client disconnected")
     finally:
         server.stop()
 
