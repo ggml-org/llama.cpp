@@ -85,7 +85,7 @@ class TensorNameMap:
             "head.out",                  # wavtokenizer
             "model.lm_head",             # dflash
             "model.transformer.ff_out",  # llada
-            "heead.decoder",             # modern-bert
+            "head.decoder",              # modern-bert
             "encoder.out",               # granite_speech_5 (also reused mid-stack for self-conditioning)
         ),
         MODEL_TENSOR.DENSE_2_OUT: (

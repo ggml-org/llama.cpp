@@ -324,7 +324,7 @@ class Keys:
         CONTEXT_SIZE          = "{arch}.ctc.context_size"           # Shaw rel-pos block attention size
         MAX_POS_EMB           = "{arch}.ctc.max_pos_emb"            # Shaw rel-pos embedding table size
         CONV_KERNEL           = "{arch}.ctc.conv_kernel"
-        SUBSAMPLE_LAYERS      = "{arch}.ctc.subsample_layers"       # 0-based block indices that subsample time by 2
+        SUBSAMPLE_LAYERS      = "{arch}.ctc.subsample_layers"       # per-layer time subsample factor (1 or 2)
         CONV_EXPANSION_FACTOR = "{arch}.ctc.conv_expansion_factor"  # conv module inner_dim = n_embd * this
 
     class Tokenizer:
