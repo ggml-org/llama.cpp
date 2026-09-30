@@ -6,7 +6,15 @@
 
 #include <cstdint>
 #include <functional>
+#include <random>
+#include <string>
 #include <vector>
+
+// Fills a tensor with uniform random values, quantizing on the way in for quantized types.
+void init_tensor_uniform(ggml_tensor * t, std::mt19937 & rng, float min, float max);
+
+// Comma-separated allow-list; a null filter accepts everything.
+bool filter_has(const char * filter, const char * name);
 
 // A prebuilt graph replicated to amortize dispatch and synchronization overhead.
 struct perf_cell {

@@ -807,22 +807,22 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const auto * dev_props  = ggml_metal_device_get_props(ggml_metal_library_get_device(lib));
     const bool   has_tensor = dev_props->has_tensor;
 
-    // Pick (nr0, nr1) from the tuning table; falls back to (64,32) baseline.
-    // Non-baseline nr1 is instantiated for every src0 type on the non-tensor path, but only
-    // against src1 = f32: every mul_mat in a graph feeds f32 activations, so the f16 src1
-    // instantiations are not worth doubling the tile variants for.
-    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32;
+    // Pick (nr0, nr1) from the tuning table; an untuned shape falls back to the baseline
+    // tile. Tiles are only instantiated against src1 = f32: every mul_mat in a graph feeds
+    // f32 activations, so the f16 src1 variants are not worth doubling the tile count for.
+    // A batched op keeps the baseline: the sweep only measured 2D weights, and the occupancy
+    // veto behind the table does not see the batch dimensions.
+    const bool tile_eligible = !has_tensor && tsrc1 == GGML_TYPE_F32 &&
+        op->ne[2]*op->ne[3] == 1;
 
-    // pick returns a legal cfg: tuned-table rows are static_assert'd legal and the
-    // baseline is legal. name/grid/smem are all derived from this one cfg, so they
-    // can never desync.
+    // name, grid and smem below all derive from this one cfg, so they cannot desync
     const ggml_metal_tuning::mm_tile_cfg_t cfg = tile_eligible
         ? ggml_metal_tuning::mm_tile_pick(
               dev_props->device_id,
               (int) tsrc0,
               (int64_t) op->src[0]->ne[1],   // N_out (out-feat, ne01)
               (int64_t) op->src[1]->ne[1])   // tokens (ne11)
-        : ggml_metal_tuning::mm_tile_baseline_cfg();
+        : ggml_metal_tuning::MM_TILE_BASELINE_CFG;
 
     const int nr0 = cfg.nr0;
     const int nr1 = cfg.nr1;
@@ -837,9 +837,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    // nr1 is a template parameter, so it selects the base function: the bare name is the
-    // NR1 template default (= the baseline nr1), anything else gets _nr1_{nr1}. nr0 is a
-    // function constant, so it only enters the pipeline variant name.
+    // nr1 selects the base function: the bare name is the NR1 template default, anything
+    // else gets _nr1_{nr1}. nr0 is a function constant and only enters the variant name.
     char nr1_suffix[16] = {0};
     if (nr1 != ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1) {
         snprintf(nr1_suffix, sizeof(nr1_suffix), "_nr1_%d", nr1);
@@ -851,8 +850,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        // nr0 is no longer a template parameter, so this is what keeps an illegal geometry
-        // out of the kernel (it used to be a static_assert there).
+        // nr0 is a function constant, so this is what keeps an illegal geometry out of the kernel
         GGML_ASSERT(ggml_metal_tuning::mm_tile_cfg_is_legal(nr0, nr1));
 
         ggml_metal_cv_t cv = ggml_metal_cv_init();
@@ -882,8 +880,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         res.nr1 = nr1;
         res.nsg = nr0 / 16;  // must match the thread count FC_mul_mm_nr0 implies in the kernel
 
-        // smem = max(sa+sb, bc_out buffer): the writeback path reuses shmem as a
-        // NR0 x NR1 float scratch, which can exceed the sa+sb load buffers for large tiles.
+        // the bc_out writeback reuses shmem as an nr0 x nr1 float scratch, which can exceed
+        // the A/B load buffers for large tiles
         const size_t NK = 32;
         const size_t sa = (size_t) nr0 * NK * sizeof(ggml_fp16_t);
         const size_t sb = (size_t) nr1 * NK * sizeof(ggml_fp16_t);

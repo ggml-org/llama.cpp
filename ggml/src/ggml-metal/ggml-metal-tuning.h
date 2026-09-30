@@ -77,59 +77,45 @@ fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11
 // mul_mm tile selection
 // ---------------------------------------------------------------------------
 
-// Bucket edges partition the (N0, tokens) shape space into cells; one tuned
-// row per cell holds the winning tile. Edges are DEVICE-INDEPENDENT: they track
-// tile geometry (NR0/NR1 granularity) and real model-dimension clusters, not any
-// single GPU's crossover point. Which tile wins inside a cell is per-device data
-// held in mm_tile_tuned_table, so a device's flip point is never baked in here.
+// Bucket edges partition the (out-feat, tokens) shape space into cells, one tuned
+// row per cell. The edges track tile granularity and model dimension clusters and
+// are shared by all devices; which tile wins inside a cell is per-device data in
+// mm_tile_tuned_table. K (ne00) is not a key: it scales every candidate equally,
+// so it does not change the tile ranking.
 //
-// K (in-feat, ne00) is NOT a key dimension: it scales every candidate's cost
-// equally, so it never changes the tile ranking, and keying on it lets exact
-// rows memorize deep-K quirks that then misroute unsampled neighbor shapes.
-// The sweep still samples deep-K shapes; group_split aggregates across K.
-//
-// out-feat (ne01): 0=<2048, 1=2048-4607, 2=4608-8191, 3=8192-29999, 4=>=30000 (vocab isolated).
-// Edge at 4608 splits the 3584/4096 cluster from 4608/5120: the crossover drifts with N0
-// (baseline threadgroup count -> occupancy), so 5120 must not inherit the 3584/4096 winner.
+// out-feat (ne01): 0=<2048, 1=2048-4607, 2=4608-8191, 3=8192-29999, 4=>=30000.
+// The edge at 4608 keeps 4608/5120 from inheriting the 3584/4096 winner.
 constexpr int MM_TILE_N0_BUCKETS[]     = { 2048, 4608, 8192, 30000 };
-// token (ne11): 0=<9, 1=9-31, 2=32-63, 3=64-127, 4=>=128. Split finely across the
-// low-token range: the small-tile vs baseline crossover sits here and drifts
-// per (dtype,N0), so each side of it gets its own bucket to key a tuned row.
-// The edge at 9 separates the small-batch range that mm_tile_ne11_mm_min can route
-// into mm (ne11 <= 8) from the range that always used mm: nr1=8 pads half as much
-// as nr1=16 at ne11 <= 8, and the two swap ranking between 8 and 16, so one bucket
-// spanning both would serve the wrong tile to one of them.
-// There is no bucket above 128: mm_tile_pick short-circuits tokens >=
-// MM_TILE_TOKENS_MAX_TUNED to baseline (every tuned device converged to baseline
-// there), so bucket-4 rows effectively serve [128, MM_TILE_TOKENS_MAX_TUNED).
+
+// tokens (ne11): 0=<9, 1=9-31, 2=32-63, 3=64-127, 4=>=128. The low range is split
+// finely because the small-tile vs baseline crossover sits there and drifts per
+// (dtype, out-feat). The edge at 9 also bounds what mm_tile_ne11_mm_min can route
+// into mm, where nr1=8 pads half as much as nr1=16. Nothing is keyed above 128:
+// mm_tile_pick short-circuits at MM_TILE_TOKENS_MAX_TUNED.
 constexpr int MM_TILE_TOKEN_BUCKETS[]  = { 9, 32, 64, 128 };
 
 int mm_tile_N0_bucket(int64_t N_out);
 int mm_tile_token_bucket(int64_t tokens);
 
 struct mm_tile_cfg_t {
-    int16_t nr0;  // 32, 64, or 128 (int16: 128 exceeds int8_t range)
-    int16_t nr1;  //  8, 16, or  32
+    int16_t nr0;  // any legal multiple of 16 (int16: it can exceed int8_t range)
+    int16_t nr1;  // 8, 16, or 32
 };
 
-// Geometries the sweep times, against the baseline anchor below. This is a sweep-budget
-// list, NOT a legality constraint: mm_tile_cfg_is_legal defines what the kernel can serve,
-// and the two are deliberately separate. nr0 is a function constant and nr1 is instantiated
-// for 8/16/32, so a retune can add any legal geometry here - 128x16, 128x32, 96x8 - without
-// touching mul_mm.metal. What bounds this list is sweep time: every entry is timed at every
-// (dtype, shape, token) cell.
+// Geometries the sweep times, against the baseline anchor below. A sweep-budget list,
+// not a legality constraint: mm_tile_cfg_is_legal defines what the kernel can serve, so a
+// retune can add any legal geometry here without touching mul_mm.metal. What bounds the
+// list is sweep time: every entry is timed at every (dtype, shape, token) cell.
 constexpr mm_tile_cfg_t MM_TILE_SWEEP_CANDIDATES[] = {
     { 32, 8 }, { 32, 16 }, { 64, 8 }, { 64, 16 },
 };
 constexpr mm_tile_cfg_t MM_TILE_BASELINE_CFG = { 64, 32 };
 
 // Legality of a tile geometry, and the single source of truth for it. nr1 selects the
-// instantiation (INST_MM_NR1 in mul_mm.metal, plus the bare names for nr1 = 32); nr0 is a
-// function constant, so every nr0 that passes here is served by that same instantiation.
-// SG_N/TM/TN derive from nr1 alone; nr0 only sets the simdgroup count and the
-// shared-memory strides. sg_m >= tn is the "32*(nr0/16) threads must cover every B-tile
-// block" condition, i.e. nr0 >= 2*nr1. The host asserts this before specializing a
-// pipeline, so the kernel no longer has to static_assert it.
+// kernel instantiation; nr0 is a function constant, so every nr0 that passes here is
+// served by that same instantiation. sg_m >= tn is the "32*(nr0/16) threads must cover
+// every B-tile block" condition, i.e. nr0 >= 2*nr1. The host asserts legality before it
+// specializes a pipeline.
 constexpr bool mm_tile_cfg_is_legal(int nr0, int nr1) {
     if (nr1 != 8 && nr1 != 16 && nr1 != 32) { return false; }
     if (nr0 % 16 != 0)                      { return false; }
@@ -141,28 +127,26 @@ constexpr bool mm_tile_cfg_is_legal(int nr0, int nr1) {
     const int tn   = nr1 / (sg_n * 8);
     if (sg_m < tn)                          { return false; }
 
-    return 32 * (nr0 / 16) <= 1024;         // threads per threadgroup
+    if (32 * (nr0 / 16) > 1024)             { return false; }  // threads per threadgroup
+
+    // threadgroup memory: the A and B load buffers, or the writeback scratch reusing them
+    const int ab = (nr0 + nr1) * 32 * 2;
+    const int bc = nr0 * nr1 * 4;
+    return (ab > bc ? ab : bc) <= 32768;
 }
 
 static_assert(mm_tile_cfg_is_legal(MM_TILE_BASELINE_CFG.nr0, MM_TILE_BASELINE_CFG.nr1),
               "the baseline tile must be servable");
 
-// Occupancy-saturation threshold for the pick-time veto, measured in baseline
-// (64x32) threadgroup count: n_tg = ceil(N_out/64) * ceil(tokens/32). Once the
-// baseline dispatch alone saturates the GPU (n_tg >= C_sat), a smaller tile has
-// no occupancy headroom left to win, so any non-baseline table row is overridden
-// back to baseline. This bounds table extrapolation error on shapes the sweep
-// never sampled. Below MM_TILE_OCCUPANCY_MIN_TOKENS the veto is exempt: those
-// wins come from baseline's token padding + bc_out slow path, which persist at
-// any occupancy.
-// Calibrated on M4 Max (40 cores x ~3.6 concurrent tg/core; accuracy is flat
-// for C_sat in [128,160]). Per-device data like the tuned table: recalibrate
-// when adding rows for a new device. Overestimating C_sat degrades to pure
-// table behavior; underestimating only forfeits small-tile wins - neither
-// direction can pick something slower than baseline.
-// A single M4 Max slot suffices structurally: the veto only fires when a tuned
-// row was found, and rows match on exact device_id, so no other device can ever
-// consult this constant.
+// Occupancy-saturation threshold for the pick-time veto, in baseline threadgroup
+// count. Once the baseline dispatch alone saturates the GPU, a smaller tile has no
+// occupancy headroom left to win, so a non-baseline row is overridden back to
+// baseline; this bounds table extrapolation on shapes the sweep never sampled.
+// Below MM_TILE_OCCUPANCY_MIN_TOKENS the wins come from baseline's token padding
+// instead, which persists at any occupancy, so the veto is exempt there.
+// Per-device data like the tuned table: calibrated on M4 Max, and only ever read
+// when a row for that device matched. A wrong value in either direction degrades
+// to plain table or plain baseline behavior, never to something slower.
 constexpr int MM_TILE_C_SAT_M4_MAX = 144;
 
 // Veto exemption edge, tied to the token bucket that separates the padding-driven
@@ -173,14 +157,10 @@ constexpr int MM_TILE_OCCUPANCY_MIN_TOKENS = MM_TILE_TOKEN_BUCKETS[1];
 // device converged to baseline there), not an edge derived from the bucket list.
 constexpr int MM_TILE_TOKENS_MAX_TUNED = 256;
 
-// Tuned table has two row kinds.
-// Exact rows key a (N0_b, tokens_b) bucket.
-// Default rows collapse N0_b but ALWAYS keep tokens_b, per the pick lattice
-// (folding order = weakest signal first, tokens never folds):
-//   L1 exact -> L2 (N0_b=ANY, keep tokens_b) -> L3 baseline (64x32).
-// tokens is the strongest tile signal (small tile at low tokens, large tile at
-// prefill), so it is never collapsed. MM_TILE_BUCKET_ANY is the collapse
-// sentinel; it applies to N0_b and is compared per-field.
+// The tuned table has two row kinds: exact rows key an (out-feat, tokens) bucket
+// pair, default rows collapse the out-feat bucket to MM_TILE_BUCKET_ANY and keep
+// the token bucket. Lookup tries exact, then default, then the baseline tile. The
+// token bucket never collapses: it is the strongest tile signal.
 constexpr int8_t MM_TILE_BUCKET_ANY    = -1;
 
 struct mm_tile_key_t {
@@ -199,9 +179,8 @@ struct mm_tile_entry_t {
 // test/tune-only override; when set, mm_tile_pick returns it directly.
 void           mm_tile_set_override(mm_tile_cfg_t cfg);
 void           mm_tile_clear_override();
-mm_tile_cfg_t  mm_tile_baseline_cfg();
 
-// Returns (64,32) unless a tuned row matches.
+// Returns MM_TILE_BASELINE_CFG unless a tuned row matches.
 mm_tile_cfg_t  mm_tile_pick(enum ggml_metal_device_id device_id,
                              int dtype,
                              int64_t N_out,
@@ -219,14 +198,13 @@ constexpr int MM_TILE_NE11_MM_MIN_DEFAULT = 8;
 // tile table.
 int            mm_tile_ne11_mm_min(enum ggml_metal_device_id device_id, int dtype, int64_t N_out);
 
-// tune-only override for mm_tile_ne11_mm_min; -1 clears it (forces the mm path so
-// the sweep can measure mm-tile vs mv_ext in the [2,8] range).
+// tune-only override for mm_tile_ne11_mm_min: 1 forces the mm path and 8 forces
+// mv_ext, so the sweep can compare them over ne11 in [2,8]. -1 restores the table.
 void           mm_tile_set_ne11_mm_min_override(int ne11_mm_min);
 
-// Self-test for the pick lattice (L1 exact -> L2 N0-collapse -> L3 baseline) and
-// for mm_tile_pick's short-circuit and occupancy veto. Runs the real lookup
-// against a synthetic table, then mm_tile_pick against the tuned one; returns the
-// number of failed assertions (0 = pass).
+// Self-test for the pick path: the large-batch short-circuit, the lookup fallback chain
+// and the occupancy veto, all driven against a synthetic table. Returns the number of
+// failed assertions (0 = pass).
 int            mm_tile_lattice_selftest();
 
 }  // namespace ggml_metal_tuning

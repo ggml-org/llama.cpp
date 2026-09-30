@@ -11948,16 +11948,20 @@ static bool mm_tile_cfg_is_legal_ref(int nr0, int nr1) {
     const int tn   = nr1 / (sg_n * 8);
     if (sg_m < tn)                          { return false; }
 
-    return 32 * (nr0 / 16) <= 1024;
+    if (32 * (nr0 / 16) > 1024)             { return false; }
+
+    const int ab = (nr0 + nr1) * 32 * 2;
+    const int bc = nr0 * nr1 * 4;
+    return (ab > bc ? ab : bc) <= 32768;
 }
 
 // nr1 is what picks the instantiation, so every instantiated nr1 has to appear. nr0 is a
-// function constant feeding address arithmetic only, so two values per nr1 are enough:
-// the nr0 = 2*nr1 legality edge and one step above it.
+// function constant feeding address arithmetic, so the sample spans the range the runtime
+// may serve: the nr0 = 2*nr1 legality edge, the swept geometries, and the widest tile.
 static std::vector<mm_tile_t> mm_tile_legal_configs() {
     std::vector<mm_tile_t> r;
     for (int nr1 : { 8, 16, 32 }) {
-        for (int nr0 : { 32, 64 }) {
+        for (int nr0 : { 16, 32, 64, 128 }) {
             if (mm_tile_cfg_is_legal_ref(nr0, nr1)) {
                 r.push_back({ nr0, nr1 });
             }
@@ -11966,13 +11970,20 @@ static std::vector<mm_tile_t> mm_tile_legal_configs() {
     return r;
 }
 
-// Forces each instantiated tile geometry and checks Metal against the CPU reference,
-// then runs the pick-lattice self-test. The override is backend-global, so this runs
-// after all parallel workers have joined.
+// Forces each tile geometry the runtime can serve and checks Metal against the CPU
+// reference for every src0 type, then runs the pick-lattice self-test. The override is
+// backend-global, so this runs after all parallel workers have joined.
 static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+    const char * LLAMA_TEST_MUL_MM_TILE_DISABLE = getenv("LLAMA_TEST_MUL_MM_TILE_DISABLE");
+    if (LLAMA_TEST_MUL_MM_TILE_DISABLE) {
+        return true;
+    }
+
     if (!op_names_filter_selects(op_names_filter, "MUL_MAT")) {
         return true;
     }
+
+    printf("Running mul_mm tile slice tests (env LLAMA_TEST_MUL_MM_TILE_DISABLE=1 to skip)\n");
 
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
 
@@ -11983,34 +11994,31 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
         return true;  // not the Metal backend: nothing to force
     }
 
-    // Every src0 type the Metal backend instantiates mul_mm for. nr1 selects the
-    // instantiation, so a type missing here ships a tile without numerical coverage.
-    const ggml_type dtypes[] = {
-        GGML_TYPE_F32,     GGML_TYPE_F16,     GGML_TYPE_BF16,
-        GGML_TYPE_Q1_0,    GGML_TYPE_Q2_0,    GGML_TYPE_Q4_0,   GGML_TYPE_Q4_1,
-        GGML_TYPE_Q5_0,    GGML_TYPE_Q5_1,    GGML_TYPE_Q8_0,   GGML_TYPE_MXFP4,
-        GGML_TYPE_Q2_K,    GGML_TYPE_Q3_K,    GGML_TYPE_Q4_K,   GGML_TYPE_Q5_K,
-        GGML_TYPE_Q6_K,    GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ3_XXS,
-        GGML_TYPE_IQ3_S,   GGML_TYPE_IQ2_S,   GGML_TYPE_IQ1_S,  GGML_TYPE_IQ1_M,
-        GGML_TYPE_IQ4_NL,  GGML_TYPE_IQ4_XS,  GGML_TYPE_TQ2_0,
-    };
-
     const auto tiles = mm_tile_legal_configs();
 
-    const int64_t k = 4096;  // a valid block multiple for every dtype above
+    // 4096 is a whole number of blocks for every type; 4096 + 16 is not a multiple of 32,
+    // which is what selects the kernel's bc_inp input path, and only fits a block size of 1.
+    const int64_t k_aligned = 4096;
+    const int64_t k_bc_inp  = 4096 + 16;
 
     int n_run = 0, n_fail = 0, n_unsup = 0;
     for (auto t : tiles) {
-        for (ggml_type type_a : dtypes) {
-            // n (tokens) > 8 routes to the mm branch; two shapes exercise the aligned path
-            // and the bc_out writeback path (N_out % nr0 != 0 || tokens % nr1 != 0).
-            const struct { int64_t m, n; } shapes[] = {
-                { t.nr0 * 3,     t.nr1 * 3     },  // bc_out = false
-                { t.nr0 * 3 + 7, t.nr1 * 3 + 5 },  // bc_out = true
+        for (ggml_type type_a : all_types) {
+            // n (tokens) > 8 routes to the mm branch. The shapes exercise the aligned path,
+            // the bc_out writeback path (N_out % nr0 != 0 || tokens % nr1 != 0), and where
+            // the block size allows it the bc_inp path.
+            struct shape_t { int64_t m, n, k; };
+            std::vector<shape_t> shapes = {
+                { t.nr0 * 3,     t.nr1 * 3,     k_aligned },
+                { t.nr0 * 3 + 7, t.nr1 * 3 + 5, k_aligned },
             };
+            if (ggml_blck_size(type_a) == 1) {
+                shapes.push_back({ t.nr0 * 3, t.nr1 * 3, k_bc_inp });
+            }
+
             for (auto s : shapes) {
                 set_ov(t.nr0, t.nr1);
-                test_mul_mat tc(type_a, GGML_TYPE_F32, s.m, s.n, k, { 1, 1 }, { 1, 1 });
+                test_mul_mat tc(type_a, GGML_TYPE_F32, s.m, s.n, s.k, { 1, 1 }, { 1, 1 });
                 auto st = tc.eval(backend, backend_cpu, "MUL_MAT", nullptr);
                 clear_ov();
 
@@ -12022,7 +12030,7 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
                 if (st == test_status_t::FAIL) {
                     printf("  FAIL mul_mm tile slice: tile=%dx%d type=%s m=%lld n=%lld k=%lld\n",
                            t.nr0, t.nr1, ggml_type_name(type_a),
-                           (long long) s.m, (long long) s.n, (long long) k);
+                           (long long) s.m, (long long) s.n, (long long) s.k);
                     n_fail++;
                 }
                 n_run++;
@@ -12035,7 +12043,7 @@ static bool run_mul_mm_slice(ggml_backend_t backend, ggml_backend_t backend_cpu,
         printf("  FAIL mul_mm pick-lattice self-test: %d assertion(s)\n", selftest_fails);
     }
 
-    // cases = legal tile geometries x src0 types x 2 shapes (aligned + bc_out writeback).
+    // cases = legal tile geometries x src0 types x shapes.
     printf("  mul_mm tile slice: %d cases run, %d failed, %d unsupported; pick-lattice self-test %s\n",
            n_run, n_fail, n_unsup, selftest_fails == 0 ? "ok" : "FAILED");
 

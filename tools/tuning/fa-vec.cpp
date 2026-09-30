@@ -67,41 +67,6 @@ static uint64_t fa_op_flops(const fa_shape & s) {
     return (uint64_t) 2 * FA_NH * FA_NR2 * s.ne01 * (s.dk + s.dv) * s.ne11 * FA_NR3;
 }
 
-static void fa_init_uniform(ggml_tensor * t, std::mt19937 & rng, float min, float max) {
-    const size_t nels = ggml_nelements(t);
-
-    std::vector<float>                    data(nels);
-    std::uniform_real_distribution<float> dist(min, max);
-    for (size_t i = 0; i < nels; i++) {
-        data[i] = dist(rng);
-    }
-
-    if (t->type == GGML_TYPE_F32) {
-        ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(float));
-        return;
-    }
-
-    GGML_ASSERT(ggml_is_quantized(t->type) || t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16);
-    GGML_ASSERT(nels % ggml_blck_size(t->type) == 0);
-
-    std::vector<float> imatrix(t->ne[0], 1.0f);
-    const float *      im = imatrix.data();
-    if (!ggml_quantize_requires_imatrix(t->type)) {
-        // when the imatrix is optional, exercise both paths; pick via one of the random numbers
-        if (data[0] > 0.5f * (min + max)) {
-            im = nullptr;
-        }
-    }
-
-    const size_t blck_size = ggml_blck_size(t->type);
-    const size_t n_blocks  = nels / blck_size;
-
-    std::vector<uint8_t> dataq(ggml_row_size(t->type, nels));
-    ggml_quantize_chunk(t->type, data.data(), dataq.data(), 0, n_blocks, blck_size, im);
-
-    ggml_backend_tensor_set(t, dataq.data(), 0, dataq.size());
-}
-
 // mirrors init_tensor_kq_mask: f16 mask with ~20% of its blocks set to -INF or zero.
 // the -INF blocks are what drives the kernel's skip-INF path, so this pattern is
 // load-bearing for the timings, not just for numerics.
@@ -166,7 +131,7 @@ static void fa_init_tensors(ggml_context * ctx, const fa_shape & s, unsigned bas
         if (strcmp(t->name, "m") == 0) {
             fa_init_kq_mask(t, rng, -1.0f, 1.0f);
         } else {
-            fa_init_uniform(t, rng, -1.0f, 1.0f);
+            init_tensor_uniform(t, rng, -1.0f, 1.0f);
         }
     }
 }
@@ -202,16 +167,6 @@ static fa_procs fa_resolve_procs(ggml_backend_dev_t dev) {
     p.dev_token = (device_token_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_device_token");
 
     return p;
-}
-
-static bool fa_filter_has(const char * filter, const char * name) {
-    if (!filter) {
-        return true;
-    }
-
-    const std::string f = std::string(",") + filter + ",";
-
-    return f.find(std::string(",") + name + ",") != std::string::npos;
 }
 
 struct fa_cand {
@@ -303,7 +258,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
     // stdout carries nothing but table rows, so the whole stream pastes into fa_vec_tuned_table
     for (const auto & dtype : dtypes) {
         const ggml_type type_kv = dtype.type;
-        if (!fa_filter_has(opts.dtype_filter, ggml_type_name(type_kv))) {
+        if (!filter_has(opts.dtype_filter, ggml_type_name(type_kv))) {
             continue;
         }
 
@@ -312,7 +267,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
         std::vector<fa_point> pts;
 
         for (auto s : shapes) {
-            if (!fa_filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
+            if (!filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
                 continue;
             }
 
@@ -392,7 +347,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
         char                     rbuf[192];
 
         for (auto s : shapes) {
-            if (!fa_filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
+            if (!filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
                 continue;
             }
 

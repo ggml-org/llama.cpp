@@ -59,14 +59,6 @@ static std::string mm_dtype_token(ggml_type dt) {
     return s;
 }
 
-static bool mm_filter_has(const char * filter, const char * name) {
-    if (!filter) {
-        return true;
-    }
-    const std::string f = std::string(",") + filter + ",";
-    return f.find(std::string(",") + name + ",") != std::string::npos;
-}
-
 // C^T = A * B^T: A(K,M) quantized weight, B(K,tokens) f32 activations -> C(M,tokens).
 // M is the output feature count (ne01), tokens the batch width (ne11).
 static ggml_tensor * mm_build_graph(ggml_context * ctx, ggml_type dt, int M, int K, int tokens) {
@@ -91,40 +83,6 @@ static unsigned mm_cell_seed(ggml_type dt, int K, int N0, int tokens, unsigned b
     return h;
 }
 
-static void mm_init_uniform(ggml_tensor * t, std::mt19937 & rng, float min, float max) {
-    const size_t nels = ggml_nelements(t);
-
-    std::vector<float>                    data(nels);
-    std::uniform_real_distribution<float> dist(min, max);
-    for (size_t i = 0; i < nels; i++) {
-        data[i] = dist(rng);
-    }
-
-    if (t->type == GGML_TYPE_F32) {
-        ggml_backend_tensor_set(t, data.data(), 0, nels * sizeof(float));
-        return;
-    }
-
-    GGML_ASSERT(ggml_is_quantized(t->type) || t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16);
-    GGML_ASSERT(nels % ggml_blck_size(t->type) == 0);
-
-    std::vector<float> imatrix(t->ne[0], 1.0f);
-    const float *      im = imatrix.data();
-    if (!ggml_quantize_requires_imatrix(t->type)) {
-        if (data[0] > 0.5f * (min + max)) {
-            im = nullptr;
-        }
-    }
-
-    const size_t blck_size = ggml_blck_size(t->type);
-    const size_t n_blocks  = nels / blck_size;
-
-    std::vector<uint8_t> dataq(ggml_row_size(t->type, nels));
-    ggml_quantize_chunk(t->type, data.data(), dataq.data(), 0, n_blocks, blck_size, im);
-
-    ggml_backend_tensor_set(t, dataq.data(), 0, dataq.size());
-}
-
 static void mm_init_tensors(ggml_context * ctx, ggml_type dt, int K, int N0, int tokens, unsigned base_seed) {
     std::mt19937 rng(mm_cell_seed(dt, K, N0, tokens, base_seed));
 
@@ -132,7 +90,7 @@ static void mm_init_tensors(ggml_context * ctx, ggml_type dt, int K, int N0, int
         if (t->view_src != NULL || t->op != GGML_OP_NONE) {
             continue;  // views share data; op results are computed
         }
-        mm_init_uniform(t, rng, -1.0f, 1.0f);
+        init_tensor_uniform(t, rng, -1.0f, 1.0f);
     }
 }
 
@@ -194,7 +152,9 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
     const int64_t C_SAT = ggml_metal_tuning::MM_TILE_C_SAT_M4_MAX;
     const int     NE11_MM_MIN_DEFAULT = ggml_metal_tuning::MM_TILE_NE11_MM_MIN_DEFAULT;
     auto n_tg_base = [](int64_t N0, int64_t tokens) {
-        return ((N0 + 63) / 64) * ((tokens + 31) / 32);
+        const int64_t bn0 = ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr0;
+        const int64_t bn1 = ggml_metal_tuning::MM_TILE_BASELINE_CFG.nr1;
+        return ((N0 + bn0 - 1) / bn0) * ((tokens + bn1 - 1) / bn1);
     };
 
     // candidates = the sweep-budget geometry list + the baseline anchor (read from the
@@ -261,7 +221,7 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
     char rbuf[256];
 
     for (const ggml_type dt : dtypes) {
-        if (!mm_filter_has(opts.dtype_filter, ggml_type_name(dt))) {
+        if (!filter_has(opts.dtype_filter, ggml_type_name(dt))) {
             continue;
         }
         const std::string dtype_token = mm_dtype_token(dt);
@@ -416,15 +376,15 @@ bool tuner_mul_mm_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
             };
 
             // emit-time sanity report for a non-baseline row, cross-checked against the occupancy
-            // rule that backs the runtime veto (only samples the veto can fire on: real token AND
-            // t>=32). An all-saturated row is unreachable; a disputed row marks an
+            // rule that backs the runtime veto (only samples the veto can fire on). An all-saturated row is unreachable; a disputed row marks an
             // extrapolation-fragile cell.
             auto sanity_row = [&](const std::vector<const pt_t *> & bp, int d, const char * kind) {
                 if (d == base_i) { return; }
                 int n_vet = 0, n_sat = 0;
                 double worst_sat = 0.0;
                 for (const auto * p : bp) {
-                    if (!is_real_token(p->tokens) || p->tokens < 32) { continue; }
+                    if (!is_real_token(p->tokens) ||
+                        p->tokens < ggml_metal_tuning::MM_TILE_OCCUPANCY_MIN_TOKENS) { continue; }
                     n_vet++;
                     if (n_tg_base(p->N0, p->tokens) >= C_SAT) {
                         n_sat++;

@@ -2448,12 +2448,15 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     const int16_t r3 = ne13/ne03;
 
     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
-    // to the matrix-vector kernel. only consult the tuned table for ops the mm branch below can
-    // actually take: a narrowed mv_ext window would otherwise push them onto mul_mv or onto a
-    // full-width mm tile, neither of which the tuning sweep measured.
+    // to the matrix-vector kernel. only consult the tuned table where a narrowed break-even can
+    // change the dispatch, i.e. on the ops the mv_ext branch below can actually take, over the
+    // ne11 window it covers. anything else would be routed off mv_ext onto a shape the tuning
+    // sweep never measured.
     const bool mm_capable = props_dev->has_simdgroup_mm && !props_dev->has_tensor &&
         op->src[1]->type == GGML_TYPE_F32 &&
-        !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]);
+        !ggml_is_transposed(op->src[0]) && !ggml_is_transposed(op->src[1]) &&
+        ne00%128 == 0 && ne12*ne13 == 1 &&
+        ne11 >= 2 && ne11 <= ggml_metal_tuning::MM_TILE_NE11_MM_MIN_DEFAULT;
     const int ne11_mm_min = mm_capable
         ? ggml_metal_tuning::mm_tile_ne11_mm_min(
               props_dev->device_id, (int) op->src[0]->type, (int64_t) op->src[0]->ne[1])

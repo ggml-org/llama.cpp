@@ -78,10 +78,10 @@ Then validate the numerics, where Metal is compared against the CPU reference:
 ./build/bin/test-backend-ops test -o MUL_MAT -b MTL0
 ```
 
-This forces every instantiated tile geometry (and the baseline) across every src0 type the kernel is instantiated for, and runs the pick-lattice self-test.
+This forces every tile geometry the runtime can serve across every src0 type, and runs the pick-lattice self-test.
 The tuner itself does no numerical checks.
 
-Only the exact device is tuned: rows are keyed to the machine that swept them, and any other device (including a sibling SKU of the same GPU family) falls through to the baseline tile, byte-for-byte identical to upstream.
+Only the exact device is tuned: rows are keyed to the machine that swept them, and any other device (including a sibling SKU of the same GPU family) falls through to the baseline tile, which dispatches exactly as upstream does.
 
 ## Thermal throttling
 
