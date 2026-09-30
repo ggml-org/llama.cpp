@@ -1,5 +1,5 @@
 datasets~=4.8.0
 matplotlib~=3.10.0
-numpy~=1.26.4
+numpy~=2.2.6
 requests~=2.32.3
 tqdm~=4.67.1

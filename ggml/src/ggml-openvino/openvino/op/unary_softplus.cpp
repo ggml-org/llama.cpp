@@ -1,6 +1,7 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+#include "ggml-openvino/ggml-openvino-extra.h"
 
 #include <openvino/op/abs.hpp>
 #include <openvino/op/add.hpp>
@@ -9,6 +10,7 @@
 #include <openvino/op/log.hpp>
 #include <openvino/op/negative.hpp>
 #include <openvino/op/relu.hpp>
+#include <openvino/op/softplus.hpp>
 
 namespace ov {
 namespace frontend {
@@ -17,6 +19,10 @@ namespace op {
 
 OutputVector translate_unary_softplus(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
+
+    if (ggml_openvino_getenv_int("GGML_OPENVINO_NATIVE_SOFTPLUS") != 0) {
+        return translate_1to1_match_1_input<ov::op::v4::SoftPlus>(context);
+    }
 
     auto input = process_view_input_new(context, 0);
     const auto element_type = input.get_element_type();

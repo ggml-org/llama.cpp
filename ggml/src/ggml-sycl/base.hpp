@@ -17,6 +17,7 @@
 #include <cstdio>
 
 extern int g_ggml_sycl_debug;
+extern int g_ggml_sycl_dev_debug;
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
@@ -30,6 +31,12 @@ extern int g_ggml_sycl_debug;
 #define GGML_SYCL_DEBUG(...)              \
     do {                                  \
         if (UNLIKELY(g_ggml_sycl_debug))  \
+            fprintf(stderr, __VA_ARGS__); \
+    } while (0)
+
+#define GGML_SYCL_DEV_DEBUG(...)          \
+    do {                                  \
+        if (UNLIKELY(g_ggml_sycl_dev_debug))  \
             fprintf(stderr, __VA_ARGS__); \
     } while (0)
 

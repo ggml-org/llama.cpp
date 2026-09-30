@@ -31,6 +31,7 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -164,9 +165,7 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
-          # This is using llvmpipe and runs slower than other backends
-          # test-backend-ops is too slow on llvmpipe, skip it
-          ctest -L main -E test-backend-ops --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
   windows:
     runs-on: windows-2025
