@@ -17,24 +17,7 @@
 #ifndef GGML_SYCL_FA_LARGE_GRF_VARIANTS
 #    define GGML_SYCL_FA_LARGE_GRF_VARIANTS 0
 #endif
-inline int ggml_sycl_fa_large_grf_mode() {
-    static const int mode = [] {
-        const int v = ggml_sycl_get_env("GGML_SYCL_FA_LARGE_GRF", 0);
-        if (v < 0 || v > 2) {
-            GGML_LOG_WARN("%s: ignoring invalid GGML_SYCL_FA_LARGE_GRF=%d (0, 1 or 2)\n", __func__, v);
-            return 0;
-        }
-#if !GGML_SYCL_FA_LARGE_GRF_VARIANTS
-        if (v != 0) {
-            GGML_LOG_WARN("%s: GGML_SYCL_FA_LARGE_GRF=%d ignored: built without the 256-GRF FA variants "
-                          "(CMake GGML_SYCL_FA_LARGE_GRF=OFF)\n", __func__, v);
-            return 0;
-        }
-#endif
-        return v;
-    }();
-    return mode;
-}
+// The validated mode reader lives in fattn.cpp (ggml_sycl_fa_large_grf_mode, fattn.hpp).
 #include "convert.hpp"
 #include "vecdotq.hpp"
 #include "fattn-buffers.hpp"
@@ -1407,7 +1390,7 @@ void launch_fattn(
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
                 block_dim.x * block_dim.y * block_dim.z,
-            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) max_blocks_per_sm,  // effective: halved for 256-GRF launches
             (uint64_t) nsm,
             (uint64_t) stream_k);
     }
@@ -1527,7 +1510,7 @@ void launch_fattn(
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
                 block_dim.x * block_dim.y * block_dim.z,
-            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) max_blocks_per_sm,  // effective: halved for 256-GRF launches
             (uint64_t) nsm);
     }
 }

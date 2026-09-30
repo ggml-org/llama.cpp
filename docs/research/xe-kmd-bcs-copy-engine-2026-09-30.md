@@ -200,7 +200,9 @@ the queues; that is harmless while the blitter is not in use.
 - `test-sycl-xe-defaults`: OK (fake sysfs tree, env decision).
 - `test-sycl-turbo-correctness` default sweep with `UR_L0_USE_COPY_ENGINE` unset on xe:
   `0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP`; stderr carries
-  `Intel GPU 0000:03:00.0 is bound to the xe kernel driver: defaulting UR_L0_USE_COPY_ENGINE=0`.
+  `DG2 GPU 0000:03:00.0 (0x56a0) on the xe kernel driver: ggml-sycl set UR_L0_USE_COPY_ENGINE=0 and
+  UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` (wording of the current code; that run printed the
+  first version of the line).
 - `llama-completion` real text (bash man page, 524-token prompt, 128 tokens, temp 0,
   production flags `--fit on --fit-target 1024 --fit-ctx 32768 -ctk q8_0 -ctv q8_0 -fa on
   --moe-cache off -t 12`, `/mnt/nvme1/oneapi-ab/N-xe-rt-*`):
@@ -338,6 +340,13 @@ and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
   runs verify stability and throughput, not bit-identical output.
 - `--load-mode none` gains are from one boot, quiet host, random-token bench plus one
   real-text prompt; the production unit still runs mmap until the user changes it.
+- The mode-2 large-GRF table predates the occupancy change (half the work-groups per
+  Xe-core for 256-GRF launches); only mode 1 was re-measured after it.
+- Timestamps in the X1 narrative mix kernel-journal wall-clock times with perf
+  `CLOCK_MONOTONIC` times; `clock-anchor.txt` in each run directory ties the two.
+- The DG2-behind-another-Intel-node ordering case and the alias/empty-value handling are
+  unit-tested against fake sysfs trees and the process environment, not run against the
+  adapter; the Windows branches of `xe-kmd.cpp` are guarded but not compiled here.
 
 ## Upstream report draft (intel/compute-runtime)
 

@@ -58,7 +58,9 @@ static void clear_copy_env() {
     for (const char * n : { "UR_L0_USE_COPY_ENGINE", "UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE",
                             "UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY", "UR_L0_USE_COPY_ENGINE_FOR_FILL",
                             "UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD", "SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE",
-                            "SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE", "GGML_SYCL_XE_COPY_ENGINE_DEFAULT" }) {
+                            "SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE",
+                            "SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_D2D_COPY", "SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_FILL",
+                            "GGML_SYCL_XE_COPY_ENGINE_DEFAULT" }) {
         unsetenv(n);
     }
 }
@@ -111,6 +113,19 @@ int main() {
         CHECK(ggml_sycl_intel_gpu_on_xe(root.string(), nullptr, &id));
         CHECK(id == 0xe20b);
         CHECK(!ggml_sycl_is_dg2(id));
+        CHECK(!ggml_sycl_dg2_gpu_on_xe(root.string(), nullptr, nullptr));
+    }
+    // Two Intel nodes on xe in either order: the DG2 is found whichever is listed first.
+    for (const bool dg2_first : { false, true }) {
+        const fs::path root = base / (dg2_first ? "dg2-first" : "bmg-first");
+        add_node(root, dg2_first ? 128 : 129, "0000:03:00.0", "0x8086", "0x56a0", "xe");
+        add_node(root, dg2_first ? 129 : 128, "0000:0a:00.0", "0x8086", "0xe20b", "xe");
+        bdf.clear();
+        id = 0;
+        CHECK(ggml_sycl_dg2_gpu_on_xe(root.string(), &bdf, &id));
+        CHECK(bdf == "0000:03:00.0");
+        CHECK(id == 0x56a0);
+        CHECK(ggml_sycl_intel_gpu_on_xe(root.string(), nullptr, nullptr));
     }
 
     // DG2 id range: A770/A750/A380 desktop, A770M/A730M mobile, Flex 170/140.
@@ -139,26 +154,23 @@ int main() {
     g_fake_env["UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY"] = "1";
     CHECK(ggml_sycl_xe_user_wants_copy_engine(fake_getenv));
     g_fake_env.clear();
+    g_fake_env["SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE_FOR_FILL"] = "1";
+    CHECK(ggml_sycl_xe_user_wants_copy_engine(fake_getenv));
+    g_fake_env.clear();
     g_fake_env["UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"] = "1";
     CHECK(!ggml_sycl_xe_user_wants_copy_engine(fake_getenv));
     g_fake_env["UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD"] = "0";
     CHECK(ggml_sycl_xe_user_wants_copy_engine(fake_getenv));
     g_fake_env.clear();
 
-    // Decisions: (dg2_on_xe, variable already set, user wants copy engines).
-    const char * v = ggml_sycl_xe_copy_engine_default(true, false, false);
-    CHECK(v != nullptr && strcmp(v, "0") == 0);
-    CHECK(ggml_sycl_xe_copy_engine_default(true, true, false) == nullptr);
-    CHECK(ggml_sycl_xe_copy_engine_default(true, false, true) == nullptr);
-    CHECK(ggml_sycl_xe_copy_engine_default(false, false, false) == nullptr);
-    const char * o = ggml_sycl_xe_copy_offload_default(true, false, false);
-    CHECK(o != nullptr && strcmp(o, "1") == 0);
-    CHECK(ggml_sycl_xe_copy_offload_default(true, true, false) == nullptr);
-    CHECK(ggml_sycl_xe_copy_offload_default(true, false, true) == nullptr);
-    CHECK(ggml_sycl_xe_copy_offload_default(false, false, false) == nullptr);
+    // Decision: (dg2_on_xe, variable already set, user wants copy engines).
+    CHECK(ggml_sycl_xe_apply_default(true, false, false));
+    CHECK(!ggml_sycl_xe_apply_default(true, true, false));
+    CHECK(!ggml_sycl_xe_apply_default(true, false, true));
+    CHECK(!ggml_sycl_xe_apply_default(false, false, false));
 
     // Applying against the fake trees changes the process environment as decided.
-    const std::string dg2_root  = (base / "mixed").string();
+    const std::string dg2_root  = (base / "bmg-first").string();  // DG2 behind a Battlemage node
     const std::string bmg_root  = (base / "bmg").string();
     const std::string i915_root = (base / "i915").string();
     auto env_eq = [](const char * name, const char * want) {
@@ -227,10 +239,18 @@ int main() {
     CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY") == nullptr);
     CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE") == nullptr);
     CHECK(env_eq("UR_L0_USE_COPY_ENGINE", "0"));
+    // Off DG2/xe nothing is touched, not even an empty value or an alias to mirror.
     clear_copy_env();
     setenv("UR_L0_USE_COPY_ENGINE_FOR_FILL", "", 1);
     CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(bmg_root));
-    CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_FILL") == nullptr);
+    CHECK(env("UR_L0_USE_COPY_ENGINE_FOR_FILL") != nullptr && env("UR_L0_USE_COPY_ENGINE_FOR_FILL")[0] == '\0');
+    clear_copy_env();
+    setenv("UR_L0_USE_COPY_ENGINE", "", 1);
+    setenv("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE", "1", 1);
+    CHECK(!ggml_sycl_apply_xe_kmd_defaults_in(i915_root));
+    CHECK(env("UR_L0_USE_COPY_ENGINE") != nullptr && env("UR_L0_USE_COPY_ENGINE")[0] == '\0');
+    CHECK(env_eq("SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE", "1"));
+    CHECK(env("UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD") == nullptr);
     // Empty UR in-order variable next to its set alias: mirrored, and the alias asks for
     // copy engines, so no default is applied.
     clear_copy_env();
@@ -252,6 +272,7 @@ int main() {
     CHECK(!ggml_sycl_xe_kmd_defaults_applied());
     CHECK(env("UR_L0_USE_COPY_ENGINE") == nullptr);
     clear_copy_env();
+    ggml_sycl_xe_kmd_flush_log();  // show what the hook would have logged at backend init
 
     fs::remove_all(base);
 

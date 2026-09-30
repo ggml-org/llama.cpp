@@ -780,6 +780,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 |--------------------|---------------------------------------|---------------------------------------------|
 | GGML_SYCL          | ON (mandatory)                        | Enable build with SYCL code path.           |
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
+| GGML_SYCL_FA_LARGE_GRF | OFF *(default)* \|ON *(Optional)* | Compile the 256-GRF variants of the flash-attention kernels so the runtime knob `GGML_SYCL_FA_LARGE_GRF` can select them. Doubles the FA device code, and the FA share of an AOT build. |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. (1.) |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
@@ -828,13 +829,13 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_SPARSE_FA_MARGIN | [0,..] default:256 | Set the margin value for Sparse Flash-attention.|
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
-| UR_L0_USE_COPY_ENGINE | adapter default, or 0 | Unified Runtime Level Zero (v1 adapter) knob: 0 routes USM copies to the compute queue instead of the blitter (bcs), 1 enables every copy engine, `lower:upper` selects a range. On Linux, when a DG2 GPU is bound to the `xe` kernel driver, ggml-sycl sets it to 0 at startup and logs one line (see Known Issues) unless the variable or its `SYCL_PI_` alias is already set, or any copy-engine variable asks for copy engines (this one, the `UR_L0_USE_COPY_ENGINE_FOR_*` family or the aliases with a value other than 0, or `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0`). An explicit 0 agrees with the default and does not block the other adapter's variable; empty counts as unset and is removed from the environment (the adapter aborts at load on an empty `UR_L0_USE_COPY_ENGINE_FOR_*` value and at the first queue on an empty value here). Set it to 1 to enable the copy engines anyway; `--prefetch-experts-slots` needs that (and is refused on the v2 adapter regardless). `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0` gives the adapter's own defaults back. |
-| GGML_SYCL_XE_COPY_ENGINE_DEFAULT | 1 (default) or 0 | 0 disables the automatic xe copy-engine defaults above entirely. |
-| UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD | 0 (default) or 1 | The same control for the Level Zero v2 adapter (`SYCL_UR_USE_LEVEL_ZERO_V2=1`, default on Xe2+), which ignores `UR_L0_USE_COPY_ENGINE`. ggml-sycl sets it to 1 on DG2/xe unless it is already set or a copy-engine variable asks for copy engines (rule above). To keep copy offload on the v2 adapter set it to 0 explicitly; on v1 set `UR_L0_USE_COPY_ENGINE=1`. Either override can bring the blitter failure back on DG2. |
+| UR_L0_USE_COPY_ENGINE | adapter default, or 0 | Unified Runtime Level Zero (v1 adapter) knob: 0 routes USM copies to the compute queue instead of the blitter (bcs), 1 enables every copy engine, `lower:upper` selects a range. On Linux, when a DG2 GPU is bound to the `xe` kernel driver, ggml-sycl sets it to 0 at startup and logs one line (see Known Issues) unless the variable or its `SYCL_PI_` alias is already set, or any copy-engine variable asks for copy engines (this one, the `UR_L0_USE_COPY_ENGINE_FOR_*` family or the aliases with a value other than 0, or `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0`). An explicit 0 agrees with the default and does not block the other adapter's variable; empty counts as unset and, on DG2/xe, is removed from the environment (the adapter aborts at load on an empty `UR_L0_USE_COPY_ENGINE_FOR_*` value and at the first queue on an empty value here). Set it to 1 to enable the copy engines anyway; `--prefetch-experts-slots` needs that (and is refused on the v2 adapter regardless). `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0` gives the adapter's own defaults back. |
+| GGML_SYCL_XE_COPY_ENGINE_DEFAULT | 1 (default) or 0 | 0 disables the automatic xe copy-engine defaults above entirely (integer, read like the other GGML_SYCL knobs). The hook's log lines are printed at backend initialization, after the application's logger is installed; when the defaults are skipped because a variable asks for copy engines, one line says which. |
+| UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD | 0 (default) or 1 | The same control for the Level Zero v2 adapter (`SYCL_UR_USE_LEVEL_ZERO_V2=1`, default on Xe2+) (its binary also reads `UR_L0_USE_COPY_ENGINE` and `UR_L0_USE_COPY_ENGINE_FOR_D2D_COPY`, none of the other v1 names). ggml-sycl sets it to 1 on DG2/xe unless it is already set or a copy-engine variable asks for copy engines (rule above). To keep copy offload on the v2 adapter set it to 0 explicitly; on v1 set `UR_L0_USE_COPY_ENGINE=1`. Either override can bring the blitter failure back on DG2. |
 | UR_L0_USE_COPY_ENGINE_FOR_IN_ORDER_QUEUE | 1 (default) or 0 | Same as above but only for in-order queues, which is every queue ggml-sycl creates. |
 | SYCL_PI_LEVEL_ZERO_USE_COPY_ENGINE | alias | Older alias for UR_L0_USE_COPY_ENGINE, read by the adapter only when the UR name is unset. An explicit value here counts like one on the UR name for the xe default; if the UR name is present but empty next to a set alias, ggml-sycl copies the alias into it (the adapter would otherwise fail parsing the empty value). |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
-| GGML_SYCL_FA_LARGE_GRF | 0 (default), 1 or 2 | Request the 256-entry register file for the flash-attention kernels: 1 = tile (prefill) kernels only, 2 = tile and vec kernels. At the default 128 GRF the FA tile kernels spill 8-15 KB per thread on DG2 (IGC 2.41 shader dumps). Measured on the A770 (paired campaigns, `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): mode 1 gives pp512 +2.5 % (d=256) to +10 % (d=128) at short context with decode flat; mode 2 adds tg128 +3.6 % at 8k for d=256 but costs -4.5 % for d=128. Prefer mode 1 when experimenting. The 256-GRF instantiations exist only in builds configured with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF: every FA kernel would otherwise carry a second device image); other builds warn and ignore the variable. |
+| GGML_SYCL_FA_LARGE_GRF | 0 (default), 1 or 2 | Request the 256-entry register file for the flash-attention kernels: 1 = tile (prefill) kernels only, 2 = tile and vec kernels. At the default 128 GRF the FA tile kernels spill 8-15 KB per thread on DG2 (IGC 2.41 shader dumps). Measured on the A770 (paired campaigns, `docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): mode 1 gives pp512 +2.5 % (d=256) to +10 % (d=128) at short context with decode flat; mode 2 adds tg128 +3.6 % at 8k for d=256 but costs -4.5 % for d=128. Prefer mode 1 when experimenting. The mode-2 numbers predate the occupancy change (half the work-groups per Xe-core for 256-GRF launches); mode 1 was re-measured after it with no change. The 256-GRF instantiations exist only in builds configured with `-DGGML_SYCL_FA_LARGE_GRF=ON` (default OFF: every FA kernel would otherwise carry a second device image); other builds warn and ignore the variable. |
 | GGML_SYCL_Q8_KV_QUANTS_FIRST | 1 (default) or 0 | Store `q8_0` KV cache rows as 128 contiguous quant values followed by four fp16 scales, instead of four interleaved 34-byte `block_q8_0` records. Applies only to SYCL devices with `q8_0` K and V and 128-element heads; every other cache keeps canonical blocks either way. Set to 0 to fall back. |
 
 ### Intel Arc (A770 / DG2) flash-attention KV cache
@@ -909,6 +910,69 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
   `makepkg`), disable injected compiler flags (`options=(!buildflags)`); host `-march`
   microarch flags leaking into the device compile can produce garbage GPU output. Do not add
   host CFLAGS to the SYCL build.
+
+### Arc A770 (DG2) on the xe KMD: blitter copies hang, then `Engine reset: engine_class=bcs`
+
+With the Unified Runtime Level Zero adapter routing USM copies to the blitter (its default),
+workloads that stream host memory to the device every token (MoE experts left on the CPU by
+`--fit`) stall silently and later log
+
+```
+xe 0000:03:00.0: [drm] Tile0: GT0: Engine reset: engine_class=bcs, logical_mask: 0x1, guc_id=6, state=0x29
+xe 0000:03:00.0: [drm] Tile0: GT0: Timedout job: seqno=..., guc_id=6, flags=0x20 in llama-bench [...]
+```
+
+followed by `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` from `ggml_backend_sycl_set_tensor_async`
+(the VM is banned after the reset, so every later `VM_BIND` fails). Measured on kernel
+7.3-rc1 and 7.3-rc5 with intel-compute-runtime 26.35.39758: 12 failures in 15 long-context
+runs with the blitter, 0 in 10 without it. Mechanism, from device coredumps, xe tracepoints
+and NEO allocation logs (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): on xe every
+userptr bind of the mmap'd model pages fails with `EPERM` (read-only file mapping, NEO asks
+for write access); NEO answers each failure with an unused-allocation eviction sweep, and
+that sweep unbinds the blitter's KMD-submitted command buffer while its job is still
+pending. With scratch pages enabled the blitter parses zeros up to the next mapped
+allocation and halts on an invalid instruction; the next LR-mode suspend then cannot
+preempt it and the GuC resets the engine after the 640 ms preempt timeout. The compute
+queue uses direct submission (allocations stay bound) and is not affected. Same sweep as
+intel/compute-runtime issues #973 and #1010, different victim.
+
+Defaults and workarounds:
+
+- ggml-sycl now sets `UR_L0_USE_COPY_ENGINE=0` (v1 adapter) and
+  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` (v2 adapter) itself when it finds a DG2 GPU (PCI
+  ids 0x5690-0x56ff) bound to `xe`. Each variable is left alone when it (or, for the v1
+  one, its `SYCL_PI_` alias) is already set, and neither is touched when any copy-engine
+  variable asks for copy engines with a value other than 0 (logged at backend
+  initialization, also when the defaults are skipped; the variable table above has the
+  exact rule). Copies run on the compute queue; decode on
+  real text was 1.2 % below the blitter path on this workload (32.38 vs 32.78 t/s).
+  Override with `UR_L0_USE_COPY_ENGINE=1` (every copy engine) on the v1 adapter or
+  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0` on the v2 adapter (both are set because the v2 adapter
+  binary also carries the v1 name while the v1 binary does not know the v2 variable); overriding reintroduces the failure described above.
+  `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0` disables the hook and gives the adapter's own
+  defaults back; revisit it when a compute-runtime release carries the read-only userptr
+  retry below. The hook runs from a load-time constructor in `ggml-sycl/xe-kmd.cpp`, ahead
+  of every SYCL entry point in the library; on any other GPU or driver it leaves the
+  environment untouched. An application that changes these variables after the library
+  is loaded must set `UR_L0_USE_COPY_ENGINE` itself.
+- `--prefetch-experts-slots` needs the private copy queue, so it is unavailable under this
+  default; the "no private stream" warning says so and names the hook. Enabling it
+  requires the v1 override and therefore the blitter path this entry is about; the v2
+  adapter never gets a private copy queue. The two are mutually exclusive on DG2 until the
+  runtime is fixed.
+- `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
+  passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
+- The runtime fix: `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
+  against intel/compute-runtime master makes NEO retry the userptr bind read-only on `EPERM`
+  instead of running the eviction sweep. With it the blitter path ran clean with zero failed
+  binds (and prefill +33 %, since the staging fallback copies disappear too). NEO master as
+  of `8ae033266e` still fails without it. Build DG2-only and load it with
+  `ZE_ENABLE_ALT_DRIVERS=/path/to/libze_intel_gpu.so.1` to test without replacing the package.
+- `--load-mode none` puts the CPU-placed weights in pinned `SYCL_Host` memory: no userptr
+  binds, no failing bind, no sweep. Measured +12 % prefill on the Ornith fit, decode flat,
+  and clean with the blitter on. Costs an owned RAM copy instead of shared page cache.
+- The i915 driver does not hit this: its userptr binds of file-backed pages succeed, so
+  the sweep never runs, and execbuf keeps batch buffers alive for the job's lifetime.
 
 ## Q&A
 
@@ -999,66 +1063,6 @@ Pass these via `CXXFLAGS` or add a one-off `#define` to enable a flag on the spo
 
 ### **GitHub contribution**:
 Please add the `[SYCL]` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
-
-### Arc A770 (DG2) on the xe KMD: blitter copies hang, then `Engine reset: engine_class=bcs`
-
-With the Unified Runtime Level Zero adapter routing USM copies to the blitter (its default),
-workloads that stream host memory to the device every token (MoE experts left on the CPU by
-`--fit`) stall silently and later log
-
-```
-xe 0000:03:00.0: [drm] Tile0: GT0: Engine reset: engine_class=bcs, logical_mask: 0x1, guc_id=6, state=0x29
-xe 0000:03:00.0: [drm] Tile0: GT0: Timedout job: seqno=..., guc_id=6, flags=0x20 in llama-bench [...]
-```
-
-followed by `UR_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` from `ggml_backend_sycl_set_tensor_async`
-(the VM is banned after the reset, so every later `VM_BIND` fails). Measured on kernel
-7.3-rc1 and 7.3-rc5 with intel-compute-runtime 26.35.39758: 12 failures in 15 long-context
-runs with the blitter, 0 in 10 without it. Mechanism, from device coredumps, xe tracepoints
-and NEO allocation logs (`docs/research/xe-kmd-bcs-copy-engine-2026-09-30.md`): on xe every
-userptr bind of the mmap'd model pages fails with `EPERM` (read-only file mapping, NEO asks
-for write access); NEO answers each failure with an unused-allocation eviction sweep, and
-that sweep unbinds the blitter's KMD-submitted command buffer while its job is still
-pending. With scratch pages enabled the blitter parses zeros up to the next mapped
-allocation and halts on an invalid instruction; the next LR-mode suspend then cannot
-preempt it and the GuC resets the engine after the 640 ms preempt timeout. The compute
-queue uses direct submission (allocations stay bound) and is not affected. Same sweep as
-intel/compute-runtime issues #973 and #1010, different victim.
-
-Defaults and workarounds:
-
-- ggml-sycl now sets `UR_L0_USE_COPY_ENGINE=0` (v1 adapter) and
-  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=1` (v2 adapter) itself when it finds a DG2 GPU (PCI
-  ids 0x5690-0x56ff) bound to `xe`. Each variable is left alone when it (or, for the v1
-  one, its `SYCL_PI_` alias) is already set, and neither is touched when any copy-engine
-  variable asks for copy engines with a value other than 0 (logged at startup; the
-  variable table above has the exact rule). Copies run on the compute queue; decode on
-  real text was 1.2 % below the blitter path on this workload (32.38 vs 32.78 t/s).
-  Override with `UR_L0_USE_COPY_ENGINE=1` (every copy engine) on the v1 adapter or
-  `UR_L0_V2_FORCE_DISABLE_COPY_OFFLOAD=0` on the v2 adapter (both adapter binaries contain
-  both names, so both are set); overriding reintroduces the failure described above.
-  `GGML_SYCL_XE_COPY_ENGINE_DEFAULT=0` disables the hook and gives the adapter's own
-  defaults back; revisit it when a compute-runtime release carries the read-only userptr
-  retry below. The hook runs from a load-time constructor in `ggml-sycl/xe-kmd.cpp`, ahead
-  of every SYCL entry point in the library.
-- `--prefetch-experts-slots` needs the private copy queue, so it is unavailable under this
-  default; the "no private stream" warning says so and names the hook. Enabling it
-  requires the v1 override and therefore the blitter path this entry is about; the v2
-  adapter never gets a private copy queue. The two are mutually exclusive on DG2 until the
-  runtime is fixed.
-- `NEOReadDebugKeys=1 DirectSubmissionOverrideBlitterSupport=1` keeps the blitter and
-  passed one full run, but decode dropped from 14.5 to 8.7 t/s on the random-token bench.
-- The runtime fix: `docs/research/patches/0001-neo-retry-userptr-bind-readonly-on-eperm.patch`
-  against intel/compute-runtime master makes NEO retry the userptr bind read-only on `EPERM`
-  instead of running the eviction sweep. With it the blitter path ran clean with zero failed
-  binds (and prefill +33 %, since the staging fallback copies disappear too). NEO master as
-  of `8ae033266e` still fails without it. Build DG2-only and load it with
-  `ZE_ENABLE_ALT_DRIVERS=/path/to/libze_intel_gpu.so.1` to test without replacing the package.
-- `--load-mode none` puts the CPU-placed weights in pinned `SYCL_Host` memory: no userptr
-  binds, no failing bind, no sweep. Measured +12 % prefill on the Ornith fit, decode flat,
-  and clean with the blitter on. Costs an owned RAM copy instead of shared page cache.
-- The i915 driver does not hit this: its userptr binds of file-backed pages succeed, so
-  the sweep never runs, and execbuf keeps batch buffers alive for the job's lifetime.
 
 ## TODO
 
