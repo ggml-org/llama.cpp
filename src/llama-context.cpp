@@ -2362,6 +2362,7 @@ void llama_context::output_reorder() {
 
     output_swaps.clear();
 
+    // [TAG_EXTRACT_TARGET_EMBEDDINGS]
     // Layer inputs and unmasked NextN embeddings contain all token rows, independent of logits selection.
     for (size_t i = 0; i < embd_batch_idxs.size(); ++i) {
         while (embd_batch_idxs[i] != (int32_t) i) {
