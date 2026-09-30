@@ -475,9 +475,7 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
             elif dim == 0:
                 return type(tensor)(lora_A, lora_B[idx])
             else:
-                raise NotImplementedError(
-                    f"_reorder_v_heads on dim={dim} not supported for LoRA tensors"
-                )
+                raise NotImplementedError(f"_reorder_v_heads on dim={dim} not supported for LoRA tensors")
 
         new_shape = shape[:dim] + [num_k_heads, num_v_per_k, head_dim] + shape[dim + 1:]
         tensor = tensor.reshape(*new_shape)
