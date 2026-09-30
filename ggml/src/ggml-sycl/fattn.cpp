@@ -344,10 +344,10 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         const ggml_tensor * K_diag = dst->src[1];
         const ggml_tensor * V_diag = dst->src[2];
         const ggml_tensor * Q_diag = dst->src[0];
-        if (K_diag->ne[1] >= 1024) {
+        dpct::queue_ptr q = ctx.stream();
+        if (K_diag->ne[1] >= 1024 && q->ext_oneapi_get_state() != sycl::ext::oneapi::experimental::queue_state::recording) {
             fa_diag_count++;
             float diag_buf[64];
-            dpct::queue_ptr q = ctx.stream();
             q->memcpy(diag_buf, dst->data, 64 * sizeof(float));
             q->wait();
             const char * kname = "???";
