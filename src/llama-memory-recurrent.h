@@ -24,7 +24,8 @@ public:
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
-        const layer_filter_cb & filter);
+        const layer_filter_cb & filter,
+                     bool   mtp_recurrent_replay = false);
 
     ~llama_memory_recurrent() = default;
 
@@ -72,6 +73,13 @@ public:
 
     // number of recurrent-state snapshots per seq for rollback; tensors are widened to (1 + n_rs_seq) groups
     uint32_t n_rs_seq = 0;
+
+    // MTP single-context replay: keep only a live row + one base row instead of (1 + n_rs_seq)
+    // snapshot planes. n_rs_seq is kept at its logical value (n_max) so the ubatch tail split and
+    // the server's rollback bookkeeping are unchanged; only the ALLOCATION and the rollback
+    // semantics change (no snapshot restore - llama_context::mtp_recurrent_replay() rebuilds the state).
+    bool mtp_recurrent_replay = false;
+    uint32_t replay_n_tokens = 0;
 
     // per-seq rollback index
     std::vector<uint32_t> rs_idx;

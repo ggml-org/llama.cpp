@@ -7,12 +7,21 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
 
+// MTP single-context replay helpers (defined near llama_n_rs_seq below)
+static llama_memory_recurrent * llama_recurrent_mem_of(llama_memory_i * mem);
+static int32_t llama_recurrent_cell_of(const llama_memory_recurrent * mem, llama_seq_id seq_id);
+
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -103,10 +112,29 @@ llama_context::llama_context(
     }
 
     cparams.n_rs_seq = params.n_rs_seq;
+
+    // MTP single-context replay: validated against the architecture here. cparams.n_rs_seq keeps its
+    // logical value (n_max) so the ubatch tail split and the server's rollback bookkeeping are
+    // unchanged; only the memory ALLOCATION (see llama_memory_recurrent) and the rollback semantics
+    // change.
+    cparams.mtp_recurrent_replay = params.mtp_recurrent_replay && llm_arch_supports_mtp_recurrent_replay(model.arch);
+    // The tape/fold is single-sequence only (one token axis per layer, one tape), and with a single
+    // state plane a verify that did not record could not be rolled back -- so require n_seq_max == 1.
+    if (cparams.mtp_recurrent_replay && cparams.n_seq_max != 1) {
+        LLAMA_LOG_INFO("%s: recurrent replay needs n_seq_max == 1 (got %u); keeping snapshots\n",
+                __func__, cparams.n_seq_max);
+        cparams.mtp_recurrent_replay = false;
+    }
+    if (params.mtp_recurrent_replay && !cparams.mtp_recurrent_replay) {
+        LLAMA_LOG_DEBUG("%s: mtp_recurrent_replay requested but arch %s does not support it; keeping snapshots\n",
+                __func__, llm_arch_name(model.arch));
+    }
+
     if (cparams.n_rs_seq > 0 && !llm_arch_supports_rs_rollback(model.arch)) {
         LLAMA_LOG_DEBUG("%s: n_rs_seq=%u requested but model does not support recurrent partial rollback; clamping to 0\n",
                         __func__, cparams.n_rs_seq);
         cparams.n_rs_seq = 0;
+        cparams.mtp_recurrent_replay = false;
     }
 
     cparams.n_threads               = params.n_threads;
@@ -1713,6 +1741,59 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         return encode(batch_inp);
     }
 
+    // MTP single-context replay: a pending recurrent rollback (recorded by seq_rm) is applied here,
+    // before any graph is built, so the graph reads the rebuilt live state. This replaces the
+    // snapshot restore that (1 + n_rs_seq) planes would otherwise perform.
+    if (cparams.mtp_recurrent_replay) {
+        if (llama_memory_recurrent * mem_recr = llama_recurrent_mem_of(memory.get())) {
+            mtp_recurrent_apply_pending_replay();
+            mem_recr->replay_n_tokens = 0;
+
+            // 2. a verify-sized multi-token target decode records the raw GDN inputs and snapshots
+            //    the pre-verify state into the base row. Larger batches (prefill) are ignored so a
+            //    stale prefill token count can never be replayed.
+            const int32_t n_batch_tokens = (int32_t) batch_inp.tokens.size();
+            if (n_batch_tokens > 1 && mtp_recurrent_tape_alloc((int) cparams.n_rs_seq + 1)) {
+                // the tape stores one token axis per layer, so the replay token count is only
+                // meaningful for a single-sequence verify batch; the tape is single-seq only, so
+                // read the first seq id of each token.
+                const auto token_seq = [&](int32_t i) {
+                    const auto & s = batch_inp.tokens[i].seq_ids;
+                    return s.empty() ? (llama_seq_id) -1 : *s.begin();
+                };
+                const llama_seq_id first_seq = token_seq(0);
+                bool single_seq = true;
+                for (int32_t i = 1; i < n_batch_tokens; ++i) {
+                    if (token_seq(i) != first_seq) {
+                        single_seq = false;
+                        break;
+                    }
+                }
+
+                if (single_seq && first_seq >= 0 && (uint32_t) first_seq < mem_recr->size &&
+                        mem_recr->cells[first_seq].tail >= 0 &&
+                        (uint32_t) n_batch_tokens <= cparams.n_ubatch &&
+                        n_batch_tokens <= mtp_recurrent_tape_ptr->max_tokens) {
+                    mtp_recurrent_tape_ptr->recording = true;
+                    mtp_recurrent_tape_ptr->n_tokens  = n_batch_tokens;
+                    // snapshot the pre-verify live row into the base row before this batch's graph
+                    // overwrites it; mtp_recurrent_replay() restores it and folds the accepted prefix
+                    mtp_recurrent_save_base(first_seq);
+                } else {
+                    // not a verify-sized single-seq batch (e.g. prefill): record nothing and clear the
+                    // token count, so a later rollback can never replay a stale window
+                    mtp_recurrent_tape_ptr->recording = false;
+                    mtp_recurrent_tape_ptr->n_tokens  = 0;
+                }
+            } else if (mtp_recurrent_tape_ptr) {
+                // single-token decode: the rollback above already consumed the tape window, so keep
+                // recording off and drop the window - it must never be replayed twice.
+                mtp_recurrent_tape_ptr->recording = false;
+                mtp_recurrent_tape_ptr->n_tokens  = 0;
+            }
+        }
+    }
+
     if (batch_inp.tokens.empty()) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -2093,6 +2174,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (cparams.mtp_recurrent_replay && mtp_recurrent_tape_ptr && mtp_recurrent_tape_ptr->recording) {
+        llama_recurrent_mem_of(memory.get())->replay_n_tokens = mtp_recurrent_tape_ptr->n_tokens;
+    }
 
     return 0;
 }
@@ -2562,6 +2647,7 @@ llm_graph_params llama_context::graph_params(
         /*.cross       =*/ &cross,
         /*.prec_policy =*/ &model.prec_policy,
         /*.samplers    =*/ sampling.samplers,
+        /*.mtp_recurrent_tape =*/ mtp_recurrent_tape_ptr.get(),
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
@@ -2716,6 +2802,7 @@ public:
         for (const auto & rinfo : rinfos) {
             ggml_backend_tensor_set(rinfo.tensor, rinfo.ptr, rinfo.offset, rinfo.size);
         }
+        run_commit_callbacks();
     }
 
     void read(void * dst, size_t size) override {
@@ -3078,6 +3165,8 @@ public:
         }
 
         GGML_ASSERT(buf_size == 0);
+
+        run_commit_callbacks();
     }
 
     void read(void * dst, size_t size) override {
@@ -3334,6 +3423,7 @@ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * file
         }
         GGML_ASSERT(nread <= state_size);
         GGML_ASSERT(nread + sizeof(uint32_t) * 3 + sizeof(llama_token) * *n_token_count_out == file.tell());
+
     }
 
     return file.tell();
@@ -3360,6 +3450,7 @@ size_t llama_context::state_seq_save_file(llama_seq_id seq_id, const char * file
 }
 
 size_t llama_context::state_write_data(llama_io_write_i & io) {
+    mtp_recurrent_apply_pending_replay();
     LLAMA_LOG_DEBUG("%s: writing state\n", __func__);
 
     // write model info
@@ -3400,12 +3491,19 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
         memory->state_read(io);
+        io.on_commit([this]() {
+            if (mtp_recurrent_tape_ptr) {
+                mtp_recurrent_tape_ptr->n_tokens = 0;
+                mtp_recurrent_tape_ptr->recording = false;
+            }
+        });
     }
 
     return io.n_bytes();
 }
 
 size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    mtp_recurrent_apply_pending_replay();
     if (memory) {
         memory->state_write(io, seq_id, flags);
     }
@@ -3416,6 +3514,12 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     if (memory) {
         memory->state_read(io, seq_id, flags);
+        io.on_commit([this]() {
+            if (mtp_recurrent_tape_ptr) {
+                mtp_recurrent_tape_ptr->n_tokens = 0;
+                mtp_recurrent_tape_ptr->recording = false;
+            }
+        });
     }
 
     return io.n_bytes();
@@ -3716,6 +3820,7 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.mtp_recurrent_replay            =*/ false,
         /*.n_outputs_max               =*/ 0,
         /*.n_outputs_max_per_seq       =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
@@ -3893,6 +3998,545 @@ uint32_t llama_n_seq_max(const llama_context * ctx) {
 
 uint32_t llama_n_rs_seq(const llama_context * ctx) {
     return ctx->get_cparams().n_rs_seq;
+}
+
+//
+// MTP single-context replay (see src/llama-mtp-recurrent-tape.h)
+//
+
+static llama_memory_recurrent * llama_recurrent_mem_of(llama_memory_i * mem) {
+    if (auto * h = dynamic_cast<llama_memory_hybrid *>(mem)) {
+        return h->get_mem_recr();
+    }
+    return dynamic_cast<llama_memory_recurrent *>(mem);
+}
+
+static int32_t llama_recurrent_cell_of(const llama_memory_recurrent * mem, llama_seq_id seq_id) {
+    if (mem == nullptr || seq_id < 0 || (uint32_t) seq_id >= mem->size) {
+        return -1;
+    }
+    return mem->cells[seq_id].tail;
+}
+
+bool llama_context::mtp_recurrent_tape_alloc(int max_tokens) {
+    if (!cparams.mtp_recurrent_replay) {
+        return false;
+    }
+    if (max_tokens < 1) {
+        max_tokens = 1;
+    }
+    if (mtp_recurrent_tape_ptr && !mtp_recurrent_tape_ptr->empty() && mtp_recurrent_tape_ptr->max_tokens >= max_tokens) {
+        return true;
+    }
+
+    const auto & hp = model.hparams;
+
+    const int64_t S_k = hp.ssm_d_state;
+    const int64_t H_v = hp.ssm_dt_rank;
+    // k is recorded as the model feeds it to the GDN op: qwen35 repeats k to num_v_heads when the
+    // fused GDN is unavailable, so H_v is the safe (and simplest) upper bound for both layouts.
+    const int64_t H_k = H_v;
+    const int64_t S_v = H_v > 0 ? (int64_t) hp.ssm_d_inner / H_v : 0;
+    const int64_t conv_channels = (int64_t) hp.ssm_d_inner + 2 * (int64_t) hp.ssm_n_group * (int64_t) hp.ssm_d_state;
+
+    if (S_k <= 0 || S_v <= 0 || H_k <= 0 || H_v <= 0) {
+        return false;
+    }
+
+    std::vector<int32_t> ids;
+    for (uint32_t il = 0; il < hp.n_layer_all; ++il) {
+        if (hp.is_recr(il)) {
+            ids.push_back((int32_t) il);
+        }
+    }
+    if (ids.empty()) {
+        return false;
+    }
+
+    mtp_recurrent_tape_ptr.reset(new llama_mtp_recurrent_tape());
+    llama_mtp_recurrent_tape * tape = mtp_recurrent_tape_ptr.get();
+    tape->max_tokens = max_tokens;
+    tape->layer_ids  = ids;
+    tape->layers.resize(ids.size());
+
+    ggml_init_params ip = { ggml_tensor_overhead() * (ids.size() * 5 + 8), nullptr, true };
+    tape->ctx = ggml_init(ip);
+    if (tape->ctx == nullptr) {
+        mtp_recurrent_tape_ptr.reset();
+        return false;
+    }
+
+    for (size_t i = 0; i < ids.size(); ++i) {
+        auto & tl = tape->layers[i];
+        tl.S_k = S_k; tl.H_k = H_k; tl.S_v = S_v; tl.H_v = H_v; tl.conv_channels = conv_channels;
+        tl.k    = ggml_new_tensor_3d(tape->ctx, GGML_TYPE_F32, S_k, H_k, max_tokens);
+        tl.v    = ggml_new_tensor_3d(tape->ctx, GGML_TYPE_F32, S_v, H_v, max_tokens);
+        tl.gate = ggml_new_tensor_3d(tape->ctx, GGML_TYPE_F32, 1,   H_v, max_tokens);
+        tl.beta = ggml_new_tensor_3d(tape->ctx, GGML_TYPE_F32, 1,   H_v, max_tokens);
+        tl.qkv  = ggml_new_tensor_2d(tape->ctx, GGML_TYPE_F32, conv_channels, max_tokens);
+    }
+
+    // DEVICE-resident tape. A host tape forced the scheduler to turn every record cpy into a
+    // cross-backend D2H copy (~120 per verify step) and the replay then uploaded it back H2D for
+    // nothing. On the device both are D2D. Fall back to host only when there is no GPU backend.
+    ggml_backend_buffer_type_t tape_buft = nullptr;
+    for (auto & b : backends) {
+        auto * dev = ggml_backend_get_device(b.get());
+        if (dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            tape_buft = ggml_backend_get_default_buffer_type(b.get());
+            break;
+        }
+    }
+    if (tape_buft == nullptr) {
+        tape_buft = ggml_backend_cpu_buffer_type();
+    }
+    tape->buf = ggml_backend_alloc_ctx_tensors_from_buft(tape->ctx, tape_buft);
+    if (tape->buf == nullptr) {
+        mtp_recurrent_tape_ptr.reset();
+        return false;
+    }
+    ggml_backend_buffer_clear(tape->buf, 0);
+
+    LLAMA_LOG_INFO("%s: MTP replay tape: %zu recurrent layers, %d tokens, %.2f MiB (%s)\n",
+            __func__, ids.size(), max_tokens,
+            (float) ggml_backend_buffer_get_size(tape->buf) / (1024.0f * 1024.0f),
+            ggml_backend_buffer_name(tape->buf));
+    return true;
+}
+
+// Pure device-to-device row copy: build 1-D views of the src/dst rows in a throwaway context and let
+// ggml_backend_tensor_copy do the copy on-device. In the non-split case the live and base rows live
+// in the SAME device tensor, so each copy is a single cudaMemcpyAsync D2D with NO host staging --
+// which is all save_base (per verify step) and the replay restore (per rollback) ever needed. The
+// previous version round-tripped ~50 MiB per call through PCIe for nothing.
+static void copy_rows_d2d(
+        const std::vector<ggml_tensor *> & src,
+        const std::vector<size_t>        & src_off,
+        const std::vector<ggml_tensor *> & dst,
+        const std::vector<size_t>        & dst_off,
+        const std::vector<size_t>        & row_bytes) {
+    const size_t n = src.size();
+    if (n == 0) {
+        return;
+    }
+    ggml_init_params ip = { ggml_tensor_overhead() * (2 * n + 8) + 256, nullptr, true };
+    ggml_context * c = ggml_init(ip);
+    if (c == nullptr) {
+        return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        ggml_tensor * sv = ggml_view_1d(c, src[i], (int64_t) (row_bytes[i] / ggml_element_size(src[i])), src_off[i]);
+        ggml_tensor * dv = ggml_view_1d(c, dst[i], (int64_t) (row_bytes[i] / ggml_element_size(dst[i])), dst_off[i]);
+        // a fresh view has buffer == NULL; ggml_backend_tensor_copy needs buffer and data resolved
+        // from the view source, otherwise ggml_backend_buffer_get_type(NULL) trips GGML_ASSERT(buffer).
+        ggml_backend_view_init(sv);
+        ggml_backend_view_init(dv);
+        ggml_backend_tensor_copy(sv, dv);
+    }
+    ggml_free(c);
+}
+
+void llama_context::mtp_recurrent_save_base(llama_seq_id seq_id) {
+    if (!cparams.mtp_recurrent_replay) {
+        return;
+    }
+    synchronize();
+    llama_memory_recurrent * mem_recr = llama_recurrent_mem_of(memory.get());
+    const int32_t cell_idx = llama_recurrent_cell_of(mem_recr, seq_id);
+    if (cell_idx < 0) {
+        return;
+    }
+
+    const uint32_t n_embd_s = model.hparams.n_embd_s();
+    const uint32_t n_embd_r = model.hparams.n_embd_r();
+    const uint32_t mem_size  = mem_recr->size;
+
+    std::vector<ggml_tensor *> src, dst;
+    std::vector<size_t> src_off, dst_off, bytes;
+    for (uint32_t il = 0; il < model.hparams.n_layer_all; ++il) {
+        if (!model.hparams.is_recr(il)) {
+            continue;
+        }
+        ggml_tensor * s      = mem_recr->s_l[il];
+        ggml_tensor * r      = mem_recr->r_l[il];
+
+        if (s != nullptr) {
+            const size_t row = (size_t) n_embd_s * ggml_element_size(s);
+            const size_t live_off = (size_t) cell_idx * row;
+            // slot-major layout: live slot 0, base slot 1 -> base row is (mem_size + cell_idx)
+            const size_t base_off = ((size_t) mem_size + cell_idx) * row;
+            src.push_back(s); src_off.push_back(live_off);
+            dst.push_back(s); dst_off.push_back(base_off);
+            bytes.push_back(row);
+        }
+        if (r != nullptr) {
+            const size_t row = (size_t) n_embd_r * ggml_element_size(r);
+            const size_t live_off = (size_t) cell_idx * row;
+            const size_t base_off = ((size_t) mem_size + cell_idx) * row;
+            src.push_back(r); src_off.push_back(live_off);
+            dst.push_back(r); dst_off.push_back(base_off);
+            bytes.push_back(row);
+        }
+    }
+    copy_rows_d2d(src, src_off, dst, dst_off, bytes);
+}
+
+void llama_context::mtp_recurrent_apply_pending_replay() {
+    if (!cparams.mtp_recurrent_replay) {
+        return;
+    }
+    auto * mem_recr = llama_recurrent_mem_of(memory.get());
+    if (mem_recr == nullptr || mem_recr->replay_n_tokens == 0) {
+        return;
+    }
+    for (size_t seq = 0; seq < mem_recr->rs_idx.size(); ++seq) {
+        const uint32_t rollback = mem_recr->rs_idx[seq];
+        if (rollback == 0) {
+            continue;
+        }
+        GGML_ASSERT(mtp_recurrent_tape_ptr && mtp_recurrent_tape_ptr->n_tokens == (int) mem_recr->replay_n_tokens);
+        GGML_ASSERT(rollback < mem_recr->replay_n_tokens);
+        mtp_recurrent_replay((llama_seq_id) seq, mem_recr->replay_n_tokens - rollback);
+        mem_recr->rs_idx[seq] = 0;
+        mem_recr->replay_n_tokens = 0;
+        mtp_recurrent_tape_ptr->n_tokens = 0;
+    }
+}
+
+void llama_context::mtp_recurrent_replay(llama_seq_id seq_id, int n_accepted) {
+    if (!cparams.mtp_recurrent_replay || n_accepted <= 0) {
+        return;
+    }
+    synchronize();
+    llama_mtp_recurrent_tape * tape = mtp_recurrent_tape_ptr.get();
+    if (tape == nullptr || tape->empty()) {
+        return;
+    }
+    if (n_accepted > tape->n_tokens) {
+        LLAMA_LOG_WARN("%s: n_accepted=%d exceeds the recorded tape (%d); skipping replay\n",
+                __func__, n_accepted, tape->n_tokens);
+        return;
+    }
+
+    llama_memory_recurrent * mem_recr = llama_recurrent_mem_of(memory.get());
+    const int32_t cell_idx = llama_recurrent_cell_of(mem_recr, seq_id);
+    if (cell_idx < 0) {
+        return;
+    }
+
+    const auto & hp = model.hparams;
+    const uint32_t n_embd_s = hp.n_embd_s();
+    const uint32_t n_embd_r = hp.n_embd_r();
+    const uint32_t mem_size  = mem_recr->size;
+
+    // 1. restore the pre-verify base (row mem_size + cell_idx) back into the live row (row cell_idx)
+    //    so the fold below reads the base and writes the post-accept state over it. Replay keeps a
+    //    base row for exactly this: with a single state plane the live row would have to stay
+    //    unadvanced between the verify and the fold, and any state consumer in that window (e.g. a
+    //    context-checkpoint save, which is what broke the prompt-cache path) would read it stale.
+    {
+        std::vector<ggml_tensor *> rsrc, rdst;
+        std::vector<size_t> rsrc_off, rdst_off, rbytes;
+        for (uint32_t il = 0; il < hp.n_layer_all; ++il) {
+            if (!hp.is_recr(il)) {
+                continue;
+            }
+            ggml_tensor * s      = mem_recr->s_l[il];
+            ggml_tensor * r      = mem_recr->r_l[il];
+            if (s != nullptr) {
+                const size_t row = (size_t) n_embd_s * ggml_element_size(s);
+                const size_t live_off = (size_t) cell_idx * row;
+                const size_t base_off = ((size_t) mem_size + cell_idx) * row;
+                rsrc.push_back(s); rsrc_off.push_back(base_off);
+                rdst.push_back(s); rdst_off.push_back(live_off);
+                rbytes.push_back(row);
+            }
+            if (r != nullptr) {
+                const size_t row = (size_t) n_embd_r * ggml_element_size(r);
+                const size_t live_off = (size_t) cell_idx * row;
+                const size_t base_off = ((size_t) mem_size + cell_idx) * row;
+                rsrc.push_back(r); rsrc_off.push_back(base_off);
+                rdst.push_back(r); rdst_off.push_back(live_off);
+                rbytes.push_back(row);
+            }
+        }
+        copy_rows_d2d(rsrc, rsrc_off, rdst, rdst_off, rbytes);
+    }
+
+    // 2. replay the accepted GDN prefix into the live S row using the same op as the forward pass
+    ggml_backend_t backend = backend_cpu;
+    for (auto & b : backends) {
+        auto * dev = ggml_backend_get_device(b.get());
+        if (dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            backend = b.get();
+            break;
+        }
+    }
+
+    // conv (R) geometry -- needed for the device-side conv rollback (common case) and the CPU
+    // fallback (when the accepted prefix is shorter than the conv window).
+    const int64_t conv_channels = (int64_t) hp.ssm_d_inner + 2 * (int64_t) hp.ssm_n_group * (int64_t) hp.ssm_d_state;
+    const int64_t conv_window   = conv_channels > 0 ? (int64_t) n_embd_r / conv_channels : 0;
+
+    const int n_rec = (int) tape->layer_ids.size();
+
+    // 2a. Fused device replay: the same fold as ONE kernel launch per layer for the GDN state plus
+    //     one for the conv window, instead of ~14 graph nodes per layer (~336 launches for 24
+    //     layers). The graph path below stays as the fallback (no fused entry, unsupported S_v, or
+    //     a non-CUDA backend).
+    if (n_rec > 0 && n_accepted > 0) {
+        ggml_backend_reg_t gpu_reg = nullptr;
+        ggml_backend_t     gpu_be  = nullptr;
+        for (auto & b : backends) {
+            auto * dev = ggml_backend_get_device(b.get());
+            if (dev != nullptr && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                gpu_reg = ggml_backend_dev_backend_reg(dev);
+                gpu_be  = b.get();
+                break;
+            }
+        }
+        using replay_fn_t = bool (*)(void *, void *, const void *, const void *, const void *, const void *, int, int, int, int, int, int);
+        using conv_fn_t   = bool (*)(void *, void *, const void *, const void *, int, int, int);
+        using stream_fn_t = void * (*)(void *);
+        using sync_fn_t   = void (*)(void *);
+        auto fn_gdn    = gpu_reg ? (replay_fn_t) ggml_backend_reg_get_proc_address(gpu_reg, "ggml_cuda_mtp_replay_gdn_state")   : nullptr;
+        auto fn_conv   = gpu_reg ? (conv_fn_t)   ggml_backend_reg_get_proc_address(gpu_reg, "ggml_cuda_mtp_replay_conv")         : nullptr;
+        auto fn_stream = gpu_reg ? (stream_fn_t) ggml_backend_reg_get_proc_address(gpu_reg, "ggml_cuda_mtp_backend_stream") : nullptr;
+        auto fn_sync   = gpu_reg ? (sync_fn_t)   ggml_backend_reg_get_proc_address(gpu_reg, "ggml_cuda_mtp_replay_sync")         : nullptr;
+
+        if (fn_gdn != nullptr && fn_conv != nullptr && fn_stream != nullptr && fn_sync != nullptr) {
+            void * stream = fn_stream(gpu_be);
+            bool ok = true;
+            for (int li = 0; li < n_rec && ok; ++li) {
+                const int il = tape->layer_ids[li];
+                auto & tl = tape->layers[li];
+                ggml_tensor * s      = mem_recr->s_l[il];
+                ggml_tensor * r      = mem_recr->r_l[il];
+                if (s == nullptr || r == nullptr || s->data == nullptr || r->data == nullptr ||
+                        tl.k == nullptr || tl.v == nullptr || tl.gate == nullptr ||
+                        tl.beta == nullptr || tl.qkv == nullptr) {
+                    ok = false;
+                    break;
+                }
+                const size_t s_off = (size_t) cell_idx * n_embd_s * ggml_element_size(s);
+                const size_t r_off = (size_t) cell_idx * n_embd_r * ggml_element_size(r);
+                void * s_ptr = (char *) s->data + s_off;
+                void * r_ptr = (char *) r->data + r_off;
+
+                ok = fn_gdn(stream, s_ptr, tl.k->data, tl.v->data, tl.gate->data, tl.beta->data,
+                        n_accepted, (int) tl.S_v, (int) tl.H_k, (int) tl.H_v,
+                        (int) (tl.k->nb[1] / sizeof(float)), (int) (tl.k->nb[2] / sizeof(float)));
+                if (ok && conv_window > 0) {
+                    ok = fn_conv(stream, r_ptr, r_ptr, tl.qkv->data,
+                            (int) conv_window, (int) conv_channels, n_accepted);
+                }
+            }
+            if (ok) {
+                // The launches are async and the backend rotates its stream index between graph
+                // nodes, so the next decode is not guaranteed to be ordered after them. Sync once
+                // (the graph path is implicitly ordered by ggml_backend_graph_compute).
+                fn_sync(stream);
+                LLAMA_LOG_DEBUG("%s: replayed %d tok over %d layers (fused)\n", __func__, n_accepted, n_rec);
+                return;
+            }
+        }
+    }
+
+    if (n_rec > 0 && n_accepted > 0) {
+        // The replay graph's structure depends only on n_accepted, so build it ONCE per accepted
+        // length and reuse it: rebuilding the context + n_rec*10 tensors + the allocation on every
+        // cycle was ~2.5 ms/step of pure CPU (the measured "gdn" phase).
+        if ((size_t) n_accepted >= tape->replay_cache.size()) {
+            tape->replay_cache.resize((size_t) n_accepted + 1);
+        }
+        auto & rc = tape->replay_cache[n_accepted];
+
+        if (rc.graph == nullptr) {
+        // NOTE: views count as graph nodes, so the budget must cover every tensor the fold adds per
+        // layer (q,k,v,g,b,result,s_view,rstate,swrite + the cpy) PLUS the conv rollback's view/
+        // transpose/cont/cpy. n_rec*12 was enough for the GDN-only fold but not once the conv moved
+        // onto the device -- it tripped GGML_ASSERT(cgraph->n_nodes < cgraph->size).
+        size_t ctx_mem = ggml_tensor_overhead() * ((size_t) n_rec * 28 + 16) +
+                         ggml_graph_overhead_custom(n_rec * 28, false);
+        ggml_init_params ip = { ctx_mem, nullptr, true };
+        ggml_context * rctx = ggml_init(ip);
+        ggml_cgraph * graph = ggml_new_graph_custom(rctx, n_rec * 24, false);
+        rc.ctx   = rctx;
+        rc.graph = graph;
+
+        bool ok = true;
+
+        for (int li = 0; li < n_rec; ++li) {
+            const int il = tape->layer_ids[li];
+            auto & tl = tape->layers[li];
+            ggml_tensor * s_base = mem_recr->s_l[il];
+            if (s_base == nullptr) { ok = false; break; }
+
+            const size_t es = ggml_element_size(s_base);
+            const size_t s_off = (size_t) cell_idx * n_embd_s * es;
+            ggml_tensor * s_view = ggml_view_4d(rctx, s_base, tl.S_v, tl.S_v, tl.H_v, 1,
+                    tl.S_v * es, tl.S_v * tl.S_v * es, tl.S_v * tl.S_v * tl.H_v * es, s_off);
+
+            // The recorded tape already holds the raw inputs on the device, so feed VIEWS of it
+            // straight into the graph -- no per-token upload copies at all. (That upload was
+            // ~192 tiny cudaMemcpyAsync per fold ~= 3.9 ms, i.e. the entire remaining "gdn" cost.
+            // The kernel honours nb[2], and ggml_is_contiguous_rows holds because S_k/S_v equal
+            // their allocated widths.)
+            ggml_tensor * k = ggml_view_4d(rctx, tl.k, tl.S_k, tl.H_k, n_accepted, 1,
+                    tl.k->nb[1], tl.k->nb[2], tl.k->nb[2] * n_accepted, 0);
+            ggml_tensor * v = ggml_view_4d(rctx, tl.v, tl.S_v, tl.H_v, n_accepted, 1,
+                    tl.v->nb[1], tl.v->nb[2], tl.v->nb[2] * n_accepted, 0);
+            ggml_tensor * g = ggml_view_4d(rctx, tl.gate, 1, tl.H_v, n_accepted, 1,
+                    tl.gate->nb[1], tl.gate->nb[2], tl.gate->nb[2] * n_accepted, 0);
+            ggml_tensor * b = ggml_view_4d(rctx, tl.beta, 1, tl.H_v, n_accepted, 1,
+                    tl.beta->nb[1], tl.beta->nb[2], tl.beta->nb[2] * n_accepted, 0);
+            ggml_backend_view_init(k);
+            ggml_backend_view_init(v);
+            ggml_backend_view_init(g);
+            ggml_backend_view_init(b);
+            // q is only used for the attn output, which we discard (the state update is q-independent),
+            // so alias it to k: the CUDA kernel asserts ggml_are_same_stride(src_q, src_k), and a
+            // fresh contiguous q would not match the tape view's padded nb[2].
+            ggml_tensor * q = k;
+
+            ggml_tensor * result = ggml_gated_delta_net(rctx, q, k, v, g, b, s_view, 1);
+            const size_t attn_bytes = (size_t) tl.S_v * tl.H_v * n_accepted * ggml_element_size(result);
+            ggml_tensor * rstate = ggml_view_1d(rctx, result, n_embd_s, attn_bytes);
+            ggml_tensor * swrite = ggml_view_1d(rctx, s_base, n_embd_s, s_off);
+            ggml_build_forward_expand(graph, ggml_cpy(rctx, rstate, swrite));
+
+            // conv (R) rollback on the DEVICE for EVERY accepted length -- no CPU loop, no D2H/H2D.
+            // With a single state plane the verify does not persist R, so the live row still holds
+            // the PRE-verify window: the new window is the last conv_window rows of
+            // [pre-verify window, recorded prefix]. For n_accepted >= conv_window the pre-verify
+            // window drops out and the new window is just the last conv_window recorded rows.
+            if (conv_window > 0) {
+                ggml_tensor * r = mem_recr->r_l[il];
+                if (r != nullptr && tl.qkv != nullptr) {
+                    const size_t es    = ggml_element_size(r);
+                    const size_t r_off = (size_t) cell_idx * n_embd_r * es;
+                    const size_t c_row = (size_t) conv_window * es; // [conv_window, conv_channels] row stride
+
+                    ggml_tensor * csrc;
+                    if (n_accepted >= (int) conv_window) {
+                        ggml_tensor * qkv_src = ggml_view_2d(rctx, tl.qkv, conv_channels, conv_window,
+                                tl.qkv->nb[1], (size_t) (n_accepted - conv_window) * tl.qkv->nb[1]);
+                        csrc = ggml_cont(rctx, ggml_transpose(rctx, qkv_src));
+                    } else {
+                        ggml_tensor * old = ggml_view_2d(rctx, r, conv_window, conv_channels, c_row, r_off);
+                        ggml_tensor * qkv_pre = ggml_view_2d(rctx, tl.qkv, conv_channels, n_accepted,
+                                tl.qkv->nb[1], 0);
+                        ggml_tensor * qkv_t = ggml_cont(rctx, ggml_transpose(rctx, qkv_pre));
+                        ggml_tensor * cat = ggml_concat(rctx, old, qkv_t, 0); // [conv_window+n_accepted, conv_channels]
+                        // The view slices cat's INNERMOST axis (ne0 = conv_window+n_accepted), so the
+                        // byte offset is n_accepted * element_size (nb[0]) while the channel stride is
+                        // cat's own nb[1]. Using nb[1] for the offset read the wrong elements and
+                        // silently corrupted the conv state (garbage output, meaningless acceptance).
+                        csrc = ggml_cont(rctx, ggml_view_2d(rctx, cat, conv_window, conv_channels,
+                                cat->nb[1], (size_t) n_accepted * ggml_element_size(cat)));
+                    }
+
+                    ggml_tensor * cdst = ggml_view_2d(rctx, r, conv_window, conv_channels, c_row, r_off);
+                    ggml_build_forward_expand(graph, ggml_cpy(rctx, csrc, cdst));
+                }
+            }
+
+            rc.q.push_back(q); rc.k.push_back(k); rc.v.push_back(v); rc.g.push_back(g); rc.b.push_back(b);
+        }
+
+        if (!ok || rc.q.empty()) {
+            ggml_free(rctx);
+            rc.ctx = nullptr; rc.graph = nullptr;
+            return;
+        }
+
+        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+
+        // The per-layer GDN outputs are dead immediately after their cpy, and the graph is emitted
+        // layer-by-layer (op_i, cpy_i, op_{i+1}, ...), so give them ONE shared slot instead of one
+        // each. Otherwise all n_rec results are live at once = n_rec * n_embd_s ~= a full extra state
+        // plane of VRAM, which silently cancelled a plane of the RS saving (measured: the VRAM peak
+        // dropped ~1.1 planes LESS than the recurrent cache did).
+        size_t needed = 0;
+        {
+            bool have_result = false;
+            for (ggml_tensor * t = ggml_get_first_tensor(rctx); t != nullptr; t = ggml_get_next_tensor(rctx, t)) {
+                if (t->view_src != nullptr) {
+                    continue;                                   // views allocate nothing
+                }
+                if (t->op == GGML_OP_GATED_DELTA_NET) {
+                    if (have_result) {
+                        continue;                               // shares the first result's slot
+                    }
+                    have_result = true;
+                }
+                needed += ggml_backend_buft_get_alloc_size(buft, t) + 64;
+            }
+            needed += 1024;
+        }
+        rc.buf = ggml_backend_buft_alloc_buffer(buft, needed);
+        if (rc.buf == nullptr) {
+            ggml_free(rctx);
+            rc.ctx = nullptr; rc.graph = nullptr;
+            return;
+        }
+        {
+            ggml_tallocr ta = ggml_tallocr_new(rc.buf);
+            ggml_tensor * shared_result = nullptr;
+            for (ggml_tensor * t = ggml_get_first_tensor(rctx); t != nullptr; t = ggml_get_next_tensor(rctx, t)) {
+                if (t->data != nullptr) {
+                    continue;
+                }
+                if (t->view_src != nullptr) {
+                    if (t->buffer == nullptr) {
+                        ggml_backend_view_init(t);
+                    }
+                    continue;
+                }
+                if (t->op == GGML_OP_GATED_DELTA_NET && shared_result != nullptr) {
+                    ggml_backend_tensor_alloc(rc.buf, t, shared_result->data);
+                    continue;
+                }
+                ggml_tallocr_alloc(&ta, t);
+                if (t->op == GGML_OP_GATED_DELTA_NET) {
+                    shared_result = t;
+                }
+            }
+        }
+        } // end build (cached per n_accepted)
+
+        // (no upload: the cached graph reads the tape views directly)
+
+        const ggml_status st = ggml_backend_graph_compute(backend, rc.graph);
+        if (st != GGML_STATUS_SUCCESS) {
+            LLAMA_LOG_WARN("%s: GDN replay graph failed with status %d\n", __func__, (int) st);
+        }
+    }
+
+    // 3. rebuild the conv (R) state from the recorded pre-transpose qkv of the accepted prefix:
+    //    the conv state is the last (conv_window) rows of concat(base_conv, qkv[0..n_accepted-1]).
+    //    Layout (must match build_conv_state): the conv tensor is
+    //    [conv_window, conv_channels] with dim0 fastest, so element (w, ch) is at ch*conv_window + w;
+    //    the recorded qkv is [conv_channels, n_tokens] with dim0 fastest, i.e. tok*conv_channels + ch.
+    //    The tape is device-resident, so the reads/writes here are batched async (one sync per phase)
+    //    instead of one blocking copy per layer.
+    // 3. conv (R) is rebuilt entirely on the device in the cached replay graph above (both the
+    //    n_accepted >= conv_window and the shorter-prefix case), so there is no host fallback any
+    //    more -- the per-layer D2H/H2D round-trip it used to do is gone.
+
+    LLAMA_LOG_DEBUG("%s: replayed %d tok over %d layers\n", __func__, n_accepted, n_rec);
+}
+
+bool llama_mtp_recurrent_replay_enabled(const llama_context * ctx) {
+    return ctx->get_cparams().mtp_recurrent_replay;
+}
+
+void llama_mtp_recurrent_save_base(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->mtp_recurrent_save_base(seq_id);
+}
+
+void llama_mtp_recurrent_replay(llama_context * ctx, llama_seq_id seq_id, int n_accepted) {
+    ctx->mtp_recurrent_replay(seq_id, n_accepted);
 }
 
 const llama_model * llama_get_model(const llama_context * ctx) {

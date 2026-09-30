@@ -1764,6 +1764,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
+        {"--mtp-recurrent-replay"}, "N",
+        "MTP single-context tape replay: 0 = off (default: keep the (1 + n_max) full recurrent-state "
+        "snapshot planes), 1 = on (keep ONE base row and rebuild the accepted prefix from the "
+        "recorded raw Gated-DeltaNet inputs), -1 = auto (on whenever MTP is active with n_max > 1)",
+        [](common_params & params, int value) {
+            params.speculative.mtp_recurrent_replay = value;
+        }
+    ).set_spec().set_env("LLAMA_ARG_MTP_RECURRENT_REPLAY").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {

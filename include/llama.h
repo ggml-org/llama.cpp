@@ -368,6 +368,10 @@ extern "C" {
         uint32_t n_ubatch;              // physical maximum batch size
         uint32_t n_seq_max;             // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;              // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
+        bool     mtp_recurrent_replay;  // MTP single-context replay: keep a live + base state row and
+                                        // rebuild the accepted prefix from a recorded raw-input tape
+                                        // instead of storing (1 + n_rs_seq) full state snapshots
+                                        // (2-plane layout). [EXPERIMENTAL]
         uint32_t n_outputs_max;         // max outputs in a ubatch (0 = n_batch)
         uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
         int32_t  n_threads;             // number of threads to use for generation
@@ -578,6 +582,18 @@ extern "C" {
     LLAMA_API uint32_t llama_n_seq_max  (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
 
+    // MTP single-context replay [EXPERIMENTAL].
+    //
+    // When enabled (llama_context_params.mtp_recurrent_replay on a supported arch), the recurrent-state
+    // cache holds a single base row and the raw gated-delta-net inputs of the verify window are
+    // recorded into a tape. The caller must:
+    //   1. call llama_mtp_recurrent_save_base(ctx, seq_id) before the speculative verify decode,
+    //   2. call llama_mtp_recurrent_replay(ctx, seq_id, n_accepted) after sampling, when some draft
+    //      tokens were rejected, to restore the base state and replay the accepted prefix.
+    // The save is also performed automatically inside llama_decode for multi-token ubatches.
+    LLAMA_API bool llama_mtp_recurrent_replay_enabled(const struct llama_context * ctx);
+    LLAMA_API void llama_mtp_recurrent_save_base(struct llama_context * ctx, llama_seq_id seq_id);
+    LLAMA_API void llama_mtp_recurrent_replay    (struct llama_context * ctx, llama_seq_id seq_id, int n_accepted);
     DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
     DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
     DEPRECATED(LLAMA_API int32_t llama_n_layer    (const struct llama_model * model), "use llama_model_n_layer instead");

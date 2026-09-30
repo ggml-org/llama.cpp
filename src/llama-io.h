@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
+#include <vector>
 
 struct ggml_tensor;
 
@@ -31,8 +33,23 @@ public:
     // drop tensor data that has been read but not yet applied (e.g. when a restore fails)
     virtual void discard() {}
 
+    // register a callback to run after the staged tensor writes have been applied (at io teardown)
+    virtual void on_commit(std::function<void()> callback) { commit_cbs.push_back(std::move(callback)); }
+
     // bytes read so far
     virtual size_t n_bytes() = 0;
 
     void read_string(std::string & str);
+
+protected:
+    // run the registered on_commit callbacks (called by the concrete io after applying its writes)
+    void run_commit_callbacks() {
+        for (auto & cb : commit_cbs) {
+            cb();
+        }
+        commit_cbs.clear();
+    }
+
+private:
+    std::vector<std::function<void()>> commit_cbs;
 };

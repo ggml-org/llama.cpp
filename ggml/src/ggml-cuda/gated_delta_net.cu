@@ -325,3 +325,171 @@ void ggml_cuda_op_gated_delta_net_fused_cache(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_cuda_gated_delta_net_fused_cache cache) {
     ggml_cuda_op_gated_delta_net_impl(ctx, dst, &cache);
 }
+
+// -------------------------------------------------------------------------------------------------
+// MTP single-context tape replay: fused GDN state replay + conv-window rebuild.
+//
+// The fold that reconstructs the post-accept recurrent state otherwise runs as a ggml graph with
+// ~14 nodes per recurrent layer (~336 kernel launches for 24 layers, ~1.1 ms), and it is launch
+// bound, not arithmetic bound (measured: replaying 1 token costs as much as replaying 4). These two
+// kernels do the same work in ONE launch per layer.
+//
+// Indexing matches the tape tensors the graph path uses:
+//   k     [S, H_k, T] -> (i, hk, t) at i + hk*S + t*H_k*S
+//   v     [S, H_v, T] -> (i, hv, t) at i + hv*S + t*H_v*S
+//   g/b   [1, H_v, T] -> (0, hv, t) at hv + t*H_v
+//   state [S, S, H_v] -> (i, j,  hv) at i + j*S + hv*S*S
+// `g` is the pre-exp gate (qwen35 feeds -exp(A)*softplus, the op applies exp) and `beta` is the
+// POST-sigmoid value qwen35 feeds the op, which the op uses directly -- so unlike the DFlash
+// variant there is NO sigmoid here.
+template <int S_v>
+__global__ void __launch_bounds__((ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v) * 4, 2)
+mtp_gdn_replay_cuda(
+        float * __restrict__ state,
+        const float * __restrict__ k,
+        const float * __restrict__ v,
+        const float * __restrict__ g,
+        const float * __restrict__ beta,
+        const int n_tokens,
+        const int H_k,
+        const int H_v,
+        const int k_nb1,   // k head stride in floats (== S_k)
+        const int k_nb2) { // k TOKEN stride in floats (== S_k * H_k_alloc, the tape's allocation)
+    const int h_idx = blockIdx.x;
+    const int lane  = threadIdx.x;
+    const int col   = blockIdx.z * blockDim.y + threadIdx.y;
+
+    if (h_idx >= H_v || col >= S_v) {
+        return;
+    }
+
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size() < S_v ? ggml_cuda_get_physical_warp_size() : S_v;
+    static_assert(S_v % warp_size == 0, "S_v must be a multiple of warp_size");
+    constexpr int rows_per_lane = (S_v + warp_size - 1) / warp_size;
+
+    float * state_h = state + (size_t) h_idx * S_v * S_v + (size_t) col * S_v;
+    float s_shard[rows_per_lane];
+
+#pragma unroll
+    for (int r = 0; r < rows_per_lane; ++r) {
+        s_shard[r] = state_h[r * warp_size + lane];
+    }
+
+    const int hk = h_idx % H_k;
+    for (int t = 0; t < n_tokens; ++t) {
+        // NB: the token stride MUST be the tape's allocation stride (k_nb2), not H_k*S_v. The tape
+        // is allocated with H_k = ssm_dt_rank, but with the fused GDN qwen35 feeds k with
+        // H_k = ssm_n_group, so H_k*S_v is wrong for every t >= 1 whenever the two differ (this
+        // silently corrupted the state on Ornith-9B while Qwen3.5-0.8B, where they are equal, was
+        // bit-exact). The head index still uses H_k for the modulo below.
+        const float * k_t = k + (size_t) t * k_nb2 + (size_t) hk * k_nb1;
+        const float * v_t = v + ((size_t) t * H_v + h_idx) * S_v;
+        const float g_val    = expf(g[(size_t) t * H_v + h_idx]);
+        const float beta_val = beta[(size_t) t * H_v + h_idx]; // already sigmoid'd by qwen35
+
+        float k_reg[rows_per_lane];
+#pragma unroll
+        for (int r = 0; r < rows_per_lane; ++r) {
+            k_reg[r] = k_t[r * warp_size + lane];
+        }
+
+        float kv_shard = 0.0f;
+#pragma unroll
+        for (int r = 0; r < rows_per_lane; ++r) {
+            kv_shard += s_shard[r] * k_reg[r];
+        }
+        const float kv_col    = warp_reduce_sum<warp_size>(kv_shard);
+        const float delta_col = (v_t[col] - g_val * kv_col) * beta_val;
+
+#pragma unroll
+        for (int r = 0; r < rows_per_lane; ++r) {
+            s_shard[r] = g_val * s_shard[r] + k_reg[r] * delta_col;
+        }
+    }
+
+#pragma unroll
+    for (int r = 0; r < rows_per_lane; ++r) {
+        state_h[r * warp_size + lane] = s_shard[r];
+    }
+}
+
+// Rebuild the conv window in place: new[w, ch] = (T + w < W) ? old[T + w, ch] : qkv[ch, T + w - W].
+// conv layout [W, C] with dim0 fastest (element (w, ch) at w + ch*W); tape qkv [C, T] with dim0
+// fastest (element (ch, t) at ch + t*C). One thread per channel: the writes land on the same row the
+// reads come from, so the retained tail is staged in registers before any store.
+__global__ void mtp_conv_replay_cuda(
+        float * __restrict__ dst,
+        const float * __restrict__ old,
+        const float * __restrict__ qkv,
+        const int W,
+        const int C,
+        const int T) {
+    const int ch = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ch >= C) {
+        return;
+    }
+
+    float oldv[32];
+    for (int w = 0; w < W; ++w) {
+        oldv[w] = old[w + ch * W];
+    }
+    for (int w = 0; w < W; ++w) {
+        const int src = T + w;
+        dst[w + ch * W] = (src < W) ? oldv[src] : qkv[ch + (src - W) * C];
+    }
+}
+
+extern "C" void ggml_cuda_mtp_replay_sync(void * stream_v) {
+    cudaStream_t stream = stream_v != nullptr ? (cudaStream_t) stream_v : cudaStreamPerThread;
+    cudaStreamSynchronize(stream);
+}
+
+// C entry points, resolved through the CUDA backend's proc-address table. `stream_v` is the raw
+// stream the backend is currently using (resolved via ggml_cuda_mtp_backend_stream).
+extern "C" bool ggml_cuda_mtp_replay_gdn_state(
+        void * stream_v,
+        void * state, const void * k, const void * v, const void * g, const void * beta,
+        int n_tokens, int S_v, int H_k, int H_v, int k_nb1, int k_nb2) {
+    if (!state || !k || !v || !g || !beta) {
+        return false;
+    }
+    if (n_tokens <= 0 || H_k <= 0 || H_v <= 0) {
+        return false;
+    }
+
+    cudaStream_t stream = stream_v != nullptr ? (cudaStream_t) stream_v : cudaStreamPerThread;
+
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    const int num_warps = 4;
+    const dim3 grid_dims(H_v, 1, (S_v + num_warps - 1) / num_warps);
+    const dim3 block_dims(warp_size <= S_v ? warp_size : S_v, num_warps, 1);
+
+    switch (S_v) {
+        case 16:  mtp_gdn_replay_cuda<16 ><<<grid_dims, block_dims, 0, stream>>>((float *) state, (const float *) k, (const float *) v, (const float *) g, (const float *) beta, n_tokens, H_k, H_v, k_nb1, k_nb2); break;
+        case 32:  mtp_gdn_replay_cuda<32 ><<<grid_dims, block_dims, 0, stream>>>((float *) state, (const float *) k, (const float *) v, (const float *) g, (const float *) beta, n_tokens, H_k, H_v, k_nb1, k_nb2); break;
+        case 64:  mtp_gdn_replay_cuda<64 ><<<grid_dims, block_dims, 0, stream>>>((float *) state, (const float *) k, (const float *) v, (const float *) g, (const float *) beta, n_tokens, H_k, H_v, k_nb1, k_nb2); break;
+        case 128: mtp_gdn_replay_cuda<128><<<grid_dims, block_dims, 0, stream>>>((float *) state, (const float *) k, (const float *) v, (const float *) g, (const float *) beta, n_tokens, H_k, H_v, k_nb1, k_nb2); break;
+        default:  return false;
+    }
+    return true;
+}
+
+extern "C" bool ggml_cuda_mtp_replay_conv(
+        void * stream_v,
+        void * dst, const void * old, const void * qkv,
+        int W, int C, int T) {
+    if (!dst || !old || !qkv) {
+        return false;
+    }
+    if (W <= 0 || C <= 0 || T <= 0 || W > 32) {
+        // W > 32 would overflow the register staging array; T <= 0 is not a replay.
+        return false;
+    }
+
+    cudaStream_t stream = stream_v != nullptr ? (cudaStream_t) stream_v : cudaStreamPerThread;
+
+    const int threads = 256;
+    const int blocks  = (C + threads - 1) / threads;
+    mtp_conv_replay_cuda<<<blocks, threads, 0, stream>>>((float *) dst, (const float *) old, (const float *) qkv, W, C, T);
+    return true;
+}

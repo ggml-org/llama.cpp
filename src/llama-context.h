@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "llama-mtp-recurrent-tape.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -223,6 +224,23 @@ struct llama_context {
             int64_t                          ndata_in_loop,
             int64_t                          t_loop_start);
 
+    //
+    // MTP single-context replay (see llama-mtp-recurrent-tape.h)
+    //
+
+    bool mtp_recurrent_replay_enabled() const { return cparams.mtp_recurrent_replay && mtp_recurrent_tape_ptr && !mtp_recurrent_tape_ptr->empty(); }
+
+    // (re)allocate the raw-input tape for `max_tokens` verify tokens (no-op if already large enough)
+    bool mtp_recurrent_tape_alloc(int max_tokens);
+
+    // copy the live recurrent state row into the base row (row 1) for every recurrent layer
+    void mtp_recurrent_save_base(llama_seq_id seq_id);
+    void mtp_recurrent_apply_pending_replay();
+
+    // restore the base row into the live row, then replay the first `n_accepted` recorded tokens
+    // through the GDN op to rebuild the committed recurrent state
+    void mtp_recurrent_replay(llama_seq_id seq_id, int n_accepted);
+
 private:
     //
     // output
@@ -353,6 +371,8 @@ private:
 
     ggml_backend_sched_ptr sched;
 
+    // MTP single-context replay: the raw-input tape written by the graph.
+    std::unique_ptr<llama_mtp_recurrent_tape> mtp_recurrent_tape_ptr;
     bool sched_need_reserve = true;
 
     ggml_backend_t backend_cpu = nullptr;

@@ -14,6 +14,9 @@ struct llama_cparams {
     uint32_t n_ubatch;
     uint32_t n_seq_max;
     uint32_t n_rs_seq;        // number of recurrent-state snapshots per seq for rollback
+    bool     mtp_recurrent_replay; // MTP single-context replay: keep one base row and replay the
+                               // accepted prefix from the recorded raw GDN inputs instead of
+                               // storing (1 + n_rs_seq) full state snapshots
     uint32_t n_outputs_max;   // max outputs supported by the context
     uint32_t n_outputs_max_per_seq;
     int32_t  n_threads;       // number of threads to use for generation

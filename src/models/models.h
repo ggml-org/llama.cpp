@@ -98,6 +98,16 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        b,
             ggml_tensor *        s,
             int                  il);
+
+    // MTP single-context replay: record the raw GDN inputs (k/v/gate/beta) into the context tape
+    void tape_record_gdn(
+            ggml_tensor * k,
+            ggml_tensor * v,
+            ggml_tensor * g,
+            ggml_tensor * b,
+            int64_t       n_seq_tokens,
+            int64_t       n_seqs,
+            int           il);
 };
 
 struct llm_build_rwkv6_base : public llm_graph_context {

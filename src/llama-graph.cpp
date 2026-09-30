@@ -1485,6 +1485,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
+    mtp_recurrent_tape   (params.mtp_recurrent_tape),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),

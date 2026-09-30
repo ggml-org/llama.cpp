@@ -18,6 +18,7 @@ struct ggml_context;
 struct ggml_tensor;
 
 struct llama_cparams;
+struct llama_mtp_recurrent_tape;
 struct llama_layer;
 struct llama_prec_policy;
 
@@ -792,6 +793,9 @@ struct llm_graph_params {
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
+    // MTP single-context replay: the raw-input tape written by the graph (nullptr when disabled)
+    llama_mtp_recurrent_tape * mtp_recurrent_tape = nullptr;
+
     static bool samplers_equal(
           const std::map<llama_seq_id, llama_sampler *> & lhs,
           const std::map<llama_seq_id, llama_sampler *> & rhs) {
@@ -1024,6 +1028,9 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
+
+    // MTP single-context replay: raw-input tape written by the graph (may be null)
+    llama_mtp_recurrent_tape * mtp_recurrent_tape;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;

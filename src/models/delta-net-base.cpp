@@ -2,6 +2,7 @@
 
 #include "llama-impl.h"
 #include "llama-memory-recurrent.h"
+#include "llama-mtp-recurrent-tape.h"
 
 // utility to get one slice from the third dimension
 // input dim:  [x, y, c, b]
@@ -466,6 +467,22 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);
     cb(conv_states, "conv_states_reshaped", il);
 
+    // MTP single-context replay: record the raw conv input (pre-transpose) so the conv state can
+    // be rebuilt after a partial acceptance. qkv_mixed is [conv_channels, n_tokens, n_seqs]; n_seqs
+    // is 1 here, so record the 2D [conv_channels, n_tokens] slab the tape holds. (A 3D view whose
+    // ne2 was n_tokens read past the tensor and tripped the ggml view bounds assert.)
+    if (mtp_recurrent_tape != nullptr && n_seqs == 1) {
+        auto * tl = mtp_recurrent_tape->layer_for(il);
+        const int64_t nt = qkv_mixed->ne[1];
+        if (tl != nullptr && tl->qkv != nullptr && nt <= mtp_recurrent_tape->max_tokens) {
+            ggml_tensor * src = ggml_view_2d(ctx0, qkv_mixed,
+                    qkv_mixed->ne[0], nt, qkv_mixed->nb[1], 0);
+            ggml_tensor * dst = ggml_view_2d(ctx0, tl->qkv,
+                    tl->qkv->ne[0], nt, tl->qkv->nb[1], 0);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
+        }
+    }
+
     qkv_mixed = ggml_transpose(ctx0, qkv_mixed);
     cb(qkv_mixed, "qkv_mixed_transposed", il);
 
@@ -499,7 +516,7 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         // this logic assumes that the last (n_rs_seq + 1) tokens of a sequence in a batch are inside
         //   the same ubatch, which `split_equal()` guarantees via its n_keep_tail argument
 
-        const int64_t K = (int64_t) cparams.n_rs_seq + 1;
+        const int64_t K = cparams.mtp_recurrent_replay ? 1 : (int64_t) cparams.n_rs_seq + 1;
 
         for (int64_t t = 1; t <= K; ++t) {
             const int64_t s_idx  = std::max<int64_t>(0, conv_input->ne[0] - conv_states->ne[0] - K + t);
@@ -561,7 +578,9 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     }
 
     const int64_t D = S_v * S_v * H_v;
-    const int64_t K = cparams.n_rs_seq + 1;
+    // MTP single-context replay writes only the live row (slot 0); the base row is filled by an
+    // explicit copy and the accepted prefix is rebuilt by llama_context::mtp_recurrent_replay().
+    const int64_t K = cparams.mtp_recurrent_replay ? 1 : (int64_t) cparams.n_rs_seq + 1;
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, K);
@@ -602,5 +621,46 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, src, dst));
 
+    tape_record_gdn(k, v, g, b, n_seq_tokens, n_seqs, il);
+
     return output;
+}
+
+// MTP single-context replay: record the raw GDN inputs consumed by the op so the recurrence can be
+// replayed from the base state after a partial acceptance. Called from build_recurrent_attn.
+void llm_build_delta_net_base::tape_record_gdn(
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * g,
+        ggml_tensor * b,
+        int64_t       n_seq_tokens,
+        int64_t       n_seqs,
+        int           il) {
+    if (mtp_recurrent_tape == nullptr || n_seqs != 1) {
+        return;
+    }
+    auto * tl = mtp_recurrent_tape->layer_for(il);
+    if (tl == nullptr || n_seq_tokens > mtp_recurrent_tape->max_tokens) {
+        return;
+    }
+    // record the ACTUAL shapes the op consumes: k is not necessarily repeated to H_v (the fused
+    // grouped-query GDN keeps H_k = ssm_n_group), so the replay must rebuild it with the same H_k.
+    if (k != nullptr) { tl->S_k = k->ne[0]; tl->H_k = k->ne[1]; }
+    if (v != nullptr) { tl->S_v = v->ne[0]; tl->H_v = v->ne[1]; }
+    auto record = [&](ggml_tensor * src, ggml_tensor * dst) {
+        if (src == nullptr || dst == nullptr) {
+            return;
+        }
+        // dst (the tape tensor) is allocated with at least src->ne[1] rows, so the sub-view keeps
+        // the full row stride and the cpy shapes match exactly.
+        ggml_tensor * sv = ggml_cont(ctx0, ggml_view_3d(ctx0, src,
+                src->ne[0], src->ne[1], n_seq_tokens, src->nb[1], src->nb[2], 0));
+        ggml_tensor * dv = ggml_view_3d(ctx0, dst,
+                src->ne[0], src->ne[1], n_seq_tokens, dst->nb[1], dst->nb[2], 0);
+        ggml_build_forward_expand(gf, ggml_cpy(ctx0, sv, dv));
+    };
+    record(k, tl->k);
+    record(v, tl->v);
+    record(g, tl->gate);
+    record(b, tl->beta);
 }

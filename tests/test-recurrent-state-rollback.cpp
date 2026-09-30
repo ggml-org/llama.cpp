@@ -12,6 +12,7 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -120,6 +121,217 @@ static double nmse(const float * a, const float * b, int n) {
         mse_a0 += (double) a[i]*a[i];
     }
     return mse_a0 == 0.0 ? (mse_ab == 0.0 ? 0.0 : std::numeric_limits<double>::infinity()) : mse_ab/mse_a0;
+}
+
+// decode `tokens` starting at absolute position `pos0` (decode_tokens above always starts at 0)
+static bool decode_tokens_at(llama_context * ctx, const std::vector<llama_token> & tokens, llama_pos pos0) {
+    llama_batch batch = llama_batch_init((int32_t) tokens.size(), 0, 1);
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        common_batch_add(batch, tokens[i], pos0 + (llama_pos) i, { 0 }, i + 1 == tokens.size());
+    }
+    const bool ok = llama_decode(ctx, batch) == 0;
+    llama_batch_free(batch);
+    return ok;
+}
+
+// The state rebuilt by MTP single-context replay must match the state a plain
+// decode of the accepted prefix would have produced. Both contexts end up with the same KV and the
+// same accepted tokens, so the next-token logits must agree.
+//
+// Three contexts, to separate two different error sources:
+// If |plain-snap| is already large, the residual is the verify-vs-decode batch-width arithmetic
+// and the replay is not at fault. If |plain-snap| ~ 0 but |plain-ctx| is large, the replay is buggy.
+static bool test_replay_matches_reference(const common_params & params, llama_model * model, const int n_vocab) {
+    auto mk_ctx = [&](bool replay) {
+        auto cp = common_context_params_to_llama(params);
+        cp.n_seq_max        = 1;
+        cp.n_rs_seq         = 4;
+        cp.mtp_recurrent_replay = replay;
+        cp.n_batch          = std::max(cp.n_batch,  (uint32_t) 8);
+        cp.n_ubatch         = std::max(cp.n_ubatch, (uint32_t) 8);
+        return llama_init_from_model(model, cp);
+    };
+
+    llama_context * plain = mk_ctx(false);
+    llama_context * snap  = mk_ctx(false);
+    llama_context * ctx   = mk_ctx(true);
+    if (ctx == nullptr || snap == nullptr || plain == nullptr) {
+        fprintf(stderr, "%s : failed to init contexts\n", __func__);
+        llama_free(ctx); llama_free(snap); llama_free(plain);
+        return false;
+    }
+    if (!llama_mtp_recurrent_replay_enabled(ctx)) {
+        fprintf(stderr, "%s : recurrent replay not enabled for this model - skipping\n", __func__);
+        llama_free(ctx); llama_free(snap); llama_free(plain);
+        return true;
+    }
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const char * test_name = __func__;
+
+    std::vector<llama_token> prompt = llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_NONE
+            ? std::vector<llama_token>{ 1, 2, 3, 4, 5 }
+            : common_tokenize(ctx, "The quick brown fox jumps", true);
+    if (prompt.size() < 2) {
+        prompt = { 1, 2, 3, 4, 5 };
+    }
+
+    auto max_diff = [&](const float * a, const float * b) {
+        float d = 0.0f;
+        for (int t = 0; t < n_vocab; ++t) { d = std::max(d, std::fabs(a[t] - b[t])); }
+        return d;
+    };
+    auto argmax = [&](const float * a) {
+        int am = 0;
+        for (int t = 0; t < n_vocab; ++t) { if (a[t] > a[am]) { am = t; } }
+        return am;
+    };
+    auto equal_logits = [&](llama_context * reference, llama_context * replay) {
+        const float * expected = llama_get_logits_ith(reference, -1);
+        const float * actual = llama_get_logits_ith(replay, -1);
+        if (expected == nullptr || actual == nullptr) {
+            return false;
+        }
+        for (int token = 0; token < n_vocab; ++token) {
+            if (!std::isfinite(expected[token]) || !std::isfinite(actual[token])) {
+                return false;
+            }
+        }
+        return std::memcmp(expected, actual, n_vocab * sizeof(float)) == 0;
+    };
+    auto save = [&](llama_context * context) {
+        std::vector<uint8_t> state(llama_state_seq_get_size(context, 0));
+        if (llama_state_seq_get_data(context, state.data(), state.size(), 0) != state.size()) {
+            state.clear();
+        }
+        return state;
+    };
+    auto restore = [&](llama_context * context, const std::vector<uint8_t> & state) {
+        if (state.empty()) {
+            return false;
+        }
+        return llama_state_seq_set_data(context, state.data(), state.size(), 0) == state.size();
+    };
+
+    prompt.resize(std::max<size_t>(prompt.size(), 8), prompt.back());
+    const std::vector<llama_token> draft = { 11 % n_vocab, 12 % n_vocab, 13 % n_vocab, 14 % n_vocab, 15 % n_vocab };
+    llama_pos position = (llama_pos) prompt.size();
+    bool passed = [&]() {
+        if (!decode_tokens(plain, prompt, prompt.size()) ||
+            !decode_tokens(snap, prompt, prompt.size()) ||
+            !decode_tokens(ctx, prompt, prompt.size())) {
+            return false;
+        }
+        if (llama_memory_seq_rm(llama_get_memory(ctx), 0, position - 1, -1)) {
+            fprintf(stderr, "%s : FAIL - rollback without a recorded tape succeeded\n", __func__);
+            return false;
+        }
+        const auto checkpoint = save(snap);
+        for (int round = 0; round < 2; ++round) {
+            for (int accepted = 1; accepted <= (int) draft.size(); ++accepted) {
+                const llama_token next = 16 % n_vocab;
+                const std::vector<llama_token> prefix(draft.begin(), draft.begin() + accepted);
+                if (!decode_tokens_at(plain, prefix, position) || !decode_one(plain, next, position + accepted)) {
+                    return false;
+                }
+                for (auto * context : { snap, ctx }) {
+                    if (!decode_tokens_at(context, draft, position)) {
+                        return false;
+                    }
+                    if (accepted < (int) draft.size() &&
+                        !llama_memory_seq_rm(llama_get_memory(context), 0, position + accepted, -1)) {
+                        fprintf(stderr, "%s : FAIL - rollback rejected\n", __func__);
+                        return false;
+                    }
+                    if (round == 1) {
+                        const auto pending = save(context);
+                        if (!restore(context, pending)) {
+                            return false;
+                        }
+                    }
+                    if (!decode_one(context, next, position + accepted)) {
+                        return false;
+                    }
+                }
+                const float * lp = llama_get_logits_ith(plain, -1);
+                const float * ls = llama_get_logits_ith(snap, -1);
+                const float * lc = llama_get_logits_ith(ctx, -1);
+                if (!lp || !ls || !lc) {
+                    return false;
+                }
+                fprintf(stderr, "%s : round %d accepted %d | max logit diff | plain-snapshot = %g | plain-replay = %g | snapshot-replay = %g "
+                                "(argmax plain %d, snap %d, replay %d)\n",
+                        test_name, round, accepted, (double) max_diff(lp, ls), (double) max_diff(lp, lc),
+                        (double) max_diff(ls, lc), argmax(lp), argmax(ls), argmax(lc));
+                if (!equal_logits(snap, ctx)) {
+                    fprintf(stderr, "%s : FAIL - replay is not bit-identical\n", __func__);
+                    return false;
+                }
+                position += accepted + 1;
+            }
+            if (!decode_tokens_at(ctx, draft, position)) {
+                return false;
+            }
+            for (auto * context : { plain, snap, ctx }) {
+                if (!restore(context, checkpoint)) {
+                    return false;
+                }
+            }
+            position = (llama_pos) prompt.size();
+        }
+        if (llama_memory_seq_rm(llama_get_memory(ctx), 0, position - 1, -1)) {
+            fprintf(stderr, "%s : FAIL - restore retained a stale rollback window\n", __func__);
+            return false;
+        }
+        for (auto * context : { snap, ctx }) {
+            if (!decode_one(context, draft[0], position)) {
+                return false;
+            }
+        }
+        if (!equal_logits(snap, ctx) || llama_memory_seq_rm(llama_get_memory(ctx), 0, position, -1)) {
+            fprintf(stderr, "%s : FAIL - single-token decode retained a stale rollback window\n", __func__);
+            return false;
+        }
+        ++position;
+        for (auto * context : { snap, ctx }) {
+            if (!decode_tokens_at(context, draft, position) ||
+                !llama_memory_seq_rm(llama_get_memory(context), 0, position + 2, -1)) {
+                return false;
+            }
+            std::vector<uint8_t> state(llama_state_get_size(context));
+            if (llama_state_get_data(context, state.data(), state.size()) != state.size() ||
+                llama_state_set_data(context, state.data(), state.size()) != state.size() ||
+                !decode_one(context, draft[2], position + 2)) {
+                return false;
+            }
+        }
+        if (!equal_logits(snap, ctx)) {
+            fprintf(stderr, "%s : FAIL - full-state restore differs\n", test_name);
+            return false;
+        }
+        for (auto * context : { snap, ctx }) {
+            if (!decode_tokens_at(context, draft, position + 3) ||
+                !llama_memory_seq_rm(llama_get_memory(context), 0, -1, -1) ||
+                !decode_tokens(context, prompt, prompt.size()) ||
+                !decode_one(context, draft[0], prompt.size())) {
+                return false;
+            }
+        }
+        if (!equal_logits(snap, ctx)) {
+            fprintf(stderr, "%s : FAIL - sequence clear retained stale tape\n", test_name);
+            return false;
+        }
+        return true;
+    }();
+
+    llama_free(ctx);
+    llama_free(snap);
+    llama_free(plain);
+
+    if (passed) {
+        fprintf(stderr, "%s : replay matches the snapshot path (bit-identical)\n", __func__);
+    }
+    return passed;
 }
 
 // Roll back multiple sequences, then replay them in a single batch whose
@@ -328,6 +540,10 @@ static test_status test_rollback(const common_params & params, llama_model * mod
         return test_status::SKIP;
     }
 
+    if (!test_replay_matches_reference(params, model, n_vocab)) {
+        return test_status::FAIL;
+    }
+
     std::vector<llama_token> tokens;
     if (llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_NONE) {
         tokens = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
@@ -497,6 +713,17 @@ struct test_results {
 // Run every test for an initialized model over both cache fills.
 static test_results run_tests(const common_params & params, llama_model * model) {
     test_results res;
+
+    // T1: MTP single-context tape replay must reproduce the state the snapshot path would produce
+    {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+        if (!test_replay_matches_reference(params, model, n_vocab)) {
+            res.rollback = test_status::FAIL;
+            res.replay   = test_status::FAIL;
+            return res;
+        }
+    }
+
     for (uint8_t fill : { 0, 0x3e }) {
         LOG_INF("%s: testing with cache fill 0x%02x\n", __func__, fill);
         const test_status rb = test_rollback(params, model, fill);

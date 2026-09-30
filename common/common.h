@@ -400,6 +400,22 @@ struct common_params_speculative {
 
         return needs_rs_seq ? draft.n_max : 0u;
     }
+
+    // --mtp-recurrent-replay: 0 = off (DEFAULT: keep the (1 + n_max) full recurrent-state snapshot
+    // planes), 1 = force on (keep ONE base row + a raw-input tape and rebuild the accepted prefix),
+    // -1 = auto (on whenever MTP is active with more than one draft token).
+    int32_t mtp_recurrent_replay = 0;
+
+    // MTP single-context replay: requested when MTP is enabled with more than one draft token.
+    // The context validates the architecture and, when accepted, sizes the recurrent cache to a
+    // single base row instead of (1 + n_max) snapshot planes.
+    bool mtp_recurrent_replay_requested() const {
+        if (mtp_recurrent_replay >= 0) {
+            return mtp_recurrent_replay != 0;
+        }
+        return need_n_rs_seq() > 1 &&
+            std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != types.end();
+    }
 };
 
 struct common_params_diffusion {

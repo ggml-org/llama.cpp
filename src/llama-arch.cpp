@@ -1129,6 +1129,18 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
     }
 }
 
+// MTP single-context replay is only valid for archs whose graph (a) has the fused gated-delta-net
+// op and (b) reads the live S state through get_s_l()/get_r_l() so the replay can write the rebuilt
+// state back into the device live row.
+bool llm_arch_supports_mtp_recurrent_replay(const llm_arch & arch) {
+    switch (arch) {
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+            return true;
+        default:
+            return false;
+    }
+}
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_GROK:

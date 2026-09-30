@@ -25,7 +25,8 @@ llama_memory_recurrent::llama_memory_recurrent(
                  uint32_t   mem_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
-    const layer_filter_cb & filter) : hparams(model.hparams), n_seq_max(n_seq_max) {
+    const layer_filter_cb & filter,
+                 bool   mtp_recurrent_replay) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer();
 
     head = 0;
@@ -33,6 +34,7 @@ llama_memory_recurrent::llama_memory_recurrent(
     used = 0;
 
     this->n_rs_seq = n_rs_seq;
+    this->mtp_recurrent_replay = mtp_recurrent_replay;
     rs_idx.assign(n_seq_max, 0);
 
     cells.clear();
@@ -98,7 +100,11 @@ llama_memory_recurrent::llama_memory_recurrent(
             throw std::runtime_error("failed to create ggml context for rs cache");
         }
 
-        const uint32_t n_rows = mem_size * (1 + n_rs_seq);
+        // MTP single-context replay keeps only 2 planes (row 0 = live, row 1 = base); otherwise the
+        // live row plus the (1 + n_rs_seq) rollback snapshots.
+        const uint32_t n_planes = mtp_recurrent_replay ? 2 : (1 + n_rs_seq);
+        const uint32_t n_rows = mem_size * n_planes;
+
         ggml_tensor * r = ggml_new_tensor_2d(ctx, type_r, hparams.n_embd_r(), n_rows);
         ggml_tensor * s = ggml_new_tensor_2d(ctx, type_s, hparams.n_embd_s(), n_rows);
         ggml_format_name(r, "cache_r_l%d", i);
@@ -156,6 +162,7 @@ void llama_memory_recurrent::clear(bool data) {
     }
 
     std::fill(rs_idx.begin(), rs_idx.end(), 0);
+    replay_n_tokens = 0;
 }
 
 bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -177,6 +184,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
         set_rs_idx(seq_id, 0);
+        replay_n_tokens = 0;
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -193,6 +201,22 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             // partial rollback via per-token snapshot index (bounded by n_rs_seq)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
+                if (mtp_recurrent_replay) {
+                    // MTP single-context replay: no snapshot is stored - record the rollback depth so
+                    // llama_context can rebuild the state from the recorded raw inputs before the next
+                    // graph read (see llama_context::mtp_recurrent_replay()). Only depths the tape can
+                    // actually cover are accepted; anything deeper returns false so the caller falls
+                    // back to a context checkpoint (the tape holds just the last n_rs_seq + 1 tokens).
+                    // a rollback is only replayable from a recorded tape window; without one (e.g.
+                    // right after a restore) return false so the caller restores a checkpoint
+                    if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq &&
+                            rollback < (llama_pos) replay_n_tokens) {
+                        set_rs_idx(seq_id, (uint32_t) rollback);
+                        cell.pos = p0 - 1;
+                        return true;
+                    }
+                    return false;
+                }
                 // pending rollback is single-use
                 const bool pending = rs_idx[seq_id] != 0;
                 if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
@@ -800,6 +824,12 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
                 }
             }
 
+            if (mtp_recurrent_replay) {
+                // replay never stores snapshots, so the serialized S layout always uses the live/base
+                // plane only - force the rollback offset to 0 to stay inside the 2-plane tensor.
+                rs_idx_cur = 0;
+            }
+
             const uint32_t cell_id = rs_idx_cur * size + (cell.src >= 0 ? cell.src : (int32_t) i);
             if (cell_ranges_data.empty() || cell_ranges_data.back().second != cell_id) {
                 cell_ranges_data.emplace_back(cell_id, cell_id + 1);
@@ -873,6 +903,9 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
     if (n_rs_seq != 0) {
         set_rs_idx(seq_id, 0);
     }
+
+    // MTP single-context replay: the tape window is not part of the serialized state
+    replay_n_tokens = 0;
 }
 
 void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id) const {
@@ -1091,6 +1124,27 @@ bool llama_memory_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell
 }
 
 bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell_count) {
+    // MTP single-context replay: after restoring the live plane, mirror the restored rows into the
+    // base plane so the base row matches the live row (the snapshot restore is replaced by the tape,
+    // but the base row must still be valid for the next verify window). The 2-plane layout is
+    // row 0 = live, row 1 = base (offset `size`).
+    const auto mirror_replay_base = [&](ggml_tensor * tensor, size_t row_bytes) {
+        if (!mtp_recurrent_replay || cell_count == 0) {
+            return;
+        }
+        // run after the staged restore writes are applied (io teardown), else the read is stale
+        const uint32_t head_v = head;
+        const uint32_t size_v = size;
+        io.on_commit([tensor, row_bytes, cell_count, head_v, size_v]() {
+            std::vector<uint8_t> row(row_bytes);
+            for (uint32_t cell = 0; cell < cell_count; ++cell) {
+                const size_t live_offset = (size_t) (head_v + cell) * row_bytes;
+                const size_t base_offset = (size_t) (size_v + head_v + cell) * row_bytes;
+                ggml_backend_tensor_get(tensor, row.data(), live_offset, row_bytes);
+                ggml_backend_tensor_set(tensor, row.data(), base_offset, row_bytes);
+            }
+        });
+    };
     uint32_t s_trans;
     uint32_t n_layer;
     io.read(&s_trans, sizeof(s_trans));
@@ -1135,6 +1189,7 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
         if (cell_count) {
             // Read and set the keys for the whole cell range
             io.read_tensor(r_l[il], head * r_size_row, cell_count * r_size_row);
+            mirror_replay_base(r_l[il], r_size_row);
         }
 
         if (p_l[il] != nullptr) {
@@ -1148,6 +1203,7 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
 
             if (cell_count) {
                 io.read_tensor(p_l[il], head * p_size_row, cell_count * p_size_row);
+                mirror_replay_base(p_l[il], p_size_row);
             }
         }
     }
@@ -1179,6 +1235,7 @@ bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell
             if (cell_count) {
                 // Read and set the values for the whole cell range
                 io.read_tensor(s_l[il], head * s_size_row, cell_count * s_size_row);
+                mirror_replay_base(s_l[il], s_size_row);
             }
         }
     } else {
@@ -1347,7 +1404,8 @@ int32_t llama_memory_recurrent_context::s_copy(int i) const {
     const uint32_t cell_idx = i + mem->head;
     const int32_t  src0     = mem->cells[cell_idx].src0;
 
-    if (mem->n_rs_seq == 0) {
+    if (mem->n_rs_seq == 0 || mem->mtp_recurrent_replay) {
+        // replay mode never restores a snapshot row; the state is rebuilt by mtp_recurrent_replay()
         return src0;
     }
 

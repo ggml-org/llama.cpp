@@ -5761,6 +5761,20 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+// MTP single-context tape replay kernels (gated_delta_net.cu).
+extern "C" bool ggml_cuda_mtp_replay_gdn_state(void * stream, void * state, const void * k, const void * v, const void * g, const void * beta, int n_tokens, int S_v, int H_k, int H_v, int k_nb1, int k_nb2);
+extern "C" bool ggml_cuda_mtp_replay_conv(void * stream, void * dst, const void * old, const void * qkv, int W, int C, int T);
+extern "C" void ggml_cuda_mtp_replay_sync(void * stream);
+
+// The tape-replay kernels need the backend's stream, but `struct ggml_backend` is incomplete in
+// gated_delta_net.cu, so resolve it here (full type available) and hand the raw stream over.
+static void * ggml_cuda_mtp_backend_stream(ggml_backend_t backend) {
+    if (backend == nullptr) {
+        return nullptr;
+    }
+    return (void *) ((ggml_backend_cuda_context *) backend->context)->stream();
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
@@ -5781,6 +5795,19 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
     }
+    if (strcmp(name, "ggml_cuda_mtp_replay_gdn_state") == 0) {
+        return (void *)ggml_cuda_mtp_replay_gdn_state;
+    }
+    if (strcmp(name, "ggml_cuda_mtp_replay_conv") == 0) {
+        return (void *)ggml_cuda_mtp_replay_conv;
+    }
+    if (strcmp(name, "ggml_cuda_mtp_backend_stream") == 0) {
+        return (void *)ggml_cuda_mtp_backend_stream;
+    }
+    if (strcmp(name, "ggml_cuda_mtp_replay_sync") == 0) {
+        return (void *)ggml_cuda_mtp_replay_sync;
+    }
+
     return nullptr;
 }
 
