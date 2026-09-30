@@ -3744,7 +3744,7 @@ void llm_graph_context::build_pooling(
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
-                    cur = ggml_unary(ctx0, cur, hparams.act_cls != GGML_UNARY_OP_COUNT ? hparams.act_cls : GGML_UNARY_OP_TANH);
+                    cur = ggml_unary(ctx0, cur, hparams.act_cls);
                     if (cls_norm) {
                         // head norm
                         cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
