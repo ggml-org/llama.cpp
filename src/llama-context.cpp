@@ -2007,7 +2007,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             }
         }
 
-        bool extracted_all_tokens = extract_layer_inputs(res, ubatch, n_tokens_prev);
+        bool extracted_all_tokens = extract_layer_inputs(res, n_tokens_prev, ubatch.n_tokens);
 
         // extract nextn embeddings before
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
@@ -2272,8 +2272,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     return n_outputs_max;
 }
 
-bool llama_context::extract_layer_inputs(const llm_graph_result * res, const llama_ubatch & ubatch, size_t token_offset) {
-    const size_t n_tokens = ubatch.n_tokens;
+bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens) {
     bool extracted = false;
     for (uint32_t il = 0; il < cparams.embeddings_layer_inp.size(); ++il) {
         if (!cparams.embeddings_layer_inp[il]) {
