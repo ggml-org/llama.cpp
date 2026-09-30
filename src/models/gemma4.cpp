@@ -438,17 +438,21 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
 class llm_graph_input_gemma4_ple : public llm_graph_input_i {
 public:
-    llm_graph_input_gemma4_ple(const ggml_tensor * table, bool is_lazy) : table(table), is_lazy(is_lazy) {}
+    llm_graph_input_gemma4_ple(const llama_model & model) : model(model) {}
 
     void set_input(const llama_ubatch * ubatch) override {
+        ggml_tensor * ple = model.per_layer_tok_embd;
+
+        const bool prefetch = model.can_prefetch.count(ple);
+
         if (ubatch->token) {
-            if (is_lazy) {
-                llama_prefetch_rows(table, ubatch->token, ubatch->n_tokens);
+            if (prefetch) {
+                llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
             }
             ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
-        } else if (is_lazy) {
+        } else if (prefetch) {
             const int32_t padding = 0;
-            llama_prefetch_rows(table, &padding, 1);
+            llama_prefetch_rows(ple, &padding, 1);
         }
     }
 
@@ -458,15 +462,13 @@ public:
 
     ggml_tensor * tokens = nullptr;
 
-private:
-    const ggml_tensor * table;
-    const bool is_lazy;
+    const llama_model & model;
 };
 
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model.per_layer_tok_embd, model.per_layer_tok_embd_lazy);
+    auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model);
 
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);

@@ -24,15 +24,19 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
         return;
     }
 
+    GGML_ASSERT(ggml_is_matrix(tensor));
+
     const size_t row_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
     const auto * base = (const char *) tensor->data;
-    std::vector<llama_memory_range> ranges;
-    ranges.reserve(n_rows);
+
+    std::vector<llama_memory_range> mr;
+    mr.reserve(n_rows);
     for (size_t i = 0; i < n_rows; ++i) {
         GGML_ASSERT(rows[i] >= 0 && rows[i] < tensor->ne[1]);
-        ranges.push_back({ base + (size_t) rows[i] * tensor->nb[1], row_bytes });
+        mr.push_back({ base + (size_t) rows[i] * tensor->nb[1], row_bytes });
     }
-    llama_prefetch(std::move(ranges));
+
+    llama_prefetch(mr);
 }
 
 time_meas::time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}

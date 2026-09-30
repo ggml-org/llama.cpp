@@ -81,7 +81,9 @@ struct llama_memory_range {
     size_t size;
 };
 
+using llama_memory_ranges = std::vector<llama_memory_range>;
+
 // Prefetch the host pages covering these memory ranges.
-void llama_prefetch(std::vector<llama_memory_range> ranges);
+void llama_prefetch(const llama_memory_ranges & mr);
 
 size_t llama_path_max();

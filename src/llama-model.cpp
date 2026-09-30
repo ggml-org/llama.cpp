@@ -1562,7 +1562,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
         // call the per-model loading function
         load_arch_tensors(ml);
-        per_layer_tok_embd_lazy = per_layer_tok_embd && ml.lazy.has(per_layer_tok_embd);
 
         // generic pass: load optional per-tensor/per-expert ".scale" tensors (e.g. NVFP4 scale2)
         // this avoids having to add scale loading to every architecture
@@ -1717,7 +1716,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
         }
     }
+
     ml.done_getting_tensors();
+
+    if (per_layer_tok_embd && ml.lazy.has(per_layer_tok_embd)) {
+        LLAMA_LOG_INFO("%s: enabling prefetch for '%s'\n", __func__, per_layer_tok_embd->name);
+
+        can_prefetch.insert(per_layer_tok_embd);
+    }
 
     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
     // If sidecar scales exist, the output weight must be an actual output tensor.
