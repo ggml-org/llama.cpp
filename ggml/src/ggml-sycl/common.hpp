@@ -777,6 +777,11 @@ bool gpu_has_xmx(sycl::device &dev);
 
 int ggml_sycl_get_env(const char *env_name, int default_val);
 
+// True when GGML_SYCL_MAX_WG_PER_CU was set and accepted by the device-info parser (an
+// invalid value falls back to the default and does not count). Read by the FA launch
+// planning, which otherwise halves the value for 256-GRF launches.
+bool ggml_sycl_max_wg_per_cu_is_explicit();
+
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
         return "";

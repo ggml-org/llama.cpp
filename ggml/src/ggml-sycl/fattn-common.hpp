@@ -3,6 +3,10 @@
 #include <sycl/sycl.hpp>
 #include "dpct/helper.hpp"
 #include "common.hpp"
+
+#include <sycl/ext/intel/experimental/grf_size_properties.hpp>
+#include <sycl/ext/oneapi/properties/properties.hpp>
+
 #include "convert.hpp"
 #include "vecdotq.hpp"
 #include "fattn-buffers.hpp"
@@ -14,6 +18,11 @@
 #include <cstdint>
 #include <cmath>
 #include <float.h>
+
+// 256-GRF FA instantiations (CMake GGML_SYCL_FA_LARGE_GRF; rationale in fattn.hpp).
+#ifndef GGML_SYCL_FA_LARGE_GRF_VARIANTS
+#    define GGML_SYCL_FA_LARGE_GRF_VARIANTS 0
+#endif
 
 
 #define FATTN_KQ_STRIDE       256
@@ -88,9 +97,10 @@ void ggml_sycl_fattn_profile_record_geometry(
     uint64_t ntiles_total,
     uint64_t blocks_total,
     uint64_t work_items_total,
-    uint64_t max_wg_per_cu,
+    uint64_t max_wg_per_cu,  // value the launch planned with (halved for 256 GRF)
     uint64_t nsm,
-    uint64_t stream_k);
+    uint64_t stream_k,
+    uint64_t grf_size);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1028,7 +1038,9 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-template <fattn_kernel_t fattn_kernel, int warp_size>
+// large_grf is a template parameter so the two instantiations get distinct kernel names;
+// a runtime branch over one lambda would define the same mangled kernel twice.
+template <fattn_kernel_t fattn_kernel, int warp_size, bool large_grf>
 static void lauch_kernel(
     dpct::dim3 group_range,
     dpct::dim3 local_range,
@@ -1073,26 +1085,33 @@ static void lauch_kernel(
     const int64_t nb33) {
     GGML_UNUSED(local_mem_size);
     q->submit([&](sycl::handler &cgh) {
-        cgh.parallel_for(
-            sycl::nd_range<3>(
-                static_cast<sycl::range<3>>(group_range * local_range),
-                static_cast<sycl::range<3>>(local_range)),
-            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
-                GGML_UNUSED(item_ct1);
-                fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
-                             max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
-                             ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
-                             ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
-                             ne31, ne32, ne33, nb31, nb32, nb33);
-            });
+        auto kernel = [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
+            GGML_UNUSED(item_ct1);
+            fattn_kernel(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
+                         max_bias, m0, m1, n_head_log2, logit_softcap, ne00,
+                         ne01, ne02, ne03, nb01, nb02, nb03, ne10, ne11,
+                         ne12, ne13, nb11, nb12, nb13, nb21, nb22, nb23,
+                         ne31, ne32, ne33, nb31, nb32, nb33);
+        };
+        const sycl::nd_range<3> range(
+            static_cast<sycl::range<3>>(group_range * local_range),
+            static_cast<sycl::range<3>>(local_range));
+        if constexpr (large_grf) {
+            cgh.parallel_for(range,
+                             sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size<256> },
+                             kernel);
+        } else {
+            cgh.parallel_for(range, kernel);
+        }
     });
 }
 
-template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size>
+// tile_route is a template parameter so the 256-GRF instantiation exists for the tile
+// kernels only (the vec kernels never run at 256 GRF).
+template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size, bool tile_route>
 void launch_fattn(
     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k,
-    const bool tile_route) {
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
 
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1276,8 +1295,17 @@ void launch_fattn(
 
     const dpct::dim3 block_dim(warp_size, nwarps, 1);
 
-    // Max. number of active blocks limited by occupancy.
+    // 256 GRF for tile launches with more than one query row (fattn-grf.hpp); the device
+    // check runs last so its one-time warning only fires when a launch asked for it.
+    const bool large_grf = ggml_sycl_fa_large_grf_wanted(ggml_sycl_fa_large_grf_mode(), tile_route, Q->ne[1]) &&
+                           ggml_sycl_fa_large_grf_supported(id);
+
+    // Max. number of active blocks limited by occupancy; a 256-GRF kernel gets half the
+    // thread slots per Xe-core (an explicit GGML_SYCL_MAX_WG_PER_CU is kept as set).
     int max_blocks_per_sm = ggml_sycl_info().devices[id].max_wg_per_cu;
+    if (large_grf) {
+        max_blocks_per_sm = ggml_sycl_fa_large_grf_max_wg_per_cu(max_blocks_per_sm);
+    }
     int parallel_blocks = max_blocks_per_sm;
     dpct::dim3 blocks_num;
     if (stream_k) {
@@ -1360,9 +1388,10 @@ void launch_fattn(
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
                 block_dim.x * block_dim.y * block_dim.z,
-            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) max_blocks_per_sm,  // effective: halved for 256-GRF launches
             (uint64_t) nsm,
-            (uint64_t) stream_k);
+            (uint64_t) stream_k,
+            (uint64_t) (large_grf ? 256 : 128));
     }
 
     float scale         = 1.0f;
@@ -1388,7 +1417,19 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
-    lauch_kernel<fattn_kernel, warp_size>(
+    auto launch = lauch_kernel<fattn_kernel, warp_size, false>;
+#if GGML_SYCL_FA_LARGE_GRF_VARIANTS
+    if constexpr (tile_route) {
+        if (large_grf) {
+            launch = lauch_kernel<fattn_kernel, warp_size, true>;
+        }
+    } else {
+        GGML_ASSERT(!large_grf);
+    }
+#else
+    GGML_ASSERT(!large_grf);
+#endif
+    launch(
         blocks_num, block_dim, main_stream, (unsigned int) nbytes_shared, (const char *) Q->data, K_data, V_data,
         mask ? ((const char *) mask->data) : nullptr, sinks ? ((const char *) sinks->data) : nullptr, KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, (sycl::float2 *)dst_tmp_meta.ptr, scale, max_bias, m0, m1,
@@ -1474,7 +1515,7 @@ void launch_fattn(
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z,
             (uint64_t) blocks_num.x * blocks_num.y * blocks_num.z *
                 block_dim.x * block_dim.y * block_dim.z,
-            (uint64_t) ggml_sycl_info().devices[id].max_wg_per_cu,
+            (uint64_t) max_blocks_per_sm,  // effective: halved for 256-GRF launches
             (uint64_t) nsm);
     }
 }

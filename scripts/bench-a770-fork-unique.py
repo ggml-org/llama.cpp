@@ -98,6 +98,7 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
         "GGML_SYCL_FA_FORCE_VEC_STANDARD",
         "GGML_SYCL_FA_Q8_GQA_TILE",
         "GGML_SYCL_FA_Q8_GQA_DIRECT",
+        "GGML_SYCL_FA_LARGE_GRF",
         "GGML_SYCL_FA_PROFILE",
         "GGML_SYCL_Q8_KV_QUANTS_FIRST",
         "LLAMA_ENABLE_INNERQ",

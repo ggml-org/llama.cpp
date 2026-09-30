@@ -329,6 +329,19 @@ else()
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 
+# 256-GRF variants of the flash-attention kernels (option in ggml/CMakeLists.txt, runtime
+# knob GGML_SYCL_FA_LARGE_GRF). Off by default: every FA tile kernel would carry a second
+# device image, and an AOT build compiles each twice.
+if (GGML_SYCL_FA_LARGE_GRF)
+    if (GGML_SYCL_DEVICE_ARCH)
+        message(WARNING "GGML_SYCL_FA_LARGE_GRF=ON with GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH}: every flash-attention tile kernel is compiled twice ahead of time; this combination has not been built by the fork")
+    endif()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=1)
+else()
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_FA_LARGE_GRF_VARIANTS=0)
+endif()
+message(STATUS "GGML_SYCL_FA_LARGE_GRF ${GGML_SYCL_FA_LARGE_GRF}")
+
 
 if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)

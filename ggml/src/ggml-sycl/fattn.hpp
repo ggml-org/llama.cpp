@@ -14,8 +14,22 @@
 #define GGML_SYCL_FATTN_HPP
 
 #include "common.hpp"
+#include "fattn-grf.hpp"
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+// GGML_SYCL_FA_LARGE_GRF (rationale, modes and the pure parse/decision in fattn-grf.hpp).
+// The environment value, parsed once with ggml_sycl_fa_large_grf_parse(); INVALID and
+// NO_VARIANTS results warn once and give OFF.
+ggml_sycl_fa_grf_mode ggml_sycl_fa_large_grf_mode();
+// True when the 256-GRF FA instantiations were compiled (CMake GGML_SYCL_FA_LARGE_GRF).
+bool ggml_sycl_fa_large_grf_variants();
+// True when the device's architecture has a 256-GRF mode (Xe-HPG, Xe-HPC, Xe2); warns
+// once per device otherwise. Call only when a large-GRF launch is wanted.
+bool ggml_sycl_fa_large_grf_supported(int device);
+// Work-groups per Xe-core to plan a 256-GRF launch with: half the device value, unless
+// GGML_SYCL_MAX_WG_PER_CU was set and accepted by its parser, which is then used as is.
+int ggml_sycl_fa_large_grf_max_wg_per_cu(int device_max_wg_per_cu);
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst);
 

@@ -552,6 +552,22 @@ if (GGML_SYCL AND NOT GGML_SYCL_SEPARATE_BUILD)
     add_test(NAME test-sycl-turbo-correctness COMMAND test-sycl-turbo-correctness)
     set_property(TEST test-sycl-turbo-correctness PROPERTY LABELS sycl)
     set_property(TEST test-sycl-turbo-correctness PROPERTY TIMEOUT 180)
+    # GGML_SYCL_FA_LARGE_GRF: the pure parse and launch decision, no GPU needed.
+    add_executable(test-sycl-fa-large-grf test-sycl-fa-large-grf.cpp)
+    target_link_libraries(test-sycl-fa-large-grf PRIVATE ggml ggml-sycl)
+    target_include_directories(test-sycl-fa-large-grf PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
+    add_test(NAME test-sycl-fa-large-grf COMMAND test-sycl-fa-large-grf)
+    set_property(TEST test-sycl-fa-large-grf PROPERTY LABELS sycl)
+    if (GGML_SYCL_FA_LARGE_GRF)
+        # The oracle with the 256-GRF tile variants selected and the FA geometry profile on;
+        # the wrapper requires the selection signal (a TILE prefill launch at grf=256, or the
+        # per-device warning that the architecture has no 256-GRF mode), not just a green sweep.
+        add_test(NAME test-sycl-turbo-correctness-large-grf
+                 COMMAND ${CMAKE_COMMAND} -DORACLE=$<TARGET_FILE:test-sycl-turbo-correctness>
+                         -P ${CMAKE_CURRENT_SOURCE_DIR}/check-sycl-fa-large-grf.cmake)
+        set_property(TEST test-sycl-turbo-correctness-large-grf PROPERTY LABELS sycl)
+        set_property(TEST test-sycl-turbo-correctness-large-grf PROPERTY TIMEOUT 660)
+    endif()
 
     # NOTE: linking only ggml-sycl does NOT bring in ggml/include (that dir is exported PUBLIC
     # by the `ggml`/`ggml-base` targets only, see ggml/src/CMakeLists.txt); a test that links

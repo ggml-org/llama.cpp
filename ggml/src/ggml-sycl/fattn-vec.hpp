@@ -688,8 +688,8 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
             constexpr int nwarps = nthreads_hw / warp_size;
             launch_fattn<D, cols_per_block, 1,
                          flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                            q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
-                ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
+                                            q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size, false>(
+                ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
             return;
         }
     }
@@ -698,8 +698,8 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
     constexpr int nwarps = nthreads_hw / warp_size;
     launch_fattn<D, cols_per_block, 1,
                  flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                    q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
-        ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false, false);
+                                    q8_quants_first, use_logit_softcap, warp_size, nthreads_hw>, warp_size, false>(
+        ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
 template <int D, int type_K, int type_V, bool q8_quants_first>

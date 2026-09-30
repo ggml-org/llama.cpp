@@ -21,6 +21,91 @@
 #include "fattn.hpp"
 #include "fattn-onednn.hpp"
 #include "fattn-sparse.hpp"
+
+#include <algorithm>
+#include <atomic>
+#include <cstdlib>
+
+bool ggml_sycl_fa_large_grf_variants() {
+    return GGML_SYCL_FA_LARGE_GRF_VARIANTS != 0;
+}
+
+// Whole-value parse: ggml_sycl_get_env() takes a leading number and ignores the rest,
+// which would turn "1junk" into mode 1 and "abc" into a silent 0. This knob promises a
+// warning for anything it does not understand.
+ggml_sycl_fa_grf_parse_result ggml_sycl_fa_large_grf_parse(const char * raw, bool variants_compiled,
+                                                           ggml_sycl_fa_grf_mode * mode) {
+    *mode = GGML_SYCL_FA_GRF_OFF;
+    if (raw == nullptr || raw[0] == '\0') {
+        return GGML_SYCL_FA_GRF_PARSE_UNSET;
+    }
+    char *     end = nullptr;
+    const long v   = strtol(raw, &end, 10);
+    if (end == raw || *end != '\0' || v < GGML_SYCL_FA_GRF_OFF || v > GGML_SYCL_FA_GRF_TILE) {
+        return GGML_SYCL_FA_GRF_PARSE_INVALID;
+    }
+    if (v != GGML_SYCL_FA_GRF_OFF && !variants_compiled) {
+        return GGML_SYCL_FA_GRF_PARSE_NO_VARIANTS;
+    }
+    *mode = (ggml_sycl_fa_grf_mode) v;
+    return GGML_SYCL_FA_GRF_PARSE_OK;
+}
+
+bool ggml_sycl_fa_large_grf_wanted(ggml_sycl_fa_grf_mode mode, bool tile_route, int64_t q_rows) {
+    return mode == GGML_SYCL_FA_GRF_TILE && tile_route && q_rows > 1;
+}
+
+ggml_sycl_fa_grf_mode ggml_sycl_fa_large_grf_mode() {
+    static const ggml_sycl_fa_grf_mode mode = [] {
+        const char *          raw = getenv("GGML_SYCL_FA_LARGE_GRF");
+        ggml_sycl_fa_grf_mode m   = GGML_SYCL_FA_GRF_OFF;
+        switch (ggml_sycl_fa_large_grf_parse(raw, ggml_sycl_fa_large_grf_variants(), &m)) {
+            case GGML_SYCL_FA_GRF_PARSE_INVALID:
+                GGML_LOG_WARN("ggml_sycl_fa_large_grf_mode: ignoring invalid GGML_SYCL_FA_LARGE_GRF=\"%s\" (0 or 1)\n", raw);
+                break;
+            case GGML_SYCL_FA_GRF_PARSE_NO_VARIANTS:
+                GGML_LOG_WARN("ggml_sycl_fa_large_grf_mode: GGML_SYCL_FA_LARGE_GRF=%s ignored: built without the "
+                              "256-GRF FA variants (CMake GGML_SYCL_FA_LARGE_GRF=OFF)\n", raw);
+                break;
+            default:
+                break;
+        }
+        return m;
+    }();
+    return mode;
+}
+
+int ggml_sycl_fa_large_grf_max_wg_per_cu(int device_max_wg_per_cu) {
+    // An override that the device-info parser rejected fell back to the default, so it is
+    // not an explicit choice and gets halved like the default.
+    return ggml_sycl_max_wg_per_cu_is_explicit() ? device_max_wg_per_cu : std::max(1, device_max_wg_per_cu / 2);
+}
+
+// The 256-entry register file exists on Xe-HPG (DG2), Xe-HPC (PVC) and Xe2 (BMG, LNL);
+// earlier generations have no large-GRF mode, and the kernel property would fail at JIT
+// or submission instead of falling back. Measured on acm_g10 only; the other entries
+// are on documentation. One warning per device when the request is ignored.
+bool ggml_sycl_fa_large_grf_supported(int device) {
+    static std::atomic<bool> warned[GGML_SYCL_MAX_DEVICES] = {};
+    switch (ggml_sycl_info().devices[device].hw_info.arch) {
+        case gpu_arch::intel_gpu_acm_g10:
+        case gpu_arch::intel_gpu_acm_g11:
+        case gpu_arch::intel_gpu_acm_g12:
+        case gpu_arch::intel_gpu_pvc:
+        case gpu_arch::intel_gpu_pvc_vg:
+        case gpu_arch::intel_gpu_bmg_g21:
+        case gpu_arch::intel_gpu_bmg_g31:
+        case gpu_arch::intel_gpu_lnl_m:
+            return true;
+        default:
+            break;
+    }
+    if (!warned[device].exchange(true)) {
+        GGML_LOG_WARN("ggml_sycl_fa_large_grf_supported: GGML_SYCL_FA_LARGE_GRF ignored on SYCL%d: this architecture "
+                      "has no 256-GRF mode (Xe-HPG, Xe-HPC or Xe2 needed)\n", device);
+    }
+    return false;
+}
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -338,9 +423,10 @@ struct ggml_sycl_fattn_geometry_bucket {
     uint64_t ntiles_total = 0;
     uint64_t blocks_total = 0;
     uint64_t work_items_total = 0;
-    uint64_t max_wg_per_cu = 0;
+    uint64_t max_wg_per_cu = 0;  // value the launch planned with (halved for 256 GRF)
     uint64_t nsm = 0;
     uint64_t stream_k = 0;
+    uint64_t grf_size = 0;
 };
 
 class ggml_sycl_fattn_geometry_collector {
@@ -356,7 +442,7 @@ public:
                     stderr,
                     "GGML_SYCL_FA_GEOMETRY: route=%s phase=%s type_k=%s launches=%llu "
                     "parallel_blocks=%llu ntiles_total=%llu blocks_total=%llu "
-                    "work_items_total=%llu max_wg_per_cu=%llu nsm=%llu stream_k=%llu\n",
+                    "work_items_total=%llu max_wg_per_cu=%llu nsm=%llu stream_k=%llu grf=%llu\n",
                     route == 0 ? "VEC" : "TILE",
                     phase == 0 ? "decode" : "prefill",
                     bucket.type_k,
@@ -367,7 +453,8 @@ public:
                     (unsigned long long) bucket.work_items_total,
                     (unsigned long long) bucket.max_wg_per_cu,
                     (unsigned long long) bucket.nsm,
-                    (unsigned long long) bucket.stream_k);
+                    (unsigned long long) bucket.stream_k,
+                    (unsigned long long) bucket.grf_size);
             }
         }
         fflush(stderr);
@@ -383,7 +470,8 @@ public:
         uint64_t work_items_total,
         uint64_t max_wg_per_cu,
         uint64_t nsm,
-        uint64_t stream_k) {
+        uint64_t stream_k,
+        uint64_t grf_size) {
         std::lock_guard<std::mutex> lock(mutex);
         ggml_sycl_fattn_geometry_bucket & bucket =
             buckets[tile_route ? 1 : 0][decode ? 0 : 1];
@@ -398,6 +486,7 @@ public:
         bucket.max_wg_per_cu    = max_wg_per_cu;
         bucket.nsm              = nsm;
         bucket.stream_k         = stream_k;
+        bucket.grf_size         = grf_size;
     }
 
 private:
@@ -415,7 +504,8 @@ void ggml_sycl_fattn_profile_record_geometry(
     uint64_t work_items_total,
     uint64_t max_wg_per_cu,
     uint64_t nsm,
-    uint64_t stream_k) {
+    uint64_t stream_k,
+    uint64_t grf_size) {
     static ggml_sycl_fattn_geometry_collector collector;
     collector.record(
         tile_route,
@@ -427,7 +517,8 @@ void ggml_sycl_fattn_profile_record_geometry(
         work_items_total,
         max_wg_per_cu,
         nsm,
-        stream_k);
+        stream_k,
+        grf_size);
 }
 
 void ggml_sycl_fattn_profile_record(

@@ -207,6 +207,7 @@ option(GGML_SYCL_HOST_MEM_FALLBACK          "ggml: allow host memory fallback in
 option(GGML_SYCL_SUPPORT_LEVEL_ZERO_API     "ggml: use Level Zero API in SYCL backend"  ON)
 option(GGML_SYCL_DNN                        "ggml: enable oneDNN in the SYCL backend"         ON)
 option(GGML_SYCL_DEVICE_CODE_SPLIT          "ggml: split SYCL device code per kernel"          ON)
+option(GGML_SYCL_FA_LARGE_GRF               "ggml: compile the 256-GRF variants of the SYCL flash-attention tile kernels (runtime knob GGML_SYCL_FA_LARGE_GRF)" OFF)
 set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
