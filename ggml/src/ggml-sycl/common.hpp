@@ -358,9 +358,8 @@ struct ggml_sycl_graph {
     uint64_t uid             = 0;
     int64_t  last_used_time  = 0;
 
-    // result of check_graph_compatibility() and graph_needs_reorder(), and the uid they were made for
+    // result of check_graph_compatibility() and the uid it was made for
     bool     compatible     = false;
-    bool     needs_reorder  = true;
     uint64_t compatible_uid = 0;
 };
 

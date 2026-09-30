@@ -6181,29 +6181,6 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 }
 
 #ifdef GGML_SYCL_GRAPH
-static bool graph_needs_reorder(ggml_backend_sycl_context * ctx, const ggml_cgraph * cgraph) {
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        if (ggml_sycl_is_view_or_noop(node) || (node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-            continue;
-        }
-        if (!should_reorder_tensor(*ctx, node)) {
-            continue;
-        }
-
-        const ggml_tensor * src0 = node->src[0];
-        const ggml_tensor_extra_gpu * extra = src0 != nullptr
-            ? static_cast<const ggml_tensor_extra_gpu *>(src0->extra)
-            : nullptr;
-        if (extra != nullptr && !extra->optimized_feature.reorder) {
-            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to needing reorder\n", __func__);
-            return true;
-        }
-    }
-
-    return false;
-}
-
 static const void * ggml_sycl_graph_get_key(ggml_cgraph * cgraph) {
     return cgraph->nodes[0];
 }
@@ -6357,21 +6334,9 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             if (cgraph->uid == 0 || cgraph->uid != graph->compatible_uid) {
                 graph->compatible_uid = cgraph->uid;
                 graph->compatible     = check_graph_compatibility(sycl_ctx, cgraph);
-// SYCL async memory allocation extensions are available but lead to a hang when reordering
-// is needed in versions prior to this fix https://github.com/intel/llvm/pull/21170
-#if !defined(__INTEL_LLVM_COMPILER) || __INTEL_LLVM_COMPILER <= 20250303
-                graph->needs_reorder = true;
-#else
-                graph->needs_reorder = false;
-#endif
             }
 
-            // an eager call applies the reorder, so once needs_reorder is confirmed false for this
-            // uid it stays false: every weight it names is now reordered, and reorder is one-way.
-            if (graph->needs_reorder) {
-                graph->needs_reorder = graph_needs_reorder(sycl_ctx, cgraph);
-            }
-            use_sycl_graph = graph->compatible && !graph->needs_reorder;
+            use_sycl_graph = graph->compatible;
         }
     }
     if (use_sycl_graph) {
