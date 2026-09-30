@@ -1137,14 +1137,7 @@ void launch_fattn(
 
     dim3 blocks_num;
     if (stream_k) {
-        // Keep untested devices and shapes on the original scheduling policy.
-        const bool tested_prefill = cc == GGML_CUDA_CC_DGX_SPARK && nsm == 48 &&
-            Q->ne[0] == 256 && DV == 256 && ncols == 64 &&
-            ((ncols1 == 8 && ncols2 == 8) || (ncols1 == 32 && ncols2 == 2)) &&
-            Q->ne[1] == 4096 && Q->ne[3] == 1 && K->ne[3] == 1 && V->ne[3] == 1 &&
-            K->ne[1] >= 4096 && K->ne[1] <= 65536 &&
-            K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && !use_sparse;
-        const bool prefer_whole_tiles = allow_whole_tiles && tested_prefill && max_blocks_per_sm >= 2;
+        const bool prefer_whole_tiles = GGML_CUDA_CC_IS_NVIDIA(cc) && allow_whole_tiles && max_blocks_per_sm >= 2;
 
         auto should_use_stream_k = [prefer_whole_tiles](const int cc, const int ntiles_dst, const int max_blocks, const int DKQ) {
             const int tiles_nwaves             = (ntiles_dst + max_blocks - 1) / max_blocks;
