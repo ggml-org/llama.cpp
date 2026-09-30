@@ -552,22 +552,24 @@ class ModelBase:
                 elif quant_format == "float-quantized" or quant_format == "int-quantized" or quant_format == "naive-quantized":
                     block_size = weight_config.get("block_structure", None)
                     strategy = weight_config.get("strategy")
-                    assert strategy == "channel" or strategy == "block"
-                    assert weight_config.get("group_size") is None  # didn't find a model using this yet
                     is_fp8 = (
                         quant_format == "float-quantized"
                         and weight_config.get("type") == "float"
                         and weight_config.get("num_bits") == 8
                     )
+                    assert strategy in ("channel", "block") or (is_fp8 and strategy == "tensor")
+                    assert weight_config.get("group_size") is None  # didn't find a model using this yet
                     for name in self.model_tensors.keys():
                         if name.endswith(".weight_scale"):
                             weight_name = name.removesuffix("_scale")
                             w = self.model_tensors[weight_name]
                             s = self.model_tensors[name]
-                            self.model_tensors[weight_name] = lambda w=w, s=s: dequant_simple(w(), s(), block_size)
+                            self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_simple(w(), s(), bs)
                             tensors_to_remove.append(name)
                             if self._fp8_as_q8 and is_fp8:
                                 self._fp8_dequantized.add(weight_name)
+                        if is_fp8 and name.endswith((".input_scale", ".activation_scale", "_activation_scale", ".k_scale", ".v_scale")):
+                            tensors_to_remove.append(name)
                 elif quant_format == "pack-quantized":
                     assert weight_config.get("strategy") == "group"
                     assert weight_config.get("type", "int") == "int"
