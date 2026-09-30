@@ -2932,6 +2932,11 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+#if GGML_SYCL_DNNL
+// F32 GEMMs below this size (row_diff * src1_ncols * ne10) call oneMKL directly instead of oneDNN
+static constexpr int64_t SYCL_F32_DNNL_MIN_GEMM_FLOPS = 256 * 256 * 256;
+#endif
+
 inline void ggml_sycl_op_mul_mat_sycl(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -3063,7 +3068,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
         {
 #if GGML_SYCL_DNNL
             const int64_t gemm_flops = (int64_t)row_diff * src1_ncols * ne10;
-            const bool use_mkl_direct = gemm_flops < 256 * 256 * 256;
+            const bool use_mkl_direct = gemm_flops < SYCL_F32_DNNL_MIN_GEMM_FLOPS;
             if (g_ggml_sycl_enable_dnn && !use_mkl_direct) {
                 DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
                                           DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
@@ -5986,6 +5991,7 @@ catch (sycl::exception const &exc) {
 
 static void ggml_backend_sycl_synchronize(ggml_backend_t backend) try {
     GGML_SYCL_DEBUG("[SYCL] call %s\n", __func__);
+
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
     SYCL_CHECK(CHECK_TRY_ERROR((stream)->wait()));
@@ -6222,29 +6228,59 @@ static bool ggml_sycl_graph_update_required(ggml_sycl_graph * graph, ggml_cgraph
     return res;
 }
 
-// Reports if ggml_sycl_mul_mat() gives this node to oneMKL or oneDNN. Both libraries chain the
-// submission on events made before recording started, which SYCL graphs do not allow.
-static bool mul_mat_uses_library_gemm(ggml_tensor * dst) {
+// Reports if ggml_sycl_mul_mat() gives this node to oneDNN. oneDNN chains the submission on events
+// made before recording started, which SYCL graphs do not allow.
+static bool mul_mat_uses_onednn(ggml_tensor * dst) {
+#if GGML_SYCL_DNNL
+    if (!g_ggml_sycl_enable_dnn) {
+        return false;
+    }
+
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src1 = dst->src[1];
 
-    // the branch order below follows the dispatch in ggml_sycl_mul_mat()
+    // the branch order below follows the dispatch in ggml_sycl_mul_mat(); the F16 branches end in
+    // a vector kernel or the batched oneMKL path, neither of which uses oneDNN
     if (!ggml_backend_buffer_is_sycl_split(src0->buffer) && src0->type == GGML_TYPE_F16) {
         if (ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
-            return !(src0->ne[3] == 1 && src1->ne[3] == 1);
+            return false;
         }
         if (!ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1 && src1->ne[3] == 1) {
             return false;
         }
         if (!ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
-            return true;
+            return false;
         }
     }
 
-    // ggml_sycl_op_mul_mat_sycl() is the last resort of the dispatch. The reorder decision that
-    // ggml_sycl_mul_mat() makes between DMMV and MMVQ is left out here: neither uses a library.
-    return !can_use_dequantize_mul_mat_vec(src0, src1, dst) && !can_use_mul_mat_vec_q(src0, src1, dst) &&
-           !can_use_mul_mat_q(src0, src1, dst);
+    // ggml_sycl_op_mul_mat_sycl() is the last resort of the dispatch and the only user of oneDNN.
+    // The reorder decision that ggml_sycl_mul_mat() makes between DMMV and MMVQ is left out here:
+    // neither uses a library.
+    if (can_use_dequantize_mul_mat_vec(src0, src1, dst) || can_use_mul_mat_vec_q(src0, src1, dst) ||
+        can_use_mul_mat_q(src0, src1, dst)) {
+        return false;
+    }
+
+    // the branch order below follows ggml_sycl_op_mul_mat_sycl(); graphs are single device only, so
+    // row_diff == src0->ne[1] and src1_ncols == src1->ne[1] there
+#if defined(GGML_SYCL_HAS_BF16)
+    if (src0->type == GGML_TYPE_BF16 && ggml_is_contiguous(src0)) {
+        return true;
+    }
+#endif
+#ifdef GGML_SYCL_F16
+    if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && ggml_is_contiguous(src0) &&
+        dst->op_params[0] == GGML_PREC_DEFAULT) {
+        return true;
+    }
+#endif
+    // the F32 branch only uses oneDNN for large GEMMs and calls oneMKL directly otherwise
+    const int64_t gemm_flops = src0->ne[1] * src1->ne[1] * src0->ne[0];
+    return gemm_flops >= SYCL_F32_DNNL_MIN_GEMM_FLOPS;
+#else
+    GGML_UNUSED(dst);
+    return false;
+#endif
 }
 
 static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgraph * cgraph) {
@@ -6262,8 +6298,7 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
             continue;
         }
 
-        const ggml_op node_op      = node->op;
-        bool          uses_library = false;
+        const ggml_op node_op = node->op;
 
         switch (node_op) {
             default:
@@ -6272,17 +6307,16 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                 // ggml_sycl_mul_mat_id() does a blocking host wait on the sycl queue after
                 // submitting a memcpy operation, but wait() can't be called on a queue that
                 // is recording to a graph.
-                GGML_LOG_DEBUG("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
+                GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
                                ggml_op_name(node_op));
                 return false;
-            case GGML_OP_OUT_PROD:
-            case GGML_OP_CONV_3D:
-            case GGML_OP_SOLVE_TRI:
-                // these ops always call a oneMKL routine
-                uses_library = true;
-                break;
             case GGML_OP_FLASH_ATTN_EXT:
-                uses_library = ggml_sycl_flash_attn_ext_uses_library(ctx->device, node);
+                // ggml_sycl_flash_attn_ext_mkl() does host waits and the oneDNN kernel uses oneDNN
+                if (ggml_sycl_flash_attn_ext_uses_library(ctx->device, node)) {
+                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using a host wait or oneDNN\n", __func__,
+                                   ggml_op_name(node_op));
+                    return false;
+                }
                 break;
             case GGML_OP_MUL_MAT:
                 // We cannot use graphs with ggml_sycl_mul_mat() when SYCL async memory allocation extensions are not available,
@@ -6296,16 +6330,12 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
                         __func__, ggml_op_name(node_op));
                     return false;
                 }
-                uses_library = mul_mat_uses_library_gemm(node);
+                if (mul_mat_uses_onednn(node)) {
+                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to %s using oneDNN\n", __func__,
+                                   ggml_op_name(node_op));
+                    return false;
+                }
                 break;
-        }
-
-        if (uses_library) {
-            // oneMKL and oneDNN chain the submission on events made before recording started,
-            // which SYCL graphs do not allow.
-            GGML_LOG_DEBUG("%s: disabling SYCL graphs due to node type %s using oneMKL or oneDNN\n", __func__,
-                           ggml_op_name(node_op));
-            return false;
         }
     }
     return true;
