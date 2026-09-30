@@ -6,6 +6,22 @@
 #include <mutex>
 #include <shared_mutex>
 
+static void * portable_aligned_malloc(size_t align, size_t size) {
+#ifdef _WIN32
+    return _aligned_malloc(size, align);
+#else
+    return std::aligned_alloc(align, size);
+#endif
+}
+
+static void portable_aligned_free(void * ptr) {
+#ifdef _WIN32
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
 ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
     /* .get_name         = */ ggml_backend_vk_buffer_type_name,
     /* .alloc_buffer     = */ ggml_backend_vk_buffer_type_alloc_buffer,
@@ -267,7 +283,7 @@ void * ggml_vk_host_malloc(size_t size) {
         const size_t align      = std::max<size_t>(vk_instance.host_import_alignment, sizeof(void *));
         const size_t alloc_size = (size + align - 1) / align * align;
 
-        void * ptr = std::aligned_alloc(align, alloc_size);
+        void * ptr = portable_aligned_malloc(align, alloc_size);
         if (ptr == nullptr) {
             return nullptr;
         }
@@ -323,7 +339,7 @@ void ggml_vk_host_free(void * ptr) {
         ggml_vk_destroy_buffer(view);
     }
     if (vk_instance.multi_device) {
-        std::free(entry.base);
+        portable_aligned_free(entry.base);
     }
 }
 
