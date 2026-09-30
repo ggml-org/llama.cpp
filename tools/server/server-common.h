@@ -300,6 +300,15 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
 
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
 //
 // OAI utils
 //
@@ -329,6 +338,16 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -643,7 +662,9 @@ struct server_subproc {
         void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
 
     private:
+#ifndef _WIN32
         intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
     };
 
 private:

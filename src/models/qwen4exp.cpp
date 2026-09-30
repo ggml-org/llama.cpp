@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cinttypes>
 
+// [TAG_QWEN4_REIMPLEMENT]
+// TODO: this graph implementation is pending complete reimplementation - do not use it as a reference
+
 // bad metadata must be catchable: GGML_ASSERT aborts the whole process
 static void qwen4exp_require_nonzero(const llama_model_loader & ml, llm_kv kid, uint32_t value) {
     if (value == 0) {
@@ -489,13 +492,13 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 // one mean-pooled indexer key scores each block; set_input resolves the cache layout
 class llama_model_qwen4exp::llm_graph_input_qsa : public llm_graph_input_i {
 public:
-    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio, bool blk_bias) :
-        mctx(mctx), ratio(ratio), blk_bias(blk_bias) {}
+    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio, bool blk_bias, bool causal_attn) :
+        mctx(mctx), ratio(ratio), blk_bias(blk_bias), causal_attn(causal_attn) {}
     virtual ~llm_graph_input_qsa() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias);
+        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio, blk_bias, causal_attn);
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -537,6 +540,9 @@ public:
 
     // the per-cell half of the bias is the attention mask, so only the per-block half is uploaded
     const bool blk_bias;
+
+    // this is fixed for the graph's lifetime, as causal_attn is part of the reuse key (llm_graph_params::allow_reuse)
+    const bool causal_attn;
 };
 
 ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
@@ -564,11 +570,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
 
     // only the "which block is visible" half of the bias varies per block
     // the rest is the visible/not test the attention mask already carries, so upload the per-block half only: 1/ratio of the cells
-    // alibi writes distances instead of a mask and non-causal keeps future cells, so both opt out
+    // alibi writes distances instead of a mask, so it opts out
     // the mask also holds an mrope rule for the query's own position, but only 2d image positions can differ there
     const bool blk_bias = kq_mask != nullptr &&
         kq_mask->ne[0] == n_kv && kq_mask->ne[1] == n_tps && kq_mask->ne[3] == n_stream &&
-        cparams.causal_attn && !hparams.use_alibi;
+        !hparams.use_alibi;
 
     // nothing above depends on the layer, so the layers sharing a ratio share one input set
     llm_graph_input_qsa * inp = nullptr;
@@ -577,7 +583,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     if (it != qsa_inps.end()) {
         inp = it->second;
     } else {
-        auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_hyb, (uint32_t) r, blk_bias);
+        auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_hyb, (uint32_t) r, blk_bias, cparams.causal_attn);
 
         qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
         qsa->cell_blk  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_stream);
@@ -1039,22 +1045,22 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
 //   mixed_n = (t[p]*m[0]) ^ ... ^ (t[p-n+1]*m[n-1]);  row = mixed_n % vocab[h] + offset[h]
 // The hash runs host-side because ggml has no int64 and no xor. EOS resets the window.
 
-class llm_graph_input_ple : public llm_graph_input_i {
+class llm_graph_input_qwen4exp_ple : public llm_graph_input_i {
 public:
-    llm_graph_input_ple(const llama_model_qwen4exp & pmodel,
-                        const llama_kv_cache_context * mctx) : pmodel(pmodel), mctx(mctx) {}
-    virtual ~llm_graph_input_ple() = default;
+    llm_graph_input_qwen4exp_ple(const llama_model & model,
+                        const llama_kv_cache_context * mctx) : model(model), mctx(mctx) {}
+    virtual ~llm_graph_input_qwen4exp_ple() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     bool can_reuse(const llm_graph_params & params) override {
         mctx = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx)->get_attn();
-        return rows->ne[0] == (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+        return rows->ne[0] == (int64_t) model.hparams.ple_n_heads * params.ubatch.n_tokens;
     }
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
 
-    const llama_model_qwen4exp & pmodel;
+    const llama_model & model;
 
     // the predecessor tokens live in the attention KV cells (ext.tok)
     const llama_kv_cache_context * mctx;
@@ -1063,24 +1069,24 @@ public:
     std::vector<llama_token> prev;
 };
 
-void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
-    const auto & hp = pmodel.hparams;
+void llm_graph_input_qwen4exp_ple::set_input(const llama_ubatch * ubatch) {
+    const auto & hparams = model.hparams;
 
     // an image arrives as an embd batch, so ubatch->token is null, but every position still needs a row for ggml_get_rows
     // stand in the image token id that the reference hashes, or EOS if the file has no such key
     // gemma3n and gemma4 do the same with a hardcoded row 0 of per_layer_token_embd.
-    const llama_token img_tok = hp.ple_image_token_id != 0
-        ? (llama_token) hp.ple_image_token_id
-        : (llama_token) hp.ple_eos_token_id;
+    const llama_token img_tok = hparams.ple_image_token_id != 0
+        ? (llama_token) hparams.ple_image_token_id
+        : (llama_token) hparams.ple_eos_token_id;
     auto tok_of = [&](int64_t k) -> llama_token {
         return ubatch->token ? ubatch->token[k] : img_tok;
     };
 
     const int64_t n_tokens = ubatch->n_tokens;
-    const int64_t n_gram   = hp.ple_ngram_size;
-    const int64_t n_heads  = hp.ple_n_heads;
-    const int64_t per_gram = hp.ple_heads_per_ngram;
-    const int64_t eos      = hp.ple_eos_token_id;
+    const int64_t n_gram   = hparams.ple_ngram_size;
+    const int64_t n_heads  = hparams.ple_n_heads;
+    const int64_t per_gram = hparams.ple_heads_per_ngram;
+    const int64_t eos      = hparams.ple_eos_token_id;
     const int64_t n_prev   = n_gram - 1;
 
     std::vector<int32_t> idx(n_heads * n_tokens);
@@ -1110,16 +1116,25 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         }
 
         for (int64_t n = 2; n <= n_gram; ++n) {
-            uint64_t mixed = (uint64_t) ctx[0] * hp.ple_layer_multipliers[0];
+            uint64_t mixed = (uint64_t) ctx[0] * hparams.ple_layer_multipliers[0];
             for (int64_t j = 1; j < n; ++j) {
-                mixed ^= (uint64_t) ctx[j] * hp.ple_layer_multipliers[j];
+                mixed ^= (uint64_t) ctx[j] * hparams.ple_layer_multipliers[j];
             }
             const int64_t base = (n - 2) * per_gram;
             for (int64_t g = 0; g < per_gram; ++g) {
                 const int64_t h_i = base + g;
                 idx[i * n_heads + h_i] =
-                    (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i] + hp.ple_head_offsets[h_i]);
+                    (int32_t) (mixed % hparams.ple_head_vocab_sizes[h_i] + hparams.ple_head_offsets[h_i]);
             }
+        }
+    }
+
+    {
+        ggml_tensor * ple = model.per_layer_tok_embd;
+
+        const bool prefetch = model.can_prefetch.count(ple);
+        if (prefetch) {
+            llama_prefetch_rows(ple, idx.data(), idx.size());
         }
     }
 
@@ -1187,8 +1202,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
     const int64_t n_heads = hparams.ple_n_heads;
 
     // the attention cells see every ubatch regardless of the layer types
-    auto ple_inp = std::make_unique<llm_graph_input_ple>(
-            static_cast<const llama_model_qwen4exp &>(model), mctx_hyb->get_attn());
+    auto ple_inp = std::make_unique<llm_graph_input_qwen4exp_ple>(model, mctx_hyb->get_attn());
 
     ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
     ggml_set_input(ple_inp->rows);

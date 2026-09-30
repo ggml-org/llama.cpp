@@ -93,6 +93,8 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+
+    float swiglu_clamp = 0.0f;
     int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;

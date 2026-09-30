@@ -1186,7 +1186,7 @@ struct ggml_backend_opencl_context {
             return nullptr;
         }
 
-        size_t sz;
+        size_t sz = 0;
         const void * kernel_bin = get_adreno_bin_kernel_func(
             kernel_name.c_str(), device_name.c_str(), driver_version.c_str(), &sz);
         if (bin_size) {
@@ -3881,7 +3881,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q4_0_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
+    {
         {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
@@ -4381,8 +4381,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q4_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
@@ -4430,8 +4430,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q6_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
@@ -4479,8 +4479,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     backend_ctx->kernel_gemv_noshuffle_q5_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q5_k_q8_1_dp4a_ila_a8_bin = nullptr;
-    if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
-        {
+    {
+        if (backend_ctx->has_vector_subgroup_broadcast) {
             std::string opts = std::string("-cl-std=") + opencl_c_std +
                                            " -cl-mad-enable "
                                            " -DSIMDGROUP_WIDTH=" +
@@ -12454,9 +12454,13 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             buf_trans_d.allocate(backend_ctx->context, size_d);
             buf_trans_dm.allocate(backend_ctx->context, size_dm);
 
+            // bin kernel transposes s but src kernel does not
+            cl_mem buf_s = extra->s;
+
             if (use_q5_k_bin_kernels(backend_ctx, tensor)) {
                 transpose_2d_as_32b(backend_ctx, extra->q, buf_trans_q.buffer, size_q, M, K/8);
                 transpose_2d_as_8b (backend_ctx, extra->s,  buf_trans_s.buffer,  size_s,  M, K/256*12, true, true);
+                buf_s = buf_trans_s.buffer;
             } else {
                 transpose_2d_as_16b(backend_ctx, extra->q, buf_trans_q.buffer, size_q, M, K/4);
             }
@@ -12467,7 +12471,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             cl_kernel kernel = backend_ctx->kernel_restore_block_q5_K_noshuffle;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &buf_trans_q.buffer));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem),   &buf_trans_qh.buffer));
-            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_trans_s.buffer));
+            CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &buf_s));
             CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem),   &buf_trans_d.buffer));
             CL_CHECK(clSetKernelArg(kernel, 4, sizeof(cl_mem),   &buf_trans_dm.buffer));
             CL_CHECK(clSetKernelArg(kernel, 5, sizeof(cl_mem),   &data_device));
