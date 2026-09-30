@@ -7533,7 +7533,7 @@ struct ggml_cgraph * ggml_new_graph(struct ggml_context * ctx) {
     return ggml_new_graph_custom(ctx, GGML_DEFAULT_GRAPH_SIZE, false);
 }
 
-struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1) {
+GGML_API struct ggml_cgraph ggml_graph_view(struct ggml_cgraph * cgraph0, int i0, int i1) {
     struct ggml_cgraph cgraph = {
         /*.size             =*/ 0,
         /*.n_nodes          =*/ i1 - i0,
