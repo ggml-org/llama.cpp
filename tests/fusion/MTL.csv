@@ -83,6 +83,12 @@ glm4                ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 glm4moe             ,1   ,any     ,ADD+ADD                     ,      1
 glm4moe             ,1   ,any     ,MUL+ADD                     ,      2
 glm4moe             ,1   ,any     ,RMS_NORM+MUL                ,      9
+glm5-next           ,0   ,any     ,ADD+ADD+ADD                 ,      1
+glm5-next           ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+glm5-next           ,0   ,any     ,MUL+ADD                     ,      2
+glm5-next           ,0   ,any     ,NORM+MUL+ADD                ,      1
+glm5-next           ,0   ,any     ,RMS_NORM+MUL                ,      8
+glm5-next           ,0   ,any     ,RMS_NORM+SCALE              ,      2
 gpt-oss             ,0   ,any     ,MUL+ADD                     ,      4
 gpt-oss             ,0   ,any     ,RMS_NORM+MUL                ,      5
 gpt2                ,0   ,any     ,NORM+MUL+ADD                ,      5
