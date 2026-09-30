@@ -384,6 +384,21 @@ template <> inline __m256bh load(const float *p) {
 }
 #endif
 
+template <typename T>
+inline T load_partial(const ggml_bf16_t *p, int n) {
+    float tmp[sizeof(T) / sizeof(float)] = {};
+    for (int i = 0; i < n; ++i) {
+        tmp[i] = GGML_BF16_TO_FP32(p[i]);
+    }
+    return load<T>(tmp);
+}
+
+#if defined(__AVX512BF16__)
+template <> inline __m512bh load_partial(const ggml_bf16_t *p, int n) {
+    return (__m512bh) _mm512_maskz_loadu_epi16((uint64_t(1) << n) - 1, p);
+}
+#endif
+
 #if defined(__riscv_v_intrinsic)
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
@@ -492,7 +507,7 @@ class tinyBLAS {
     }
 
     bool matmul(int64_t m, int64_t n) {
-        if (k % KN != 0)
+        if (k % KN != 0 && !(std::is_same_v<TA, ggml_bf16_t> && std::is_same_v<TB, ggml_bf16_t>))
             return false;
         // compute RM for only need tile with size RM&RM-1
 #if VECTOR_REGISTERS == 32
@@ -548,7 +563,7 @@ class tinyBLAS {
     template <int RM, int RN>
     inline void gemm_bloc(int64_t ii, int64_t jj) {
         D Cv[RN][RM] = {};
-        for (int64_t l = 0; l < k; l += KN) {
+        for (int64_t l = 0; l + KN <= k; l += KN) {
             // help compiler for op order.
             if constexpr (RM <= RN) {
                 V Av[RM];
@@ -570,6 +585,21 @@ class tinyBLAS {
                     V Av = load<V>(A + lda * (ii + i) + l);
                     for (int64_t j = 0; j < RN; ++j) {
                         Cv[j][i] = madd(Av, Bv[j], Cv[j][i]);
+                    }
+                }
+            }
+        }
+        if constexpr (std::is_same_v<TA, ggml_bf16_t> && std::is_same_v<TB, ggml_bf16_t>) {
+            const int64_t rem = k % KN;
+            if (rem != 0) {
+                V Av[RM];
+                for (int64_t i = 0; i < RM; ++i) {
+                    Av[i] = load_partial<V>(A + lda * (ii + i) + k - rem, rem);
+                }
+                for (int64_t j = 0; j < RN; ++j) {
+                    V Bv = load_partial<V>(B + ldb * (jj + j) + k - rem, rem);
+                    for (int64_t i = 0; i < RM; ++i) {
+                        Cv[j][i] = madd(Av[i], Bv, Cv[j][i]);
                     }
                 }
             }
