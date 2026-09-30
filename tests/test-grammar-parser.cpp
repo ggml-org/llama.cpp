@@ -165,6 +165,20 @@ int main()
         root ::= "a"{5000,6000}
     )""");
 
+    // Recursion depth limit exceeded (Issue #29495)
+    {
+        std::string deep_grammar = "root ::= ";
+        int n_depth = 300;
+        for (int i = 0; i < n_depth; ++i) {
+            deep_grammar += "(";
+        }
+        deep_grammar += "\"x\"";
+        for (int i = 0; i < n_depth; ++i) {
+            deep_grammar += ")";
+        }
+        verify_failure(deep_grammar.c_str());
+    }
+
     verify_parsing(R"""(
         root ::= "a"{0,5000}
     )""", {
