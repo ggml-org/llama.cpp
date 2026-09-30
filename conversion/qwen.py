@@ -785,9 +785,8 @@ class DFlashModel(Qwen3Model):
         if "model.lm_head.weight" not in self.model_tensors:
             if self.target_model_dir is None:
                 raise ValueError("mask_embedding.pt requires --target-model-dir to obtain the output head")
-            with open(self.target_model_dir / "config.json", encoding="utf-8") as f:
-                target_config = json.load(f)
-            target_config = target_config.get("text_config", target_config)
+            target_config = ModelBase.load_hparams(self.target_model_dir, False)
+            target_config = {**target_config, **target_config.get("text_config", {})}
             head_name = embedding_name if target_config.get("tie_word_embeddings", False) else "lm_head.weight"
             # Keep the output head separate from the patched input embedding table.
             yield "model.lm_head.weight", target_tensor(head_name)
