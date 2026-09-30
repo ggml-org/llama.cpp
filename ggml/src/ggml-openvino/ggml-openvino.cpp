@@ -9,6 +9,7 @@
 #include "ggml-quants.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -960,6 +961,24 @@ static bool has_view_op_input(const ggml_tensor * op) {
     return false;
 }
 
+// OV slices whole elements per axis, so each stride must be a multiple of the next smaller one
+// (e.g. a batch stride of m*nb[1] + pad bytes cannot be expressed and would be read wrongly).
+static bool has_strides_on_element_grid(const ggml_tensor * t) {
+    std::vector<size_t> strides;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (t->ne[i] > 1) {
+            strides.push_back(t->nb[i]);
+        }
+    }
+    std::sort(strides.begin(), strides.end());
+    for (size_t i = 1; i < strides.size(); i++) {
+        if (strides[i - 1] == 0 || strides[i] % strides[i - 1] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool has_non_contiguous_view_input(const ggml_tensor * op) {
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (op->src[i] == nullptr) {
@@ -1160,10 +1179,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
-        if (op->op == GGML_OP_GET_ROWS && ggml_is_quantized(op->src[0]->type) &&
-            op->src[0]->view_src != nullptr && op->src[0]->view_offs != 0) {
-            return {false, "GET_ROWS with a nonzero quantized src0 view offset is not supported"};
-        }
         if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
             op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "GET_ROWS with BF16 src0 is not supported on GPU"};
@@ -1192,6 +1207,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[1]->op == GGML_OP_PERMUTE) {
             return {false, "ADD/MUL/SUB with PERMUTE src1 is not supported"};
         }
+        if (op->src[0]->type != op->src[1]->type &&
+            (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16)) {
+            return {false, "ADD/MUL/SUB with BF16 and a different src1 type is not supported"};
+        }
         // >8-expert MoE ReduceSum drifts past the 1e-7 tolerance (f32 order vs CPU); intermittent.
         if (op->op == GGML_OP_ADD && is_moe_expert_sum_add(op) && op->src[1]->src[0]->ne[1] > 8) {
             return {false, "MoE expert-plane sum with more than 8 experts is not supported"};
@@ -1202,6 +1221,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
                                std::to_string(op->src[0]->ne[i]) + ", src1->ne[" + std::to_string(i) + "]=" +
                                std::to_string(op->src[1]->ne[i])};
             }
+        }
+        break;
+    }
+    case GGML_OP_SCALE: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "SCALE with BF16 type is not supported"};
         }
         break;
     }
@@ -1539,6 +1564,9 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         }
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
+        }
+        if (!has_strides_on_element_grid(src)) {
+            return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
         }
         const bool is_supported_3d_moe_expert =
             op->op == GGML_OP_MUL_MAT_ID && i == 0 && (src->type == GGML_TYPE_MXFP4 || src->ne[3] == 1);

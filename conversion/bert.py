@@ -341,7 +341,7 @@ class NomicBertModel(BertModel):
         else:
             raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
 
-        assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
+        assert self.hparams["activation_function"] == ("gelu" if self.is_moe else "swiglu")
 
         # this doesn't do anything in the HF version
         assert self.hparams["causal"] is False
