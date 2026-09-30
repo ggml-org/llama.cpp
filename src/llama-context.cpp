@@ -2007,7 +2007,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             }
         }
 
-        bool extracted_all_tokens = extract_layer_inputs(res, n_tokens_prev, ubatch.n_tokens);
+        // [TAG_EXTRACT_TARGET_EMBEDDINGS]
+        bool extract_all_idxs = extract_layer_inputs(res, n_tokens_prev, ubatch.n_tokens);
 
         // extract nextn embeddings before
         // only meaningful in LLAMA_POOLING_TYPE_NONE (per-token); other pooling modes are ignored.
@@ -2025,11 +2026,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
                 ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
-                extracted_all_tokens = extracted_all_tokens || !masked;
+                extract_all_idxs = extract_all_idxs || !masked;
             }
         }
 
-        if (extracted_all_tokens) {
+        if (extract_all_idxs) {
             GGML_ASSERT(ubatch.data && ubatch.data->batch_idxs.size() == ubatch.n_tokens);
             GGML_ASSERT(embd_batch_idxs.size() == (size_t) n_tokens_prev);
             const auto & batch_idxs = ubatch.data->batch_idxs;
