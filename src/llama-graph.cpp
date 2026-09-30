@@ -2550,7 +2550,11 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     //}
 
     const auto n_embd = !cross->v_embd.empty() ? cross->n_embd : hparams.n_embd_inp();
-    const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
+    const auto n_enc  = !cross->v_embd.empty()
+        ? cross->n_enc
+        : arch == LLM_ARCH_T5GEMMA2
+            ? (cparams.n_ctx_seq + cparams.encoder_chunk_size - 1)/cparams.encoder_chunk_size
+            : hparams.n_ctx_train;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
     ggml_set_input(cur);

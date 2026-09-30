@@ -91,6 +91,11 @@ struct llama_cross {
 
     // needed to construct the cross-attention mask in the decoder
     std::vector<std::set<llama_seq_id>> seq_ids_enc;
+
+    uint32_t encoder_chunk_size = 0;
+    llama_seq_id seq_id = -1;
+    bool ready   = false;
+    bool decoded = false;
 };
 
 struct llm_graph_params;

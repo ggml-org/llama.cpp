@@ -1174,22 +1174,39 @@ class TensorNameMap:
 
         MODEL_TENSOR.DEC_ATTN_NORM: (
             "decoder.block.{bid}.layer.0.layer_norm", # t5
+            "model.decoder.layers.{bid}.pre_self_attn_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.DEC_ATTN_POST_NORM: (
+            "model.decoder.layers.{bid}.post_self_attn_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.DEC_ATTN_Q_NORM: (
+            "model.decoder.layers.{bid}.self_attn.q_norm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.DEC_ATTN_K_NORM: (
+            "model.decoder.layers.{bid}.self_attn.k_norm", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_ATTN_Q: (
             "decoder.block.{bid}.layer.0.SelfAttention.q", # t5
+            "model.decoder.layers.{bid}.self_attn.q_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_ATTN_K: (
             "decoder.block.{bid}.layer.0.SelfAttention.k", # t5
+            "model.decoder.layers.{bid}.self_attn.k_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_ATTN_V: (
             "decoder.block.{bid}.layer.0.SelfAttention.v", # t5
+            "model.decoder.layers.{bid}.self_attn.v_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_ATTN_OUT: (
             "decoder.block.{bid}.layer.0.SelfAttention.o", # t5
+            "model.decoder.layers.{bid}.self_attn.o_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_ATTN_REL_B: (
@@ -1222,43 +1239,69 @@ class TensorNameMap:
 
         MODEL_TENSOR.DEC_FFN_NORM: (
             "decoder.block.{bid}.layer.2.layer_norm", # t5
+            "model.decoder.layers.{bid}.pre_feedforward_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.DEC_FFN_POST_NORM: (
+            "model.decoder.layers.{bid}.post_feedforward_layernorm", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_FFN_GATE: (
             "decoder.block.{bid}.layer.2.DenseReluDense.wi_0", # flan-t5
+            "model.decoder.layers.{bid}.mlp.gate_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_FFN_UP: (
             "decoder.block.{bid}.layer.2.DenseReluDense.wi",   # t5
             "decoder.block.{bid}.layer.2.DenseReluDense.wi_1", # flan-t5
+            "model.decoder.layers.{bid}.mlp.up_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_FFN_DOWN: (
             "decoder.block.{bid}.layer.2.DenseReluDense.wo", # t5
+            "model.decoder.layers.{bid}.mlp.down_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.DEC_OUTPUT_NORM: (
             "decoder.final_layer_norm", # t5
+            "model.decoder.norm", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_NORM: (
             "encoder.block.{bid}.layer.0.layer_norm", # t5
+            "model.encoder.layers.{bid}.pre_self_attn_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.ENC_ATTN_POST_NORM: (
+            "model.encoder.layers.{bid}.post_self_attn_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.ENC_ATTN_Q_NORM: (
+            "model.encoder.layers.{bid}.self_attn.q_norm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.ENC_ATTN_K_NORM: (
+            "model.encoder.layers.{bid}.self_attn.k_norm", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_Q: (
             "encoder.block.{bid}.layer.0.SelfAttention.q", # t5
+            "model.encoder.layers.{bid}.self_attn.q_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_K: (
             "encoder.block.{bid}.layer.0.SelfAttention.k", # t5
+            "model.encoder.layers.{bid}.self_attn.k_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_V: (
             "encoder.block.{bid}.layer.0.SelfAttention.v", # t5
+            "model.encoder.layers.{bid}.self_attn.v_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_OUT: (
             "encoder.block.{bid}.layer.0.SelfAttention.o", # t5
+            "model.encoder.layers.{bid}.self_attn.o_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_ATTN_REL_B: (
@@ -1267,19 +1310,27 @@ class TensorNameMap:
 
         MODEL_TENSOR.ENC_FFN_NORM: (
             "encoder.block.{bid}.layer.1.layer_norm", # t5
+            "model.encoder.layers.{bid}.pre_feedforward_layernorm", # t5gemma2
+        ),
+
+        MODEL_TENSOR.ENC_FFN_POST_NORM: (
+            "model.encoder.layers.{bid}.post_feedforward_layernorm", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_FFN_GATE: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wi_0", # flan-t5
+            "model.encoder.layers.{bid}.mlp.gate_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_FFN_UP: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wi",   # t5
             "encoder.block.{bid}.layer.1.DenseReluDense.wi_1", # flan-t5
+            "model.encoder.layers.{bid}.mlp.up_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.ENC_FFN_DOWN: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wo", # t5
+            "model.encoder.layers.{bid}.mlp.down_proj", # t5gemma2
         ),
 
         MODEL_TENSOR.VISEXP_UP: (
@@ -1385,6 +1436,7 @@ class TensorNameMap:
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
             "encoder.final_layer_norm", # t5
+            "model.encoder.norm",       # t5gemma2
             "layer_norm",               # neobert
             "model.hidden_norm",        # dflash
             "encoder.output_norm_enc",  # dflash (transformers MuseGlimmerAssistant)
