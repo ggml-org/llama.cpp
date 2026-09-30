@@ -4856,13 +4856,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
     // K2 Horizon dedicated parser
     {
-        auto tmpls = read_templates("models/templates/IFM-K2-Horizon-7B.jinja");
+        auto tmpls = read_templates("models/templates/IFM-K2-Horizon.jinja");
         const auto caps = common_chat_templates_get_caps(tmpls.get());
         GGML_ASSERT(caps.at("supports_parallel_tool_calls"));
         GGML_ASSERT(caps.at("supports_object_arguments"));
         assert_contains(common_chat_format_example(tmpls.get(), true, {}), "Hi there");
 
-        auto tst = peg_tester("models/templates/IFM-K2-Horizon-7B.jinja", detailed_debug);
+        auto tst = peg_tester("models/templates/IFM-K2-Horizon.jinja", detailed_debug);
 
         const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer","const":42}},"required":["answer"],"additionalProperties":false})";
         tst.test("Let me calculate.</ifm|think>\n{\"answer\":42}<|ifm|im_end|>")
