@@ -821,7 +821,7 @@ const bool llama_mlock::SUPPORTED = true;
 const bool llama_mlock::SUPPORTED = false;
 #endif
 
-void llama_prefetch(const llama_memory_ranges & mr) {
+void llama_prefetch(llama_memory_ranges mr) {
 #if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
     if (mr.empty()) {
         return;

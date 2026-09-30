@@ -36,7 +36,7 @@ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_
         mr.push_back({ base + (size_t) rows[i] * tensor->nb[1], row_bytes });
     }
 
-    llama_prefetch(mr);
+    llama_prefetch(std::move(mr));
 }
 
 time_meas::time_meas(int64_t & t_acc, bool disable) : t_start_us(disable ? -1 : ggml_time_us()), t_acc(t_acc) {}
