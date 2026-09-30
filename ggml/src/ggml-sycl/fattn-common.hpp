@@ -1043,13 +1043,14 @@ static void flash_attn_combine_results(const float * __restrict__ VKQ_parts,
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-template <fattn_kernel_t fattn_kernel, int warp_size>
+// large_grf is a template parameter so the two instantiations get distinct kernel names;
+// a runtime branch over one lambda would define the same mangled kernel twice.
+template <fattn_kernel_t fattn_kernel, int warp_size, bool large_grf>
 static void lauch_kernel(
     dpct::dim3 group_range,
     dpct::dim3 local_range,
     queue_ptr q,
     unsigned int local_mem_size,
-    const bool large_grf,
     const char* __restrict__ Q,
     const char* __restrict__ K,
     const char* __restrict__ V,
@@ -1100,8 +1101,7 @@ static void lauch_kernel(
         const sycl::nd_range<3> range(
             static_cast<sycl::range<3>>(group_range * local_range),
             static_cast<sycl::range<3>>(local_range));
-        if (large_grf) {
-            // Two instantiations of the same kernel; only the requested one is JIT-compiled.
+        if constexpr (large_grf) {
             cgh.parallel_for(range,
                              sycl::ext::oneapi::experimental::properties{ sycl::ext::intel::experimental::grf_size<256> },
                              kernel);
@@ -1413,8 +1413,9 @@ void launch_fattn(
 
     const int  grf_mode  = ggml_sycl_fa_large_grf_mode();
     const bool large_grf = grf_mode == 2 || (grf_mode == 1 && tile_route);
-    lauch_kernel<fattn_kernel, warp_size>(
-        blocks_num, block_dim, main_stream, (unsigned int) nbytes_shared, large_grf, (const char *) Q->data, K_data, V_data,
+    auto launch = large_grf ? lauch_kernel<fattn_kernel, warp_size, true> : lauch_kernel<fattn_kernel, warp_size, false>;
+    launch(
+        blocks_num, block_dim, main_stream, (unsigned int) nbytes_shared, (const char *) Q->data, K_data, V_data,
         mask ? ((const char *) mask->data) : nullptr, sinks ? ((const char *) sinks->data) : nullptr, KV_max.ptr,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, (sycl::float2 *)dst_tmp_meta.ptr, scale, max_bias, m0, m1,
         n_head_log2, logit_softcap, Q->ne[0], ne01, Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3], K->ne[0],
