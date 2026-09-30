@@ -1,8 +1,9 @@
 #include "models.h"
+#include "llama-impl.h"
 
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);
@@ -145,7 +146,7 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
 }
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
-static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
     return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
                         idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
@@ -372,7 +373,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
             cur = ggml_gelu(ctx0, cur);
 
-            ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
+            ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
             // TODO @ngxson : improve this
             if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
@@ -435,10 +436,40 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     ggml_build_forward_expand(gf, cur);
 }
 
+class llm_graph_input_gemma4_ple : public llm_graph_input_i {
+public:
+    llm_graph_input_gemma4_ple(const llama_model & model) : model(model) {}
+
+    void set_input(const llama_ubatch * ubatch) override {
+        ggml_tensor * ple = model.per_layer_tok_embd;
+
+        const bool prefetch = model.can_prefetch.count(ple);
+
+        if (ubatch->token) {
+            if (prefetch) {
+                llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
+            }
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
+        } else if (prefetch) {
+            // [TAG_GEMMA4_IMG_PADDING]
+            const int32_t padding = 0;
+            llama_prefetch_rows(ple, &padding, 1);
+        }
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return params.ubatch.token ? tokens && tokens->ne[0] == params.ubatch.n_tokens : tokens == nullptr;
+    }
+
+    ggml_tensor * tokens = nullptr;
+
+    const llama_model & model;
+};
+
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model);
 
     ggml_tensor * inp_per_layer;
     float tok_embd_scale = sqrtf((float) n_embd_per_layer);
@@ -451,9 +482,8 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
         inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
-
-        res->add_input(std::move(inp));
     } else {
+        // [TAG_GEMMA4_IMG_PADDING]
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
         const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
@@ -467,6 +497,7 @@ ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, 1);
         cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
+    res->add_input(std::move(inp));
     return inp_per_layer;
 }
 

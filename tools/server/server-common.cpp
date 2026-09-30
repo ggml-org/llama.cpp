@@ -15,6 +15,23 @@
 #include <limits>
 #include <cstring>
 #include <type_traits>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+// windows.h defines min and max as macros, which breaks std::min and std::max
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#include <io.h>
+#else
+#include <errno.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+#endif
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -953,7 +970,7 @@ server_tokens process_mtmd_prompt(
 }
 
 /**
- * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * tokenize a single input "prompt" object
  * use tokenize_input_prompts() if the input could be an array.
  * this supports these cases:
  * - "prompt": "string"
@@ -961,7 +978,7 @@ server_tokens process_mtmd_prompt(
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -1130,6 +1147,79 @@ static void handle_media(
     }
 }
 
+// load media files from an OAI content array, then replace each media part with a media marker text part
+static void oaicompat_content_load_media(json & content, const server_chat_params & opt, std::vector<raw_buffer> & out_files) {
+    for (auto & p : content) {
+        std::string type = json_value(p, "type", std::string());
+        if (type == "image_url") {
+            if (!opt.allow_image) {
+                throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            json image_url = json_value(p, "image_url", json::object());
+            std::string url = json_value(image_url, "url", std::string());
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("image_url");
+
+        } else if (type == "input_audio") {
+            if (!opt.allow_audio) {
+                throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // note: don't need to validate "format", it's redundant
+            json input_audio = json_value(p, "input_audio", json::object());
+            std::string url  = json_value(input_audio, "data",
+                                    json_value(input_audio, "url", std::string()));
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_audio");
+
+        } else if (type == "input_video" || type == "video_url") {
+            if (!opt.allow_video) {
+                throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+            }
+
+            // accept the OpenAI-style "video_url" key as an alias of "input_video"
+            json input_video = json_value(p, type, json::object());
+            std::string url  = json_value(input_video, "data",
+                                    json_value(input_video, "url", std::string()));
+            handle_media(out_files, url, opt.media_path);
+
+            p["type"] = "media_marker";
+            p["text"] = get_media_marker();
+            p.erase("input_video");
+            p.erase("video_url");
+
+        } else if (type != "text") {
+            throw std::invalid_argument("unsupported content[].type");
+        }
+    }
+}
+
+server_tokens tokenize_oai_content_array(const llama_vocab * vocab, mtmd_context * mctx, const server_chat_params & opt, json content, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
+    if (!content.is_array()) {
+        throw std::invalid_argument("\"content\" must be an array");
+    }
+
+    std::vector<raw_buffer> files;
+    oaicompat_content_load_media(content, opt, files);
+
+    std::string prompt;
+    for (const auto & p : content) {
+        prompt += json_value(p, "text", std::string());
+    }
+
+    if (files.empty()) {
+        return server_tokens(common_tokenize(vocab, prompt, add_special, parse_special), false);
+    }
+    return process_mtmd_prompt(mctx, prompt, files, init_opt);
+}
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
@@ -1181,6 +1271,11 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // an absent or empty schema means any object
+    if (json_schema.is_object() && json_schema.empty()) {
+        json_schema["type"] = "object";
+    }
+
     // get input files
     if (!body.contains("messages")) {
         throw std::invalid_argument("'messages' is required");
@@ -1211,54 +1306,7 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
-        for (auto & p : content) {
-            std::string type = json_value(p, "type", std::string());
-            if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json image_url = json_value(p, "image_url", json::object());
-                std::string url = json_value(image_url, "url", std::string());
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("image_url");
-
-            } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                // note: don't need to validate "format", it's redundant
-                json input_audio = json_value(p, "input_audio", json::object());
-                std::string url  = json_value(input_audio, "data",
-                                        json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("input_audio");
-
-            } else if (type == "input_video") {
-                if (!opt.allow_video) {
-                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
-                json input_video = json_value(p, "input_video", json::object());
-                std::string url  = json_value(input_video, "data",
-                                        json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path);
-
-                p["type"] = "media_marker";
-                p["text"] = get_media_marker();
-                p.erase("input_video");
-
-            } else if (type != "text") {
-                throw std::invalid_argument("unsupported content[].type");
-            }
-        }
+        oaicompat_content_load_media(content, opt, out_files);
     }
 
     auto caps = common_chat_templates_get_caps(opt.tmpls.get());
@@ -1831,4 +1879,134 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+//
+// server_subproc
+//
+
+bool server_subproc::has_output() {
+    if (out_handle >= 0) {
+        return true;
+    }
+    FILE * f = sproc.stdout_file(); // combined stdout/stderr
+    if (!f) {
+        return false;
+    }
+#ifdef _WIN32
+    HANDLE h = (HANDLE) _get_osfhandle(_fileno(f));
+    if (h != INVALID_HANDLE_VALUE) {
+        out_handle = (intptr_t) h;
+    }
+#else
+    int fd = fileno(f);
+    if (fd >= 0) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+        out_handle = fd;
+    }
+#endif
+    return out_handle >= 0;
+}
+
+int server_subproc::read_output(char * buf, size_t len) {
+    if (!has_output()) {
+        return -1;
+    }
+#ifdef _WIN32
+    HANDLE h     = (HANDLE) out_handle;
+    DWORD  avail = 0;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+        return -1; // pipe broken, child gone
+    }
+    if (avail == 0) {
+        return 0;
+    }
+    DWORD to_read = avail < (DWORD) len ? avail : (DWORD) len;
+    DWORD got     = 0;
+    if (!ReadFile(h, buf, to_read, &got, NULL) || got == 0) {
+        return -1;
+    }
+    return (int) got;
+#else
+    while (true) {
+        ssize_t r = read((int) out_handle, buf, len);
+        if (r > 0) {
+            return (int) r;
+        }
+        if (r == 0) {
+            return -1; // EOF
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return 0;
+        }
+        return -1;
+    }
+#endif
+}
+
+server_subproc::waiter::waiter() {
+#ifndef _WIN32
+    int fds[2];
+    GGML_ASSERT(pipe(fds) == 0);
+    for (int fd : fds) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    }
+    wake_fd[0] = fds[0];
+    wake_fd[1] = fds[1];
+#endif
+}
+
+server_subproc::waiter::~waiter() {
+#ifndef _WIN32
+    close((int) wake_fd[0]);
+    close((int) wake_fd[1]);
+#endif
+}
+
+void server_subproc::waiter::wake() {
+#ifndef _WIN32
+    char c = 1;
+    (void) !write((int) wake_fd[1], &c, 1);
+#endif
+}
+
+void server_subproc::waiter::wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms) {
+    ready.assign(procs.size(), false);
+#ifdef _WIN32
+    // no waitable wait exists for anonymous pipes, so poll them in 50 ms steps
+    bool any = false;
+    for (size_t i = 0; i < procs.size(); i++) {
+        DWORD avail = 0;
+        if (!procs[i]->has_output() || !PeekNamedPipe((HANDLE) procs[i]->out_handle, NULL, 0, NULL, &avail, NULL) || avail > 0) {
+            ready[i] = true; // data or broken pipe, read_output() tells which
+            any = true;
+        }
+    }
+    if (!any) {
+        int64_t step = timeout_ms < 0 ? 50 : std::min<int64_t>(timeout_ms, 50);
+        std::this_thread::sleep_for(std::chrono::milliseconds(step));
+    }
+#else
+    std::vector<pollfd> pfds;
+    pfds.reserve(procs.size() + 1);
+    pfds.push_back({ (int) wake_fd[0], POLLIN, 0 });
+    for (auto * p : procs) {
+        pfds.push_back({ p->has_output() ? (int) p->out_handle : -1, POLLIN, 0 }); // poll() skips negative fds
+    }
+    int timeout = timeout_ms < 0 ? -1 : (int) std::min<int64_t>(timeout_ms, std::numeric_limits<int>::max());
+    int r = poll(pfds.data(), pfds.size(), timeout);
+    if (r < 0 && errno != EINTR) {
+        LOG_ERR("%s: poll() failed: %s\n", __func__, strerror(errno));
+    }
+    if (pfds[0].revents) {
+        char buf[64];
+        while (read((int) wake_fd[0], buf, sizeof(buf)) > 0) {}
+    }
+    for (size_t i = 0; i < procs.size(); i++) {
+        ready[i] = pfds[i + 1].fd < 0 || pfds[i + 1].revents != 0;
+    }
+#endif
 }

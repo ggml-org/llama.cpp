@@ -188,7 +188,7 @@ int main(int argc, char ** argv) {
             common_speculative_get_draft_params(spec, seq_id) = {
                 /* .drafting   = */ true,
                 /* .n_max      = */ n_draft_max,
-                /* .n_past     = */ n_past,
+                /* .pos0       = */ n_past,
                 /* .id_last    = */ id_last,
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
@@ -228,7 +228,6 @@ int main(int argc, char ** argv) {
                 common_batch_add(batch_tgt, draft[i], n_past + i, { seq_id }, true);
             }
 
-            //LOG_DBG("target batch: %s\n", string_from(ctx_tgt, batch_tgt).c_str());
 
             llama_decode(ctx_tgt, batch_tgt);
         }

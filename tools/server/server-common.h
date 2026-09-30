@@ -6,6 +6,7 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "subproc.h"
 
 #include "json.h"
 
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cinttypes>
+#include <cstdio>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -298,6 +300,15 @@ std::vector<server_tokens> tokenize_input_prompts(
                                         bool parse_special,
                                         const mtmd_helper_init_opt & init_opt);
 
+// tokenize a single prompt, see tokenize_input_prompts() for the supported shapes
+server_tokens tokenize_input_subprompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const json & json_prompt,
+                                        bool add_special,
+                                        bool parse_special,
+                                        const mtmd_helper_init_opt & init_opt);
+
 //
 // OAI utils
 //
@@ -327,6 +338,16 @@ json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
     const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
+
+// used by /embeddings endpoint, content has the same format as a chat message content array
+server_tokens tokenize_oai_content_array(
+    const llama_vocab * vocab,
+    mtmd_context * mctx,
+    const server_chat_params & opt,
+    json content,
+    bool add_special,
+    bool parse_special,
+    const mtmd_helper_init_opt & init_opt);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -610,4 +631,42 @@ struct server_pipe {
         cv.notify_one();
         return true;
     }
+};
+
+// wrapper around common_subproc to manage a child server process
+// mainly used by router mode
+struct server_subproc {
+    common_subproc sproc;
+    std::atomic<bool> stopped{false}; // set by the monitor once the process exited and was reaped
+
+    bool is_alive() { return sproc.alive(); }
+    void terminate() { sproc.terminate(); }
+    int  join() { return sproc.join(); }
+
+    // true if the child's combined stdout/stderr pipe is available (call after create())
+    bool has_output();
+
+    // non-blocking read
+    // returns the number of bytes read, 0 when nothing is available, -1 when the pipe is closed or broken
+    int read_output(char * buf, size_t len);
+
+    // wait until one of a set of children has output, wake() is called, or a timeout passes
+    struct waiter {
+        waiter();
+        ~waiter();
+
+        // thread-safe; on Windows this is a no-op, wait() returns within 50 ms anyway
+        void wake();
+
+        // timeout_ms < 0 waits until data or wake(); ready[i] is set for each child with data (or a broken pipe)
+        void wait(const std::vector<server_subproc *> & procs, std::vector<bool> & ready, int64_t timeout_ms);
+
+    private:
+#ifndef _WIN32
+        intptr_t wake_fd[2] = { -1, -1 }; // POSIX self-pipe
+#endif
+    };
+
+private:
+    intptr_t out_handle = -1; // fd on POSIX, HANDLE on Windows; taken lazily from sproc
 };

@@ -9,20 +9,6 @@ from .base import ModelBase, gguf, logger
 from .deepseek import DeepseekV2Model
 
 
-def split_kv_b_proj(weight: torch.Tensor, n_head: int, qk_nope: int, v_head_dim: int):
-    """Split kv_b_proj into k_b (transposed) and v_b, matching DeepSeek MLA absorption.
-
-    weight: [n_head*(qk_nope+v_head_dim), kv_lora_rank].
-    Returns (k_b, v_b): k_b [n_head, kv_lora_rank, qk_nope], v_b [n_head, v_head_dim, kv_lora_rank].
-    """
-    kv_lora = weight.shape[-1]
-    assert weight.shape[0] == n_head * (qk_nope + v_head_dim)
-    kv_b = weight.view(n_head, qk_nope + v_head_dim, kv_lora)
-    k_b, v_b = torch.split(kv_b, [qk_nope, v_head_dim], dim=1)
-    k_b = k_b.transpose(1, 2).contiguous()  # [n_head, kv_lora, qk_nope]
-    return k_b, v_b.contiguous()
-
-
 def split_gate_up(weight: torch.Tensor, moe_intermediate_size: int):
     """Split a fused stacked gate_up expert tensor into (gate, up).
 
@@ -36,6 +22,7 @@ def split_gate_up(weight: torch.Tensor, moe_intermediate_size: int):
 
 
 @ModelBase.register("HYV4ForCausalLM")
+@ModelBase.example("tencent/Hy4-preview")
 class HYV4Model(DeepseekV2Model):
     """HY_V4: DeepSeek-V3 style MLA + MoE with iHC, a gated MLA output and a learnable sink.
 
@@ -53,6 +40,8 @@ class HYV4Model(DeepseekV2Model):
     """
 
     model_arch = gguf.MODEL_ARCH.HY_V4
+
+    merge_expert = False
 
     # tensors a "full" indexer layer must carry
     INDEXER_SUFFIXES = frozenset({
@@ -186,6 +175,10 @@ class HYV4Model(DeepseekV2Model):
             )
 
     def prepare_tensors(self):
+        # Hy4-preview for some reason has num_key_value_heads equal to 8, so override it here
+        # without this conversion/deepseek.py fails on assert
+        self.hparams["num_key_value_heads"] = self.hparams["num_attention_heads"]
+
         # validate before the base materializes tensors, so a mismatch fails early
         is_full = self.indexer_is_full()
         if is_full is not None:
@@ -227,85 +220,25 @@ class HYV4Model(DeepseekV2Model):
 
     def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
         hparams = self.hparams
-        n_head = hparams["num_attention_heads"]
-        qk_nope = hparams["qk_nope_head_dim"]
-        v_head_dim = hparams["v_head_dim"]
         moe_inter = hparams["moe_intermediate_size"]
 
         tn = self.format_tensor_name
 
-        # ---- global (non per-layer) ----
-        if name == "model.embed_tokens.weight":
-            return [(tn(gguf.MODEL_TENSOR.TOKEN_EMBD), data_torch)]
-        if name == "model.norm.weight":
-            return [(tn(gguf.MODEL_TENSOR.OUTPUT_NORM), data_torch)]
-        if name == "lm_head.weight":
-            return [(tn(gguf.MODEL_TENSOR.OUTPUT), data_torch)]
-        if name == "model.hc_head.hc_head_fn":
-            return [(tn(gguf.MODEL_TENSOR.HC_HEAD_FN), data_torch)]
-        if name == "model.hc_head.hc_head_base":
-            return [(tn(gguf.MODEL_TENSOR.HC_HEAD_BASE), data_torch)]
-        if name == "model.hc_head.hc_head_scale":
-            return [(tn(gguf.MODEL_TENSOR.HC_HEAD_SCALE), data_torch)]
-
-        assert bid is not None, f"expected a per-layer tensor, got {name!r}"
-
-        # ---- per-layer, keyed by suffix after 'model.layers.{bid}.' ----
-        suffix = name.split(f"model.layers.{bid}.", 1)[-1]
-
-        # note: q_b_proj and kv_a_proj_with_mqa are mapped straight through (no RoPE permute),
-        # the graph rotates consecutive pairs so the rows need no reordering
-        simple = {
-            "input_layernorm.weight":          (gguf.MODEL_TENSOR.ATTN_NORM, ".weight"),
-            "post_attention_layernorm.weight": (gguf.MODEL_TENSOR.FFN_NORM,  ".weight"),
-            "self_attn.q_a_proj.weight":       (gguf.MODEL_TENSOR.ATTN_Q_A, ".weight"),
-            "self_attn.q_a_layernorm.weight":  (gguf.MODEL_TENSOR.ATTN_Q_A_NORM, ".weight"),
-            "self_attn.q_b_proj.weight":       (gguf.MODEL_TENSOR.ATTN_Q_B, ".weight"),
-            "self_attn.kv_a_proj_with_mqa.weight": (gguf.MODEL_TENSOR.ATTN_KV_A_MQA, ".weight"),
-            "self_attn.kv_a_layernorm.weight": (gguf.MODEL_TENSOR.ATTN_KV_A_NORM, ".weight"),
-            "self_attn.o_proj.weight":         (gguf.MODEL_TENSOR.ATTN_OUT, ".weight"),
-            "self_attn.linear_gate.weight":    (gguf.MODEL_TENSOR.ATTN_GATE, ".weight"),
-            "self_attn.learnable_sink_param":  (gguf.MODEL_TENSOR.ATTN_SINKS, ".weight"),
-            "self_attn.indexer.wq_b.weight":   (gguf.MODEL_TENSOR.INDEXER_ATTN_Q_B, ".weight"),
-            "self_attn.indexer.wk.weight":     (gguf.MODEL_TENSOR.INDEXER_ATTN_K, ".weight"),
-            "self_attn.indexer.k_norm.weight": (gguf.MODEL_TENSOR.INDEXER_K_NORM, ".weight"),
-            "self_attn.indexer.k_norm.bias":   (gguf.MODEL_TENSOR.INDEXER_K_NORM, ".bias"),
-            "self_attn.indexer.weights_proj.weight": (gguf.MODEL_TENSOR.INDEXER_PROJ, ".weight"),
-            "hc_attn_layer.hc_pre.hc_fn":      (gguf.MODEL_TENSOR.HC_ATTN_FN, ".weight"),
-            "hc_attn_layer.hc_pre.hc_base":    (gguf.MODEL_TENSOR.HC_ATTN_BASE, ".weight"),
-            "hc_attn_layer.hc_pre.hc_scale":   (gguf.MODEL_TENSOR.HC_ATTN_SCALE, ".weight"),
-            "hc_mlp_layer.hc_pre.hc_fn":       (gguf.MODEL_TENSOR.HC_FFN_FN, ".weight"),
-            "hc_mlp_layer.hc_pre.hc_base":     (gguf.MODEL_TENSOR.HC_FFN_BASE, ".weight"),
-            "hc_mlp_layer.hc_pre.hc_scale":    (gguf.MODEL_TENSOR.HC_FFN_SCALE, ".weight"),
-            "mlp.gate.weight":                 (gguf.MODEL_TENSOR.FFN_GATE_INP, ".weight"),
-            "mlp.gate.e_score_correction.bias":(gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, ".bias"),
-            "mlp.gate_proj.weight":            (gguf.MODEL_TENSOR.FFN_GATE, ".weight"),
-            "mlp.up_proj.weight":              (gguf.MODEL_TENSOR.FFN_UP, ".weight"),
-            "mlp.down_proj.weight":            (gguf.MODEL_TENSOR.FFN_DOWN, ".weight"),
-            "mlp.shared_experts.gate_proj.weight": (gguf.MODEL_TENSOR.FFN_GATE_SHEXP, ".weight"),
-            "mlp.shared_experts.up_proj.weight":   (gguf.MODEL_TENSOR.FFN_UP_SHEXP, ".weight"),
-            "mlp.shared_experts.down_proj.weight": (gguf.MODEL_TENSOR.FFN_DOWN_SHEXP, ".weight"),
-        }
-        if suffix in simple:
-            key, sfx = simple[suffix]
-            return [(tn(key, bid, sfx), data_torch)]
-
-        # kv_b_proj: split into k_b (transposed) and v_b
-        if suffix == "self_attn.kv_b_proj.weight":
-            k_b, v_b = split_kv_b_proj(data_torch, n_head, qk_nope, v_head_dim)
-            return [
-                (tn(gguf.MODEL_TENSOR.ATTN_K_B, bid), k_b),
-                (tn(gguf.MODEL_TENSOR.ATTN_V_B, bid), v_b),
-            ]
-
         # fused stacked experts: split gate_up into gate/up
-        if suffix == "mlp.experts.gate_up_proj":
+        if name.endswith("mlp.experts.gate_up_proj"):
             gate, up = split_gate_up(data_torch, moe_inter)
-            return [
-                (tn(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
-                (tn(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
-            ]
-        if suffix == "mlp.experts.down_proj":
-            return [(tn(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), data_torch)]
+            yield from super().modify_tensors(gate, tn(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
+            yield from super().modify_tensors(up,   tn(gguf.MODEL_TENSOR.FFN_UP_EXP,   bid), bid)
+            return
 
-        raise ValueError(f"Unsupported HY_V4 tensor {name!r} (suffix {suffix!r})")
+        # add .weight suffixes
+        if name.endswith("mlp.experts.down_proj") or name.endswith(".self_attn.learnable_sink_param"):
+            name += ".weight"
+
+        if re.search(r"\.hc_head\.hc_head_(?:fn|base|scale)$", name):
+            name += ".weight"
+
+        if re.search(r"\.hc_(?:attn|mlp)_layer\.hc_pre\.hc_(?:fn|base|scale)$", name):
+            name += ".weight"
+
+        yield from super().modify_tensors(data_torch, name, bid)

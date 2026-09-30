@@ -694,6 +694,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_QWEN3VL:
+            case PROJECTOR_TYPE_LING3VL:
             case PROJECTOR_TYPE_MIMOVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
@@ -866,6 +867,13 @@ struct mtmd_context {
                     img_beg = "<|begin_of_image|>";
                     img_end = "<|end_of_image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
+            case PROJECTOR_TYPE_GLM5V:
+                {
+                    // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
+                    img_beg = "<|begin_of_image|>";
+                    img_end = "<|end_of_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_glm5v>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_PADDLEOCR:
                 {

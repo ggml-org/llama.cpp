@@ -61,7 +61,7 @@ struct common_speculative_draft_params {
     // can be used to constraint the max draft based on the remaining context size
     int32_t n_max = -1;
 
-    llama_pos   n_past;
+    llama_pos   pos0;
     llama_token id_last;
 
     // TODO: remove in the future by keeping track of the prompt from the _begin() call and the consecutive accept calls
@@ -77,6 +77,9 @@ common_speculative_draft_params & common_speculative_get_draft_params(common_spe
 void common_speculative_begin(common_speculative * spec, llama_seq_id seq_id, const llama_tokens & prompt);
 
 // process the batch and update the internal state of the speculative context
+bool common_speculative_process(common_speculative * spec, const common_batch & batch);
+
+// legacy llama_batch input, converted with common_batch_from_llama_batch()
 bool common_speculative_process(common_speculative * spec, const llama_batch & batch);
 
 // generate drafts for the sequences specified with `common_speculative_get_draft_params`
