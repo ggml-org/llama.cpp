@@ -234,6 +234,38 @@ staging copies (a CPU memcpy of every 4-23 MB expert group) disappear as well.
 This is the change to send upstream; the fork default (`UR_L0_USE_COPY_ENGINE=0`) stays
 until a release carries it.
 
+## Side result: the FA kernels spill, and a large-GRF knob (2026-09-30, 10:50-11:20)
+
+IGC shader dumps (`IGC_ShaderDumpEnable=1`, `SYCL_CACHE_PERSISTENT=0`, IGC 2.41.5,
+`/mnt/ssd1/igc-dumps`) of the oracle and a production real-text run: 23 of 173 kernels use
+`GRAPH_COLORING_SPILL_FF_RA`, 21 of them FA kernels at 128 GRF. Production (q8_0 KV,
+d=256): `flash_attn_tile<256,256,4,8>` 15 392 B spill / 55k spill refs,
+`flash_attn_tile<256,256,2,8>` 10 848 B / 26k, `flash_attn_ext_vec<256,1,q8_0,q8_0>`
+8 160 B / 1.9k (the decode kernel); `mul_mat_vec_q6_K` under 200 B. Spills are legacy
+`send.dc0` hword scratch block messages (writes at SIMD8 with descriptor `0x020F00xx`, fills
+at SIMD16 with `0x021C00xx`), the pattern the gaema IGC fork's vISA patches target; the
+oracle is green with these kernels executing, so no miscompile is observed here.
+
+`GGML_SYCL_FA_LARGE_GRF` (0 off, 1 tile kernels, 2 tile and vec) passes
+`sycl::ext::intel::experimental::grf_size<256>` as a kernel property in
+`lauch_kernel` (`ggml/src/ggml-sycl/fattn-common.hpp`). Paired product campaign
+(`scripts/bench-a770-fork-unique.py --campaign product`, q8_0/q8_0, 4 repetitions, sample 0
+discarded, sole tenancy, no kernel message) of the compile-time equivalent of mode 2
+against the default build, `/mnt/nvme1/oneapi-ab/grf256-*`:
+
+| model | depth | pp512 default -> 256 GRF | tg128 default -> 256 GRF |
+|---|--:|--:|--:|
+| Ornith IQ2_M (d=256, 41 layers) | 0 | 266.0 +- 1.4 -> 274.9 +- 0.5 (+3.3 %) | 53.5 -> 53.4 (flat) |
+| | 2048 | 299.0 -> 298.8 (flat) | 52.9 -> 52.8 (flat) |
+| | 8192 | 265.2 -> 265.3 (flat) | 46.6 +- 0.1 -> 48.3 +- 0.0 (+3.6 %) |
+| Llama 3.1 8B Q4_K_M (d=128) | 0 | 1004.0 +- 2.0 -> 1098.0 +- 13.9 (+9.4 %) | 47.0 -> 47.7 (+1.5 %) |
+| | 8192 | 210.8 -> 211.3 (flat) | 36.5 +- 0.0 -> 34.8 +- 0.0 (-4.5 %) |
+
+Reading: the prefill gain is the tile kernel's spill traffic; the d=128 decode loss at depth
+is the vec kernel at half occupancy for a kernel that spilled little. Hence the tile-only
+mode 1; its campaign is recorded below when finished. Oracle (default sweep with turbo FA,
+and `LLAMA_TEST_FA256=1`) green on the 256-GRF build: `0 GATE-FAIL`, no hang.
+
 ## Not claimed
 
 - The exact task-count/tag comparison that misjudges the in-flight command buffer is
@@ -248,6 +280,9 @@ until a release carries it.
 - No i915 production-placement baseline exists yet; the 09-29 decode regression numbers
   are for the `auto` placement only.
 - The 7.3-rc5 kernel was booted for this session; rc1 vs rc5 was not compared for speed.
+- The large-GRF numbers are one campaign per model on one host; mode 1 (tile only) is not
+  yet measured; the standing "global large-GRF is a dead end" decision is untouched (this is
+  per-kernel).
 - X7D/X7E ran while another process compiled on the host (load up to 31, swap active);
   their pass/fail stands, their decode numbers do not. X7B is one pass of a self-built driver on one host; the patch changes only the EPERM
   path and leaves the sweep itself untouched, so #1010's transient-EBUSY trigger on
