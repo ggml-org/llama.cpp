@@ -2106,6 +2106,46 @@ void ggml_compute_forward_concat(
     }
 }
 
+// row loop shared by the BF16 unary ops
+template <void (*vec_op)(const int, ggml_bf16_t *, const ggml_bf16_t *)>
+static void ggml_compute_forward_unary_bf16_rows(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    assert(ggml_is_contiguous_rows(src0));
+    assert(ggml_are_same_shape(src0, dst));
+
+    GGML_TENSOR_LOCALS(int64_t, ne0, src0, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb0, src0, nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst,  ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst,  nb)
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nc = src0->ne[0];
+    const int nr = ggml_nrows(src0);
+
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    for (int ir = ir0; ir < ir1; ++ir) {
+        const int i3 = ir/(ne02*ne01);
+        const int i2 = (ir - i3*ne02*ne01)/ne01;
+        const int i1 = (ir - i3*ne02*ne01 - i2*ne01);
+
+        vec_op(nc,
+                (ggml_bf16_t *) ((char *) dst->data  + i3*nb3  + i2*nb2  + i1*nb1),
+                (ggml_bf16_t *) ((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01));
+    }
+}
+
 // ggml_compute_forward_gelu
 
 static void ggml_compute_forward_gelu_f32(
@@ -2203,6 +2243,12 @@ static void ggml_compute_forward_gelu_f16(
     }
 }
 
+static void ggml_compute_forward_gelu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_unary_bf16_rows<ggml_vec_gelu_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_gelu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2220,7 +2266,7 @@ static void ggml_compute_forward_gelu(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_unary_bf16(params, dst);
+                ggml_compute_forward_gelu_bf16(params, dst);
             } break;
         default:
             {
@@ -2437,6 +2483,12 @@ static void ggml_compute_forward_gelu_erf_f16(
     }
 }
 
+static void ggml_compute_forward_gelu_erf_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_unary_bf16_rows<ggml_vec_gelu_erf_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_gelu_erf(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2454,7 +2506,7 @@ static void ggml_compute_forward_gelu_erf(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_unary_bf16(params, dst);
+                ggml_compute_forward_gelu_erf_bf16(params, dst);
             } break;
         default:
             {
@@ -2560,6 +2612,12 @@ static void ggml_compute_forward_gelu_quick_f16(
     }
 }
 
+static void ggml_compute_forward_gelu_quick_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_unary_bf16_rows<ggml_vec_gelu_quick_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_gelu_quick(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2577,7 +2635,7 @@ static void ggml_compute_forward_gelu_quick(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_unary_bf16(params, dst);
+                ggml_compute_forward_gelu_quick_bf16(params, dst);
             } break;
         default:
             {
@@ -2683,6 +2741,12 @@ static void ggml_compute_forward_silu_f16(
     }
 }
 
+static void ggml_compute_forward_silu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_unary_bf16_rows<ggml_vec_silu_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_silu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2700,7 +2764,7 @@ static void ggml_compute_forward_silu(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_unary_bf16(params, dst);
+                ggml_compute_forward_silu_bf16(params, dst);
             } break;
         default:
             {
@@ -2905,29 +2969,9 @@ void ggml_compute_forward_silu_back(
 
 // ggml_compute_forward_reglu
 
-// BF16 GLU: values are converted to F32 for the op
-static inline float op_glu_reglu(float x, float g) {
-    return (x > 0.f) ? x * g : 0.f;
-}
-
-static inline float op_glu_geglu(float x, float g) {
-    return ggml_gelu_f32(x) * g;
-}
-
-static inline float op_glu_swiglu(float x, float g) {
-    return (x / (1.0f + expf(-x))) * g;
-}
-
-static inline float op_glu_geglu_erf(float x, float g) {
-    return 0.5f * x * (1.0f + erff(x * SQRT_2_INV)) * g;
-}
-
-static inline float op_glu_geglu_quick(float x, float g) {
-    return ggml_gelu_quick_f32(x) * g;
-}
-
-template <float (*op)(float, float)>
-static void ggml_compute_forward_glu_bf16(
+// row loop shared by the BF16 GLU ops
+template <void (*vec_op)(const int, ggml_bf16_t *, const ggml_bf16_t *, const ggml_bf16_t *)>
+static void ggml_compute_forward_glu_bf16_rows(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
 
@@ -2974,9 +3018,7 @@ static void ggml_compute_forward_glu_bf16(
             src1_p += swapped ? 0 : nc;
         }
 
-        for (int k = 0; k < nc; k++) {
-            dst_p[k] = GGML_FP32_TO_BF16(op(GGML_BF16_TO_FP32(src0_p[k]), GGML_BF16_TO_FP32(src1_p[k])));
-        }
+        vec_op(nc, dst_p, src0_p, src1_p);
     }
 }
 
@@ -3099,6 +3141,12 @@ static void ggml_compute_forward_reglu_f16(
     }
 }
 
+static void ggml_compute_forward_reglu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_glu_bf16_rows<ggml_vec_reglu_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_reglu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3116,7 +3164,7 @@ static void ggml_compute_forward_reglu(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_glu_bf16<op_glu_reglu>(params, dst);
+                ggml_compute_forward_reglu_bf16(params, dst);
             } break;
         default:
             {
@@ -3246,6 +3294,12 @@ static void ggml_compute_forward_geglu_f16(
     }
 }
 
+static void ggml_compute_forward_geglu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_glu_bf16_rows<ggml_vec_geglu_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_geglu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3263,7 +3317,7 @@ static void ggml_compute_forward_geglu(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_glu_bf16<op_glu_geglu>(params, dst);
+                ggml_compute_forward_geglu_bf16(params, dst);
             } break;
         default:
             {
@@ -3393,6 +3447,12 @@ static void ggml_compute_forward_swiglu_f16(
     }
 }
 
+static void ggml_compute_forward_swiglu_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_glu_bf16_rows<ggml_vec_swiglu_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_swiglu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3410,7 +3470,7 @@ static void ggml_compute_forward_swiglu(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_glu_bf16<op_glu_swiglu>(params, dst);
+                ggml_compute_forward_swiglu_bf16(params, dst);
             } break;
         default:
             {
@@ -3760,6 +3820,12 @@ static void ggml_compute_forward_geglu_erf_f16(
     }
 }
 
+static void ggml_compute_forward_geglu_erf_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_glu_bf16_rows<ggml_vec_geglu_erf_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_geglu_erf(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3777,7 +3843,7 @@ static void ggml_compute_forward_geglu_erf(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_glu_bf16<op_glu_geglu_erf>(params, dst);
+                ggml_compute_forward_geglu_erf_bf16(params, dst);
             } break;
         default:
             {
@@ -3907,6 +3973,12 @@ static void ggml_compute_forward_geglu_quick_f16(
     }
 }
 
+static void ggml_compute_forward_geglu_quick_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    ggml_compute_forward_glu_bf16_rows<ggml_vec_geglu_quick_bf16>(params, dst);
+}
+
 static void ggml_compute_forward_geglu_quick(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3924,7 +3996,7 @@ static void ggml_compute_forward_geglu_quick(
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_glu_bf16<op_glu_geglu_quick>(params, dst);
+                ggml_compute_forward_geglu_quick_bf16(params, dst);
             } break;
         default:
             {
