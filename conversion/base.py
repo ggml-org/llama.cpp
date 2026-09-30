@@ -595,6 +595,9 @@ class ModelBase:
         for name, value in new_tensors.items():
             self.model_tensors[name] = value
 
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
+        return scale
+
     def _prepare_fp8_e4m3_tensors(self):
         if self._fp8_as_q8:
             return
@@ -622,6 +625,8 @@ class ModelBase:
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]()).float().flatten()
             if scale.numel() != 1:
                 continue
+
+            scale = self._transform_fp8_scale(weight_name, scale)
 
             weight_prefix = weight_name.removesuffix(".weight")
             # Transformers fine-grained FP8 uses activation_scale while ModelOpt uses input_scale.
@@ -971,9 +976,11 @@ class ModelBase:
             weight = LazyTorchTensor.to_eager(self.model_tensors[name]())
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
 
-            # Skip non-NVFP4 tensors (e.g. FP8 with per-channel 1D scales)
-            if scale.ndim < 2:
+            # Leave FP8 weights and their scales for _prepare_fp8_e4m3_tensors.
+            if weight.dtype in (torch.float8_e4m3fn, torch.float8_e5m2) or scale.ndim < 2:
                 continue
+            if weight.ndim != 2 or scale.shape[0] != weight.shape[0] or scale.shape[1] * 8 != weight.shape[1]:
+                raise ValueError(f"NVFP4 weight {name!r} has incompatible shapes: weight {list(weight.shape)}, scale {list(scale.shape)}")
 
             scale2 = LazyTorchTensor.to_eager(self.model_tensors.get(scale2_name, lambda: torch.tensor(1.0))())
             input_scale = LazyTorchTensor.to_eager(self.model_tensors.get(input_scale_name, lambda: torch.tensor(1.0))())

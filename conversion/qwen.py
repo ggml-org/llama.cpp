@@ -490,6 +490,24 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         perm[dim], perm[dim + 1] = perm[dim + 1], perm[dim]
         return tensor.permute(*perm).contiguous().reshape(*shape)
 
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
+        num_k_heads = self.hparams.get("linear_num_key_heads", 0)
+        num_v_heads = self.hparams.get("linear_num_value_heads", 0)
+        if scale.numel() == 1 or num_k_heads == 0 or num_v_heads == 0 or num_k_heads == num_v_heads:
+            return scale
+
+        num_v_per_k = num_v_heads // num_k_heads
+        head_v_dim = self.hparams["linear_value_head_dim"]
+        if name.endswith(".linear_attn.in_proj_qkv.weight"):
+            qk_dim = 2 * self.hparams["linear_key_head_dim"] * num_k_heads
+            v_scale = self._reorder_v_heads(scale[qk_dim:], 0, num_k_heads, num_v_per_k, head_v_dim)
+            return torch.cat([scale[:qk_dim], v_scale])
+        if name.endswith(".linear_attn.in_proj_z.weight"):
+            return self._reorder_v_heads(scale, 0, num_k_heads, num_v_per_k, head_v_dim)
+        if name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
+            return self._reorder_v_heads(scale, 0, num_k_heads, num_v_per_k, 1)
+        return scale
+
     def _transform_nvfp4_weight(self, name: str, weight: Tensor, scale: Tensor) -> tuple[Tensor, Tensor]:
         if not name.endswith((
             ".linear_attn.in_proj_qkv.weight",
