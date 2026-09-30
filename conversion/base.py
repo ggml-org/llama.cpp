@@ -769,6 +769,7 @@ class ModelBase:
         }
         weights: dict[int, set[gguf.MODEL_TENSOR]] = {}
         biases: dict[int, set[gguf.MODEL_TENSOR]] = {}
+        fp8_layers: set[int] = set()
 
         for name in self.model_tensors:
             mapped = self.tensor_map.get_type_and_name(name, try_suffixes=(".weight", ".bias"))
@@ -783,10 +784,16 @@ class ModelBase:
                 continue
             if new_name.endswith(".weight"):
                 weights.setdefault(bid, set()).add(tensor_type)
+                if not self._fp8_as_q8 and self.model_tensors[name]().dtype == torch.float8_e4m3fn:
+                    fp8_layers.add(bid)
             elif new_name.endswith(".bias"):
                 biases.setdefault(bid, set()).add(tensor_type)
 
         for bid, weight_types in weights.items():
+            # NVFP4 weights use separate reordering and repacking hooks and are exported before this fusion pass.
+            # Separate FP8 scales cannot be represented by one fused QKV scale.
+            if bid in fp8_layers:
+                continue
             bias_types = biases.get(bid, set())
             if weight_types == qkv_types and (not bias_types or bias_types == qkv_types):
                 self._fusable_qkv_weight_layers.add(bid)
