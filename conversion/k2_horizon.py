@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("K2HorizonForCausalLM")
@@ -18,16 +18,6 @@ class K2HorizonModel(TextModel):
     model_arch = gguf.MODEL_ARCH.K2HORIZON
 
     _experts: list[dict[str, Tensor]] | None = None
-
-    def set_vocab(self):
-        super().set_vocab()
-
-        # the 0.9B repo keeps an older chat_template.jinja next to the served chat_template_generation.jinja
-        tmpl_file = self.dir_model / "chat_template_generation.jinja"
-        if tmpl_file.is_file():
-            self.gguf_writer.remove_key(gguf.Keys.Tokenizer.CHAT_TEMPLATE)
-            self.gguf_writer.add_chat_template(tmpl_file.read_text(encoding="utf-8"))
-            logger.info(f"gguf: using {tmpl_file.name} as the chat template")
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -49,11 +39,6 @@ class K2HorizonModel(TextModel):
                 while n_dense in mlp_only_layers:
                     n_dense += 1
 
-            gating_funcs = {"sigmoid": gguf.ExpertGatingFuncType.SIGMOID, "softmax": gguf.ExpertGatingFuncType.SOFTMAX}
-            router_func = hparams.get("router_score_func")
-            if router_func not in gating_funcs:
-                raise ValueError(f"Unsupported router_score_func: {router_func!r}")
-
             self.gguf_writer.add_expert_feed_forward_length(n_ff_exp)
             self.gguf_writer.add_leading_dense_block_count(n_dense)
             self.gguf_writer.add_moe_every_n_layers(int(hparams.get("decoder_sparse_step", 1)))
@@ -63,7 +48,6 @@ class K2HorizonModel(TextModel):
                 self.gguf_writer.add_expert_shared_feed_forward_length(n_ff_exp * n_shared)
             if (router_scale := hparams.get("router_scaling_factor")) is not None:
                 self.gguf_writer.add_expert_weights_scale(float(router_scale))
-            self.gguf_writer.add_expert_gating_func(gating_funcs[router_func])
 
         # MoVA
         n_value_expert      = int(hparams.get("mova_num_experts", 0))

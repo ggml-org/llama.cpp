@@ -234,9 +234,7 @@ class ModelBase:
 
         prefix = "model" if not self.is_mistral_format else "consolidated"
         part_names: list[str] = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
-        if not part_names and not self.is_mistral_format:
-            part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".safetensors")
-        is_safetensors: bool = len(part_names) > 0
+        is_safetensors: bool = len(part_names) > 0 or (not self.is_mistral_format and (self.dir_model / "model.safetensors.index.json").is_file())
         if not is_safetensors:
             part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
 
@@ -1529,7 +1527,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_expert_group_used_count(n_group_used)
             logger.info(f"gguf: expert groups used count = {n_group_used}")
 
-        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn"], optional=True)) is not None:
+        if (score_func := self.find_hparam(["score_function", "scoring_func", "score_func", "moe_router_activation", "moe_router_activation_func", "expert_selection_fn", "router_score_func"], optional=True)) is not None:
             if score_func == "sigmoid":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
@@ -2573,6 +2571,11 @@ class TextModel(ModelBase):
         self.gguf_writer.add_eot_token_id(4)
 
         self.gguf_writer.add_add_space_prefix(False)
+
+        if (add_bos := tokenizer_config.get("add_bos_token")) is not None:
+            self.gguf_writer.add_add_bos_token(add_bos)
+        if (add_eos := tokenizer_config.get("add_eos_token")) is not None:
+            self.gguf_writer.add_add_eos_token(add_eos)
 
 
 class MmprojModel(ModelBase):

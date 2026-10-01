@@ -69,26 +69,9 @@ static bool get_current_logits(llama_context * ctx, std::vector<float> & out) {
     return true;
 }
 
-struct llama_batch_ptr {
-    llama_batch batch;
-
-    llama_batch_ptr(int32_t n_tokens, int32_t embd, int32_t n_seq_max)
-        : batch{llama_batch_init(n_tokens, embd, n_seq_max)} {}
-
-    ~llama_batch_ptr() { llama_batch_free(batch); }
-
-    llama_batch_ptr(const llama_batch_ptr &) = delete;
-    llama_batch_ptr & operator=(const llama_batch_ptr &) = delete;
-    llama_batch_ptr(llama_batch_ptr &&) = default;
-    llama_batch_ptr & operator=(llama_batch_ptr &&) = default;
-
-    llama_batch & get() { return batch; }
-    const llama_batch & get() const { return batch; }
-};
-
 static generation_result generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
     generation_result result;
-    llama_batch_ptr batch(1, 0, 1);
+    common_batch batch(ctx);
 
     for (int i = 0; i < n_predict; i++) {
         std::vector<float> logits;
@@ -104,10 +87,10 @@ static generation_result generate_tokens(llama_context * ctx, llama_sampler * sm
         result.tokens.push_back(next_token);
         result.logits.push_back(std::move(logits));
 
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
+        batch.clear();
+        batch.add(next_token, n_past, seq_id, true);
 
-        if (llama_decode(ctx, batch.get())) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return {};
         }
@@ -125,7 +108,7 @@ static bool generate_tokens_compare(
         return false;
     }
 
-    llama_batch_ptr batch(1, 0, 1);
+    common_batch batch(ctx);
 
     for (int i = 0; i < n_predict; i++) {
         std::vector<float> logits;
@@ -153,10 +136,10 @@ static bool generate_tokens_compare(
             LOG_TRC("%s: sampled token %d differs from expected %d, using expected token\n", __func__, next_token, expected_token);
         }
 
-        common_batch_clear(batch.get());
-        common_batch_add(batch.get(), expected_token, n_past, {seq_id}, true);
+        batch.clear();
+        batch.add(expected_token, n_past, seq_id, true);
 
-        if (llama_decode(ctx, batch.get())) {
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("\n%s: failed to evaluate\n", __func__);
             return false;
         }
@@ -222,12 +205,12 @@ static bool test_seq_rm_isolated(
 
     const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
     for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
-        llama_batch_ptr batch(n_tokens, 0, 1);
+        common_batch batch(ctx.get());
         for (size_t i = 0; i < n_tokens; ++i) {
-            common_batch_add(batch.get(), tokens[i], i, { seq_id }, i == n_tokens - 1);
+            batch.add(tokens[i], i, seq_id, i == n_tokens - 1);
         }
 
-        if (llama_decode(ctx.get(), batch.get())) {
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
             return false;
         }
@@ -469,9 +452,9 @@ static bool test_seq_cp_scatter(struct llama_model * model, const struct common_
     const uint32_t flags = on_device ? LLAMA_STATE_SEQ_FLAGS_ON_DEVICE : LLAMA_STATE_SEQ_FLAGS_NONE;
 
     auto decode_one = [&](llama_token tok, int pos, llama_seq_id seq) {
-        llama_batch_ptr batch(1, 0, 1);
-        common_batch_add(batch.get(), tok, pos, { seq }, true);
-        return llama_decode(ctx.get(), batch.get()) == 0;
+        common_batch batch(ctx.get());
+        batch.add(tok, pos, seq, true);
+        return llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
     };
 
     // seq 0 cells 0,1,4 interleave the seq 1 cells 2,3,5
@@ -554,7 +537,8 @@ static bool test_state_roundtrip(struct llama_model * model, const struct common
 
     LOGV(LOG_LEVEL_INFO, "\n=== Test 8: state blob round-trip ===\n");
 
-    if (llama_decode(ctx.get(), llama_batch_get_one(const_cast<llama_token *>(tokens.data()), (int32_t) tokens.size()))) {
+    common_batch batch = common_batch_get_one(ctx.get(), tokens);
+    if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         LOG_ERR("\n%s: failed to decode prompt\n", __func__);
         return false;
     }
@@ -643,12 +627,12 @@ static bool test_state_restore_failure(struct llama_model * model, const struct 
     }
 
     const auto decode = [&](const llama_tokens & inp, llama_seq_id seq_id, std::vector<float> * logits_out) {
-        llama_batch_ptr batch(inp.size(), 0, 1);
+        common_batch batch(ctx.get());
         for (size_t i = 0; i < inp.size(); ++i) {
-            common_batch_add(batch.get(), inp[i], i, { seq_id }, i == inp.size() - 1);
+            batch.add(inp[i], i, seq_id, i == inp.size() - 1);
         }
 
-        if (llama_decode(ctx.get(), batch.get())) {
+        if (llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             LOG_ERR("%s: failed to decode on sequence %d\n", __func__, seq_id);
             return false;
         }

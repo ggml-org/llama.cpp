@@ -8,6 +8,7 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_EMBEDDING_SCALE, hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE, hparams.f_attention_scale, false);
+    ml.get_key(LLM_KV_ATTENTION_VALUE_SCALE, hparams.f_attn_value_scale, false);
 
     hparams.llm_ffn_op = LLM_FFN_SILU;
     std::string hidden_act;
@@ -737,6 +738,11 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         ggml_tensor * cur = use_iswa
             ? build_attn(inp_attn_iswa, layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
             : build_attn(inp_attn,      layer.wo, NULL, layer.wo_s, Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
+
+        if (hparams.f_attn_value_scale != 0.0f) {
+            cur = ggml_scale(ctx0, cur, hparams.f_attn_value_scale);
+            cb(cur, "attn_out_scaled", il);
+        }
 
         if (attn_dynamic) {
             cur = build_dflash2_conv(*this, cur, attn_dynamic, layer.dflash_attn_conv_base, 1);
