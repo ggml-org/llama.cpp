@@ -31,15 +31,16 @@ jobs:
     strategy:
       matrix:
         include:
+          # CTK >= 13.5 bundles CCCL >= 3.5; omit GGML_CUDA_CCCL_VERSION for those versions.
           - cuda: '12.4'
             arch: x64
-            defines: '-DGGML_CUDA_CUB_3DOT2=ON'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - cuda: '13.4'
             arch: x64
-            defines: ''
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
           - cuda: '13.4'
             arch: arm64
-            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone
