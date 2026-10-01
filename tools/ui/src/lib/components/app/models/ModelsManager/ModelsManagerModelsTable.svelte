@@ -29,7 +29,6 @@
 		ModelsSection
 	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import ModelsSelectorDownloadItem from '$lib/components/app/models/ModelsSelector/ModelsSelectorDownloadItem.svelte';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
@@ -39,7 +38,7 @@
 		ModelsTableSortKey
 	} from '$lib/constants';
 	import { KeyboardKey, ModelCapability, ModelDownloadConfirmAction } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import type { Snippet } from 'svelte';
@@ -76,22 +75,18 @@
 	let isEmpty = $derived(groups.every((group) => group.items.length === 0));
 	let hasFilters = $derived(contextLimit > 0 || modalities.length > 0 || capabilities.length > 0);
 
-	/** In-flight and paused downloads, tracked by the status feed. */
-	let downloadEntries = $derived(modelsStore.status.getDownloadEntries());
-
 	/** Noun the show-more row counts in, per unit of the grouped list. */
 	const SHOW_MORE_NOUNS: Record<GroupedListUnit, string> = {
 		[GroupedListUnit.ENTRIES]: 'models',
 		[GroupedListUnit.GROUPS]: 'families'
 	};
-	let pendingCancel = $state('');
-	let cancelOpen = $state(false);
 	let pendingDelete = $state('');
 	let deleteOpen = $state(false);
 	/** Repos whose quants are folded away; the rest show them. */
 	const collapsedQuants = new SvelteSet<string>();
 	/** Sections that list their models straight, without folding them into families. */
 	const FLAT_SECTIONS = new Set<ModelsTableGroupKind>([
+		ModelsTableGroupKind.DOWNLOADING,
 		ModelsTableGroupKind.FAVORITES,
 		ModelsTableGroupKind.LOADED
 	]);
@@ -99,7 +94,9 @@
 		groups.map((group) => {
 			// a flat section lists its models straight, families or not
 			const flat = FLAT_SECTIONS.has(group.kind) || !settingsStore.config.groupModelsByFamily;
-			const items = sortEntries(group.items);
+			// downloads keep the feed's order: their progress, not their name, moves
+			const items =
+				group.kind === ModelsTableGroupKind.DOWNLOADING ? group.items : sortEntries(group.items);
 
 			return {
 				...group,
@@ -121,11 +118,6 @@
 	}
 
 	// cancel is confirmed once for the whole list, so one dialog serves every row
-	function requestCancel(repoWithTag: string): void {
-		pendingCancel = repoWithTag;
-		cancelOpen = true;
-	}
-
 	function requestDelete(option: ModelOption): void {
 		pendingDelete = option.model;
 		deleteOpen = true;
@@ -326,13 +318,6 @@
 {/snippet}
 
 <DialogConfirmDownload
-	action={ModelDownloadConfirmAction.CANCEL}
-	onClose={() => (cancelOpen = false)}
-	open={cancelOpen}
-	repoWithTag={pendingCancel}
-/>
-
-<DialogConfirmDownload
 	action={ModelDownloadConfirmAction.DELETE}
 	onClose={() => (deleteOpen = false)}
 	open={deleteOpen}
@@ -365,22 +350,12 @@
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
-		{#if downloadEntries.length > 0}
-			<ModelsSection count={downloadEntries.length} label="Download in progress" sticky>
-				{#snippet icon()}
-					<Download class="h-3.5 w-3.5 shrink-0" />
-				{/snippet}
-
-				{#each downloadEntries as entry (entry.repoWithTag)}
-					<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} />
-				{/each}
-			</ModelsSection>
-		{/if}
-
 		{#each sections as group (group.key)}
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
-					{#if group.kind === ModelsTableGroupKind.FAVORITES}
+					{#if group.kind === ModelsTableGroupKind.DOWNLOADING}
+						<Download class="h-3.5 w-3.5 shrink-0" />
+					{:else if group.kind === ModelsTableGroupKind.FAVORITES}
 						<Heart class="h-3.5 w-3.5 shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOADED}
 						<Power class="h-3.5 w-3.5 shrink-0" />
