@@ -762,10 +762,12 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
         }
     }
 
-    // a ubatch touches at most t_s/kpool + 1 pools of a sequence with t_s tokens: pad to that bound so the
-    // graph keeps its shape as the count moves, e.g. between 0 and n_seq while several sequences decode
+    // a ubatch touches at most t_s/kpool + 1 pools per sequence, pad to that bound so the graph keeps its shape
+    // as the count moves; reserve sizes the list for every pool the cache can hold, so never pad past n_pool_max
+    const auto *   idx        = mem->get_mem_idx();
+    const uint32_t n_pool_max = idx->get_size() / kpool * idx->get_n_seq_max();
     const uint32_t bound = ubatch.n_tokens/kpool + ubatch.n_seqs_unq;
-    st.n_new_g = std::max({st.n_new, 1u, std::min(bound, kpool_pad(st.n_pool_real) - 1)});
+    st.n_new_g = std::max({st.n_new, 1u, std::min({bound, kpool_pad(st.n_pool_real) - 1, n_pool_max})});
 }
 
 const llama_memory_hybrid_idx_context::kpool_state & llama_memory_hybrid_idx_context::kpool_cur() const {

@@ -34,10 +34,10 @@ static const char * test_status_str(test_status status) {
     return "";
 }
 
-static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens, uint32_t count) {
+static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens) {
     common_batch batch(ctx);
-    for (uint32_t pos = 0; pos < count; ++pos) {
-        batch.add(tokens[pos], pos, 0, pos + 1 == count);
+    for (uint32_t pos = 0; pos < tokens.size(); ++pos) {
+        batch.add(tokens[pos], pos, 0, pos + 1 == tokens.size());
     }
     return llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0;
 }
@@ -74,7 +74,7 @@ static llama_context_ptr init_ctx(llama_model * model, llama_context_params cpar
 
     // Use a full ubatch so buffer discovery preserves prefill allocation sizes.
     const uint32_t n_tokens = llama_n_ubatch(ctx.get());
-    if (!decode_tokens(ctx.get(), std::vector<llama_token>(n_tokens, 0), n_tokens)) {
+    if (!decode_tokens(ctx.get(), std::vector<llama_token>(n_tokens, 0))) {
         return nullptr;
     }
     llama_synchronize(ctx.get());
@@ -347,7 +347,7 @@ static test_status test_rollback(const common_params & params, llama_model * mod
     // Decode the full prompt on the source, then roll back three positions.
     // Replaying them crosses DSV4's ratio-4 compressor boundary.
     // Rollback leaves the recurrent memory in a snapshot state (rs_idx != 0).
-    if (!decode_tokens(ctx_src.get(), tokens, n_tokens)) {
+    if (!decode_tokens(ctx_src.get(), tokens)) {
         LOG_ERR("%s: failed to decode prompt\n", __func__);
         return test_status::FAIL;
     }
@@ -432,7 +432,7 @@ static test_status test_rollback(const common_params & params, llama_model * mod
             t = 0;
         }
     }
-    if (!decode_tokens(ctx_dirty.get(), noise, n_tokens)) {
+    if (!decode_tokens(ctx_dirty.get(), noise)) {
         LOG_ERR("%s: dirty prompt decode failed\n", __func__);
         return test_status::FAIL;
     }
