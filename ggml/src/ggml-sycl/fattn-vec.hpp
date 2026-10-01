@@ -589,7 +589,7 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
     const bool need_f16_V = type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
 
-    const auto arch = ggml_sycl_info().devices[ctx.device].hw_info.arch;
+    const auto arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
     const int nthreads = ggml_sycl_fattn_vec_get_nthreads_device(arch);
     if constexpr (D <= 256) {
         if (nthreads == 256) {
