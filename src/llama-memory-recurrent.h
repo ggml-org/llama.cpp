@@ -123,6 +123,9 @@ private:
     // ggml contexts for the KV cache along with the allocated backend buffers:
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
+    // true if no layers - can happen if the layer filter removes all layers
+    bool is_empty() const;
+
     size_t total_size() const;
 
     size_t size_r_bytes() const;
