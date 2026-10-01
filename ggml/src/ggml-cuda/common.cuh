@@ -1586,6 +1586,7 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * shared_up = nullptr;
     const void * shared_gate = nullptr;
     float * shared_dst = nullptr;
+    uint32_t shared_stride_col_dst = 0;
 };
 
 struct ggml_cuda_kernel_launch_params {

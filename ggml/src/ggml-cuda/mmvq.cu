@@ -601,7 +601,7 @@ __launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, h
 static __global__ void mul_mat_vec_q(
         const void * vx_ptr, const void * vy_ptr, const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
         const uint32_t ncols_x, const uint3 nchannels_y, const uint32_t stride_row_x, const uint32_t stride_col_y,
-        const uint32_t stride_col_dst, const uint3 channel_ratio, const uint32_t stride_channel_x,
+        uint32_t stride_col_dst, const uint3 channel_ratio, const uint32_t stride_channel_x,
         const uint32_t stride_channel_y, const uint32_t stride_channel_dst, const uint3 sample_ratio,
         const uint32_t stride_sample_x, const uint32_t stride_sample_y, const uint32_t stride_sample_dst,
         const uint32_t ids_stride) {
@@ -630,6 +630,7 @@ static __global__ void mul_mat_vec_q(
     if (shared_expert) {
         vx = fusion.shared_up;
         dst = fusion.shared_dst;
+        stride_col_dst = fusion.shared_stride_col_dst;
     }
 
     uint32_t channel_x;
@@ -878,7 +879,7 @@ static __global__ void mul_mat_vec_q_moe(
     if (shared_expert) {
         vx = fusion.shared_up;
         dst = fusion.shared_dst;
-        stride_col_dst = nrows_x;
+        stride_col_dst = fusion.shared_stride_col_dst;
     }
 
     // fuse gate, bias, scales, and glu_op into the up projection
@@ -1480,6 +1481,7 @@ void ggml_cuda_mul_mat_vec_q(
             fusion_local.shared_up   = fusion->shared_up->data;
             fusion_local.shared_gate = fusion->shared_gate->data;
             fusion_local.shared_dst  = (float *) fusion->shared_dst->data;
+            fusion_local.shared_stride_col_dst = fusion->shared_dst->nb[1] / ts_dst;
         }
 
         if (fusion->x_bias) {
