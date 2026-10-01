@@ -2566,6 +2566,11 @@ class TextModel(ModelBase):
 
         self.gguf_writer.add_add_space_prefix(False)
 
+        if (add_bos := tokenizer_config.get("add_bos_token")) is not None:
+            self.gguf_writer.add_add_bos_token(add_bos)
+        if (add_eos := tokenizer_config.get("add_eos_token")) is not None:
+            self.gguf_writer.add_add_eos_token(add_eos)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
