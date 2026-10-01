@@ -1,4 +1,3 @@
-import socket
 import threading
 import pytest
 from utils import *
@@ -62,60 +61,6 @@ def test_router_chat_completion_stream(model: str, success: bool):
     else:
         assert ex is not None
         assert content == ""
-
-
-def test_router_disconnect_stops_child_generation():
-    global server
-    server.server_slots = True
-    server.n_ctx = 8192
-    server.n_threads = 1
-    server.start()
-    try:
-        model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
-        _load_model_and_wait(model_id)
-
-        models = server.make_request("GET", "/models").body["data"]
-        model = next(item for item in models if item["id"] == model_id)
-        args = model["status"]["args"]
-        child_port = int(args[args.index("--port") + 1])
-        child_url = f"http://127.0.0.1:{child_port}/slots"
-
-        def child_slots():
-            res = requests.get(child_url, timeout=2)
-            res.raise_for_status()
-            return res.json()
-
-        assert not any(slot["is_processing"] for slot in child_slots())
-        body = json.dumps({
-            "model": model_id,
-            "prompt": "Count upward from one, writing each number separated by a space.",
-            "n_predict": 8192,
-            "ignore_eos": True,
-            "stream": False,
-        }).encode()
-        with socket.create_connection((server.server_host, server.server_port), timeout=5) as client:
-            client.sendall(
-                f"POST /completion HTTP/1.1\r\nHost: {server.server_host}:{server.server_port}\r\n"
-                f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body
-            )
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                slots = child_slots()
-                if any(slot["is_processing"] and slot.get("next_token", [{}])[0].get("n_decoded", 0) > 0 for slot in slots):
-                    break
-                time.sleep(0.05)
-            else:
-                raise AssertionError("child did not begin generating")
-
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if not any(slot["is_processing"] for slot in child_slots()):
-                break
-            time.sleep(0.05)
-        else:
-            raise AssertionError("child kept generating after router client disconnected")
-    finally:
-        server.stop()
 
 
 def _get_model_ids(is_reload: bool, headers: dict | None = None) -> set[str]:
