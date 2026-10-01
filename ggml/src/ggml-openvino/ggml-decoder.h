@@ -354,41 +354,41 @@ public:
 
     void update_io(ggml_cgraph * cgraph);
 
-    inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
 
-    inline static bool is_inp_pos(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_pos(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[1];
     }
 
     // IMROPE packs 4 stacked position planes (t/h/w/e) into inp_pos, each of length
     // n_tokens; other modes carry a single position per token.
-    inline static int get_inp_pos_n_planes(const ggml_tensor * op) {
+    static int get_inp_pos_n_planes(const ggml_tensor * op) {
         return op->op_params[2] == GGML_ROPE_TYPE_IMROPE ? 4 : 1;
     }
 
-    inline static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
     }
 
-    inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_CPY || (op->op == GGML_OP_FLASH_ATTN_EXT && tensor == op->src[3]) ||
                (op->op == GGML_OP_SOFT_MAX && tensor == op->src[1]);
     }
 
-    inline static bool is_inp_mean(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_mean(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_MUL_MAT && tensor == op->src[1] && tensor->op == GGML_OP_NONE &&
                (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->type == GGML_TYPE_F32 &&
                op->src[0] != nullptr && op->src[0]->op != GGML_OP_NONE;
     }
 
-    inline static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }
 
     // also returns true for cache_s and cache_r in SSM/DeltaNet models
-    inline static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr) {
             return false;
         }
@@ -396,14 +396,14 @@ public:
                (op != nullptr && op->op == GGML_OP_SET_ROWS && op->src[2] == tensor);
     }
 
-    inline static bool is_conv_state_writeback(const ggml_tensor * node) {
+    static bool is_conv_state_writeback(const ggml_tensor * node) {
         return node->op == GGML_OP_CPY && node->view_src != nullptr && is_kvcache(node->view_src, nullptr) &&
                node->src[0] != nullptr && node->src[0]->op == GGML_OP_VIEW && node->src[0]->src[0] != nullptr &&
                node->src[0]->src[0]->op == GGML_OP_CONCAT && node->src[1] != nullptr &&
                node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src;
     }
 
-    inline static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_kv_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
     }
 
@@ -411,13 +411,13 @@ public:
         return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
     }
 
-    inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
                op->src[1]->op == GGML_OP_NONE;
     }
 
     // the state permutation index input used in SSM/DeltaNet models (inp->s_copy in llama-graph.cpp)
-    inline static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
+    static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] &&
                op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
     }
@@ -481,5 +481,3 @@ private:
 };
 
 void print_tensor_address_map(const ggml_cgraph * cgraph);
-
-std::optional<int> extract_layer_from_name(const std::string & name);

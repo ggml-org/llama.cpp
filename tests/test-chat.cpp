@@ -1217,6 +1217,16 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
     assert_msg_equals(tc.expect, msg_accum, true);
 
+    // A response format must be enforced by an eager grammar
+    if (!tc.params.json_schema.empty()) {
+        if (parser.params_.grammar.empty()) {
+            throw std::runtime_error("json_schema is set but no grammar was produced");
+        }
+        if (parser.params_.grammar_lazy) {
+            throw std::runtime_error("json_schema is set but the grammar is lazy");
+        }
+    }
+
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
         auto grammar = build_grammar(parser.params_.grammar);
@@ -3032,6 +3042,26 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_with_content_and_tool_call("Hello, world!\nWhat's up?", "get_time", R"({"city": "Paris"})"))
             .run();
 
+        // Required tool call
+        tst.test(
+                "<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect(message_with_tool_calls("get_time", R"({"city": "Paris"})"))
+            .run();
+
+        // Required tool call after reasoning
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<channel|><|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", {} },
+            })
+            .run();
+
         // Parallel tool calls
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>"
@@ -4621,6 +4651,214 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         }
     }
 
+    // Ling 3.0 / Bailing V3 dedicated parser
+    {
+        auto tst = peg_tester("models/templates/inclusionai-ling-3.0-flash.jinja", detailed_debug);
+
+        const std::string get_time_call =
+            "<tool_call>get_time\n"
+            "<arg_key>city</arg_key>\n"
+            "<arg_value>Paris</arg_value>\n"
+            "</tool_call>";
+
+        // A tool call emitted before the think block is closed must be extracted,
+        // with the preceding text kept as reasoning.
+        tst.test("I need to check the time first.\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("I need to check the time first.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Closed think block, prose, then a tool call.
+        tst.test("Let me check the time.\n</think>\nChecking it now.\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("Let me check the time.\n")
+            .expect_content("Checking it now.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Prose after the last tool call is content, not a parse failure.
+        tst.test(get_time_call + "\nThe time has been checked.")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_content("\nThe time has been checked.")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Parallel tool calls.
+        tst.test("</think>\n" + get_time_call + "\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .parallel_tool_calls(true)
+            .expect_content("")
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", "" },
+                { "get_time", R"({"city": "Paris"})", "" },
+            })
+            .run();
+
+        // Argument values may contain marker-like strings.
+        tst.test("check this\n</think>\n<tool_call>tool_2req_4opt\n"
+                 "<arg_key>req1</arg_key>\n<arg_value>contains </think> and <tool_call> strings</arg_value>\n"
+                 "<arg_key>req2</arg_key>\n<arg_value>1</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ tool_2req_4opt })
+            .expect_reasoning("check this\n")
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req1": "contains </think> and <tool_call> strings", "req2": 1})", "" },
+            })
+            .run();
+
+        // reasoning_format=none keeps extracting tool calls.
+        tst.test("I need to check the time first.\n" + get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ get_time_tool })
+            .expect_content("I need to check the time first.\n")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // With thinking off the template pre-closes the think block, so the model
+        // emits bare content: it must not be classified as reasoning.
+        tst.test("Here is the answer.\nNo think block at all.")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .expect_reasoning("")
+            .expect_content("Here is the answer.\nNo think block at all.")
+            .run();
+
+        tst.test(get_time_call)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .tools({ get_time_tool })
+            .expect_reasoning("")
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // The end-of-turn token may arrive spelled out as text tokens instead of
+        // the single control token; it must not leak into content.
+        tst.test("Here is the answer.<|role_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .expect_content("Here is the answer.")
+            .run();
+
+        tst.test(get_time_call + "<|role_end|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Real output tolerates whitespace variation between tags (the template
+        // renders historical calls with no newline after the tool name).
+        tst.test("</think>\n<tool_call>get_time<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", "" } })
+            .run();
+
+        // Required arguments may arrive in any order.
+        tst.test("</think>\n<tool_call>tool_2req_4opt\n"
+                 "<arg_key>req2</arg_key>\n<arg_value>7</arg_value>\n"
+                 "<arg_key>req1</arg_key>\n<arg_value>hello</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({ { "tool_2req_4opt", R"({"req2": 7, "req1": "hello"})", "" } })
+            .run();
+
+        // Optional arguments may follow the required ones.
+        tst.test("</think>\n<tool_call>tool_2req_4opt\n"
+                 "<arg_key>req1</arg_key>\n<arg_value>hello</arg_value>\n"
+                 "<arg_key>req2</arg_key>\n<arg_value>7</arg_value>\n"
+                 "<arg_key>opt1</arg_key>\n<arg_value>extra</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({ { "tool_2req_4opt", R"({"req1": "hello", "req2": 7, "opt1": "extra"})", "" } })
+            .run();
+
+        // Non-string arguments parse as JSON.
+        tst.test("</think>\n<tool_call>magic_int\n"
+                 "<arg_key>ref</arg_key>\n<arg_value>42</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_tool_calls({ { "magic_int", R"({"ref": 42})", "" } })
+            .run();
+
+        // A nullable string accepts a JSON null and raw text.
+        tst.test("</think>\n<tool_call>set_nullable_str\n"
+                 "<arg_key>name</arg_key>\n<arg_value>null</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({ { "set_nullable_str", R"({"name": null})", "" } })
+            .run();
+
+        tst.test("</think>\n<tool_call>set_nullable_str\n"
+                 "<arg_key>name</arg_key>\n<arg_value>hello world</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({ { "set_nullable_str", R"({"name": "hello world"})", "" } })
+            .run();
+
+        // A raw string that starts like a JSON value must not be taken as JSON:
+        // the choice falls back to the string alternative.
+        tst.test("</think>\n<tool_call>set_nullable_str\n"
+                 "<arg_key>name</arg_key>\n<arg_value>123 Main St</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ nullable_string_tool })
+            .expect_tool_calls({ { "set_nullable_str", R"({"name": "123 Main St"})", "" } })
+            .run();
+
+        // String unions: object and integer values parse as JSON, strings stay raw.
+        tst.test("</think>\n<tool_call>set_union\n"
+                 "<arg_key>value</arg_key>\n<arg_value>{\"a\": 1}</arg_value>\n"
+                 "<arg_key>amount</arg_key>\n<arg_value>7</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ string_union_tool })
+            .expect_tool_calls({ { "set_union", R"({"value": {"a": 1}, "amount": 7})", "" } })
+            .run();
+
+        tst.test("</think>\n<tool_call>set_union\n"
+                 "<arg_key>value</arg_key>\n<arg_value>plain text</arg_value>\n"
+                 "<arg_key>amount</arg_key>\n<arg_value>1abc</arg_value>\n"
+                 "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ string_union_tool })
+            .expect_tool_calls({ { "set_union", R"({"value": "plain text", "amount": "1abc"})", "" } })
+            .run();
+
+        // Continuation: the partial assistant turn is spliced back into the prompt.
+        common_chat_msg prefill = simple_assist_msg("", "I'm thinking");
+
+        tst.test("Hello, world!")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, prefill })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!")
+            .run();
+
+        tst.test(" more</think>Hello, world!")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, prefill })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking more")
+            .expect_content("Hello, world!")
+            .run();
+    }
+
     // Kimi-K3 tests - custom parser
     // Unique feature: XTML tags built from <|open|>/<|close|>/<|sep|>, and a
     // generation prompt that leaves the think section already open.
@@ -6129,6 +6367,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        // A tool call as the first message of the turn: "<|start|>assistant" is the
+        // generation prompt, so the output starts at " to=".
+        tst.test(" to=special_function<|message|>" + call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_call)
+            .run();
+
         // "Inform then act": the model answers the user and calls a tool in ONE generation,
         // closing the answer with <|eom|>. The answer must stop there rather than swallow it.
         tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eom|>"
@@ -6146,6 +6392,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_content("You invoke it like this:\n" + call_markup)
+            .run();
+
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
         // Tool markup inside the analysis channel is reasoning, not a call
@@ -6336,6 +6598,76 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
             .expect_reasoning("I'm thinking")
             .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
+    // LLM-jp-4.1: GPT-OSS dialect with spaces after special tokens and <|end|>-separated parallel calls
+    {
+        auto tst = peg_tester("models/templates/llm-jp-llm-jp-4.1-8b-thinking.jinja", detailed_debug);
+
+        // Final channel
+        tst.test("<|channel|> final<|message|> Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // One space rule: an intentional leading space survives
+        tst.test("<|channel|> final<|message|>  padded").expect_content(" padded").run();
+
+        // Reasoning + content
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|><|start|> assistant<|channel|> final<|message|> Hello, world!\nWhat's "
+               "up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Partial reasoning
+        tst.test("<|channel|> analysis<|message|> I'm\nthinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .is_partial(true)
+            .expect_reasoning("I'm\nthinking")
+            .run();
+
+        // Tool call, recipient in role header
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // Tool call, recipient in channel header
+        tst.test("<|channel|> commentary to=functions.special_function<|message|> {\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Parallel tool calls separated by <|end|>
+        tst.test(
+               "<|channel|> analysis<|message|> I'm\nthinking<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 1}<|end|>"
+               "<|start|> assistant to=functions.special_function<|channel|> commentary <|constrain|>  json<|message|> {\"arg1\": 2}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .parallel_tool_calls(true)
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "special_function", "{\"arg1\": 1}", {} },
+                { "special_function", "{\"arg1\": 2}", {} },
+            })
+            .run();
+
+        // Structured output
+        tst.test(
+            "<|channel|> analysis<|message|> I need to output the invoice details in JSON<|end|>"
+            "<|start|> assistant<|channel|> final <|constrain|>  json"
+            "<|message|> "
+            R"({"amount": 123.45, "date": "2025-12-03"})"
+            )
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
     }
 

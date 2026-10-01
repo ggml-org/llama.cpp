@@ -245,7 +245,7 @@ void GgmlOvDecoder::set_input_output() {
             if (src->op == GGML_OP_VIEW) {
                 // Traverse upward through nested VIEW operations
                 std::remove_reference_t<decltype(current_node_info.node_inputs_views[src_name])> view_chain;
-                auto current = src;
+                auto * current = src;
 
                 while (current != nullptr) {
                     auto current_name = get_tensor_ov_name(m_cgraph, current);
@@ -612,9 +612,8 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 if (node->src[1]->view_src != nullptr) {
                     if (node->src[3] != nullptr) {
                         return 4;  // decoder self-attention
-                    } else {
-                        return 5;  // cross-attention or encoder self-attention
-                    };
+                    }
+                    return 5;      // cross-attention or encoder self-attention
                 }
                 break;
             default:
@@ -736,8 +735,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
 
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        auto * node = cgraph->nodes[i];
-        std::string name = std::string(node->name);
+        ggml_tensor * node = cgraph->nodes[i];
         const int attention_pattern_case = get_attention_pattern_case(node);
         if (attention_pattern_case != -1) {
             ggml_tensor * cache_k_permute = nullptr;
@@ -948,7 +946,6 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op,
     if (m_naive) {
         return input != nullptr ? ov::PartialShape{get_shape(input)} : ov::PartialShape{get_shape(op)};
     }
-    auto name = std::string(input->name);
     ov::PartialShape input_shape;
 
     if (is_inp_tok(input, op) || is_inp_pos(input, op)) {
@@ -1168,6 +1165,11 @@ void GgmlOvDecoder::compute_model_inputs() {
             if (m_model_weights.find(src_name) != m_model_weights.end()) {
                 continue;
             }
+            // A view over a weight is served by the base tensor's Constant, never by a Parameter.
+            if (src->view_src != nullptr &&
+                m_model_weights.find(get_tensor_ov_name(m_cgraph, src->view_src)) != m_model_weights.end()) {
+                continue;
+            }
 
             bool is_intermediate_node = false;
             for (const auto & node_info : m_node_info_list) {
@@ -1303,19 +1305,19 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                 continue;
             }
 
-            std::string src_name = get_tensor_ov_name(cgraph, src);
-            if (is_rope_freqs_weight(src, node)) {
+            // A view over a weight is served by the base tensor's Constant.
+            ggml_tensor * base = src->view_src ? src->view_src : src;
+            std::string src_name = get_tensor_ov_name(cgraph, base);
+            if (is_rope_freqs_weight(base, node)) {
                 src_name = "rope_freqs.weight";
             }
-            if (!src->view_src) {
-                ggml_backend_buffer * buffer = src->buffer;
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type) ||
-                    is_mul_mat_id_expert_weight(node, i)) {
-                    if (model_weights.find(src_name) == model_weights.end()) {
-                        auto weight_node = create_weight_node(src, naive);
-                        weight_node->set_friendly_name(src_name);
-                        model_weights[src_name] = weight_node;
-                    }
+            ggml_backend_buffer * buffer = base->buffer;
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(base->type) ||
+                is_mul_mat_id_expert_weight(node, i)) {
+                if (model_weights.find(src_name) == model_weights.end()) {
+                    auto weight_node = create_weight_node(base, naive);
+                    weight_node->set_friendly_name(src_name);
+                    model_weights[src_name] = weight_node;
                 }
             }
         }
@@ -1344,15 +1346,14 @@ std::set<std::string> GgmlOvDecoder::collect_weight_names(ggml_cgraph * cgraph) 
             if (src == nullptr) {
                 continue;
             }
-            std::string src_name(src->name);
-            if (is_rope_freqs_weight(src, node)) {
+            const ggml_tensor * base = src->view_src ? src->view_src : src;
+            std::string src_name(base->name);
+            if (is_rope_freqs_weight(base, node)) {
                 src_name = "rope_freqs.weight";
             }
-            if (!src->view_src) {
-                ggml_backend_buffer * buffer = src->buffer;
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type)) {
-                    names.insert(src_name);
-                }
+            ggml_backend_buffer * buffer = base->buffer;
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(base->type)) {
+                names.insert(src_name);
             }
         }
     }
@@ -1474,7 +1475,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
 void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filename) {
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "Failed to open file" << std::endl;
+        std::cerr << "Failed to open file" << '\n';
         return;
     }
 
@@ -1580,11 +1581,11 @@ void print_tensor_address_map(const ggml_cgraph * cgraph) {
         }
     }
     for (const auto & pair : address_map) {
-        std::cout << "Address: " << pair.first << std::endl;
+        std::cout << "Address: " << pair.first << '\n';
         for (const auto & name : pair.second) {
             std::cout << name << " ; ";
         }
-        std::cout << std::endl << std::endl;
+        std::cout << "\n\n";
     }
 }
 
@@ -2226,7 +2227,7 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     std::cout << ", ";
                 }
             }
-            std::cout << "]" << std::endl;
+            std::cout << "]" << '\n';
             // print the src name & shape with the dynamic dim for debugging
             for (int j = 0; j < GGML_MAX_SRC; j++) {
                 ggml_tensor * src = node->src[j];
@@ -2245,9 +2246,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                         std::cout << ", ";
                     }
                 }
-                std::cout << "]" << std::endl;
+                std::cout << "]" << '\n';
             }
-            std::cout << std::endl;
+            std::cout << '\n';
         }
     }
 }

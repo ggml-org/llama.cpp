@@ -125,3 +125,43 @@ def test_server_sleep_metrics_buckets():
     assert res.status_code == 200
     assert is_sleeping(server) == False
     assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
+
+
+def test_server_sleep_token_counting_wake():
+    global server
+    server.sleep_idle_seconds = 1
+    server.start()
+
+    wait_for_sleep(server)
+    assert is_sleeping(server)
+
+    res = server.make_request("POST", "/chat/completions/input_tokens", data={
+        "messages": [
+            {"role": "user", "content": "Hello world"}
+        ]
+    })
+    assert res.status_code == 200
+    assert res.body["input_tokens"] > 0
+    assert is_sleeping(server) == False
+
+    wait_for_sleep(server)
+    assert is_sleeping(server)
+
+    res = server.make_request("POST", "/v1/responses/input_tokens", data={
+        "input": "Hello world"
+    })
+    assert res.status_code == 200
+    assert res.body["input_tokens"] > 0
+    assert is_sleeping(server) == False
+
+    wait_for_sleep(server)
+    assert is_sleeping(server)
+
+    res = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "messages": [
+            {"role": "user", "content": "Hello world"}
+        ]
+    })
+    assert res.status_code == 200
+    assert res.body["input_tokens"] > 0
+    assert is_sleeping(server) == False

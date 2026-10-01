@@ -9,6 +9,7 @@
 #include "ggml-quants.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <climits>
@@ -28,12 +29,7 @@
 #include <string>
 #include <vector>
 
-#ifndef _WIN32
-#    include <sys/mman.h>
-#    include <unistd.h>
-#endif
-
-#if defined(_WIN32)
+#ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
 #        define NOMINMAX
@@ -61,6 +57,7 @@
 // - CPU repack buffer: tensor->extra stores tensor_traits with repacked data
 // =====================================================
 
+namespace {
 // Buffer context that manages per-tensor allocations (no contiguous buffer for weights)
 struct ggml_backend_openvino_buffer_context {
     int device;
@@ -199,6 +196,7 @@ struct ggml_backend_openvino_buffer_type_context {
     int device;
     std::string name;
 };
+}  // namespace
 
 // =====================================================
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS)
@@ -258,14 +256,16 @@ void ggml_openvino_release_weight_buffers() {
     for (const auto & b : reg.buffers) {
         // Align down/up to page boundaries so madvise only drops whole pages
         // fully owned by this buffer.
-        const long page = sysconf(_SC_PAGESIZE);
-        uintptr_t start = reinterpret_cast<uintptr_t>(b.first);
-        uintptr_t end = start + b.second;
-        uintptr_t astart = (start + page - 1) & ~(uintptr_t) (page - 1);
-        uintptr_t aend = end & ~(uintptr_t) (page - 1);
-        if (aend > astart) {
-            if (madvise(reinterpret_cast<void *>(astart), aend - astart, MADV_DONTNEED) == 0) {
-                total += aend - astart;
+        const size_t page = (size_t) sysconf(_SC_PAGESIZE);
+        const uintptr_t ustart = reinterpret_cast<uintptr_t>(b.first);
+        const size_t offset_to_page = (page - (ustart & (page - 1))) & (page - 1);
+        if (b.second > offset_to_page) {
+            const size_t aligned_len = (b.second - offset_to_page) & ~(page - 1);
+            if (aligned_len > 0) {
+                char * astart = static_cast<char *>(b.first) + offset_to_page;
+                if (madvise(astart, aligned_len, MADV_DONTNEED) == 0) {
+                    total += aligned_len;
+                }
             }
         }
     }
@@ -876,11 +876,13 @@ GGML_BACKEND_API bool ggml_backend_is_openvino(ggml_backend_t backend) {
     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_openvino_guid());
 }
 
+namespace {
 struct ggml_backend_openvino_device_context {
     int device;
     std::string name;
     std::string description;
 };
+}
 
 static const char * ggml_backend_openvino_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
@@ -957,6 +959,24 @@ static bool has_view_op_input(const ggml_tensor * op) {
         }
     }
     return false;
+}
+
+// OV slices whole elements per axis, so each stride must be a multiple of the next smaller one
+// (e.g. a batch stride of m*nb[1] + pad bytes cannot be expressed and would be read wrongly).
+static bool has_strides_on_element_grid(const ggml_tensor * t) {
+    std::vector<size_t> strides;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (t->ne[i] > 1) {
+            strides.push_back(t->nb[i]);
+        }
+    }
+    std::sort(strides.begin(), strides.end());
+    for (size_t i = 1; i < strides.size(); i++) {
+        if (strides[i - 1] == 0 || strides[i] % strides[i - 1] != 0) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool has_non_contiguous_view_input(const ggml_tensor * op) {
@@ -1159,10 +1179,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return {false, "GET_ROWS/SET_ROWS with ne[3] != 1 (ne[3]=" + std::to_string(op->ne[3]) + ") is not supported"};
         }
-        if (op->op == GGML_OP_GET_ROWS && ggml_is_quantized(op->src[0]->type) &&
-            op->src[0]->view_src != nullptr && op->src[0]->view_offs != 0) {
-            return {false, "GET_ROWS with a nonzero quantized src0 view offset is not supported"};
-        }
         if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
             op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "GET_ROWS with BF16 src0 is not supported on GPU"};
@@ -1191,6 +1207,10 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[1]->op == GGML_OP_PERMUTE) {
             return {false, "ADD/MUL/SUB with PERMUTE src1 is not supported"};
         }
+        if (op->src[0]->type != op->src[1]->type &&
+            (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16)) {
+            return {false, "ADD/MUL/SUB with BF16 and a different src1 type is not supported"};
+        }
         // >8-expert MoE ReduceSum drifts past the 1e-7 tolerance (f32 order vs CPU); intermittent.
         if (op->op == GGML_OP_ADD && is_moe_expert_sum_add(op) && op->src[1]->src[0]->ne[1] > 8) {
             return {false, "MoE expert-plane sum with more than 8 experts is not supported"};
@@ -1201,6 +1221,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
                                std::to_string(op->src[0]->ne[i]) + ", src1->ne[" + std::to_string(i) + "]=" +
                                std::to_string(op->src[1]->ne[i])};
             }
+        }
+        break;
+    }
+    case GGML_OP_SCALE: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "SCALE with BF16 type is not supported"};
         }
         break;
     }
@@ -1539,6 +1565,9 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (supported_types.find(src->type) == supported_types.end()) {
             return {false, "src[" + std::to_string(i) + "] type " + std::string(ggml_type_name(src->type)) + " is not supported"};
         }
+        if (!has_strides_on_element_grid(src)) {
+            return {false, "src[" + std::to_string(i) + "] strides are not multiples of each other"};
+        }
         const bool is_supported_3d_moe_expert =
             op->op == GGML_OP_MUL_MAT_ID && i == 0 && (src->type == GGML_TYPE_MXFP4 || src->ne[3] == 1);
         if (ggml_is_quantized(src->type) && src->ne[2] != 1 && !is_supported_3d_moe_expert) {
@@ -1588,9 +1617,11 @@ static const struct ggml_backend_device_i ggml_backend_openvino_device_interface
     /* .event_synchronize    = */ NULL,
 };
 
+namespace {
 struct ggml_backend_openvino_reg_context {
     std::vector<ggml_backend_dev_t> devices;
 };
+}
 
 static const char * ggml_backend_openvino_reg_get_name(ggml_backend_reg_t reg) {
     return GGML_OPENVINO_NAME;
