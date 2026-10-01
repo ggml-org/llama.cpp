@@ -192,6 +192,9 @@ struct server_task {
             }
             return pos;
         }
+
+        // for a joint head: one value per prompt token, see llama_batch_ext_set_decision_order()
+        std::vector<int32_t> order;
     };
     decision decision;
 

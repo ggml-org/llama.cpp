@@ -116,6 +116,9 @@ void server_decision_context::init(const llama_model * model) {
             throw std::runtime_error("decision model has no valid max_head_tokens");
         }
         n_options_max = 255;
+    } else if (model_type == COMMON_DECISION_TYPE_CLEF) {
+        n_options_max   = 255;
+        noul_true_first = true;
     } else {
         throw std::runtime_error("unsupported decision model type: " + type_name);
     }
@@ -518,6 +521,162 @@ void server_decision_context::fill_task_laya(llama_tokens & tokens, const server
 
     // the output has one score per question type
     task.decision.column = question.type;
+}
+
+//
+// joint prompt (clef)
+//
+
+// the template separates the pieces of the prompt with these, they are tokenized one by one
+static const std::string CLEF_MARKER         = "<<clef:";
+static const std::string CLEF_PIECE_SEP      = "<<clef:sep>>";
+static const std::string CLEF_PIECE_STATE    = "<<clef:state>>";
+static const std::string CLEF_PIECE_QUESTION = "<<clef:question>>";
+static const std::string CLEF_PIECE_OPTION   = "<<clef:option>>";
+
+// strings are used as is, other values are compact JSON with sorted keys
+static std::string clef_render(const json & val) {
+    return val.is_string() ? val.get<std::string>() : decision_sort_keys(val).dump();
+}
+
+std::vector<size_t> server_decision_context::prompt_order(const server_decision_question & question) const {
+    std::vector<size_t> order(question.options.size());
+    for (size_t i = 0; i < order.size(); i++) {
+        order[i] = i;
+    }
+    if (type == COMMON_DECISION_TYPE_CLEF && question.type == SERVER_DECISION_QUESTION_CHOICE) {
+        std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+            return question.options[a].key < question.options[b].key;
+        });
+    }
+    return order;
+}
+
+void server_decision_context::fill_task_joint(const json & state, const std::vector<server_decision_question> & questions, server_task & task) const {
+    auto clean = [](const json & val) {
+        return decision_replace_text(val, CLEF_MARKER, "<<clef ");
+    };
+
+    json inp_questions = json::array();
+    for (const auto & question : questions) {
+        json options = json::array();
+        for (const size_t i : prompt_order(question)) {
+            const auto & opt = question.options[i];
+
+            json description = opt.description;
+            if (description.is_null() && question.type == SERVER_DECISION_QUESTION_NOUL) {
+                description = opt.key == "true"
+                    ? "The proposition is true or the answer is yes."
+                    : "The proposition is false or the answer is no.";
+            }
+
+            // keys in sorted order
+            json semantics = json::object();
+            if (!description.is_null()) {
+                semantics["description"] = decision_sort_keys(description);
+            }
+            semantics["option_id"] = opt.key;
+
+            options.push_back(json{{"text", semantics.dump()}});
+        }
+
+        inp_questions.push_back(json{
+            {"id",           question.id},
+            {"type",         decision_question_type_name(question.type)},
+            {"instructions", clef_render(question.instructions)},
+            {"options",      options},
+        });
+    }
+
+    const json inp = clean(json{
+        {"state",     clef_render(state)},
+        {"questions", inp_questions},
+    });
+
+    jinja::context ctx(tmpl->source());
+    jinja::global_from_json(ctx, inp, false);
+    jinja::runtime runtime(ctx);
+    const jinja::value results = runtime.execute(tmpl->prog);
+    const std::string prompt   = jinja::runtime::gather_string_parts(results)->as_string().str();
+
+    // the model was trained with the pieces tokenized one by one
+    llama_tokens tokens;
+    int32_t i_question  = -1;
+    size_t  n_questions = 0;
+    size_t  n_options   = 0;
+    for (std::string piece : string_split(prompt, CLEF_PIECE_SEP)) {
+        enum { PIECE_TEXT, PIECE_QUESTION, PIECE_OPTION } kind = PIECE_TEXT;
+        if (string_starts_with(piece, CLEF_PIECE_QUESTION)) {
+            piece = piece.substr(CLEF_PIECE_QUESTION.size());
+            kind  = PIECE_QUESTION;
+        } else if (string_starts_with(piece, CLEF_PIECE_OPTION)) {
+            piece = piece.substr(CLEF_PIECE_OPTION.size());
+            kind  = PIECE_OPTION;
+        } else if (string_starts_with(piece, CLEF_PIECE_STATE)) {
+            piece = piece.substr(CLEF_PIECE_STATE.size());
+        }
+
+        const int32_t start = tokens.size();
+        const llama_tokens piece_tokens = common_tokenize(vocab, piece, false, true);
+        tokens.insert(tokens.end(), piece_tokens.begin(), piece_tokens.end());
+        const int32_t end = tokens.size();
+
+        if (kind == PIECE_TEXT) {
+            continue;
+        }
+        if (start == end) {
+            throw std::invalid_argument("the instructions and the options of a question must not be empty");
+        }
+        // see llama_batch_ext_set_decision_order(): question of type noul, choice, score, or option
+        int32_t order = 4;
+        if (kind == PIECE_QUESTION) {
+            i_question++;
+            switch (questions.at(i_question).type) {
+                case SERVER_DECISION_QUESTION_NOUL:   order = 1; break;
+                case SERVER_DECISION_QUESTION_CHOICE: order = 2; break;
+                case SERVER_DECISION_QUESTION_SCORE:  order = 3; break;
+            }
+            n_questions++;
+        } else {
+            // the score of option i is returned at row i
+            task.decision.markers.push_back(n_options);
+            n_options++;
+        }
+        task.decision.order.resize(tokens.size(), 0);
+        std::fill(task.decision.order.begin() + start, task.decision.order.end(), order);
+    }
+    task.decision.order.resize(tokens.size(), 0);
+
+    size_t n_options_exp = 0;
+    for (const auto & question : questions) {
+        n_options_exp += question.options.size();
+    }
+    if (n_questions != questions.size() || n_options != n_options_exp) {
+        throw std::runtime_error("unexpected layout of the decision prompt");
+    }
+
+    task.decision.column = 0;
+    task.tokens = server_tokens(tokens, false);
+}
+
+std::vector<std::vector<float>> server_decision_context::split_scores(
+        const std::vector<server_decision_question> & questions,
+        const std::vector<float> & scores) const {
+    std::vector<std::vector<float>> result;
+    size_t offset = 0;
+    for (const auto & question : questions) {
+        const auto order = prompt_order(question);
+        if (offset + order.size() > scores.size()) {
+            throw std::runtime_error("decision result does not match the number of options");
+        }
+        std::vector<float> cur(order.size());
+        for (size_t i = 0; i < order.size(); i++) {
+            cur[order[i]] = scores[offset + i];
+        }
+        offset += order.size();
+        result.push_back(std::move(cur));
+    }
+    return result;
 }
 
 //
