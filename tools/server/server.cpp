@@ -102,11 +102,11 @@ int llama_server(int argc, char ** argv) {
     // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
     server_stream_session_manager_start();
 
-    SRV_INF("%s", "initializing ...\n");
-
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
+
+    SRV_INF("%s", "initializing ...\n");
 
     llama_backend_init();
     llama_numa_init(params.numa);
