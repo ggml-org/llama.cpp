@@ -777,6 +777,9 @@ class ModelBase:
                 bid = next(int(part) for part in new_name.split(".") if part.isdecimal())
                 self._unfusable_gate_up_layers.add(bid)
 
+        for bid in sorted(self._unfusable_gate_up_layers):
+            logger.warning(f"Skipping --fuse-gate-up-exps for layer {bid}: fusion of preserved FP8 expert projections is not supported")
+
     def prepare_qkv_fusion(self) -> None:
         self._fusable_qkv_weight_layers.clear()
         self._fusable_qkv_bias_layers.clear()
@@ -811,12 +814,13 @@ class ModelBase:
                 biases.setdefault(bid, set()).add(tensor_type)
 
         for bid, weight_types in weights.items():
-            # NVFP4 weights use separate reordering and repacking hooks and are exported before this fusion pass.
-            # Separate FP8 scales cannot be represented by one fused QKV scale.
-            if bid in fp8_layers:
-                continue
             bias_types = biases.get(bid, set())
             if weight_types == qkv_types and (not bias_types or bias_types == qkv_types):
+                # NVFP4 weights use separate reordering and repacking hooks and are exported before this fusion pass.
+                # Separate FP8 scales cannot be represented by one fused QKV scale.
+                if bid in fp8_layers:
+                    logger.warning(f"Skipping --fuse-qkv for layer {bid}: fusion of preserved FP8 projections is not supported")
+                    continue
                 self._fusable_qkv_weight_layers.add(bid)
                 if bias_types:
                     self._fusable_qkv_bias_layers.add(bid)
