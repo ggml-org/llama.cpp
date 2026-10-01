@@ -545,6 +545,8 @@ MATMUL_2D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_do
 MATMUL_2D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
 MATMUL_2D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
 MATMUL_2D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
+MATMUL_2D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
+MATMUL_2D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
 MATMUL_2D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
 MATMUL_2D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
 
@@ -652,6 +654,7 @@ static void name(unsigned int nth, unsigned int ith, void * data) {             
 
 QUANTIZE_IMPL(quantize_f32_q8_0_tiled, "quantize-f32-q8_0_tiled", quantize_f32_q8_0_tiled_kernel, htp_mm_q8_0_tiled_row_size(ne0))
 QUANTIZE_IMPL(quantize_f32_q8_1_tiled, "quantize-f32-q8_1_tiled", quantize_f32_q8_1_tiled_kernel, htp_mm_q8_1_tiled_row_size(ne0))
+QUANTIZE_IMPL(quantize_f32_q8_1_s16_tiled, "quantize-f32-q8_1_s16_tiled", quantize_f32_q8_1_s16_tiled_kernel, htp_mm_q8_1_tiled_row_size(ne0))
 QUANTIZE_IMPL(quantize_f32_f32,        "quantize-f32-f32",        quantize_f32_f32_kernel,        mmctx->vtcm_src1_stride)
 QUANTIZE_IMPL(quantize_f32_f16,        "quantize-f32-f16",        quantize_f32_f16_kernel,        mmctx->vtcm_src1_stride)
 QUANTIZE_IMPL(quantize_f16_f16,        "quantize-f16-f16",        quantize_f16_f16_kernel,        mmctx->vtcm_src1_stride)
@@ -712,11 +715,56 @@ static void quantize_f32_q8_1_tiled_block(unsigned int nth, unsigned int ith, vo
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
 }
 
+static void quantize_f32_q8_1_s16_tiled_block(unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    struct htp_mm_context * mmctx = data;
+    if (mmctx->quant_ib_first[ith] >= mmctx->quant_ib_last[ith]) {
+        return;
+    }
+    struct htp_ops_context * octx = mmctx->octx;
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
+
+    const struct htp_tensor * src = mmctx->act;
+
+    quantize_f32_q8_1_s16_tiled_block_kernel(
+        (const float *) mmctx->vtcm_act_raw,
+        mmctx->vtcm_src1,
+        NULL,
+        src->ne[0],
+        mmctx->quant_ib_first[ith],
+        mmctx->quant_ib_last[ith],
+        mmctx->vtcm_act_raw_stride,
+        htp_mm_q8_1_tiled_row_size(src->ne[0]),
+        mmctx->quant_r[ith],
+        mmctx->quant_c[ith]
+    );
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, mmctx->quant_ib_first[ith]);
+}
+
+// q8_1 for weight types with offsets (q8_1_s16 for Q2_K), otherwise q8_0
+static inline worker_callback_t htp_mm_act_quant_row_func(int weight_type) {
+    if (weight_type == HTP_TYPE_Q2_K) {
+        return quantize_f32_q8_1_s16_tiled;
+    }
+    return htp_mm_weight_has_offset(weight_type) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+}
+
+static inline worker_callback_t htp_mm_act_quant_block_func(int weight_type) {
+    if (weight_type == HTP_TYPE_Q2_K) {
+        return quantize_f32_q8_1_s16_tiled_block;
+    }
+    return htp_mm_weight_has_offset(weight_type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+}
+
 MATVEC_2D_REPACKED_IMPL(q4_0,       576,  tiled_vec_dot_q4_0_32x1)
 MATVEC_2D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x1)
 MATVEC_2D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x1)
 MATVEC_2D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x1)
 MATVEC_2D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x1)
+MATVEC_2D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x1)
+MATVEC_2D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x1)
 MATVEC_2D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x1)
 MATVEC_2D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x1)
 
@@ -726,6 +774,8 @@ MATMUL_NX_2D_REPACKED_IMPL(q8_0,    1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_do
 MATMUL_NX_2D_REPACKED_IMPL(iq4nl,   576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
 MATMUL_NX_2D_REPACKED_IMPL(mxfp4,   544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
 MATMUL_NX_2D_REPACKED_IMPL(q5_k,    768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
+MATMUL_NX_2D_REPACKED_IMPL(q3_k,    512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
+MATMUL_NX_2D_REPACKED_IMPL(q2_k,    512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
 
 #define MATMUL_4D_REPACKED_IMPL(SUFFIX, TILE_SIZE, DOT_2X2, DOT_2X1)                                                                                        \
 static void hvx_mm_4d_repacked_##SUFFIX(unsigned int nth, unsigned int ith, void * data) {                                                                  \
@@ -859,6 +909,8 @@ MATMUL_4D_REPACKED_IMPL(q4_1,       640,  tiled_vec_dot_q4_1_32x2,  tiled_vec_do
 MATMUL_4D_REPACKED_IMPL(q8_0,       1088, tiled_vec_dot_q8_0_32x2,  tiled_vec_dot_q8_0_32x1)
 MATMUL_4D_REPACKED_IMPL(q6_k,       896,  tiled_vec_dot_q6_k_32x2,  tiled_vec_dot_q6_k_32x1)
 MATMUL_4D_REPACKED_IMPL(q5_k,       768,  tiled_vec_dot_q5_k_32x2,  tiled_vec_dot_q5_k_32x1)
+MATMUL_4D_REPACKED_IMPL(q3_k,       512,  tiled_vec_dot_q3_k_32x2,  tiled_vec_dot_q3_k_32x1)
+MATMUL_4D_REPACKED_IMPL(q2_k,       512,  tiled_vec_dot_q2_k_32x2,  tiled_vec_dot_q2_k_32x1)
 MATMUL_4D_REPACKED_IMPL(iq4nl,      576,  tiled_vec_dot_iq4nl_32x2, tiled_vec_dot_iq4nl_32x1)
 MATMUL_4D_REPACKED_IMPL(mxfp4,      544,  tiled_vec_dot_mxfp4_32x2, tiled_vec_dot_mxfp4_32x1)
 
@@ -1600,6 +1652,14 @@ static int hvx_mm_init_vec_dot(struct htp_mm_context * mmctx, enum htp_data_type
             mmctx->type         = "q6_k_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q6_k_32x1;
             return 0;
+        case HTP_TYPE_Q3_K:
+            mmctx->type         = "q3_k_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_q3_k_32x1;
+            return 0;
+        case HTP_TYPE_Q2_K:
+            mmctx->type         = "q2_k_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_q2_k_32x1;
+            return 0;
         case HTP_TYPE_IQ4_NL:
             mmctx->type         = "iq4nl_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_iq4nl_32x1;
@@ -1651,7 +1711,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
     bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
                         src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
                         src0->type == HTP_TYPE_MXFP4 || src0->type == HTP_TYPE_Q6_K ||
-                        src0->type == HTP_TYPE_Q4_K || src0->type == HTP_TYPE_Q5_K);
+                        src0->type == HTP_TYPE_Q4_K || src0->type == HTP_TYPE_Q5_K ||
+                        src0->type == HTP_TYPE_Q3_K || src0->type == HTP_TYPE_Q2_K);
 
     // Compute src0_nrows_per_thread
     mmctx->src0_nrows_per_thread  = fastdiv(nrows + octx->n_threads - 1, &octx->n_threads_div);
@@ -1681,6 +1742,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_4d_repacked_q8_0;   break;
                 case HTP_TYPE_Q6_K:   matmul_job_func = hvx_mm_4d_repacked_q6_k;   break;
                 case HTP_TYPE_Q5_K:   matmul_job_func = hvx_mm_4d_repacked_q5_k;   break;
+                case HTP_TYPE_Q3_K:   matmul_job_func = hvx_mm_4d_repacked_q3_k;   break;
+                case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mm_4d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_4d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_4d_repacked_mxfp4;  break;
                 default:              return HTP_STATUS_NO_SUPPORT;
@@ -1697,6 +1760,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_2d_repacked_q8_0;   break;
                 case HTP_TYPE_Q6_K:   matmul_job_func = hvx_mm_2d_repacked_q6_k;   break;
                 case HTP_TYPE_Q5_K:   matmul_job_func = hvx_mm_2d_repacked_q5_k;   break;
+                case HTP_TYPE_Q3_K:   matmul_job_func = hvx_mm_2d_repacked_q3_k;   break;
+                case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mm_2d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_2d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_2d_repacked_mxfp4;  break;
                 default:              return HTP_STATUS_NO_SUPPORT;
@@ -1713,6 +1778,8 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mv_2d_repacked_q8_0;   break;
                 case HTP_TYPE_Q5_K:   matmul_job_func = hvx_mv_2d_repacked_q5_k;   break;
                 case HTP_TYPE_Q6_K:   matmul_job_func = hvx_mv_2d_repacked_q6_k;   break;
+                case HTP_TYPE_Q3_K:   matmul_job_func = hvx_mv_2d_repacked_q3_k;   break;
+                case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mv_2d_repacked_q2_k;   break;
                 case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mv_2d_repacked_iq4nl;  break;
                 case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mv_2d_repacked_mxfp4;  break;
                 default:              return HTP_STATUS_NO_SUPPORT;
@@ -1758,7 +1825,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
 
             if (src1_nrows < octx->n_threads && !is_batched) {
                 n_quant_tasks = MIN(total_nb, octx->n_threads);
-                quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+                quant_task_func = htp_mm_act_quant_block_func(src0->type);
                 for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
                     uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
                     uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
@@ -1769,7 +1836,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 }
             } else {
                 n_quant_tasks = MIN(src1_nrows, octx->n_threads);
-                quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+                quant_task_func = htp_mm_act_quant_row_func(src0->type);
             }
             src1_row_size = htp_mm_weight_has_offset(src0->type) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
             break;
@@ -1849,7 +1916,7 @@ static int hvx_mm_matmul(struct htp_ops_context * octx) {
                 work_queue_func_t q_func;
                 if (cur_m_rows < octx->n_threads && (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK || kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW)) {
                     quant_tasks = MIN(total_nb, octx->n_threads);
-                    q_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+                    q_func = htp_mm_act_quant_block_func(src0->type);
                     for (uint32_t ith = 0; ith < quant_tasks; ++ith) {
                         uint32_t ib_first = (total_nb * ith) / quant_tasks;
                         uint32_t ib_last  = (total_nb * (ith + 1)) / quant_tasks;
@@ -2012,6 +2079,8 @@ DEQUANTIZE_WORKER_LOOP_IMPL(mxfp4)
 DEQUANTIZE_WORKER_LOOP_IMPL(q8_0)
 DEQUANTIZE_WORKER_LOOP_IMPL(q6_k)
 DEQUANTIZE_WORKER_LOOP_IMPL(q5_k)
+DEQUANTIZE_WORKER_LOOP_IMPL(q3_k)
+DEQUANTIZE_WORKER_LOOP_IMPL(q2_k)
 
 static void convert_f16_worker_loop(unsigned int n, unsigned int i, void *data) {
     tiled_dequantize_state_t *state = (tiled_dequantize_state_t *)data;
@@ -2697,6 +2766,8 @@ static int hmx_mm_2d_f32(struct htp_context *ctx,
         case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q8_0; break;
         case HTP_TYPE_Q5_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q5_k; break;
         case HTP_TYPE_Q6_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q6_k; break;
+        case HTP_TYPE_Q3_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q3_k; break;
+        case HTP_TYPE_Q2_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q2_k; break;
         case HTP_TYPE_F16:    dequant_worker_fn = convert_f16_worker_loop; break;
         case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
@@ -2963,6 +3034,8 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
         case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q8_0; break;
         case HTP_TYPE_Q5_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q5_k; break;
         case HTP_TYPE_Q6_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q6_k; break;
+        case HTP_TYPE_Q3_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q3_k; break;
+        case HTP_TYPE_Q2_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q2_k; break;
         case HTP_TYPE_F16:    dequant_worker_fn = convert_f16_worker_loop; break;
         case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
@@ -3559,6 +3632,8 @@ static int hmx_mm_id_2d_f32(struct htp_context *ctx,
         case HTP_TYPE_Q8_0:   dequant_worker_fn = dequantize_tiled_worker_loop_q8_0; break;
         case HTP_TYPE_Q5_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q5_k; break;
         case HTP_TYPE_Q6_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q6_k; break;
+        case HTP_TYPE_Q3_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q3_k; break;
+        case HTP_TYPE_Q2_K:   dequant_worker_fn = dequantize_tiled_worker_loop_q2_k; break;
         case HTP_TYPE_F16:    dequant_worker_fn = convert_f16_worker_loop; break;
         case HTP_TYPE_F32:    dequant_worker_fn = quantize_f32_worker_loop; break;
         default:
@@ -3863,7 +3938,7 @@ static int hvx_mm_matmul_id(
     uint32_t n_quant_tasks = 1;
     if (act_nrows < octx->n_threads) {
         n_quant_tasks = MIN(total_nb, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        quant_task_func = htp_mm_act_quant_block_func(src0->type);
         for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
@@ -3874,7 +3949,7 @@ static int hvx_mm_matmul_id(
         }
     } else {
         n_quant_tasks = MIN(act_nrows, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        quant_task_func = htp_mm_act_quant_row_func(src0->type);
     }
     size_t src1_row_size  = htp_mm_weight_has_offset(src0->type) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
@@ -4016,7 +4091,7 @@ static int hvx_mm_matmul_id_nx(
     uint32_t n_quant_tasks = 1;
     if (act_nrows < octx->n_threads) {
         n_quant_tasks = MIN(total_nb, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        quant_task_func = htp_mm_act_quant_block_func(src0->type);
         for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
@@ -4027,7 +4102,7 @@ static int hvx_mm_matmul_id_nx(
         }
     } else {
         n_quant_tasks = MIN(act_nrows, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        quant_task_func = htp_mm_act_quant_row_func(src0->type);
     }
     size_t src1_row_size = htp_mm_weight_has_offset(src0->type) ? htp_mm_q8_1_tiled_row_size(act->ne[0]) : htp_mm_q8_0_tiled_row_size(act->ne[0]);
 
@@ -4394,7 +4469,8 @@ int op_matmul_nx(struct htp_ops_context * octx) {
     bool is_repacked = (src0->type == HTP_TYPE_Q4_0 || src0->type == HTP_TYPE_Q4_1 ||
                         src0->type == HTP_TYPE_Q8_0 || src0->type == HTP_TYPE_IQ4_NL ||
                         src0->type == HTP_TYPE_MXFP4 || src0->type == HTP_TYPE_Q4_K ||
-                        src0->type == HTP_TYPE_Q5_K);
+                        src0->type == HTP_TYPE_Q5_K || src0->type == HTP_TYPE_Q3_K ||
+                        src0->type == HTP_TYPE_Q2_K);
 
     struct htp_mm_context mmctx_struct = {0};
     struct htp_mm_context * mmctx = &mmctx_struct;
@@ -4421,7 +4497,7 @@ int op_matmul_nx(struct htp_ops_context * octx) {
     uint32_t n_quant_tasks = 1;
     if (act_nrows < octx->n_threads) {
         n_quant_tasks = MIN(total_nb, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled_block : quantize_f32_q8_0_tiled_block;
+        quant_task_func = htp_mm_act_quant_block_func(src0->type);
         for (uint32_t ith = 0; ith < n_quant_tasks; ++ith) {
             uint32_t ib_first = (total_nb * ith) / n_quant_tasks;
             uint32_t ib_last  = (total_nb * (ith + 1)) / n_quant_tasks;
@@ -4432,7 +4508,7 @@ int op_matmul_nx(struct htp_ops_context * octx) {
         }
     } else {
         n_quant_tasks = MIN(act_nrows, octx->n_threads);
-        quant_task_func = htp_mm_weight_has_offset(src0->type) ? quantize_f32_q8_1_tiled : quantize_f32_q8_0_tiled;
+        quant_task_func = htp_mm_act_quant_row_func(src0->type);
     }
 
     const size_t src1_row_size = htp_mm_weight_has_offset(src0->type)
@@ -4480,6 +4556,8 @@ int op_matmul_nx(struct htp_ops_context * octx) {
             case HTP_TYPE_Q4_1:
             case HTP_TYPE_Q4_K:   matmul_job_func = hvx_mm_nx_2d_repacked_q4_1;   break;
             case HTP_TYPE_Q5_K:   matmul_job_func = hvx_mm_nx_2d_repacked_q5_k;   break;
+            case HTP_TYPE_Q3_K:   matmul_job_func = hvx_mm_nx_2d_repacked_q3_k;   break;
+            case HTP_TYPE_Q2_K:   matmul_job_func = hvx_mm_nx_2d_repacked_q2_k;   break;
             case HTP_TYPE_Q8_0:   matmul_job_func = hvx_mm_nx_2d_repacked_q8_0;   break;
             case HTP_TYPE_IQ4_NL: matmul_job_func = hvx_mm_nx_2d_repacked_iq4nl;  break;
             case HTP_TYPE_MXFP4:  matmul_job_func = hvx_mm_nx_2d_repacked_mxfp4;  break;

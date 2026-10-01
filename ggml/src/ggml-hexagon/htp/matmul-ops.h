@@ -33,6 +33,16 @@ extern "C" {
 //   vectors 4..5: high 2 bits, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
 //   vector 6: fp16 scales per row, d * scales[]: k 0..15 in lanes 0..31, k 16..31 in lanes 32..63
 #define HTP_MM_WEIGHT_TILE_SIZE_Q6_K   896
+// Q3_K native 3-bit tile, vrmpy-ready like Q6_K
+//   vectors 0..1: low 2 bits, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   vector 2: bit g set where the hmask bit of group g is clear (quant = low 2 bits - 4)
+//   vector 3: fp16 scales per row, d * (scales[] - 32): k 0..15 in lanes 0..31, k 16..31 in lanes 32..63
+#define HTP_MM_WEIGHT_TILE_SIZE_Q3_K   512
+// Q2_K native 2-bit tile, vrmpy-ready like Q6_K
+//   vectors 0..1: unsigned 2-bit quants, vector m holds groups 4m..4m+3 at bit offsets 0,2,4,6
+//   vector 2: fp16 scales per row, d * (scales[] & 0xF), same lanes as Q3_K vector 3
+//   vector 3: fp16 offsets per row, -dmin * (scales[] >> 4), same lanes
+#define HTP_MM_WEIGHT_TILE_SIZE_Q2_K   512
 
 // --- Weight Repacked Aligned Tile Sizes ---
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q4_0   640
@@ -42,6 +52,8 @@ extern "C" {
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4  640
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q5_K   768
 #define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q6_K   896
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q3_K   512
+#define HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_K   512
 
 // --- Activation Tiled Block Sizes (including padding) ---
 #define HTP_MM_ACT_TILE_SIZE_Q8_0      1152
@@ -207,6 +219,10 @@ static inline uint32_t htp_mm_get_weight_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_TILE_SIZE_Q5_K;
         case HTP_TYPE_Q6_K:
             return HTP_MM_WEIGHT_TILE_SIZE_Q6_K;
+        case HTP_TYPE_Q3_K:
+            return HTP_MM_WEIGHT_TILE_SIZE_Q3_K;
+        case HTP_TYPE_Q2_K:
+            return HTP_MM_WEIGHT_TILE_SIZE_Q2_K;
         case HTP_TYPE_MXFP4:
             return HTP_MM_WEIGHT_TILE_SIZE_MXFP4;
         default:
@@ -228,6 +244,10 @@ static inline uint32_t htp_mm_get_weight_aligned_tile_size(int weight_type) {
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q5_K;
         case HTP_TYPE_Q6_K:
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q6_K;
+        case HTP_TYPE_Q3_K:
+            return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q3_K;
+        case HTP_TYPE_Q2_K:
+            return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_Q2_K;
         case HTP_TYPE_MXFP4:
             return HTP_MM_WEIGHT_ALIGNED_TILE_SIZE_MXFP4;
         default:
@@ -236,8 +256,10 @@ static inline uint32_t htp_mm_get_weight_aligned_tile_size(int weight_type) {
 }
 
 // weight types whose tiles carry a per-block offset (x = d * q + m): the activations need block sums (q8_1)
+// (Q2_K: per-16 k sums, q8_1_s16)
 static inline bool htp_mm_weight_has_offset(int weight_type) {
-    return weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_Q4_K || weight_type == HTP_TYPE_Q5_K;
+    return weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_Q4_K || weight_type == HTP_TYPE_Q5_K ||
+           weight_type == HTP_TYPE_Q2_K;
 }
 
 // --- Activation/Row Size Helpers ---
@@ -263,6 +285,8 @@ static inline size_t htp_mm_get_tiled_row_stride(int weight_type, uint32_t k) {
         case HTP_TYPE_Q8_0:
         case HTP_TYPE_Q5_K:
         case HTP_TYPE_Q6_K:
+        case HTP_TYPE_Q3_K:
+        case HTP_TYPE_Q2_K:
         case HTP_TYPE_MXFP4:
             return (size_t) nb * htp_mm_get_weight_tile_size(weight_type);
         case HTP_TYPE_F16:
@@ -501,7 +525,8 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     const bool is_repack = (wtype == HTP_TYPE_Q4_0 || wtype == HTP_TYPE_Q4_1 ||
                             wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL ||
                             wtype == HTP_TYPE_MXFP4 || wtype == HTP_TYPE_Q6_K ||
-                            wtype == HTP_TYPE_Q4_K || wtype == HTP_TYPE_Q5_K);
+                            wtype == HTP_TYPE_Q4_K || wtype == HTP_TYPE_Q5_K ||
+                            wtype == HTP_TYPE_Q3_K || wtype == HTP_TYPE_Q2_K);
 
     if (is_fused_nx) {
         const size_t src0_row_size_padded = hex_round_up(src0_row_size, 128);
