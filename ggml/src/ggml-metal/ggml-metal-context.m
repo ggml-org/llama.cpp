@@ -372,8 +372,17 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     @autoreleasepool {
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
-        id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
-                                                          length:size
+        // newBufferWithBytesNoCopy requires a page-aligned pointer and, on macOS 12/13, a length that is
+        // a multiple of the page size - otherwise it returns nil (see ggml-org/llama.cpp#16266)
+        // expand the wrapped region to the enclosing page boundaries: every page in that range contains
+        // bytes of [data, data + size), so it is already mapped; the blit below only writes [data, data + size)
+        const size_t    size_page = sysconf(_SC_PAGESIZE);
+        const uintptr_t dst_offs  = (uintptr_t) data % size_page;
+        void *          dst_base  = (char *) data - dst_offs;
+        const size_t    dst_len   = ((dst_offs + size + size_page - 1) / size_page) * size_page;
+
+        id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:dst_base
+                                                          length:dst_len
                                                          options:MTLResourceStorageModeShared
                                                      deallocator:nil];
 
@@ -395,7 +404,7 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
         [encoder copyFromBuffer:bid_src.metal
                    sourceOffset:bid_src.offs
                        toBuffer:buf_dst
-              destinationOffset:0
+              destinationOffset:dst_offs
                            size:size];
 
         [encoder endEncoding];
