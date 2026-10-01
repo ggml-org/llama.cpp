@@ -1589,7 +1589,7 @@ json server_task_result_metrics::to_json() {
     json decode = json{
         {"total",                metrics.n_decode},
         {"n_tokens_max",         metrics.n_tokens_max},
-        {"seconds_total",        json_round1(std::round(metrics.predict_bucket.time / 1e4) / 10.0)},
+        {"seconds_total",        json_round1(std::round(metrics.predict.time / 1e4) / 10.0)},
         {"busy_slots_per_decode", json_round1(std::round(n_busy * 10.0) / 10.0)},
     };
 
