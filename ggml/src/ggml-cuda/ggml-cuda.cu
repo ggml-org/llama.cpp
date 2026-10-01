@@ -5890,6 +5890,10 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         /* .context = */ ctx,
     };
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    cuda_backend->supports_sync_tracking = true;
+#endif
+
     return cuda_backend;
 }
 

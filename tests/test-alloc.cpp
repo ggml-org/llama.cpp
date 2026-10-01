@@ -666,6 +666,13 @@ static void test_backend_synchronize() {
     backend.iface.event_wait = [](ggml_backend_t, ggml_backend_event_t) {};
     backend.iface.cpy_tensor_async = [](ggml_backend_t, ggml_backend_t, const ggml_tensor *, ggml_tensor *) { return true; };
 
+    // Backends that do not opt in retain unconditional synchronization.
+    ggml_backend_synchronize(&backend);
+    ggml_backend_synchronize(&backend);
+    GGML_ASSERT(n_sync == 2);
+    backend.supports_sync_tracking = true;
+    backend.is_synchronized = false;
+
     auto check_sync = [&]() {
         const int before = n_sync;
         ggml_backend_synchronize(&backend);

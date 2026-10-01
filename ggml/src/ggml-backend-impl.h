@@ -164,8 +164,11 @@ extern "C" {
         // Async submissions clear this; only a full backend synchronization sets it.
 #ifdef __cplusplus
         bool is_synchronized = false;
+        // Enable only when all async submission paths invalidate is_synchronized.
+        bool supports_sync_tracking = false;
 #else
         bool is_synchronized;
+        bool supports_sync_tracking;
 #endif
     };
 

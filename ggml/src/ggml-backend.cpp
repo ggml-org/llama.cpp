@@ -432,8 +432,7 @@ void ggml_backend_synchronize(ggml_backend_t backend) {
         return;
     }
 
-    // Meta backends must also check work submitted directly to their child backends.
-    if (backend->is_synchronized && !ggml_backend_is_meta(backend)) {
+    if (backend->supports_sync_tracking && backend->is_synchronized) {
         return;
     }
 

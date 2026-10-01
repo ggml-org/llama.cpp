@@ -7088,9 +7088,6 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     }
 
     auto * comm_ctx = static_cast<ggml_backend_sycl_comm_context *>(comm_ctx_v);
-    for (ggml_backend_t backend : comm_ctx->backends) {
-        backend->is_synchronized = false;
-    }
     const size_t n_backends = comm_ctx->backends.size();
 
     // Fast path: N=2, F32/F16, contiguous, matching shapes.
