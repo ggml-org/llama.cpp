@@ -1249,6 +1249,9 @@ static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct gg
         return false;
     }
     auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
+    for (ggml_backend_t backend : comm_ctx->backends) {
+        backend->is_synchronized = false;
+    }
     return comm_ctx->try_allreduce(comm_ctx, tensors);
 }
 

@@ -90,10 +90,10 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
         return 1;
     }
 
-    status = bck->iface.graph_compute(bck, cgraph);
+    status = ggml_backend_graph_compute_async(bck, cgraph);
 
     if (async_backend && bck->iface.synchronize) {
-        bck->iface.synchronize(bck);
+        ggml_backend_synchronize(bck);
     }
 
     apir_encode_ggml_status(enc, &status);

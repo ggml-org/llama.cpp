@@ -273,6 +273,7 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
         ggml_backend_tensor_set(tensor, data, offset, size);
     } else {
         backend->iface.set_tensor_async(backend, tensor, data, offset, size);
+        backend->is_synchronized = false;
     }
 }
 
@@ -287,6 +288,7 @@ void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_ten
         ggml_backend_tensor_get(tensor, data, offset, size);
     } else {
         backend->iface.get_tensor_async(backend, tensor, data, offset, size);
+        backend->is_synchronized = false;
     }
 }
 
@@ -309,6 +311,7 @@ void ggml_backend_tensor_set_2d_async(ggml_backend_t backend, struct ggml_tensor
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + (n_copies-1)*stride_tensor + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
     backend->iface.set_tensor_2d_async(backend, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+    backend->is_synchronized = false;
 }
 
 void ggml_backend_tensor_get_2d_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size,
@@ -330,6 +333,7 @@ void ggml_backend_tensor_get_2d_async(ggml_backend_t backend, const struct ggml_
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + (n_copies-1)*stride_tensor + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
     backend->iface.get_tensor_2d_async(backend, tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+    backend->is_synchronized = false;
 }
 
 void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -428,7 +432,13 @@ void ggml_backend_synchronize(ggml_backend_t backend) {
         return;
     }
 
+    // Meta backends must also check work submitted directly to their child backends.
+    if (backend->is_synchronized && !ggml_backend_is_meta(backend)) {
+        return;
+    }
+
     backend->iface.synchronize(backend);
+    backend->is_synchronized = true;
 }
 
 ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -449,7 +459,10 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
     GGML_ASSERT(backend);
     GGML_ASSERT(backend->iface.graph_plan_compute != NULL);
 
-    return backend->iface.graph_plan_compute(backend, plan);
+    const auto status = backend->iface.graph_plan_compute(backend, plan);
+    // A failed submission may still have queued work.
+    backend->is_synchronized = false;
+    return status;
 }
 
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
@@ -460,7 +473,10 @@ enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_
 
 enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     GGML_ASSERT(backend);
-    return backend->iface.graph_compute(backend, cgraph);
+    const auto status = backend->iface.graph_compute(backend, cgraph);
+    // A failed submission may still have queued work.
+    backend->is_synchronized = false;
+    return status;
 }
 
 bool ggml_backend_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
@@ -508,6 +524,18 @@ void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor
     }
 }
 
+static bool ggml_backend_tensor_try_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
+    if (backend_dst->iface.cpy_tensor_async == NULL) {
+        return false;
+    }
+
+    const bool copied = backend_dst->iface.cpy_tensor_async(backend_src, backend_dst, src, dst);
+    // A cross-backend copy may queue work on both streams.
+    backend_src->is_synchronized = false;
+    backend_dst->is_synchronized = false;
+    return copied;
+}
+
 void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     GGML_ASSERT(ggml_are_same_layout(src, dst) && "cannot copy tensors with different layouts");
 
@@ -516,10 +544,8 @@ void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t b
     }
 
     GGML_ASSERT(backend_dst);
-    if (backend_dst->iface.cpy_tensor_async != NULL) {
-        if (backend_dst->iface.cpy_tensor_async(backend_src, backend_dst, src, dst)) {
-            return;
-        }
+    if (ggml_backend_tensor_try_copy_async(backend_src, backend_dst, src, dst)) {
+        return;
     }
 
     // an async copy would normally happen after all the queued operations on both backends are completed
@@ -551,6 +577,7 @@ void ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backen
     GGML_ASSERT(backend->iface.event_record != NULL);
 
     backend->iface.event_record(backend, event);
+    backend->is_synchronized = false;
 }
 
 void ggml_backend_event_synchronize(ggml_backend_event_t event) {
@@ -565,6 +592,7 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
     GGML_ASSERT(backend->iface.event_wait != NULL);
 
     backend->iface.event_wait(backend, event);
+    backend->is_synchronized = false;
 }
 
 static void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph, struct ggml_backend_graph_optimize_params * params) {
@@ -1798,7 +1826,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                     // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-                    if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                    if (!ggml_backend_tensor_try_copy_async(input_backend, split_backend, input, input_cpy)) {
                         ggml_backend_synchronize(input_backend);
                         if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                             ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);

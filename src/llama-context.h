@@ -356,9 +356,6 @@ private:
 
     bool sched_need_reserve = true;
 
-    // An async graph or its host output copies may still be pending.
-    bool output_pending = false;
-
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 

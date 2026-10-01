@@ -650,6 +650,84 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+// Check that every async entry point invalidates a completed synchronization.
+static void test_backend_synchronize() {
+    int n_sync = 0;
+    ggml_backend backend = {};
+    backend.context = &n_sync;
+    backend.iface.synchronize = [](ggml_backend_t b) { ++*(int *) b->context; };
+    backend.iface.set_tensor_async = [](ggml_backend_t, ggml_tensor *, const void *, size_t, size_t) {};
+    backend.iface.get_tensor_async = [](ggml_backend_t, const ggml_tensor *, void *, size_t, size_t) {};
+    backend.iface.set_tensor_2d_async = [](ggml_backend_t, ggml_tensor *, const void *, size_t, size_t, size_t, size_t, size_t) {};
+    backend.iface.get_tensor_2d_async = [](ggml_backend_t, const ggml_tensor *, void *, size_t, size_t, size_t, size_t, size_t) {};
+    backend.iface.graph_compute = [](ggml_backend_t, ggml_cgraph *) { return GGML_STATUS_SUCCESS; };
+    backend.iface.graph_plan_compute = [](ggml_backend_t, ggml_backend_graph_plan_t) { return GGML_STATUS_SUCCESS; };
+    backend.iface.event_record = [](ggml_backend_t, ggml_backend_event_t) {};
+    backend.iface.event_wait = [](ggml_backend_t, ggml_backend_event_t) {};
+    backend.iface.cpy_tensor_async = [](ggml_backend_t, ggml_backend_t, const ggml_tensor *, ggml_tensor *) { return true; };
+
+    auto check_sync = [&]() {
+        const int before = n_sync;
+        ggml_backend_synchronize(&backend);
+        GGML_ASSERT(n_sync == before + 1);
+        ggml_backend_synchronize(&backend);
+        GGML_ASSERT(n_sync == before + 1);
+    };
+    check_sync();
+
+    float data[2] = {};
+    ggml_tensor tensor = {};
+    tensor.type = GGML_TYPE_F32;
+    tensor.ne[0] = 2;
+    tensor.nb[0] = sizeof(float);
+    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+        tensor.ne[i] = 1;
+        tensor.nb[i] = sizeof(data);
+    }
+    tensor.data = data;
+
+    ggml_backend_graph_compute_async(&backend, nullptr);
+    check_sync();
+    // A copy after a completed graph must still be synchronized.
+    ggml_backend_tensor_get_async(&backend, &tensor, data, 0, sizeof(data));
+    check_sync();
+    ggml_backend_tensor_set_async(&backend, &tensor, data, 0, sizeof(data));
+    check_sync();
+    ggml_backend_tensor_get_2d_async(&backend, &tensor, data, 0, sizeof(float), 2, sizeof(float), sizeof(float));
+    check_sync();
+    ggml_backend_tensor_set_2d_async(&backend, &tensor, data, 0, sizeof(float), 2, sizeof(float), sizeof(float));
+    check_sync();
+    // Also cover the fallback through the one-dimensional callbacks.
+    backend.iface.get_tensor_2d_async = nullptr;
+    backend.iface.set_tensor_2d_async = nullptr;
+    ggml_backend_tensor_get_2d_async(&backend, &tensor, data, 0, sizeof(float), 2, sizeof(float), sizeof(float));
+    check_sync();
+    ggml_backend_tensor_set_2d_async(&backend, &tensor, data, 0, sizeof(float), 2, sizeof(float), sizeof(float));
+    check_sync();
+    ggml_backend_graph_plan_compute(&backend, nullptr);
+    check_sync();
+    // Failure does not imply that no work was submitted.
+    backend.iface.graph_compute = [](ggml_backend_t, ggml_cgraph *) { return GGML_STATUS_ABORTED; };
+    GGML_ASSERT(ggml_backend_graph_compute_async(&backend, nullptr) == GGML_STATUS_ABORTED);
+    check_sync();
+    ggml_backend_event_record(nullptr, &backend);
+    check_sync();
+    ggml_backend_event_wait(&backend, nullptr);
+    check_sync();
+
+    int n_sync_dst = 0;
+    ggml_backend dst_backend = backend;
+    dst_backend.context = &n_sync_dst;
+    ggml_tensor dst = tensor;
+    ggml_backend_tensor_copy_async(&backend, &dst_backend, &tensor, &dst);
+    check_sync();
+    ggml_backend_synchronize(&dst_backend);
+    ggml_backend_synchronize(&dst_backend);
+    GGML_ASSERT(n_sync_dst == 1);
+    ggml_backend_tensor_copy_async(&backend, &backend, &tensor, &dst);
+    check_sync();
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -658,6 +736,7 @@ static void run(const char * name, void (*f)()) {
 }
 
 int main() {
+    run("test_backend_synchronize", test_backend_synchronize);
     run("test_max_size_too_many_tensors", test_max_size_too_many_tensors);
     run("test_max_size_tensor_too_large", test_max_size_tensor_too_large);
     run("test_tensor_larger_than_max_size", test_tensor_larger_than_max_size);

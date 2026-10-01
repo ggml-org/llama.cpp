@@ -771,10 +771,7 @@ void llama_context::synchronize() {
         return;
     }
 
-    if (output_pending) {
-        ggml_backend_sched_synchronize(sched.get());
-        output_pending = false;
-    }
+    ggml_backend_sched_synchronize(sched.get());
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -1420,7 +1417,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         // that the previous compute is still reading.
         if (cparams.pipeline_parallel) {
             ggml_backend_sched_synchronize(sched.get());
-            output_pending = false;
         }
 
         n_reused++;
@@ -2627,7 +2623,6 @@ ggml_status llama_context::graph_compute(
     }
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
-    output_pending = true;
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
