@@ -1,8 +1,3 @@
-// K2 Horizon (MBZUAI IFM): grouped RMSNorm, optional per-head QK-norm and softplus
-// attention output gate, DeepSeek-V3 style MoE (sigmoid router, selection bias,
-// shared expert, leading dense layers) and MoVA: in MoE layers the V projection is
-// replaced by routed value experts, V = sum_k w_k * silu(W_k x).
-
 #include "models.h"
 
 void llama_model_k2_horizon::load_arch_hparams(llama_model_loader & ml) {
@@ -39,12 +34,17 @@ void llama_model_k2_horizon::load_arch_hparams(llama_model_loader & ml) {
         GGML_ASSERT(hparams.n_value_expert_used == 0);
     }
 
-    if (hparams.n_layer() == 28 && hparams.n_embd == 1536) {
-        type = LLM_TYPE_1B;
-    } else if (hparams.n_layer() == 48 && hparams.n_embd == 2560) {
-        type = LLM_TYPE_36B;
-    } else {
-        type = LLM_TYPE_UNKNOWN;
+    switch (hparams.n_layer()) {
+        case 28: type = LLM_TYPE_1B; break;
+        case 36:
+            switch (hparams.n_embd) {
+                case 2560: type = LLM_TYPE_4B; break;
+                case 4096: type = LLM_TYPE_7B; break;
+                default:   type = LLM_TYPE_UNKNOWN;
+            } break;
+        case 48: type = LLM_TYPE_36B; break;
+        case 64: type = LLM_TYPE_32B; break;
+        default: type = LLM_TYPE_UNKNOWN;
     }
 }
 

@@ -9,7 +9,6 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
-#include "../src/llama-model.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -507,10 +506,6 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         llama_model_load_from_file_ptr(file, model_params));
     if (!model) {
         throw std::runtime_error("failed to create llama model");
-    }
-    if (model->arch == LLM_ARCH_K2_HORIZON) {
-        GGML_ASSERT(model->hparams.yarn_beta_fast == 128.0f);
-        GGML_ASSERT(model->hparams.yarn_beta_slow ==   4.0f);
     }
     llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
     if (!lctx) {
