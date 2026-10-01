@@ -48,9 +48,9 @@ const T * cast_stmt(const statement_ptr & ptr) {
 void enable_debug(bool enable);
 
 // for visiting AST nodes
-// function signature: void(bool is_leaf, statement * node, pair of <label, children>)
-using visitor_pair = std::pair<std::string, std::vector<statement *>>;
-using visitor_fn = std::function<void(bool, statement *, std::vector<visitor_pair>)>;
+// function signature: void(bool is_leaf, const statement * node, pair of <label, children>)
+using visitor_pair = std::pair<std::string, std::vector<const statement *>>;
+using visitor_fn = std::function<void(bool, const statement *, std::vector<visitor_pair>)>;
 
 struct context {
     std::shared_ptr<std::string> src; // for debugging; use shared_ptr to avoid copying on scope creation
@@ -107,8 +107,8 @@ private:
 };
 
 // utils for visiting AST nodes
-static std::vector<statement *> stmts_to_ptr(const statements & stmts) {
-    std::vector<statement *> children;
+static std::vector<const statement *> stmts_to_ptr(const statements & stmts) {
+    std::vector<const statement *> children;
     for (const auto & stmt : stmts) {
         children.push_back(stmt.get());
     }
@@ -117,17 +117,18 @@ static std::vector<statement *> stmts_to_ptr(const statements & stmts) {
 
 /**
  * Base class for all nodes in the AST.
+ * The AST is shared between threads, so visit and execute must be const.
  */
 struct statement {
     size_t pos; // position in source, for debugging
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
-    virtual void visit(context & ctx) { ctx.visitor(true, this, {}); }
+    virtual void visit(context & ctx) const { ctx.visitor(true, this, {}); }
 
     // execute_impl must be overridden by derived classes
-    virtual value execute_impl(context &) { throw_exec_error(); }
+    virtual value execute_impl(context &) const { throw_exec_error(); }
     // execute is the public method to execute a statement with error handling
-    value execute(context &);
+    value execute(context &) const;
 
 private:
     [[noreturn]] void throw_exec_error() const {
@@ -166,7 +167,7 @@ struct program : public statement {
     program() = default;
     explicit program(statements && body) : body(std::move(body)) {}
     std::string type() const override { return "Program"; }
-    [[noreturn]] value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw std::runtime_error("Cannot execute program directly, use jinja::runtime instead");
     }
 };
@@ -182,8 +183,8 @@ struct if_statement : public statement {
     }
 
     std::string type() const override { return "If"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"test", {test.get()}},
             {"body", stmts_to_ptr(body)},
@@ -213,8 +214,8 @@ struct for_statement : public statement {
     }
 
     std::string type() const override { return "For"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"loopvar", {loopvar.get()}},
             {"iterable", {iterable.get()}},
@@ -233,7 +234,7 @@ struct break_statement : public statement {
         }
     };
 
-    [[noreturn]] value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw break_statement::signal();
     }
 };
@@ -247,7 +248,7 @@ struct continue_statement : public statement {
         }
     };
 
-    [[noreturn]] value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw continue_statement::signal();
     }
 };
@@ -255,7 +256,7 @@ struct continue_statement : public statement {
 // do nothing
 struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_undefined>();
     }
 };
@@ -272,8 +273,8 @@ struct set_statement : public statement {
     }
 
     std::string type() const override { return "Set"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"assignee", {assignee.get()}},
             {"value", {val.get()}},
@@ -294,8 +295,8 @@ struct macro_statement : public statement {
     }
 
     std::string type() const override { return "Macro"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"name", {name.get()}},
             {"args", stmts_to_ptr(args)},
@@ -308,7 +309,7 @@ struct comment_statement : public statement {
     std::string val;
     explicit comment_statement(const std::string & v) : val(v) {}
     std::string type() const override { return "Comment"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_undefined>();
     }
 };
@@ -318,7 +319,7 @@ struct comment_statement : public statement {
 // Represents an omitted expression in a computed member, e.g. `a[]`.
 struct blank_expression : public expression {
     std::string type() const override { return "BlankExpression"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_undefined>();
     }
 };
@@ -334,8 +335,8 @@ struct member_expression : public expression {
         chk_type<expression>(this->property);
     }
     std::string type() const override { return "MemberExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"object", {object.get()}},
             {"property", {property.get()}}
@@ -353,8 +354,8 @@ struct call_expression : public expression {
         for (const auto& arg : this->args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"callee", {callee.get()}},
             {"args", stmts_to_ptr(args)}
@@ -369,7 +370,7 @@ struct identifier : public expression {
     std::string val;
     explicit identifier(const std::string & val) : val(val) {}
     std::string type() const override { return "Identifier"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
 };
 
 // Literals
@@ -378,7 +379,7 @@ struct integer_literal : public expression {
     int64_t val;
     explicit integer_literal(int64_t val) : val(val) {}
     std::string type() const override { return "IntegerLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_int>(val);
     }
 };
@@ -387,7 +388,7 @@ struct float_literal : public expression {
     double val;
     explicit float_literal(double val) : val(val) {}
     std::string type() const override { return "FloatLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_float>(val);
     }
 };
@@ -396,7 +397,7 @@ struct string_literal : public expression {
     std::string val;
     explicit string_literal(const std::string & val) : val(val) {}
     std::string type() const override { return "StringLiteral"; }
-    value execute_impl(context &) override {
+    value execute_impl(context &) const override {
         return mk_val<value_string>(val);
     }
 };
@@ -407,7 +408,7 @@ struct array_literal : public expression {
         for (const auto& item : this->val) chk_type<expression>(item);
     }
     std::string type() const override { return "ArrayLiteral"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto arr = mk_val<value_array>();
         for (const auto & item_stmt : val) {
             arr->push_back(item_stmt->execute(ctx));
@@ -422,7 +423,7 @@ struct tuple_literal : public expression {
         for (const auto& item : this->val) chk_type<expression>(item);
     }
     std::string type() const override { return "TupleLiteral"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto arr = mk_val<value_array>();
         for (const auto & item_stmt : val) {
             arr->push_back(item_stmt->execute(ctx));
@@ -441,7 +442,7 @@ struct object_literal : public expression {
         }
     }
     std::string type() const override { return "ObjectLiteral"; }
-    value execute_impl(context & ctx) override;
+    value execute_impl(context & ctx) const override;
 };
 
 // Complex Expressions
@@ -462,8 +463,8 @@ struct binary_expression : public expression {
         chk_type<expression>(this->right);
     }
     std::string type() const override { return "BinaryExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"left", {left.get()}},
             {"right", {right.get()}}
@@ -476,10 +477,7 @@ struct binary_expression : public expression {
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */
 struct filter_expression : public expression {
-    // either an expression or a value is allowed
     statement_ptr operand;
-    value_string val; // will be set by filter_statement
-
     statement_ptr filter;
 
     filter_expression(statement_ptr && operand, statement_ptr && filter)
@@ -488,14 +486,9 @@ struct filter_expression : public expression {
         chk_type<identifier, call_expression>(this->filter);
     }
 
-    filter_expression(value_string && val, statement_ptr && filter)
-        : val(std::move(val)), filter(std::move(filter)) {
-        chk_type<identifier, call_expression>(this->filter);
-    }
-
     std::string type() const override { return "FilterExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"operand", {operand.get()}},
             {"filter", {filter.get()}}
@@ -512,8 +505,8 @@ struct filter_statement : public statement {
         chk_type<identifier, call_expression>(this->filter);
     }
     std::string type() const override { return "FilterStatement"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"filter", {filter.get()}},
             {"body", stmts_to_ptr(body)}
@@ -537,14 +530,14 @@ struct select_expression : public expression {
         chk_type<expression>(this->test);
     }
     std::string type() const override { return "SelectExpression"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         auto predicate = test->execute_impl(ctx);
         if (!predicate->as_bool()) {
             return mk_val<value_undefined>();
         }
         return lhs->execute_impl(ctx);
     }
-    void visit(context & ctx) override {
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"lhs", {lhs.get()}},
             {"test", {test.get()}}
@@ -567,8 +560,8 @@ struct test_expression : public expression {
         chk_type<identifier, call_expression>(this->test);
     }
     std::string type() const override { return "TestExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"operand", {operand.get()}},
             {"test", {test.get()}}
@@ -588,8 +581,8 @@ struct unary_expression : public expression {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "UnaryExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"argument", {argument.get()}}
         });
@@ -608,10 +601,10 @@ struct slice_expression : public expression {
         chk_type<expression>(this->step_expr);
     }
     std::string type() const override { return "SliceExpression"; }
-    [[noreturn]] value execute_impl(context &) override {
+    [[noreturn]] value execute_impl(context &) const override {
         throw std::runtime_error("must be handled by MemberExpression");
     }
-    void visit(context & ctx) override {
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"start_expr", {start_expr.get()}},
             {"stop_expr", {stop_expr.get()}},
@@ -630,8 +623,8 @@ struct keyword_argument_expression : public expression {
         chk_type<expression>(this->val);
     }
     std::string type() const override { return "KeywordArgumentExpression"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"key", {key.get()}},
             {"val", {val.get()}}
@@ -645,7 +638,7 @@ struct spread_expression : public expression {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }
-    void visit(context & ctx) override {
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"argument", {argument.get()}}
         });
@@ -663,8 +656,8 @@ struct call_statement : public statement {
         for (const auto & arg : this->caller_args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallStatement"; }
-    value execute_impl(context & ctx) override;
-    void visit(context & ctx) override {
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"call", {call.get()}},
             {"caller_args", stmts_to_ptr(caller_args)},
@@ -685,7 +678,7 @@ struct ternary_expression : public expression {
         chk_type<expression>(this->false_expr);
     }
     std::string type() const override { return "Ternary"; }
-    value execute_impl(context & ctx) override {
+    value execute_impl(context & ctx) const override {
         value cond_val = condition->execute(ctx);
         if (cond_val->as_bool()) {
             return true_expr->execute(ctx);
@@ -693,7 +686,7 @@ struct ternary_expression : public expression {
             return false_expr->execute(ctx);
         }
     }
-    void visit(context & ctx) override {
+    void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"condition", {condition.get()}},
             {"true_expr", {true_expr.get()}},

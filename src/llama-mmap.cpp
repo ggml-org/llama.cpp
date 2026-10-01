@@ -821,6 +821,85 @@ const bool llama_mlock::SUPPORTED = true;
 const bool llama_mlock::SUPPORTED = false;
 #endif
 
+void llama_prefetch(llama_memory_ranges mr) {
+#if defined(__linux__) || (defined(_WIN32) && _WIN32_WINNT >= 0x602)
+    if (mr.empty()) {
+        return;
+    }
+
+#if defined(_WIN32)
+    using prefetch_virtual_memory_t = BOOL (WINAPI *)(HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+    static const auto pPrefetchVirtualMemory = (prefetch_virtual_memory_t) (void *) GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "PrefetchVirtualMemory");
+    if (!pPrefetchVirtualMemory) {
+        return;
+    }
+
+    static const long page_size = [] {
+        SYSTEM_INFO info;
+        GetSystemInfo(&info);
+        return (long) info.dwPageSize;
+    }();
+#else
+    static const long page_size = sysconf(_SC_PAGESIZE);
+#endif
+    if (page_size <= 0) {
+        return;
+    }
+
+    const size_t page = (size_t) page_size;
+    std::sort(mr.begin(), mr.end(), [](const llama_memory_range & a, const llama_memory_range & b) {
+        return (uintptr_t) a.addr < (uintptr_t) b.addr;
+    });
+
+    uintptr_t begin = 0, end = 0;
+#if defined(_WIN32)
+    // collect the mr and prefetch them in one call, so the reads can be issued concurrently
+    std::vector<WIN32_MEMORY_RANGE_ENTRY> entries;
+    auto prefetch = [&]() {
+        entries.push_back({ (PVOID) begin, (SIZE_T) (end - begin) });
+        return true;
+    };
+#else
+    auto prefetch = [&]() {
+        if (madvise((void *) begin, end - begin, MADV_WILLNEED) != 0) {
+            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
+            return false;
+        }
+        return true;
+    };
+#endif
+    for (const auto & range : mr) {
+        if (!range.addr || range.size == 0) {
+            continue;
+        }
+        const uintptr_t pointer = (uintptr_t) range.addr;
+        const uintptr_t first = pointer / page * page;
+        const uintptr_t last = (pointer + range.size + page - 1) / page * page;
+        if (end && first > end) {
+            if (!prefetch()) {
+                return;
+            }
+            end = 0;
+        }
+        if (!end) {
+            begin = first;
+        }
+        end = std::max(end, last);
+    }
+    if (end) {
+        prefetch();
+    }
+#if defined(_WIN32)
+    if (!entries.empty() && !pPrefetchVirtualMemory(GetCurrentProcess(), (ULONG_PTR) entries.size(), entries.data(), 0)) {
+        LLAMA_LOG_WARN("llama_prefetch: PrefetchVirtualMemory failed: %s\n",
+                llama_format_win_err(GetLastError()).c_str());
+    }
+#endif
+#else
+    GGML_UNUSED(mr);
+#endif
+}
+
 size_t llama_path_max() {
     return PATH_MAX;
 }

@@ -520,6 +520,12 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
+    def add_tensor_extra_prec_a4(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+        if len(tensor_names) != len(values):
+            raise ValueError("tensor_extra prec_a4 names and values must have the same length")
+        self.add_array(Keys.General.TENSOR_EXTRA_NAME, list(tensor_names))
+        self.add_array(Keys.General.TENSOR_EXTRA_PREC_A4, list(values))
+
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)
 
@@ -823,6 +829,12 @@ class GGUFWriter:
     def add_indexer_types(self, value: Sequence[bool]) -> None:
         key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
         self.add_array(key, value)
+
+    def add_indexer_kpool(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.KPOOL.format(arch=self.arch), value)
+
+    def add_indexer_kpool_select_tail(self, value: bool) -> None:
+        self.add_bool(Keys.Attention.Indexer.KPOOL_SELECT_TAIL.format(arch=self.arch), value)
 
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
@@ -1328,6 +1340,9 @@ class GGUFWriter:
     def add_classifier_output_labels(self, labels: Sequence[str]) -> None:
         self.add_array(Keys.Classifier.OUTPUT_LABELS.format(arch=self.arch), labels)
 
+    def add_classifier_pooling_type(self, value: PoolingType) -> None:
+        self.add_uint32(Keys.Classifier.POOLING_TYPE.format(arch=self.arch), value.value)
+
     # for vision models
 
     def add_clip_has_vision_encoder(self, value: bool) -> None:
@@ -1404,6 +1419,9 @@ class GGUFWriter:
 
     def add_vision_image_std(self, values: Sequence[float]) -> None:
         self.add_array(Keys.ClipVision.IMAGE_STD, values)
+
+    def add_vision_swiglu_clamp(self, value: float) -> None:
+        self.add_float32(Keys.ClipVision.SWIGLU_CLAMP, value)
 
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)

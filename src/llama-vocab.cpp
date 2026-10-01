@@ -2283,10 +2283,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_PORO;
                 clean_spaces = false;
             } else if (
-                tokenizer_pre == "glm4" ||
                 tokenizer_pre == "chatglm-bpe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_CHATGLM4;
                 special_bos_id = LLAMA_TOKEN_NULL;
+            } else if (
+                tokenizer_pre == "glm4" ||
+                tokenizer_pre == "glm5") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_CHATGLM4;
+                special_bos_id = LLAMA_TOKEN_NULL;
+                ignore_merges = true;
             } else if (
                 tokenizer_pre == "viking") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_VIKING;
@@ -2996,9 +3001,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // workaround for gemma4 and paddleocr: do not include </s> as an eog token
+        // gemma4 and plamo have a normal </s> token, unlike paddleocr
         {
-            bool has_tool_response = false;
+            bool has_normal_s_marker = false;
             bool has_s = false;
 
             llama_token s_id = LLAMA_TOKEN_NULL;
@@ -3008,21 +3013,21 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     continue;
                 }
                 const auto & text = id_to_token[tid].text;
-                if (text == "<|tool_response>") {
-                    has_tool_response = true;
+                if (text == "<|tool_response>" || text == "<|plamo:eos|>") {
+                    has_normal_s_marker = true;
                 } else if (text == "</s>") {
                     has_s = true;
                     s_id = tid;
                 }
             }
 
-            if (has_tool_response && has_s) {
+            if (has_normal_s_marker && has_s) {
                 special_eog_ids.erase(s_id);
 
                 auto & attr = id_to_token[s_id].attr;
                 attr = LLAMA_TOKEN_ATTR_NORMAL;
 
-                LLAMA_LOG_WARN("%s: special_eog_ids contains '<|tool_response>', removing '</s>' token from EOG list\n", __func__);
+                LLAMA_LOG_WARN("%s: '</s>' is a normal token here, removing it from EOG list\n", __func__);
             }
         }
     }
