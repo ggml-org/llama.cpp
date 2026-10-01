@@ -57,6 +57,7 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    void output_synchronize();
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -355,6 +356,9 @@ private:
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
+
+    // Output getters share completion of the last graph and its host copies.
+    bool output_pending = false;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
