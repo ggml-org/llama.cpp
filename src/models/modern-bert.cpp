@@ -5,9 +5,7 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
     if (found_swa && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_SYMMETRIC;
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
-        uint32_t swa_period = 3;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-        hparams.set_swa_pattern(swa_period, true);
+        load_swa_pattern(ml, 3, true);
     } else {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
@@ -20,6 +18,11 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
     std::string hidden_act;
     if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
         hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
+    }
+
+    // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
+    if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
+        hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
     }
 
     switch (hparams.n_layer()) {
