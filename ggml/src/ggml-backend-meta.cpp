@@ -2331,20 +2331,22 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             if (node->flags & GGML_TENSOR_FLAG_COMPUTE) {
                 continue;
             }
-            ggml_tensor * node_zero = get_node_aux(node);
-            node_zero->op = GGML_OP_SCALE; // FIXME 0.0f * NaN == NaN
-            node_zero->src[0] = node;
-            ggml_set_op_params_f32(node_zero, 0, 0.0f);
-            node_zero->data = node->data;
-            node_zero->buffer = node->buffer;
-            node_zero->flags |= GGML_TENSOR_FLAG_COMPUTE;
+            if (ggml_nelements(node) > 0) {
+                ggml_tensor * node_zero = get_node_aux(node);
+                node_zero->op = GGML_OP_FILL;
+                node_zero->src[0] = node; // only used for the shape, the data is not read
+                ggml_set_op_params_f32(node_zero, 0, 0.0f);
+                node_zero->data = node->data;
+                node_zero->buffer = node->buffer;
+                node_zero->flags |= GGML_TENSOR_FLAG_COMPUTE;
 
-            step_cgraphs[j] = get_cgraph_aux();
-            step_cgraphs[j]->nodes[0] = node_zero;
-            step_cgraphs[j]->n_nodes = 1;
-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j]);
-            if (status != GGML_STATUS_SUCCESS) {
-                return status;
+                step_cgraphs[j] = get_cgraph_aux();
+                step_cgraphs[j]->nodes[0] = node_zero;
+                step_cgraphs[j]->n_nodes = 1;
+                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, step_cgraphs[j]);
+                if (status != GGML_STATUS_SUCCESS) {
+                    return status;
+                }
             }
         }
         std::fill(step_cgraphs.begin(), step_cgraphs.end(), nullptr);
