@@ -628,6 +628,9 @@ class ModelBase:
     def _transform_fp8_scale(self, name: str, scale: Tensor) -> Tensor:
         return scale
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        return (self.map_tensor_name(name),)
+
     def _prepare_fp8_e4m3_tensors(self):
         if self._fp8_as_q8:
             return
@@ -694,10 +697,10 @@ class ModelBase:
                     assert isinstance(entries, list)
                     cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
             else:
-                new_name = self.map_tensor_name(weight_name)
-                scale_tensors[new_name.replace(".weight", ".scale")] = scale.numpy()
-                if input_scale is not None:
-                    input_scale_tensors[new_name.replace(".weight", ".input_scale")] = input_scale.numpy()
+                for new_name in self._map_fp8_weight_names(weight_name):
+                    scale_tensors[new_name.replace(".weight", ".scale")] = scale.numpy()
+                    if input_scale is not None:
+                        input_scale_tensors[new_name.replace(".weight", ".input_scale")] = input_scale.numpy()
 
         for name in consumed:
             self.model_tensors.pop(name, None)

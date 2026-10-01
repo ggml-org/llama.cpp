@@ -372,6 +372,16 @@ class _QwenMtpMixin:
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            # Both split projections keep the original per-tensor scales.
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
+            )
+        return super()._map_fp8_weight_names(name)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_ssm_conv_kernel(self.hparams["linear_conv_kernel_dim"])
