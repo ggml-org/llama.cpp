@@ -2109,11 +2109,9 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
     }
 
-    // Sparse kernels reduce the loading pipeline to one stage.
-    const int effective_nstages = use_sparse && nstages > 1 ? 1 : nstages;
-    const bool allow_whole_tiles = effective_nstages == 2;
+    // Whole tiles need the two-stage pipeline to hide the K/V loads.
     launch_fattn<DV, ncols1, ncols2>
-        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, true, true, true, use_sparse, warp_size_host, allow_whole_tiles);
+        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, true, true, true, use_sparse, warp_size_host, nstages == 2 && !use_sparse);
 }
 
 
