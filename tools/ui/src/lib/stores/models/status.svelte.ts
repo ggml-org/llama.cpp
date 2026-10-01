@@ -259,6 +259,7 @@ export class ModelStatusManager {
 		// not fall back to 0%, and let the server discard its stale DOWNLOADED entry
 		// (via the list fetch) before re-posting
 		const snapshot = this.pausedDownloads.get(repoWithTag) ?? null;
+		const wasPaused = this.pausedDownloads.has(repoWithTag);
 
 		if (this.deletePausedDownload(repoWithTag) || this.stopRequests.delete(repoWithTag)) {
 			await this.host.fetchRouterModels();
@@ -276,7 +277,15 @@ export class ModelStatusManager {
 
 			toast.success(`Download started: ${this.host.toDisplayName(repoWithTag)}`);
 		} catch (error) {
-			toast.error(`Download failed: ${repoWithTag}`);
+			// the download did not start: a resumed one stays paused rather than
+			// dropping off the list, which reads as a finished download
+			if (wasPaused) {
+				this.setPausedDownload(repoWithTag, snapshot);
+			}
+
+			const reason = error instanceof Error ? error.message : 'unknown error';
+
+			toast.error(`Download failed: ${repoWithTag} (${reason})`);
 
 			throw error;
 		}
