@@ -59,6 +59,11 @@ function downloadIdKey(repoWithTag: string): string {
 	return `${repo.toUpperCase()}:${tag.toUpperCase().replace(HF_UD_QUANT_PREFIX_REGEX, '')}`;
 }
 
+/** Zeroed progress, used until the first feed record reports real counts. */
+function emptyDownloadProgress(): ModelDownloadProgress {
+	return { downloadedBytes: 0, files: {}, totalBytes: 0 };
+}
+
 export class ModelStatusManager {
 	/**
 	 * Sidecar files pulled by registered models, as `<repo>/<file>` keys.
@@ -250,8 +255,11 @@ export class ModelStatusManager {
 		// the feed must be live so the resulting models_reload event refreshes the list
 		this.subscribe();
 
-		// resuming a paused download: drop the paused state, and let the server
-		// discard its stale DOWNLOADED entry (via the list fetch) before re-posting
+		// resuming a paused download: keep the last reported progress so the chip does
+		// not fall back to 0%, and let the server discard its stale DOWNLOADED entry
+		// (via the list fetch) before re-posting
+		const snapshot = this.pausedDownloads.get(repoWithTag) ?? null;
+
 		if (this.deletePausedDownload(repoWithTag) || this.stopRequests.delete(repoWithTag)) {
 			await this.host.fetchRouterModels();
 		}
@@ -264,7 +272,7 @@ export class ModelStatusManager {
 			}
 
 			// flip the chip to "downloading" right away; the feed refines it with real progress
-			this.downloadProgress.set(repoWithTag, { downloadedBytes: 0, files: {}, totalBytes: 0 });
+			this.downloadProgress.set(repoWithTag, snapshot ?? emptyDownloadProgress());
 
 			toast.success(`Download started: ${this.host.toDisplayName(repoWithTag)}`);
 		} catch (error) {
@@ -378,9 +386,10 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * The server stops the download child but keeps the partial files, so
-	 * re-posting the tag resumes where it stopped. The feed reports the stop
-	 * as download_failed; the 'pause' stop request marks it as intentional.
+	 * The server stops the download child but keeps the partial file, so re-posting
+	 * the tag resumes where it stopped. The feed reports the stop as download_failed;
+	 * the 'pause' stop request marks it as intentional, and the paused state is stored
+	 * before the request: an unconfirmed pause would leave the chip spinning.
 	 */
 	async pauseDownload(repoWithTag: string): Promise<void> {
 		if (!serverStore.isRouterMode) {
@@ -393,10 +402,21 @@ export class ModelStatusManager {
 
 		this.stopRequests.set(repoWithTag, ModelDownloadStopRequest.PAUSE);
 
+		const snapshot = this.downloadProgress.get(repoWithTag) ?? null;
+		const wasInFlight = this.downloadProgress.delete(repoWithTag);
+
+		this.setPausedDownload(repoWithTag, snapshot);
+
 		try {
 			await ModelsService.unload(repoWithTag);
 		} catch {
 			this.stopRequests.delete(repoWithTag);
+			this.deletePausedDownload(repoWithTag);
+
+			if (wasInFlight) {
+				this.downloadProgress.set(repoWithTag, snapshot ?? emptyDownloadProgress());
+			}
+
 			toast.error(`Failed to pause: ${repoWithTag}`);
 		}
 	}
@@ -476,7 +496,11 @@ export class ModelStatusManager {
 		}
 
 		if (request === ModelDownloadStopRequest.PAUSE) {
-			this.setPausedDownload(event.model, progress);
+			// a pause already stored its snapshot when the user asked for it
+			if (!this.pausedDownloads.has(event.model)) {
+				this.setPausedDownload(event.model, progress);
+			}
+
 			this.failedDownloads.delete(event.model);
 
 			return;
