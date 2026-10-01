@@ -396,7 +396,10 @@ struct common_sampler * common_sampler_init(
             samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
             // default: sample from distribution
-            samplers.push_back(llama_sampler_init_dist(params.seed));
+            const bool greedy = params.backend_sampling && !grmr && !rbudget && params.n_probs == 0 && params.temp == 0.0f &&
+                params.dynatemp_range == 0.0f && !params.samplers.empty() &&
+                params.samplers.back() == COMMON_SAMPLER_TYPE_TEMPERATURE;
+            samplers.push_back(greedy ? llama_sampler_init_greedy() : llama_sampler_init_dist(params.seed));
         }
     } else if (params.mirostat == 1) {
         samplers.push_back(llama_sampler_init_temp(params.temp));
