@@ -762,10 +762,10 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
         }
     }
 
-    // a ubatch touches at most t_s/kpool + 1 pools of a sequence with t_s tokens: pad to that bound so the
-    // graph keeps its shape as the count moves, e.g. between 0 and n_seq while several sequences decode
+    // a ubatch touches at most t_s/kpool + 1 pools per sequence, pad to that bound so the graph keeps its shape
+    // as the count moves; a cache-filling batch only has n_pool_real pools, and graph reserve covers only those
     const uint32_t bound = ubatch.n_tokens/kpool + ubatch.n_seqs_unq;
-    st.n_new_g = std::max({st.n_new, 1u, std::min(bound, kpool_pad(st.n_pool_real) - 1)});
+    st.n_new_g = std::max({st.n_new, 1u, std::min({bound, st.n_pool_real, kpool_pad(st.n_pool_real) - 1})});
 }
 
 const llama_memory_hybrid_idx_context::kpool_state & llama_memory_hybrid_idx_context::kpool_cur() const {
