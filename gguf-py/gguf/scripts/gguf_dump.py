@@ -304,7 +304,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
 
                 value = f'[ {", ".join(array_elements).strip()}{", ..." if total_elements > len(array_elements) else ""} ]'
 
-        kv_dump_table.append({"n":n, "pretty_type":pretty_type, "total_elements":total_elements, "field_name":field.name, "value":value})
+        kv_dump_table.append({"n":n, "pretty_type":pretty_type, "total_elements":total_elements, "field_name":sanitize_name(field.name), "value":value})
 
     kv_dump_table_header_map = [
         {'key_name':'n',                'header_name':'POS',      'align':'right'},
@@ -355,7 +355,9 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
         for group in tensor_prefix_order:
             tensors = tensor_groups[group]
             group_elements = sum(tensor.n_elements for tensor in tensors)
-            markdown_content += f"- [{translate_tensor_name(group)} Tensor Group - {element_count_rounded_notation(group_elements)} Elements](#{group.replace('.', '_')})\n"
+            safe_group = sanitize_name(group)
+            safe_group_label = sanitize_name(translate_tensor_name(group))
+            markdown_content += f"- [{safe_group_label} Tensor Group - {element_count_rounded_notation(group_elements)} Elements](#{safe_group.replace('.', '_')})\n"
 
         markdown_content += "\n"
 
@@ -368,7 +370,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
         for key, tensor in enumerate(reader.tensors):
             data_offset_pretty = '{0:#16x}'.format(tensor.data_offset)
             data_size_pretty = '{0:#16x}'.format(tensor.n_bytes)
-            tensor_mapping_table.append({"t_id":key, "layer_name":tensor.name, "data_offset":data_offset_pretty, "data_size":data_size_pretty})
+            tensor_mapping_table.append({"t_id":key, "layer_name":sanitize_name(tensor.name), "data_offset":data_offset_pretty, "data_size":data_size_pretty})
 
         tensors_mapping_table_header_map = [
             {'key_name':'t_id',         'header_name':'T_ID',               'align':'right'},
@@ -386,7 +388,9 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             group_percentage = group_elements / total_elements * 100
             total_group_bytes = 0
             total_group_elements = 0
-            markdown_content += f"### <a name=\"{group.replace('.', '_')}\">{translate_tensor_name(group)} Tensor Group : {element_count_rounded_notation(group_elements)} Elements</a>\n\n"
+            safe_group = sanitize_name(group)
+            safe_group_label = sanitize_name(translate_tensor_name(group))
+            markdown_content += f"### <a name=\"{safe_group.replace('.', '_')}\">{safe_group_label} Tensor Group : {element_count_rounded_notation(group_elements)} Elements</a>\n\n"
 
             # Precalculate column sizing for visual consistency
             prettify_element_est_count_size: int = 1
@@ -401,7 +405,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             # Generate Tensor Layer Table Content
             tensor_dump_table: list[dict[str, str | int]] = []
             for tensor in tensors:
-                human_friendly_name = translate_tensor_name(tensor.name.replace(".weight", ".(W)").replace(".bias", ".(B)"))
+                human_friendly_name = sanitize_name(translate_tensor_name(tensor.name.replace(".weight", ".(W)").replace(".bias", ".(B)")))
                 pretty_dimension = ' x '.join(f'{str(d):>{prettify_dimension_max_widths[i]}}' for i, d in enumerate(list(tensor.shape) + [1] * (4 - len(tensor.shape))))
                 element_count_est = f"({element_count_rounded_notation(tensor.n_elements):>{prettify_element_est_count_size}})"
                 element_count_string = f"{element_count_est} {tensor.n_elements:>{prettify_element_count_size}}"
@@ -410,7 +414,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
                     bpw = (tensor.n_bytes * 8) / tensor.n_elements
                 else:
                     bpw = float('nan')
-                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":tensor.name, "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string, "bpw": f"{bpw:.4f}"})
+                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":sanitize_name(tensor.name), "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string, "bpw": f"{bpw:.4f}"})
                 total_group_bytes += tensor.n_bytes
                 total_group_elements += tensor.n_elements
 
