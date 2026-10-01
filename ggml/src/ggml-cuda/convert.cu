@@ -29,6 +29,14 @@ static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __
             const int64_t iybs = i00 - i00%qk; // y block start index
             const int64_t y_offset = qr == 1 ? 1 : qk/2;
 
+            if constexpr (qk == 1) {
+                if (i00 + 1 == ne00) {
+                    const int64_t iy0 = (i0203*ne01 + i01)*ne00 + i00;
+                    y[iy0] = ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(((const uint8_t *) vx)[ib]));
+                    continue;
+                }
+            }
+
             // dequantize
             float2 v;
             dequantize_kernel(vx, ib, iqs, v);

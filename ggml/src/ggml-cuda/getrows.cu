@@ -30,6 +30,13 @@ static __global__ void k_get_rows(
             const int iybs = i00 - i00%qk; // dst block start index
             const int y_offset = qr == 1 ? 1 : qk/2;
 
+            if constexpr (qk == 1) {
+                if (i00 + 1 == ne00) {
+                    dst_row[i00] = ggml_cuda_cast<dst_t>(ggml_cuda_f8_e4m3_to_fp32(((const uint8_t *) src0_row)[i00]));
+                    continue;
+                }
+            }
+
             // dequantize
             float2 v;
             dequantize_kernel(src0_row, ib, iqs, v);
@@ -178,7 +185,7 @@ static void get_rows_cuda_q(
     const size_t s12 = nb12 / sizeof(int32_t);
     // const size_t s13 = nb13 / sizeof(int32_t);
 
-    GGML_ASSERT(ne00 % 2 == 0);
+    GGML_ASSERT(qk == 1 || ne00 % 2 == 0);
 
     GGML_ASSERT(ne12 > 0);
     GGML_ASSERT(ne11 <= std::numeric_limits<uint32_t>::max() / ne12);
