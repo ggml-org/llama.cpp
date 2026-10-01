@@ -1327,11 +1327,15 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
 }
 
 ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
-    return model.layers[il].k_cache_scale;
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return model.layers[layers[ikv].il].k_cache_scale;
 }
 
 ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
-    return model.layers[il].v_cache_scale;
+    const int32_t ikv = map_layer_ids.at(il);
+
+    return model.layers[layers[ikv].il].v_cache_scale;
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
@@ -1967,19 +1971,23 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
                                 : hparams.rope_type;
     ggml_tensor * tmp;
 
-    if (ggml_is_quantized(cur->type)) {
+    if (ggml_is_quantized(cur->type) || cur->type == GGML_TYPE_F8_E4M3) {
         // dequantize to f32 -> RoPE -> quantize back
         tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
 
         // rotate back
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        if (rot) {
+            tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        }
 
         tmp = ggml_rope_ext(ctx, tmp,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
 
         // rotate fwd
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        if (rot) {
+            tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        }
 
         tmp = ggml_cpy(ctx, tmp, cur);
     } else {
