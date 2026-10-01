@@ -130,14 +130,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Only available in router mode.',
-				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
-				label: 'Enable Discover Models',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
-				defaultValue: false,
-				help: 'Fetch model metadata (avatars, context length, chat template, file sizes) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models.',
+				help: 'Fetch model metadata (avatars, context length, chat template, file sizes) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use Hugging Face Hub API for models metadata',
 				type: SettingsFieldType.CHECKBOX
