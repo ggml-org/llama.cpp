@@ -729,10 +729,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
 
     ggml_tensor * sel = ggml_set_rows(ctx0, mask_all, zeros, ggml_reshape_3d(ctx0, sel_idx, n_sel, n_tokens, 1));
-    sel = ggml_view_2d(ctx0, sel, n_kv, n_tokens, sel->nb[2], 0);
 
     GGML_ASSERT(kq_mask->ne[0] == n_kv && kq_mask->ne[1]*kq_mask->ne[2]*kq_mask->ne[3] == n_tokens);
-    sel = ggml_add(ctx0, sel, ggml_reshape_2d(ctx0, kq_mask, n_kv, n_tokens));
+    const size_t row = sel->nb[2];
+    sel = ggml_view_4d(ctx0, sel, n_kv, kq_mask->ne[1], kq_mask->ne[2], kq_mask->ne[3],
+            row, row*kq_mask->ne[1], row*kq_mask->ne[1]*kq_mask->ne[2], 0);
+    sel = ggml_add(ctx0, sel, kq_mask);
     cb(sel, "indexer_sel", il);
 
     return sel;
