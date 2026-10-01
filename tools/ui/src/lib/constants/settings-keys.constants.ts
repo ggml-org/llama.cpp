@@ -26,7 +26,6 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_EXPONENT: 'dynatemp_exponent',
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
-	ENABLE_DISCOVER_MODELS: 'enableDiscoverModels',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',

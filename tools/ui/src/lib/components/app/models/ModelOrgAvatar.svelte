@@ -29,11 +29,11 @@
 		size = 'h-9 w-9'
 	}: Props = $props();
 
-	// with the Hub off there is nothing to fetch: render the monogram straight away
-	let orgAvatarFailed = $derived(!HuggingFaceService.isEnabled() || failedAvatarOrgs.has(org));
-	let quantAvatarFailed = $derived(
-		!HuggingFaceService.isEnabled() || failedAvatarOrgs.has(quantOrg ?? '')
-	);
+	// With the Hub metadata setting off there is nothing to fetch and nothing to
+	// show: the avatar is hidden entirely instead of falling back to a monogram.
+	let hubEnabled = $derived(HuggingFaceService.isEnabled());
+	let orgAvatarFailed = $derived(failedAvatarOrgs.has(org));
+	let quantAvatarFailed = $derived(failedAvatarOrgs.has(quantOrg ?? ''));
 
 	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
 	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));
@@ -59,54 +59,56 @@
 	});
 </script>
 
-<span class="relative inline-flex shrink-0 {className}">
-	{#if orgAvatarFailed}
-		<span
-			aria-hidden="true"
-			class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
-			style="background-color: hsl({hue} 60% 45%)"
-		>
-			{org.charAt(0).toUpperCase()}
-		</span>
-	{:else}
-		<div class="rounded-md">
-			<img
-				alt=""
-				class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
-				loading="lazy"
-				onerror={() => {
-					failedAvatarOrgs.add(org);
-				}}
-				src={HuggingFaceService.getAvatarUrl(org)}
-			/>
-		</div>
-	{/if}
-
-	{#if quantOrg && quantOrg !== org}
-		<!-- native title instead of a floating tooltip: long model lists mount one badge per row -->
-		<span
-			class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted"
-			title={quantOrg}
-		>
-			{#if quantAvatarFailed}
-				<span
-					aria-hidden="true"
-					class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
-					style="background-color: hsl({quantHue} 60% 45%)"
-				>
-					{quantOrg.charAt(0).toUpperCase()}
-				</span>
-			{:else}
+{#if hubEnabled}
+	<span class="relative inline-flex shrink-0 {className}">
+		{#if orgAvatarFailed}
+			<span
+				aria-hidden="true"
+				class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
+				style="background-color: hsl({hue} 60% 45%)"
+			>
+				{org.charAt(0).toUpperCase()}
+			</span>
+		{:else}
+			<div class="rounded-md">
 				<img
 					alt=""
-					class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
+					class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
 					loading="lazy"
 					onerror={() => {
-						failedAvatarOrgs.add(quantOrg ?? '');
+						failedAvatarOrgs.add(org);
 					}}
-					src={HuggingFaceService.getAvatarUrl(quantOrg)}
+					src={HuggingFaceService.getAvatarUrl(org)}
 				/>
-			{/if}
-		</span>
-	{/if}
-</span>
+			</div>
+		{/if}
+
+		{#if quantOrg && quantOrg !== org}
+			<!-- native title instead of a floating tooltip: long model lists mount one badge per row -->
+			<span
+				class="absolute {quantPositionClass} {quantSize} overflow-hidden rounded-full border border-background bg-muted"
+				title={quantOrg}
+			>
+				{#if quantAvatarFailed}
+					<span
+						aria-hidden="true"
+						class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
+						style="background-color: hsl({quantHue} 60% 45%)"
+					>
+						{quantOrg.charAt(0).toUpperCase()}
+					</span>
+				{:else}
+					<img
+						alt=""
+						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
+						loading="lazy"
+						onerror={() => {
+							failedAvatarOrgs.add(quantOrg ?? '');
+						}}
+						src={HuggingFaceService.getAvatarUrl(quantOrg)}
+					/>
+				{/if}
+			</span>
+		{/if}
+	</span>
+{/if}

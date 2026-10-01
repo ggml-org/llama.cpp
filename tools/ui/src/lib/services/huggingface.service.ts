@@ -611,11 +611,12 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * True when the UI may read model metadata from the Hugging Face Hub. Off by
-	 * default: with it off, callers only see what the server's /v1/models reports.
+	 * True when the UI may read model metadata from the Hugging Face Hub. On by
+	 * default: with it off, callers only see what the server's /v1/models reports
+	 * and the org avatars stay hidden.
 	 */
 	static isEnabled(): boolean {
-		return settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] ?? false;
+		return settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] ?? true;
 	}
 
 	/**
