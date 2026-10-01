@@ -4,6 +4,14 @@
 
 #ifdef __ARM_FEATURE_SVE
 #include <arm_sve.h>
+
+static inline svbool_t load_as_svbool(const uint32_t * p) {
+    svbool_t r;
+    __asm__("ldr %0, %1"
+            : "=Upa"(r)
+            : "Q"(*p));
+    return r;
+}
 #endif // __ARM_FEATURE_SVE
 
 #if defined(__ARM_NEON) && !defined(__CUDACC__) && !defined(__MUSACC__)
