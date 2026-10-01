@@ -78,6 +78,15 @@ class Qwen2Model(TextModel):
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.removesuffix(".weight").endswith(".mlp.experts.gate_up_proj"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+            )
+        return super()._map_fp8_weight_names(name)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:

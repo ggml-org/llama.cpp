@@ -699,9 +699,15 @@ class ModelBase:
                     cast(list[tuple[int, float]], entries).append((expert_id, float(input_scale[0])))
             else:
                 for new_name in self._map_fp8_weight_names(weight_name):
-                    scale_tensors[new_name.replace(".weight", ".scale")] = scale.numpy()
+                    mapped = self.tensor_map.get_type_and_name(new_name, try_suffixes=(".weight",)) if weight.ndim == 3 else None
+                    is_packed_expert = mapped is not None and mapped[0] in (
+                        gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_DOWN_EXP,
+                    )
+                    # Packed expert weights need one scale value per expert.
+                    n_scales = weight.shape[0] if is_packed_expert else 1
+                    scale_tensors[new_name.replace(".weight", ".scale")] = np.repeat(scale.numpy(), n_scales)
                     if input_scale is not None:
-                        input_scale_tensors[new_name.replace(".weight", ".input_scale")] = input_scale.numpy()
+                        input_scale_tensors[new_name.replace(".weight", ".input_scale")] = np.repeat(input_scale.numpy(), n_scales)
 
         for name in consumed:
             self.model_tensors.pop(name, None)
@@ -771,7 +777,7 @@ class ModelBase:
             if mapped is None:
                 continue
             tensor_type, new_name = mapped
-            if tensor_type not in (gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP) or not new_name.endswith(".weight"):
+            if tensor_type not in (gguf.MODEL_TENSOR.FFN_GATE_EXP, gguf.MODEL_TENSOR.FFN_UP_EXP, gguf.MODEL_TENSOR.FFN_GATE_UP_EXP) or not new_name.endswith(".weight"):
                 continue
             if gen().dtype == torch.float8_e4m3fn:
                 bid = next(int(part) for part in new_name.split(".") if part.isdecimal())
