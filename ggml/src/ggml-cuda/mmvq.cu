@@ -113,10 +113,6 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
 #elif defined(GCN) || defined(CDNA)
     return MMVQ_PARAMETERS_GCN;
 #elif __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA && __CUDA_ARCH__ < GGML_CUDA_CC_AMPERE
-    // sm70 shares TURING's ncols_dst==1 split: K-quant vec_dot prefers nwarps=2
-    // over GENERIC's 4. Measured +3.17% tg128 on a V100-32GB PCIe with a 27B
-    // Q4_K_M (paired interleaved A/B, n=6, t=49); perplexity unchanged. Volta
-    // has no table of its own - the tuning is the same, so it reuses TURING's.
     return MMVQ_PARAMETERS_TURING;
 #elif __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
     return MMVQ_PARAMETERS_GB10;
