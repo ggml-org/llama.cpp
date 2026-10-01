@@ -4142,6 +4142,36 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     }
 }
 
+static bool ggml_sycl_supports_mmvq_id(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Helper functions to unify device memory allocation for both async and sync paths
 static inline void * sycl_ext_malloc_device(dpct::queue_ptr stream, size_t size) {
     bool use_async = g_ggml_sycl_use_async_mem_op;
@@ -5114,22 +5144,39 @@ __dpct_inline__ static void k_copy_dst_from_contiguous(
     }
 }
 
+// returns true when ggml_sycl_mul_mat_id takes the fallback path that requires stream synchronization
+static bool ggml_sycl_mul_mat_id_needs_sync(const ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * ids  = dst->src[2];
+
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne11 = src1->ne[1];
+    const int64_t ne12 = src1->ne[2];
+
+    if (ne12 != 1) return true;
+    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return true;
+    if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return true;
+    if (!ggml_is_contiguous(src1)) return true;
+
+    const int64_t n_ids_per_group = ids->ne[0];
+    if (ids->ne[1] != 1) return true;
+    if (ne11 != 1 && ne11 != n_ids_per_group) return true;
+
+    return !ggml_sycl_supports_mmvq_id(src0->type);
+}
+
 // Fused MoE TG fast path. Returns false to fall back to the per-expert loop below.
 static bool ggml_sycl_mul_mat_id_mmvq_fused(
     ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
     const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst)
 {
+    if (ggml_sycl_mul_mat_id_needs_sync(dst)) return false;
+
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
-    const int64_t ne12 = src1->ne[2];
-    if (ne12 != 1) return false;
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) return false;
-    if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return false;
-    if (!ggml_is_contiguous(src1)) return false;
 
     const int64_t n_ids_per_group = ids->ne[0];
-    if (ids->ne[1] != 1) return false;
-    if (ne11 != 1 && ne11 != n_ids_per_group) return false;
 
     const queue_ptr stream           = ctx.stream();
     const int       src1_padded_cols = GGML_PAD((int) ne10, MATRIX_ROW_PADDING);
@@ -5236,6 +5283,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
             return;
         }
     }
+    GGML_ASSERT(ggml_sycl_mul_mat_id_needs_sync(dst));
 
     std::vector<char> ids_host(ggml_nbytes(ids));
     const char * ids_dev = (const char *) ids->data;
@@ -6304,12 +6352,15 @@ static bool check_graph_compatibility(ggml_backend_sycl_context * ctx, ggml_cgra
             default:
                 break;
             case GGML_OP_MUL_MAT_ID:
-                // ggml_sycl_mul_mat_id() does a blocking host wait on the sycl queue after
-                // submitting a memcpy operation, but wait() can't be called on a queue that
-                // is recording to a graph.
-                GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
-                               ggml_op_name(node_op));
-                return false;
+                // The ggml_sycl_mul_mat_id() fallback path does a blocking host wait on the sycl
+                // queue after submitting a memcpy operation, but wait() can't be called on a queue
+                // that is recording to a graph.
+                if (ggml_sycl_mul_mat_id_needs_sync(node)) {
+                    GGML_LOG_DEBUG("%s: disabling SYCL graphs due to host wait in %s\n", __func__,
+                                   ggml_op_name(node_op));
+                    return false;
+                }
+                break;
             case GGML_OP_FLASH_ATTN_EXT:
                 // ggml_sycl_flash_attn_ext_mkl() does host waits and the oneDNN kernel uses oneDNN
                 if (ggml_sycl_flash_attn_ext_uses_library(ctx->device, node)) {
