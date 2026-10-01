@@ -19,8 +19,8 @@ logger = logging.getLogger("gguf-dump")
 
 
 def sanitize_name(name: str) -> str:
-    '''Escape control characters in field/tensor names to prevent terminal injection.'''
-    return repr(name)[1:-1] if any(ord(c) < 32 or ord(c) == 127 for c in name) else name
+    '''Escape non-printable characters in field/tensor names to prevent terminal injection.'''
+    return ''.join(c if c.isprintable() else repr(c)[1:-1] for c in name)
 
 
 def get_file_host_endian(reader: GGUFReader) -> tuple[str, str]:
