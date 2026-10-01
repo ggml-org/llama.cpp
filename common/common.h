@@ -914,6 +914,15 @@ std::filesystem::path common_get_path_from_env(const std::string & name);
 bool fs_validate_filename(const std::string & filename, bool allow_subdirs = false);
 bool fs_is_directory(const std::string & path);
 
+// some old libstdc++ versions don't follow symlinks here, so adding a trailing "/" fixes it: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=101510
+inline bool common_create_directories(const std::filesystem::path & path, std::error_code & ec) {
+#if defined(__linux__)
+    return std::filesystem::create_directories(path / "", ec);
+#else
+    return std::filesystem::create_directories(path, ec);
+#endif
+}
+
 std::filesystem::path fs_get_cache_directory();
 std::filesystem::path fs_get_cache_file(const std::string & filename);
 std::filesystem::path fs_get_config_directory();
