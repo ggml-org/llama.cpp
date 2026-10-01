@@ -107,7 +107,7 @@ struct task_result_state {
     std::vector<common_chat_msg_diff> diffs;
     common_chat_parser_params chat_parser_params;
     common_chat_msg chat_msg;
-    std::string generated_text; // append new chunks of generated text here
+    common_chat_input generated_input; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
     std::unordered_set<size_t> sent_tool_call_names;
 
@@ -127,7 +127,7 @@ struct task_result_state {
 
     // parse partial tool calls and update the internal state
     common_chat_msg update_chat_msg(
-        const std::string & text_added,
+        const common_chat_input & added,
         bool is_partial,
         std::vector<common_chat_msg_diff> & diffs,
         bool filter_tool_calls = false);
@@ -318,7 +318,7 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    std::string content;
+    common_chat_input content;
     llama_tokens tokens;
 
     bool stream;
@@ -393,8 +393,8 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    std::string  content;
-    llama_tokens tokens;
+    common_chat_input content;
+    llama_tokens      tokens;
 
     int32_t n_decoded;
     int32_t n_prompt_tokens;
