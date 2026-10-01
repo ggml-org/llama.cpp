@@ -1,15 +1,17 @@
+#include "dma-queue.h"
 #include "hex-common.h"
+#include "hex-cpy-dma.h"
+#include "hex-fastdiv.h"
 #include "hex-profile.h"
+#include "hexagon_protos.h"
+#include "hexagon_types.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
-#include "hexagon_types.h"
-#include "hexagon_protos.h"
-#include "hvx_hexagon_protos.h"
-#include "dma-queue.h"
 #include "htp-vtcm.h"
 #include "hvx-utils.h"
-#include "hex-fastdiv.h"
+#include "hvx_hexagon_protos.h"
+
 #include <string.h>
 
 struct htp_concat_context {
@@ -285,73 +287,63 @@ static void concat_generic(unsigned int nth, unsigned int ith, void * data) {
     }
 }
 
-static bool concat_dim1_contiguous_dma(struct htp_ops_context * octx, int dim, uint32_t type_size) {
+static bool concat_dma(struct htp_ops_context * octx, int dim, uint32_t type_size) {
+    if (dim < 0 || dim >= HTP_OP_MAX_DIMS) {
+        return false;
+    }
+
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
 
-    if (dim != 1 || octx->ctx->mdev.count > 1 ||
+    // Not partitioned across devices: the row/element-split paths handle that.
+    if (octx->ctx->mdev.count > 1 ||
         (dst->type != HTP_TYPE_F32 && dst->type != HTP_TYPE_F16 && dst->type != HTP_TYPE_I32) ||
-        src0->type != dst->type || src1->type != dst->type ||
-        src0->ne[0] != dst->ne[0] || src1->ne[0] != dst->ne[0] ||
-        src0->ne[2] != dst->ne[2] || src1->ne[2] != dst->ne[2] ||
-        src0->ne[3] != dst->ne[3] || src1->ne[3] != dst->ne[3] ||
-        dst->ne[1] != src0->ne[1] + src1->ne[1] ||
-        !htp_tensor_is_contiguous(src0, type_size) ||
-        !htp_tensor_is_contiguous(src1, type_size) ||
-        !htp_tensor_is_contiguous(dst, type_size)) {
+        src0->type != dst->type || src1->type != dst->type || src0->nb[0] != type_size || src1->nb[0] != type_size ||
+        dst->nb[0] != type_size || (size_t) dst->ne[0] * type_size > DMA_MAX_SIZE_24B ||
+        dst->nb[1] > DMA_MAX_STRIDE_24B || src0->nb[1] > DMA_MAX_STRIDE_24B || src1->nb[1] > DMA_MAX_STRIDE_24B) {
         return false;
     }
 
-    const uint32_t src0_row_size = src0->ne[0] * type_size;
-    const uint32_t src1_row_size = src1->ne[0] * type_size;
-
-    // v75+ dma_queue_push() writes a 2D descriptor directly and does not split overflow.
-#if __HVX_ARCH__ >= 75
-    if (src0_row_size > 0xffffffu || src1_row_size > 0xffffffu ||
-        src0->nb[1] > 0xffffffu || src1->nb[1] > 0xffffffu || dst->nb[1] > 0xffffffu ||
-        src0->ne[1] > UINT16_MAX || src1->ne[1] > UINT16_MAX) {
-        return false;
-    }
-#endif
-
-    dma_queue * q = octx->ctx->dma[0];
-
-    for (uint32_t i3 = 0; i3 < dst->ne[3]; ++i3) {
-        for (uint32_t i2 = 0; i2 < dst->ne[2]; ++i2) {
-            dma_addr_t dst_addr  = dst->data  + i3 * dst->nb[3]  + i2 * dst->nb[2];
-            dma_addr_t src0_addr = src0->data + i3 * src0->nb[3] + i2 * src0->nb[2];
-            dma_addr_t src1_addr = src1->data + i3 * src1->nb[3] + i2 * src1->nb[2];
-
-            if (!dma_queue_push(q, dma_make_data(dst_addr, src0_addr), dst->nb[1], src0->nb[1], src0_row_size, src0->ne[1])) {
-                dma_queue_flush(q);
-                dma_queue_push(q, dma_make_data(dst_addr, src0_addr), dst->nb[1], src0->nb[1], src0_row_size, src0->ne[1]);
-            }
-
-            dst_addr += src0->ne[1] * dst->nb[1];
-            if (!dma_queue_push(q, dma_make_data(dst_addr, src1_addr), dst->nb[1], src1->nb[1], src1_row_size, src1->ne[1])) {
-                dma_queue_flush(q);
-                dma_queue_push(q, dma_make_data(dst_addr, src1_addr), dst->nb[1], src1->nb[1], src1_row_size, src1->ne[1]);
-            }
+    for (int d = 0; d < HTP_OP_MAX_DIMS; d++) {
+        const uint32_t ne_d = (d == dim) ? src0->ne[d] + src1->ne[d] : src0->ne[d];
+        if (dst->ne[d] != ne_d || (d != dim && src1->ne[d] != dst->ne[d])) {
+            return false;
         }
     }
 
+    // The two views of dst, shaped like the sources.
+    struct htp_tensor view0 = *dst;
+    struct htp_tensor view1 = *dst;
+    for (int d = 0; d < HTP_OP_MAX_DIMS; d++) {
+        view0.ne[d] = src0->ne[d];
+        view1.ne[d] = src1->ne[d];
+    }
+    view1.data += (uint64_t) src0->ne[dim] * dst->nb[dim];
+
+    dma_queue * q = octx->ctx->dma[0];
+
+    cpy_dma_sametype_sameshape(q, &view0, src0, type_size);
+    cpy_dma_sametype_sameshape(q, &view1, src1, type_size);
     dma_queue_flush(q);
     return true;
 }
 
 int op_concat(struct htp_ops_context * octx) {
+    int dim = octx->op_params[0];
+    if (dim < 0 || dim >= HTP_OP_MAX_DIMS) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
     const struct htp_tensor * src0 = octx->src[0];
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
-
-    int dim = octx->op_params[0];
 
     const uint32_t type_size = (dst->type == HTP_TYPE_F32 || dst->type == HTP_TYPE_I32) ? 4 : 2;
     bool is_src1_transposed  = (src1->nb[0] > src1->nb[1]);
     bool is_src0_transposed  = (src0->nb[0] > src0->nb[1]);
 
-    if (concat_dim1_contiguous_dma(octx, dim, type_size)) {
+    if (concat_dma(octx, dim, type_size)) {
         return HTP_STATUS_OK;
     }
 
