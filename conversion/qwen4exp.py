@@ -28,8 +28,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     # the MTP head: one full-attention QSA block after the trunk, fed by the trunk's hc-wide residual
     supports_mtp_export = True
 
-    # MTP names the shared Qwen remapper does not know: fc_embedding and fc_hidden act on the
-    # embedding and on each hc stream, and the block collapses its streams with its own mixer
+    # MTP tensors the shared Qwen remapper does not know
     _MTP_EXTRA = {
         "fc_embedding":           "nextn_fc_embedding",
         "fc_hidden":              "nextn_fc_hidden",

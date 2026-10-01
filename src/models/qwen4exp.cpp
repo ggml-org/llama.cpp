@@ -450,9 +450,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     // make sure hc_init is in the same graph split as the first layer (-sm tensor)
     ggml_build_forward_expand(gf, res_hc);
 
-    // the MTP head reads the residual of every row unless its rows are masked to the outputs
-    const bool narrow_early = !cparams.embeddings_nextn || cparams.embeddings_nextn_masked;
-
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = res_hc;
 
@@ -476,7 +473,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
             cur = build_layer_attn(inp->get_attn(), mctx_hyb, inp_kpool, cur, inp_pos, sections, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && narrow_early) {
+        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
             // everything below is per token, so drop the rows that produce no output
             cur    = ggml_get_rows(ctx0, cur,    inp_out_ids);
             inject = ggml_get_rows(ctx0, inject, inp_out_ids);
@@ -511,7 +508,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         ggml_build_forward_expand(gf, res->t_h_nextn);
     }
 
-    if (inp_out_ids && !narrow_early) {
+    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
         res_hc = ggml_reshape_2d(ctx0, res_hc, n_embd*hc, res_hc->ne[2]);
         res_hc = ggml_get_rows(ctx0, res_hc, inp_out_ids);
         res_hc = ggml_reshape_3d(ctx0, res_hc, n_embd, hc, res_hc->ne[1]);
@@ -532,13 +529,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     ggml_build_forward_expand(gf, cur);
 }
 
-// MTP draft head, as in the vLLM and SGLang qwen4_exp MTP models:
-//   x_s    = eh_proj([enorm(e) ; hnorm(h_s)]) = fc_embedding(enorm(e)) + fc_hidden(hnorm(h_s)) for every hc stream s
-//   x      = one decoder layer (QSA attention, MoE) on the hc-wide residual
-//   logits = lm_head(own mixer(x)), and x is the h of the next draft step
-// h is the trunk's hc-wide residual before its final mixer, e is the embedding of the next token
-// hnorm takes the RMS of each stream: vLLM and SGLang take one RMS over all hc*n_embd, but the streams
-// differ ~7x in scale and the per-stream norm drafts better (+1-3 points acceptance on Qwen3.8-Flash-Next)
 llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
     graph(model, params, no_build{}) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "qwen4exp MTP has a single block");
