@@ -302,6 +302,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			const response = await ModelsService.list();
 
 			this.routerModels = response.data;
+			// a download an earlier run left unfinished shows up here as still
+			// downloading, and is offered as paused until it is resumed
+			this._status.syncPausedDownloads();
 			// keep the selector options in sync: a downloaded / deleted model shows
 			// up here too, not only in the router model rows
 			this.models = this.buildModelOptions(response);

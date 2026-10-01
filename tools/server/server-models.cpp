@@ -26,6 +26,7 @@
 #include <chrono>
 #include <queue>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <sstream>
 #include <cstring>
@@ -579,6 +580,7 @@ server_models::server_models(
         LOG_WRN("failed to get server executable path: %s\n", e.what());
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
+    load_unfinished_downloads();
     load_models();
     debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
 }
@@ -645,6 +647,56 @@ void server_models::add_model(server_model_meta && meta) {
         /* subproc */ std::make_shared<server_subproc>(),
         /* meta    */ std::move(meta)
     };
+}
+
+// where the unfinished downloads are remembered, inside the model cache
+static std::string unfinished_downloads_path() {
+    return hf_cache::get_cache_path() + "/unfinished-downloads.json";
+}
+
+void server_models::load_unfinished_downloads() {
+    std::ifstream in(unfinished_downloads_path());
+    if (!in) {
+        return;
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    try {
+        json data = json::parse(raw);
+        for (const auto & tag : data.value("downloads", json::array())) {
+            if (tag.is_string()) {
+                unfinished_downloads.insert(tag.get<std::string>());
+            }
+        }
+    } catch (const std::exception & e) {
+        LOG_WRN("failed to read unfinished downloads: %s\n", e.what());
+    }
+}
+
+// callers hold the mutex
+void server_models::save_unfinished_downloads() {
+    json data;
+    data["downloads"] = json::array();
+    for (const auto & tag : unfinished_downloads) {
+        data["downloads"].push_back(tag);
+    }
+    std::ofstream out(unfinished_downloads_path(), std::ios::trunc);
+    if (!out) {
+        LOG_WRN("failed to record unfinished downloads in %s\n", unfinished_downloads_path().c_str());
+        return;
+    }
+    out << data.dump();
+}
+
+std::vector<std::string> server_models::get_unfinished_downloads() {
+    std::lock_guard<std::mutex> lk(mutex);
+    return { unfinished_downloads.begin(), unfinished_downloads.end() };
+}
+
+void server_models::clear_unfinished_download(const std::string & name) {
+    std::lock_guard<std::mutex> lk(mutex);
+    if (unfinished_downloads.erase(name) > 0) {
+        save_unfinished_downloads();
+    }
 }
 
 void server_models::notify_sse(const std::string & event, const std::string & model_id, const json & data) {
@@ -1137,6 +1189,11 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
     }
 
+    // remember the tag: the partial files carry a content hash, not the name
+    if (opts.mode == SERVER_CHILD_MODE_DOWNLOAD && unfinished_downloads.insert(name).second) {
+        save_unfinished_downloads();
+    }
+
     // prepare new instance info
     instance_t inst;
     inst.meta             = meta;
@@ -1332,6 +1389,12 @@ void server_models::update_download_progress(const std::string & name, const com
                 // mark the instance to be erased on next load_models() call
                 it->second.meta.status = SERVER_MODEL_STATUS_DOWNLOADED;
                 need_reload = true;
+
+                // a download that failed keeps its tag: its partial files are still
+                // there and re-posting the tag resumes them
+                if (ok && unfinished_downloads.erase(name) > 0) {
+                    save_unfinished_downloads();
+                }
             } else {
                 json & info = it->second.meta.loaded_info;
                 if (!info.contains("progress")) {
@@ -1391,6 +1454,9 @@ bool server_models::remove(const std::string & name) {
     it = mapping.find(name);
     if (it == mapping.end()) {
         // load_models() already erased the entry; we just need to clean up the cached files on disk
+        if (unfinished_downloads.erase(name) > 0) {
+            save_unfinished_downloads();
+        }
         lk.unlock();
         bool ok = common_download_remove(name);
         SRV_INF("removing model name=%s from cache (%s)\n", name.c_str(), ok ? "succeeded" : "partial");
@@ -1401,6 +1467,9 @@ bool server_models::remove(const std::string & name) {
     // remove from disk (best-effort: cancelled downloads may have no cached files)
     bool ok = common_download_remove(name);
     mapping.erase(name);
+    if (unfinished_downloads.erase(name) > 0) {
+        save_unfinished_downloads();
+    }
     if (!ok) {
         SRV_WRN("removing model name=%s from disk returned false (no cached files?)\n", name.c_str());
     }
@@ -2087,6 +2156,32 @@ void server_models_routes::init_routes() {
             }
             models_json.push_back(model_info);
         }
+
+        const json architecture_default = json {
+            {"input_modalities",  json::array({"text"})},
+            {"output_modalities", json::array({"text"})},
+        };
+
+        // a download that never finished has no instance: report it as still
+        // downloading so the UI can offer to resume it, without starting anything
+        for (const auto & tag : models.get_unfinished_downloads()) {
+            if (models.has_model(tag)) {
+                continue; // complete, or downloading right now
+            }
+            models_json.push_back(json {
+                {"id",           tag},
+                {"aliases",      json::array()},
+                {"tags",         json::array()},
+                {"object",       "model"},
+                {"owned_by",     "llamacpp"},
+                {"created",      t},
+                {"status",       json { {"value", "downloading"}, {"args", json::array()} }},
+                {"architecture", architecture_default},
+                {"source",       server_model_source_to_string(SERVER_MODEL_SOURCE_CACHE)},
+                {"can_remove",   true},
+            });
+        }
+
         res_ok(res, {
             {"data", models_json},
             {"object", "list"},
@@ -2198,6 +2293,14 @@ void server_models_routes::init_routes() {
         std::string name = req.get_param("model");
         if (name.empty()) {
             throw std::invalid_argument("model must be a non-empty string");
+        }
+
+        // a download listed from an earlier run has no instance: dropping its tag is
+        // the whole removal, and its partial files stay on disk for a later resume
+        if (!models.has_model(name)) {
+            models.clear_unfinished_download(name);
+            res_ok(res, {{"success", true}});
+            return res;
         }
 
         models.remove(name); // throws on error

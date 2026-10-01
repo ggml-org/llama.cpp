@@ -133,6 +133,11 @@ private:
     // models asked to stop, still counted as running until the monitor records their exit
     std::set<std::string> stopping_models;
 
+    // tags of downloads that never finished. The cache names partial files after their
+    // content hash, so this is the only record of what is still incomplete: it lets a
+    // restarted router list them without starting a download
+    std::set<std::string> unfinished_downloads;
+
     // set to true while load_models() is executing a reload; load() will wait until clear
     bool is_reloading = false;
 
@@ -250,6 +255,18 @@ public:
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
+
+    // read the unfinished downloads recorded by an earlier run
+    void load_unfinished_downloads();
+
+    // write them back; callers hold the mutex
+    void save_unfinished_downloads();
+
+    // tags of unfinished downloads (thread-safe)
+    std::vector<std::string> get_unfinished_downloads();
+
+    // forget a download that will never be resumed (thread-safe)
+    void clear_unfinished_download(const std::string & name);
 
     // return a copy of model metadata (thread-safe)
     std::optional<server_model_meta> get_meta(const std::string & name);
