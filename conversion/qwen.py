@@ -729,6 +729,12 @@ class DFlashModel(Qwen3Model):
         embedding_scale = dflash_config.get(
             "input_embedding_scale", self.hparams.get("input_embedding_scale")
         )
+        if embedding_scale is None and self.target_model_dir is not None:
+            # the draft shares the target's token embeddings, and Gemma scales them by sqrt(hidden_size) in the forward pass
+            target_hparams = ModelBase.load_hparams(self.target_model_dir, False)
+            if get_model_architecture(target_hparams, ModelType.TEXT).startswith("Gemma"):
+                target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
+                embedding_scale = target_hparams["hidden_size"] ** 0.5
         if embedding_scale is not None:
             self.gguf_writer.add_embedding_scale(float(embedding_scale))
 
