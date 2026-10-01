@@ -4189,7 +4189,6 @@ struct sycl_reorder_temp_buffer {
             return;
         }
         if (host_fallback) {
-            stream->wait_and_throw();
             sycl::free(ptr, *stream);
         } else {
             sycl_ext_free(stream, ptr);
