@@ -6,9 +6,6 @@
 #include <algorithm>
 #include <cinttypes>
 
-// [TAG_QWEN4_REIMPLEMENT]
-// TODO: this graph implementation is pending complete reimplementation - do not use it as a reference
-
 // bad metadata must be catchable: GGML_ASSERT aborts the whole process
 static void qwen4exp_require_nonzero(const llama_model_loader & ml, llm_kv kid, uint32_t value) {
     if (value == 0) {
@@ -843,6 +840,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     const int64_t n_sel = sel_idx->ne[0];
     GGML_ASSERT(n_sel == inp_kpool->n_sel);
 
+    // TODO: figure out to reduce the large copmute buffer that this creates
     // scatter zeros for the selected cells into an all -inf row, the extra row n_kv takes the sentinels
     // seeding from sel_idx ties the scatter storage lifetime to this layer
     const int64_t n_kv = inp_kpool->n_kv;
