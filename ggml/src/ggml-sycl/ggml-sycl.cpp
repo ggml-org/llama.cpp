@@ -5372,7 +5372,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         bool grouped = false;
         if (ggml_is_contiguous(src0) && src1->type == GGML_TYPE_F32 &&
             dst->type == GGML_TYPE_F32 && nb11 == sizeof(float)*ne10 && nb1 == sizeof(float)*ne0) {
-            grouped = ggml_sycl_grouped_dequant_gemm(src0->type, src0_original, nb02,
+            const bool src0_reordered =
+                src0->extra && ((const ggml_tensor_extra_gpu *) src0->extra)->optimized_feature.reorder;
+            grouped = ggml_sycl_grouped_dequant_gemm(src0->type, src0_reordered, src0_original, nb02,
                                                      (const float *) src1_contiguous.get(), ggml_sycl_src1_prec(dst),
                                                      (float *) dst_contiguous.get(),
                                                      expert_row_offsets.data(), n_as, ne01, ne10, n_routed_rows,

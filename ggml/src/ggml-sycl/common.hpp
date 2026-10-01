@@ -78,6 +78,10 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_IQ2_S    = 1 << 6,
     GGML_SYCL_XMX_GATHER_IQ1_S    = 1 << 7,
     GGML_SYCL_XMX_GATHER_IQ1_M    = 1 << 8,
+    GGML_SYCL_XMX_GATHER_Q8_0     = 1 << 9,
+    GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
+    GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
+    GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
