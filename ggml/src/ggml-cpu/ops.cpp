@@ -9578,7 +9578,7 @@ void ggml_compute_forward_flash_attn_ext(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     switch (dst->op_params[3]) {
-        case GGML_PREC_DEFAULT:
+        case GGML_PREC_UNDEFINED:
         case GGML_PREC_F32:
             {
                 // uses F32 accumulators

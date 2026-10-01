@@ -1523,7 +1523,7 @@ bool ggml_et_op_flash_attn_ext(ggml_backend_et_device_context * dev_ctx, const g
     }
 
     const ggml_prec prec = ggml_flash_attn_ext_get_prec(node);
-    if (prec != GGML_PREC_F32 && prec != GGML_PREC_DEFAULT) {
+    if (prec != GGML_PREC_F32 && prec != GGML_PREC_UNDEFINED) {
         GGML_LOG_ERROR("ET: FLASH_ATTN_EXT baseline kernel only supports F32 precision\n");
         return false;
     }

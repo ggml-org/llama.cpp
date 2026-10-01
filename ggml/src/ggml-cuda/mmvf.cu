@@ -617,7 +617,7 @@ static void mul_mat_vec_f_cuda(
         const int64_t ids_stride, enum ggml_prec prec, cudaStream_t stream) {
 
     if constexpr(std::is_same_v<T, half>) {
-        if (prec == GGML_PREC_DEFAULT) {
+        if (prec == GGML_PREC_UNDEFINED) {
             mul_mat_vec_f_cuda_switch_ncols_dst<T, half>
                 (x, y, ids, fusion, dst, ncols, nrows, ncols_dst, stride_row, stride_col_y, stride_col_dst,
                 nchannels_x, nchannels_y, nchannels_dst, stride_channel_x, stride_channel_y,
