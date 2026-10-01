@@ -58,20 +58,22 @@ inline bool ggml_sycl_xmx_gather_type_enabled(ggml_type src0_type) {
 }
 
 // dst[n*ldd + m] = sum_k dequant(src0)[m*K + k] * src1[n*K + k], src1 is F32, F16 or BF16.
-// The XMX combination is picked per call from the src1 type.
-// Returns false when the case is not handled (type, device, or shape).
+// The XMX combination is picked per call from the src1 type and its precision request src1_prec
+// (op_params[3], [TAG_GGML_PREC]); the accumulator is f32, which meets any request.
+// Returns false when the case is not handled (type, device, precision, or shape).
 bool ggml_sycl_fused_dequant_gemm(ggml_type src0_type, const void * src0, const void * src1, ggml_type src1_type,
-                                  float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd, ggml_sycl_pool & pool,
-                                  dpct::queue_ptr stream);
+                                  int32_t src1_prec, float * dst, int64_t M, int64_t N, int64_t K, int64_t ldd,
+                                  ggml_sycl_pool & pool, dpct::queue_ptr stream);
 
 // One launch for every expert of a MUL_MAT_ID: rows of src1/dst are grouped by expert, expert e
 // owns rows [expert_row_offsets[e], expert_row_offsets[e+1]) and reads its weights at
 // src0_base + e*expert_stride. tiles is host scratch that must stay alive until the queue drains.
 // dst[n*M + m] = sum_k dequant(src0_e)[m*K + k] * src1[n*K + k]
-// Returns false when the case is not handled (type, device, or shape).
+// Returns false when the case is not handled (type, device, precision, or shape).
 bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, const void * src0_base, size_t expert_stride,
-                                    const float * src1, float * dst, const int64_t * expert_row_offsets,
-                                    int64_t n_as, int64_t M, int64_t K, int64_t total_rows,
+                                    const float * src1, int32_t src1_prec, float * dst,
+                                    const int64_t * expert_row_offsets, int64_t n_as, int64_t M, int64_t K,
+                                    int64_t total_rows,
                                     std::vector<ggml_sycl_gg_tile> & tiles, ggml_sycl_pool & pool,
                                     dpct::queue_ptr stream);
 
