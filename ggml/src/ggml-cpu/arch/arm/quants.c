@@ -1023,8 +1023,8 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                     svbool_t qhbits0p = load_as_svbool((const uint32_t *) x0->qh);
                     svbool_t qhbits1p = load_as_svbool((const uint32_t *) x1->qh);
-                    const svint8_t qhbits0 = svdup_n_s8_z(~qhbits0p, 0x10);
-                    const svint8_t qhbits1 = svdup_n_s8_z(~qhbits1p, 0x10);
+                    const svint8_t qhbits0 = svdup_n_s8_z(svnot_b_z(p32, qhbits0p), 0x10);
+                    const svint8_t qhbits1 = svdup_n_s8_z(svnot_b_z(p32, qhbits1p), 0x10);
 
                     const svuint8_t qx0r = svld1rq_u8(p32, x0->qs);
                     const svuint8_t qx1r = svld1rq_u8(p32, x1->qs);
