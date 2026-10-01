@@ -2,13 +2,14 @@
 	import ModelAvatar from '../ModelAvatar.svelte';
 	import ModelCapabilities from '../ModelCapabilities.svelte';
 	import ModelContext from '../ModelContext.svelte';
+	import ModelDownloadProgressBar from '../ModelDownloadProgressBar.svelte';
 	import ModelId from '../ModelId.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
-	import { configuredContext } from './utils';
+	import { configuredContext, downloadProgressFor } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS, ModelRowDownloadState } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
@@ -27,6 +28,16 @@
 
 	let favorite = $derived(isFavorite(option));
 	let isHidden = $derived(modelsStore.isHidden(option.id));
+	// live while the download runs, frozen while it is paused
+	let downloadProgress = $derived(downloadProgressFor(option.model));
+	// a tracked download takes over the status column while it runs
+	let download = $derived(
+		modelsStore.status.isDownloadPaused(option.model)
+			? ModelRowDownloadState.PAUSED
+			: modelsStore.status.isDownloadInProgress(option.model)
+				? ModelRowDownloadState.DOWNLOADING
+				: null
+	);
 
 	function handleKeydown(event: KeyboardEvent): void {
 		if (event.key === KeyboardKey.SPACE) event.preventDefault();
@@ -38,7 +49,7 @@
 <div
 	class={[
 		MODEL_ROW_GRID_CLASS,
-		'group cursor-pointer rounded-md px-2 py-3 transition',
+		'group relative cursor-pointer rounded-md px-2 py-3 transition',
 		isHidden && 'opacity-60',
 		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
 	]}
@@ -74,11 +85,19 @@
 
 	<ModelContext class="justify-self-end" configured={configuredContext(option)} {option} />
 
-	<ModelsManagerStatusCell {option} />
+	<ModelsManagerStatusCell {download} {option} />
+
+	{#if download}
+		<ModelDownloadProgressBar
+			downloadedBytes={downloadProgress?.downloadedBytes ?? 0}
+			overlay
+			totalBytes={downloadProgress?.totalBytes ?? 0}
+		/>
+	{/if}
 
 	<div class="flex items-center justify-center justify-self-center">
 		<DropdownMenuActions
-			actions={modelRowActions(option, favorite, isHidden, onDelete)}
+			actions={modelRowActions(option, favorite, isHidden, onDelete, download)}
 			align="end"
 			triggerIcon={MoreHorizontal}
 			triggerTooltip="Model actions"

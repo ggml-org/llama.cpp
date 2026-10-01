@@ -80,7 +80,11 @@
 	const headerStyle = 'top: var(--dropdown-sticky-height, 0px)';
 
 	/** In-flight / paused downloads, tracked by the status feed. */
-	let getDownloadEntries = $derived(modelsStore.status.getDownloadEntries());
+	// only a running download belongs in the selector; a paused one waits in the
+	// manager table, where its partial files are resumed or dropped
+	let getDownloadEntries = $derived(
+		modelsStore.status.getDownloadEntries().filter((entry) => !entry.isPaused)
+	);
 
 	// cancel is confirmed once for the whole list, so one dialog serves every row
 	// The target is kept while the dialog closes so its copy stays rendered.
@@ -186,7 +190,7 @@
 {/if}
 
 {#if getDownloadEntries.length > 0}
-	<p class={headerClass} style={headerStyle}>Download in progress</p>
+	<p class={headerClass} style={headerStyle}>Downloading</p>
 
 	{#each getDownloadEntries as entry (entry.repoWithTag)}
 		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} {showOrgName} />
