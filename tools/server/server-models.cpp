@@ -2158,9 +2158,23 @@ void server_models_routes::init_routes() {
             throw std::invalid_argument("model validation failed, unable to download");
         }
 
-        // reject if model already exists
+        // reject if model already exists, but a paused download parks its entry as
+        // DOWNLOADED until the next reload: re-posting that tag is how a resume is
+        // asked for, so a download that is not running is replaced instead
         if (models.has_model(name)) {
-            throw std::invalid_argument("model '" + name + "' already exists");
+            auto existing = models.get_meta(name);
+
+            // the entry can disappear here: get_meta() triggers the reload that
+            // erases a finished download, which is the resume case as well
+            const bool resumable = existing.has_value() && !existing->is_running() &&
+                (existing->status == SERVER_MODEL_STATUS_DOWNLOADED ||
+                 existing->status == SERVER_MODEL_STATUS_DOWNLOADING);
+
+            if (existing.has_value() && !resumable) {
+                throw std::invalid_argument("model '" + name + "' already exists");
+            }
+
+            SRV_INF("resuming download for model '%s'\n", name.c_str());
         }
 
         // then, proceed with the actual download
