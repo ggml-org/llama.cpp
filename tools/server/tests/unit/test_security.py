@@ -20,6 +20,75 @@ def create_server():
     server.api_key = TEST_API_KEY
 
 
+@pytest.mark.parametrize("warn_unknown_env", [False, True])
+@pytest.mark.parametrize("fallback_token", [None, ""])
+def test_startup_warns_about_ignored_credential_environment_variables(monkeypatch, tmp_path, warn_unknown_env, fallback_token):
+    global server
+    ignored_api_key = "ignored-api-key-sentinel"
+    ignored_hf_token = "ignored-hf-token-sentinel"
+    monkeypatch.setenv("LLAMA_ARG_API_KEY", ignored_api_key)
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", ignored_hf_token)
+    monkeypatch.delenv("LLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("LLAMA_ARG_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("LLAMA_ARG_WARN_UNKNOWN_ENV", raising=False)
+    if warn_unknown_env:
+        monkeypatch.setenv("LLAMA_ARG_WARN_UNKNOWN_ENV", "1")
+    if fallback_token is None:
+        monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("HUGGING_FACE_HUB_TOKEN", fallback_token)
+
+    server = ServerPreset.router()
+    log_path = tmp_path / "server.log"
+    server.log_path = str(log_path)
+    server.start()
+    server.stop()
+    startup_log = log_path.read_text()
+
+    # Unknown LLAMA_ARG diagnostics are opt-in; the specialized message replaces the generic one.
+    assert startup_log.count("LLAMA_ARG_API_KEY is ignored") == int(warn_unknown_env)
+    assert ("LLAMA_API_KEY, LLAMA_ARG_API_KEY_FILE, --api-key, or --api-key-file" in startup_log) == warn_unknown_env
+    assert "unknown environment variable: LLAMA_ARG_API_KEY" not in startup_log
+    assert "HUGGINGFACE_HUB_TOKEN is ignored" in startup_log
+    assert "HF_TOKEN or --hf-token" in startup_log
+    assert ignored_api_key not in startup_log
+    assert ignored_hf_token not in startup_log
+
+
+@pytest.mark.parametrize("token_env", ["HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"])
+def test_startup_does_not_warn_when_supported_credentials_are_configured(monkeypatch, tmp_path, token_env):
+    global server
+    credential_values = [
+        "ignored-api-key-sentinel",
+        "ignored-hf-token-sentinel",
+        "supported-api-key-sentinel",
+        "supported-hf-token-sentinel",
+    ]
+    monkeypatch.setenv("LLAMA_ARG_API_KEY", credential_values[0])
+    monkeypatch.setenv("HUGGINGFACE_HUB_TOKEN", credential_values[1])
+    monkeypatch.setenv("LLAMA_API_KEY", credential_values[2])
+    monkeypatch.delenv("LLAMA_ARG_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGING_FACE_HUB_TOKEN", raising=False)
+    monkeypatch.setenv(token_env, credential_values[3])
+    monkeypatch.setenv("LLAMA_ARG_WARN_UNKNOWN_ENV", "1")
+
+    server = ServerPreset.router()
+    log_path = tmp_path / "server.log"
+    server.log_path = str(log_path)
+    server.start()
+    server.stop()
+    startup_log = log_path.read_text()
+
+    assert "LLAMA_ARG_API_KEY is ignored" not in startup_log
+    # A supported key suppresses credential advice, but the opt-in scan still reports the unknown name.
+    assert startup_log.count("unknown environment variable: LLAMA_ARG_API_KEY") == 1
+    assert "HUGGINGFACE_HUB_TOKEN is ignored" not in startup_log
+    for credential_value in credential_values:
+        assert credential_value not in startup_log
+
+
 @pytest.mark.parametrize("endpoint", ["/health"])
 def test_access_public_endpoint(endpoint: str):
     global server

@@ -121,6 +121,8 @@ The Vite dev server proxies API requests to the mode-specific
 For a backend on another origin, copy `.env.example` to the gitignored local
 `.env` file and override `VITE_PUBLIC_SERVER_ORIGIN`.
 
+These are Vite development variables only; `llama-server` does not load `.env` files. The checked-in `.env.example` uses `http://localhost:8080`; override it when the backend listens elsewhere.
+
 ```typescript
 // vite.config.ts proxy configuration
 const createServerProxy = (mode: string) => {
