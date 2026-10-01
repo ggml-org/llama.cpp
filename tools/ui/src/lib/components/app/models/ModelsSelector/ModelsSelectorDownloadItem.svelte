@@ -35,6 +35,9 @@
 
 		fetchedBaseModelOrg = null;
 
+		// avatars hidden with the Hub metadata setting off: no lookups at all
+		if (!HuggingFaceService.isEnabled()) return;
+
 		let cancelled = false;
 
 		void HuggingFaceService.getBaseModel(repoWithTag)
