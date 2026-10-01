@@ -2001,7 +2001,7 @@ struct backend_test_case {
 
 static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
-    { "greedy_filtered", test_backend_filtered_greedy, true },
+    { "greedy_filtered", test_backend_filtered_greedy,         true },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "penalties",       test_backend_penalties_sampling,      true  },
     { "temp",            test_backend_temp_sampling,           true  },
