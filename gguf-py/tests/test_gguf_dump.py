@@ -23,6 +23,7 @@ def test_sanitize_name_preserves_printable_text():
 def test_sanitize_name_escapes_non_printable_characters(name, expected):
     assert sanitize_name(name) == expected
 
+
 def test_dump_markdown_metadata_sanitizes_names(capsys):
     payload = "\x1b]52;c;payload\x07"
     field = SimpleNamespace(
@@ -53,4 +54,3 @@ def test_dump_markdown_metadata_sanitizes_names(capsys):
     output = capsys.readouterr().out
     assert payload not in output
     assert "\\x1b]52;c;payload\\x07" in output
-
