@@ -82,6 +82,15 @@ static std::filesystem::path fs_get_cache_directory() {
     return cache_directory / "llama.cpp";
 }
 
+// NOTE: this is copied from common.h to avoid linking with libcommon
+static bool common_create_directories(const std::filesystem::path & path, std::error_code & ec) {
+#if defined(__linux__)
+    return std::filesystem::create_directories(path / "", ec);
+#else
+    return std::filesystem::create_directories(path, ec);
+#endif
+}
+
 struct rpc_server_params {
     std::string              host        = "127.0.0.1";
     int                      port        = 50052;
@@ -233,7 +242,7 @@ int main(int argc, char * argv[]) {
     if (params.use_cache) {
         const std::filesystem::path cache_dir_path = fs_get_cache_directory() / "rpc";
         std::error_code ec;
-        std::filesystem::create_directories(cache_dir_path, ec);
+        common_create_directories(cache_dir_path, ec);
         if (ec) {
             fprintf(stderr, "Failed to create cache directory: %s\n", fs_path_to_utf8(cache_dir_path).c_str());
             return 1;

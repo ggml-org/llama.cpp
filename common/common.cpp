@@ -1023,7 +1023,7 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
     GGML_ASSERT(filename.find(DIRECTORY_SEPARATOR) == std::string::npos);
     const std::filesystem::path cache_directory = fs_get_cache_directory();
     std::error_code ec;
-    std::filesystem::create_directories(cache_directory, ec);
+    common_create_directories(cache_directory, ec);
     if (ec) {
         throw std::runtime_error("failed to create cache directory: " + fs_path_to_utf8(cache_directory));
     }
