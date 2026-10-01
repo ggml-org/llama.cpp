@@ -57,7 +57,6 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
-    void output_synchronize();
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
@@ -357,7 +356,7 @@ private:
 
     bool sched_need_reserve = true;
 
-    // Output getters share completion of the last graph and its host copies.
+    // An async graph or its host output copies may still be pending.
     bool output_pending = false;
 
     ggml_backend_t backend_cpu = nullptr;
