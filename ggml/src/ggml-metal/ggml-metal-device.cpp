@@ -2519,7 +2519,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_silu_back(ggml_m
 }
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset(ggml_metal_library_t lib, const ggml_tensor *  op) {
-    GGML_ASSERT(op->type == GGML_TYPE_I64);
+    GGML_ASSERT(op->type == GGML_TYPE_I64 || op->type == GGML_TYPE_F32);
 
     char base[256];
     char name[256];

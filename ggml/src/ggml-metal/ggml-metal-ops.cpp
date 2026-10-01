@@ -5766,6 +5766,22 @@ int ggml_metal_op_cross_entropy_loss(ggml_metal_op_t ctx, int idx) {
     GGML_ASSERT(ggml_are_same_shape(op->src[0], op->src[1]));
     GGML_ASSERT(ggml_is_scalar(op));
 
+    // Since Metal Shader is doing atomic write on the destination buffer so I need to set "op" to 0
+    // because "op" is mapped to destination buffer in kernel_cross_entropy_loss_f32
+    {
+        ggml_metal_kargs_memset args_memset = { /*.val =*/ 0 };
+
+        auto pipeline_memset = ggml_metal_library_get_pipeline_memset(lib, op);
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline_memset);
+        ggml_metal_encoder_set_bytes(enc, &args_memset, sizeof(args_memset), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 1);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 1, 1, 1);
+    }
+
+    ggml_metal_op_concurrency_reset(ctx);
+
     const int64_t ne00  = op->src[0]->ne[0];
     const int64_t nrows = ggml_nrows(op->src[0]);
 
@@ -5795,7 +5811,7 @@ int ggml_metal_op_cross_entropy_loss(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, GGML_PAD(nsg * sizeof(float), 16), 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, nth, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(enc, nrows, 1, 1, nth, 1, 1);
 
     return 1;
 }
