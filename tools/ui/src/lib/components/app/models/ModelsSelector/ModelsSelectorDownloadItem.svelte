@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ModelDownloadProgressBar from '../ModelDownloadProgressBar.svelte';
 	import ModelOrgAvatar from '../ModelOrgAvatar.svelte';
-	import { Info, Loader2, Pause, Play, X } from '@lucide/svelte';
+	import { Loader2, Pause, Play, X } from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore, uiStore } from '$lib/stores';
+	import { modelsStore } from '$lib/stores';
 	import type { ModelDownloadProgress } from '$lib/types';
 
 	interface Props {
@@ -89,7 +89,7 @@
 
 		<!-- status action: spinner -> pause on hover while in flight, play on hover
 				 when paused; opacity only for the spinner, the spin owns the transform -->
-		<span class="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
+		<span class="relative inline-flex h-5 w-5 shrink-0 items-center justify-center">
 			{#if entry.isPaused}
 				<Play
 					class="absolute h-4 w-4 scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
@@ -106,17 +106,10 @@
 		</span>
 	</button>
 
-	<ActionIcon
-		ariaLabel="Manage model"
-		class="h-4 w-4 shrink-0 scale-75 cursor-pointer rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-foreground group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
-		icon={Info}
-		iconSize="h-4 w-4"
-		onclick={() => uiStore.openModelsManager(entry.repoWithTag)}
-	/>
-
+	<!-- the row actions keep the sizing and reveal of the other selector rows -->
 	<ActionIcon
 		ariaLabel="Cancel downloading"
-		class="h-4 w-4 shrink-0 scale-75 cursor-pointer rounded-sm text-muted-foreground/70 opacity-0 transition-[opacity,transform,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] hover:text-destructive group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+		class="pointer-events-none h-5 w-5 shrink-0 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 hover:text-destructive [@media(pointer:coarse)]:pointer-events-auto [@media(pointer:coarse)]:opacity-100"
 		icon={X}
 		iconSize="h-4 w-4"
 		onclick={() => onRequestCancel?.(entry.repoWithTag)}

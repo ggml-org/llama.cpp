@@ -15,6 +15,8 @@ import {
 	Loader2 as LoadingIcon,
 	Mic as AudioIcon,
 	Package as ModelIcon,
+	Pause as PauseDownloadIcon,
+	Play as ResumeDownloadIcon,
 	Power as LoadIcon,
 	RotateCw as RetryIcon,
 	Sparkles as PromptCommandIcon,
@@ -104,6 +106,12 @@ export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> =
 };
 
 /** Icons the model load control shows for its states and actions. */
+/** Icons of the download control a manager row shows while it downloads. */
+export const MODEL_DOWNLOAD_ICONS = {
+	pause: PauseDownloadIcon,
+	resume: ResumeDownloadIcon
+} as const;
+
 export const MODEL_LOAD_ICONS = {
 	failed: LoadFailedIcon,
 	load: LoadIcon,

@@ -2,6 +2,7 @@
 	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import ModelsManagerModelsTable from './ModelsManagerModelsTable.svelte';
 	import {
+		downloadGroups,
 		groupModelQuants,
 		modelContextLength,
 		type ModelQuantGroup,
@@ -139,14 +140,22 @@
 		rank.size === 0 ? list : [...list].sort((a, b) => rankOf(a) - rankOf(b));
 	// one entry per repo, so a model with several quants takes a single table row
 	let entries = $derived(byRecency(groupModelQuants(matching)));
+	// tracked downloads get their own section, listed like any other model
+	let downloads = $derived(
+		downloadGroups(modelsStore.status.getDownloadEntries(), modelsStore.models)
+	);
 	let groups = $derived.by(() => {
 		// a loaded quant is a model of its own: its repo keeps the quants left behind
 		const isLoaded = (option: ModelOption) => modelsStore.isModelLoaded(option.model);
+		// a tracked download stands in its own section, so it is not listed twice
+		const isDownload = (option: ModelOption) =>
+			modelsStore.status.isDownloadInProgress(option.model) ||
+			modelsStore.status.isDownloadPaused(option.model);
 		const loaded: ModelQuantGroup[] = [];
 		const rest: ModelQuantGroup[] = [];
 
 		for (const entry of entries) {
-			const remaining = entry.quants.filter((quant) => !isLoaded(quant));
+			const remaining = entry.quants.filter((quant) => !isLoaded(quant) && !isDownload(quant));
 
 			for (const quant of entry.quants) {
 				if (!isLoaded(quant)) continue;
@@ -183,6 +192,7 @@
 		};
 
 		pushSection(ModelsTableGroupKind.LOADED, loaded);
+		pushSection(ModelsTableGroupKind.DOWNLOADING, downloads);
 		pushSection(ModelsTableGroupKind.FAVORITES, favorites);
 		pushSection(ModelsTableGroupKind.LOCAL, local);
 		pushSection(ModelsTableGroupKind.HIDDEN, hidden);

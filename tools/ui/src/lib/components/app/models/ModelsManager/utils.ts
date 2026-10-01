@@ -1,8 +1,8 @@
-import { ModelGroupKind, ModelsTableGroupKind } from '$lib/constants';
+import { LOCAL_BACKEND_ID, ModelGroupKind, ModelsTableGroupKind } from '$lib/constants';
 import { ModelCapability, ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
-import type { ModelOption } from '$lib/types/models';
+import type { ModelDownloadProgress, ModelOption } from '$lib/types/models';
 import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
 
 /** One repo of the table, with the rows it ships as. */
@@ -11,6 +11,45 @@ export interface ModelQuantGroup {
 	key: string;
 	kind: ModelGroupKind;
 	quants: ModelOption[];
+}
+
+/** Byte counts of a tracked download: live while it runs, frozen while paused. */
+export function downloadProgressFor(repoWithTag: string): ModelDownloadProgress | null {
+	return (
+		modelsStore.status.getDownloadProgress(repoWithTag) ??
+		modelsStore.status.getPausedDownloadProgress(repoWithTag)
+	);
+}
+
+/** One tracked download of the status feed. */
+export interface DownloadEntry {
+	isPaused: boolean;
+	progress: ModelDownloadProgress | null;
+	repoWithTag: string;
+}
+
+/**
+ * One table row per tracked download, so the table lists them the way it lists
+ * any other model. A paused download is already in the router's listing, so its
+ * own option is reused; a fresh one stands for its tag alone.
+ */
+export function downloadGroups(entries: DownloadEntry[], models: ModelOption[]): ModelQuantGroup[] {
+	return entries.map((entry) => {
+		const option = models.find((candidate) => candidate.model === entry.repoWithTag) ?? {
+			backendId: LOCAL_BACKEND_ID,
+			capabilities: [],
+			id: entry.repoWithTag,
+			model: entry.repoWithTag,
+			name: entry.repoWithTag
+		};
+
+		return {
+			base: option,
+			key: `download::${entry.repoWithTag}`,
+			kind: ModelGroupKind.QUANTS,
+			quants: [option]
+		};
+	});
 }
 
 /** One collapsible block of the manager's table. */
