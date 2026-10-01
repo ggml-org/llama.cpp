@@ -661,6 +661,7 @@ bool llama_kv_stream_model::reset(bool clear) {
 bool llama_kv_stream_model::restore(size_t tokens) { return !impl->mtp_owner && impl->restore(tokens); }
 bool llama_kv_stream_model::truncate(size_t tokens) { return !impl->mtp_owner && impl->truncate(tokens); }
 size_t llama_kv_stream_model::tokens() const noexcept { return impl->session ? impl->session->tokens() : 0; }
+uint32_t llama_kv_stream_model::max_batch_rows() const noexcept { return impl->config.max_batch_rows; }
 size_t llama_kv_stream_model::granted_bytes() const noexcept {
     if (impl->shared) return device_grant_bytes();
     return (impl->arena ? ggml_backend_buffer_get_size(ggml_backend_memory_arena_parent(impl->arena.get())) : 0) +

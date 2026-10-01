@@ -119,12 +119,14 @@ int main(int argc,char ** argv) {
     const bool cancel_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-cancel") == 0;
     const bool lease_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-lease") == 0;
     const bool admission_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-admission") == 0;
+    const bool wide_ubatch_only = argc > 1 && std::strcmp(argv[1], "--cuda-mtp-wide-ubatch") == 0;
     testing t;
     if (admission_only) t.set_filter("mtp_prefill_admission_demotes_resident_pages_before_population");
+    if (wide_ubatch_only) t.set_filter("mtp_prefill_uses_configured_microbatch_rows");
     if (auxiliary_only) t.set_filter("auxiliary_mtp_cache_shares_physical_policy_without_merging_identity");
     if (lease_only) t.set_filter("populated_mtp_lease_reuses_one_upload_for_tg1_to_tg4");
     if (cancel_only) t.set_filter("mtp_proxy_cancellation_drains_pending_writes");
-    if (argc < 2 || (!auxiliary_only && !lease_only && !cancel_only && !admission_only && std::strcmp(argv[1],"--cuda"))) {
+    if (argc < 2 || (!auxiliary_only && !lease_only && !cancel_only && !admission_only && !wide_ubatch_only && std::strcmp(argv[1],"--cuda"))) {
         t.assert_true(!llama_kv_stream_model::create({})); return t.summary();
     }
     ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1;
@@ -903,6 +905,76 @@ int main(int argc,char ** argv) {
         t.assert_equal(size_t(5120), pending->tokens());
     });
 
+    t.test("mtp_prefill_uses_configured_microbatch_rows", [&](testing & t) {
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,1024,false,2,2,7);
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape,256,page).status ==
+                ggml_kv_stream_status::success)) return;
+        llama_kv_stream_model_config config;
+        config.backend=backend.get();
+        config.host=f.host->config();
+        config.pool_bytes=7*page.bytes;
+        config.max_batch_rows=512;
+        config.query_heads=4;
+        config.auxiliary_cache_layers=1;
+        auto model=llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(model))) return;
+        auto cache=model->auxiliary_cache();
+        auto proxy=llama_kv_stream_mtp_proxy::create(dev,cache,model.get());
+        if (!t.assert_true(bool(proxy))) return;
+        ggml_context_ptr ctx(ggml_init({8192,nullptr,true}));
+        auto * k=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,512);
+        auto * v=ggml_new_tensor_2d(ctx.get(),GGML_TYPE_F32,512,512);
+        auto * indices=ggml_new_tensor_1d(ctx.get(),GGML_TYPE_I64,512);
+        ggml_backend_buffer_ptr source(ggml_backend_alloc_ctx_tensors(ctx.get(),backend.get()));
+        if (!t.assert_true(k && v && indices && bool(source))) return;
+        std::vector<float> data(512*512);
+        for (size_t i=0;i<data.size();++i) data[i]=.2f*std::sin(float(i%401)*.13f);
+        std::vector<int64_t> positions(512);
+        for (size_t i=0;i<positions.size();++i) positions[i]=int64_t(i);
+        ggml_backend_tensor_set(k,data.data(),0,data.size()*sizeof(float));
+        ggml_backend_tensor_set(v,data.data(),0,data.size()*sizeof(float));
+        ggml_backend_tensor_set(indices,positions.data(),0,positions.size()*sizeof(int64_t));
+        ggml_tensor k_op{},v_op{};
+        k_op.op=v_op.op=GGML_OP_SET_ROWS;
+        k_op.src[0]=k; k_op.src[1]=indices; k_op.src[2]=proxy->key();
+        v_op.src[0]=v; v_op.src[1]=indices; v_op.src[2]=proxy->value(); v_op.src[3]=k;
+        auto * owner=proxy->key()->buffer;
+        if (!t.assert_true(ggml_backend_execution_supports(owner,dev,&k_op) &&
+                ggml_backend_execution_supports(owner,dev,&v_op))) return;
+        block_inputs input(f,512,512);
+        auto * key=ggml_view_3d(ctx.get(),proxy->key(),256,512,2,
+            ggml_row_size(GGML_TYPE_Q8_0,512),ggml_row_size(GGML_TYPE_Q8_0,256),0);
+        auto * value=ggml_view_3d(ctx.get(),proxy->value(),256,512,2,
+            ggml_row_size(GGML_TYPE_Q4_0,512),ggml_row_size(GGML_TYPE_Q4_0,256),0);
+        if (!t.assert_true(key && value)) return;
+        ggml_tensor attention=*input.output;
+        attention.op=GGML_OP_FLASH_ATTN_EXT;
+        attention.src[0]=input.q; attention.src[1]=key;
+        attention.src[2]=value; attention.src[3]=input.mask;
+        if (!t.assert_true(ggml_backend_execution_supports(owner,dev,&attention))) return;
+        if (!t.assert_equal(GGML_STATUS_SUCCESS,
+                ggml_backend_execution_compute(owner,backend.get(),&k_op)) ||
+                !t.assert_equal(GGML_STATUS_SUCCESS,
+                ggml_backend_execution_compute(owner,backend.get(),&v_op)) ||
+                !t.assert_true(proxy->complete_publication())) return;
+        t.assert_equal(size_t(512),cache->tokens());
+        const auto expected_k=reference_bytes(backend.get(),data,GGML_TYPE_Q8_0,1);
+        const auto expected_v=reference_bytes(backend.get(),data,GGML_TYPE_Q4_0,1);
+        llama_kv_stream_host_layer host;
+        if (!t.assert_true(cache->host()->layer(0,host))) return;
+        t.assert_true(!std::memcmp(host.k,expected_k.data(),expected_k.size()));
+        t.assert_true(!std::memcmp(host.v,expected_v.data(),expected_v.size()));
+        config.max_batch_rows=128;
+        auto limited_model=llama_kv_stream_model::create(config);
+        if (!t.assert_true(bool(limited_model))) return;
+        auto limited_proxy=llama_kv_stream_mtp_proxy::create(
+            dev,limited_model->auxiliary_cache(),limited_model.get());
+        if (!t.assert_true(bool(limited_proxy))) return;
+        ggml_tensor too_wide=k_op;
+        too_wide.src[2]=limited_proxy->key();
+        t.assert_true(!ggml_backend_execution_supports(limited_proxy->key()->buffer,dev,&too_wide));
+    });
     t.test("mtp_proxy_cancellation_drains_pending_writes", [&](testing & t) {
         fixture f(backend.get(), true, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, 513, false, 2, 2, 7);
         ggml_kv_stream_layout page;

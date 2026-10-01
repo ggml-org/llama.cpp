@@ -14,6 +14,7 @@
 struct llama_kv_stream_mtp_proxy::implementation {
     std::shared_ptr<llama_kv_stream_logical_cache> cache;
     llama_kv_stream_model * target = nullptr;
+    uint32_t max_prefill_rows = 0;
     const ggml_tensor * pending_k = nullptr;
     ggml_backend_t pending_backend = nullptr;
     ggml_backend_buffer_ptr pending_owner;
@@ -52,11 +53,11 @@ struct llama_kv_stream_mtp_proxy::implementation {
             if (!plane(op->src[2], value)) return false;
             const size_t width = size_t(value ? shape.head_dim_v : shape.head_dim_k)*shape.heads;
             return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] == int64_t(width) &&
-                op->src[0]->ne[1] > 0 && op->src[0]->ne[1] <= 256 &&
+                op->src[0]->ne[1] > 0 && op->src[0]->ne[1] <= max_prefill_rows &&
                 op->src[1]->type == GGML_TYPE_I64 && ggml_nelements(op->src[1]) == op->src[0]->ne[1];
         }
         if (op->op != GGML_OP_FLASH_ATTN_EXT || !op->src[3] || op->src[0]->ne[1] < 1 ||
-                op->src[0]->ne[1] > 256 || (armed && op->src[0]->ne[1] != rows)) return false;
+                op->src[0]->ne[1] > max_prefill_rows || (armed && op->src[0]->ne[1] != rows)) return false;
         return
             op->src[1]->type == shape.type_k && op->src[2]->type == shape.type_v &&
             op->src[1]->ne[0] == shape.head_dim_k && op->src[2]->ne[0] == shape.head_dim_v &&
@@ -99,7 +100,7 @@ struct llama_kv_stream_mtp_proxy::implementation {
             writer.reset();
             writer = std::shared_ptr<llama_kv_stream_writer>(
                 llama_kv_stream_writer::create(backend, scratch, bytes,
-                    cache->host()->config().shape, 256));
+                    cache->host()->config().shape, max_prefill_rows));
             if (!writer) return GGML_STATUS_FAILED;
             writer_scratch = scratch;
             writer_scratch_bytes = bytes;
@@ -295,7 +296,7 @@ struct llama_kv_stream_mtp_proxy::implementation {
 std::unique_ptr<llama_kv_stream_mtp_proxy> llama_kv_stream_mtp_proxy::create(
         ggml_backend_dev_t device, std::shared_ptr<llama_kv_stream_logical_cache> cache,
         llama_kv_stream_model * target) {
-    if (!device || !cache || !target ||
+    if (!device || !cache || !target || !target->max_batch_rows() ||
             cache != target->auxiliary_cache() || cache->host()->config().layers != 1)
         return {};
     auto result = std::unique_ptr<llama_kv_stream_mtp_proxy>(new llama_kv_stream_mtp_proxy);
@@ -303,6 +304,7 @@ std::unique_ptr<llama_kv_stream_mtp_proxy> llama_kv_stream_mtp_proxy::create(
     auto & state = *result->impl;
     state.cache = std::move(cache);
     state.target = target;
+    state.max_prefill_rows = target->max_batch_rows();
     const ggml_backend_execution_ops ops{
         [](void * p, const ggml_tensor * op) {
             return (**static_cast<std::shared_ptr<implementation> *>(p)).supports(op);
