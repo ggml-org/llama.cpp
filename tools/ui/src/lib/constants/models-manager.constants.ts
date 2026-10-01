@@ -10,6 +10,7 @@ export type ModelGroupKind = (typeof ModelGroupKind)[keyof typeof ModelGroupKind
 
 /** Kind of one collapsible block of the table. */
 export const ModelsTableGroupKind = {
+	DOWNLOADING: 'downloading',
 	FAVORITES: 'favorites',
 	HIDDEN: 'hidden',
 	LOADED: 'loaded',
@@ -20,11 +21,21 @@ export type ModelsTableGroupKind = (typeof ModelsTableGroupKind)[keyof typeof Mo
 
 /** Header label of each manager section. */
 export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
+	[ModelsTableGroupKind.DOWNLOADING]: 'Downloading',
 	[ModelsTableGroupKind.FAVORITES]: 'Favorites',
 	[ModelsTableGroupKind.HIDDEN]: 'Hidden models',
 	[ModelsTableGroupKind.LOADED]: 'Loaded models',
 	[ModelsTableGroupKind.LOCAL]: 'Local models'
 };
+
+/** Download state a table row reports in place of its load state. */
+export const ModelRowDownloadState = {
+	DOWNLOADING: 'downloading',
+	PAUSED: 'paused'
+} as const;
+
+export type ModelRowDownloadState =
+	(typeof ModelRowDownloadState)[keyof typeof ModelRowDownloadState];
 
 /** Column the manager's table can be ordered by. */
 export const ModelsTableSortKey = {

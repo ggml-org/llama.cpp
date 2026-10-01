@@ -1,4 +1,5 @@
 import { Eye, EyeOff, Heart, HeartOff, Trash2 } from '@lucide/svelte';
+import { MODEL_DOWNLOAD_ICONS, ModelRowDownloadState } from '$lib/constants';
 import { modelsStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 
@@ -7,8 +8,35 @@ export function modelRowActions(
 	option: ModelOption,
 	favorite: boolean,
 	isHidden: boolean,
-	onDelete: (option: ModelOption) => void
+	onDelete: (option: ModelOption) => void,
+	/** Download state, when the row stands for a tracked download. */
+	download?: ModelRowDownloadState | null
 ) {
+	// a tracked download is paused, resumed or dropped: it is not loaded, hidden or
+	// drafted. Deleting it stops the download and removes what is on disk, which is
+	// what the same wording offers on a cached model
+	if (download) {
+		const isPaused = download === ModelRowDownloadState.PAUSED;
+
+		return [
+			{
+				icon: isPaused ? MODEL_DOWNLOAD_ICONS.resume : MODEL_DOWNLOAD_ICONS.pause,
+				label: isPaused ? 'Resume downloading' : 'Pause downloading',
+				onclick: () =>
+					void (isPaused
+						? modelsStore.status.downloadModel(option.model)
+						: modelsStore.status.pauseDownload(option.model))
+			},
+			{
+				icon: Trash2,
+				label: 'Delete from disk',
+				onclick: () => onDelete(option),
+				separator: true,
+				variant: 'destructive' as const
+			}
+		];
+	}
+
 	return [
 		{
 			icon: favorite ? HeartOff : Heart,
