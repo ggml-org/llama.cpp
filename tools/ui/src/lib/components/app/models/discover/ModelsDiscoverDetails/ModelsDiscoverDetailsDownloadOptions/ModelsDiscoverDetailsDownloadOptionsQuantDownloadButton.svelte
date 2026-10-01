@@ -219,8 +219,8 @@
 	{@render tooltipTrigger(tooltipText, deleteChip)}
 {:else if entry.isDownloading || entry.isPaused}
 	<!-- in-flight / paused chips: the chip body pauses / resumes on click, the X
-	     inside the chip cancels (stops and discards the partial files). The X slot
-	     is reserved, so the chip never reflows when the affordance fades in -->
+	     inside the chip cancels the download. The X slot is reserved, so the chip
+	     never reflows when the affordance fades in -->
 	<div
 		class="group relative inline-flex h-auto items-center gap-1 overflow-hidden rounded-md! border px-2 py-1 text-left font-mono text-xs shadow-sm transition-[background-color,border-color,transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)] active:scale-[0.97]
 			{entry.isPaused
