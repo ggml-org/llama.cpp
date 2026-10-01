@@ -195,6 +195,8 @@ cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Release
 ```
 
+To use a specific CCCL version instead of the one bundled with the installed CUDA Toolkit, add `-DGGML_CUDA_CCCL_VERSION=vMAJOR.MINOR.PATCH`. CUB DeviceTopK requires CCCL 3.4.3 or newer; older versions use the sort fallback.
+
 Note that this also builds the CPU backend by default. On Windows on ARM, MSVC's
 support for the ARM NEON intrinsics used by the CPU backend may be incomplete, so
 a CUDA build produced entirely with MSVC might have a slower CPU backend. If CPU
