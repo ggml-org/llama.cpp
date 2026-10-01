@@ -731,8 +731,9 @@ bool llama_memory_recurrent::get_can_shift() const {
 }
 
 bool llama_memory_recurrent::is_empty() const {
-    assert(total_size() == 0);
-    return ctxs_bufs.empty();
+    const bool res = ctxs_bufs.empty();
+    assert(!res || total_size() == 0);
+    return res;
 }
 
 size_t llama_memory_recurrent::total_size() const {
