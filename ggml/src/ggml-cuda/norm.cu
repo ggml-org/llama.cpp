@@ -371,7 +371,7 @@ static bool rms_norm_f32_vec_aligned(
             add_ncols_packed, add_nrows_packed, add_nchannels_packed, add_nsamples_packed, scale_out); \
     } while (0)
 
-template <bool do_multiply, bool do_add, bool do_scale = false>
+template <bool do_multiply, bool do_add, bool do_scale>
 static void rms_norm_f32_dispatch(
         const dim3     blocks_num,
         const float *  x,   float * dst,   const int ncols,
@@ -430,7 +430,7 @@ static void rms_norm_f32_cuda(
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream,
         const float scale_out = 1.0f) {
     const dim3 blocks_num(nrows, nchannels, nsamples);
-    rms_norm_f32_dispatch<false, false, do_scale>(
+    rms_norm_f32_dispatch</*do_multiply*/false, /*do_add*/false, do_scale>(
         blocks_num, x, dst, ncols, stride_row, stride_channel, stride_sample, eps,
         nullptr, 0, 0, 0, make_uint3(0, 0, 0), make_uint3(0, 0, 0), make_uint3(0, 0, 0), make_uint3(0, 0, 0),
         nullptr, 0, 0, 0, make_uint3(0, 0, 0), make_uint3(0, 0, 0), make_uint3(0, 0, 0), make_uint3(0, 0, 0),
@@ -476,7 +476,7 @@ static void rms_norm_mul_f32_cuda(const float *  x,
     const uint3 zero_packed          = make_uint3(0, 0, 0);
 
     if (add == nullptr) {
-        rms_norm_f32_dispatch<true, false>(
+        rms_norm_f32_dispatch</*do_multiply*/true, /*do_add*/false, /*do_scale*/false>(
             blocks_num, x, dst, ncols, stride_row, stride_channel, stride_sample, eps,
             mul, mul_stride_row, mul_stride_channel, mul_stride_sample,
             mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed,
@@ -486,7 +486,7 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         const uint3 add_nrows_packed     = init_fastdiv_values(add_nrows);
         const uint3 add_nchannels_packed = init_fastdiv_values(add_nchannels);
         const uint3 add_nsamples_packed  = init_fastdiv_values(add_nsamples);
-        rms_norm_f32_dispatch<true, true>(
+        rms_norm_f32_dispatch</*do_multiply*/true, /*do_add*/true, /*do_scale*/false>(
             blocks_num, x, dst, ncols, stride_row, stride_channel, stride_sample, eps,
             mul, mul_stride_row, mul_stride_channel, mul_stride_sample,
             mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed,
