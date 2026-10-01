@@ -16,6 +16,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Firefunction v2
   - Command R7B
   - DeepSeek R1 (WIP / seems reluctant to call any tools?)
+  - GPT-OSS (Harmony), LLM-jp-4.1 (Harmony dialect)
 
 - Generic tool call is supported when the template isn't recognized by native format handlers (you'll see `Chat format: Generic` in the logs).
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
