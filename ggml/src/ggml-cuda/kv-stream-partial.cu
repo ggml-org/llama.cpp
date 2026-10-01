@@ -1,6 +1,7 @@
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #include "kv-stream-partial.cuh"
 #include "kv-stream-dispatch.cuh"
+#include "kv-stream-attention-dispatch.h"
 #include "convert.cuh"
 #include "fattn.cuh"
 #include "../ggml-backend-impl.h"
@@ -245,7 +246,7 @@ static bool resume_plan(
     ggml_cuda_set_device(ctx.device);
     const auto & device = ggml_cuda_info().devices[ctx.device];
     // Native dispatch selects MMA for these unquantized shapes; stage 7.5 owns that path.
-    if (!native || !resumed || device.cc < GGML_CUDA_CC_ADA_LOVELACE ||
+    if (!native || !resumed || ggml_cuda_kv_stream_attention_select(device.cc,queries,ggml_type(key),ggml_type(value)) != ggml_cuda_kv_stream_attention_path::vector ||
             (!ggml_is_quantized(ggml_type(key)) && !ggml_is_quantized(ggml_type(value)))) return false;
     int occupancy = 0;
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&occupancy,native,128,0));
@@ -425,18 +426,20 @@ static bool spans_workspace(
     ggml_kv_stream_span_plan_view view;
     if (!ggml_kv_stream_span_plan_get_view(span_plan,view) || !supports_spans(backend,op) ||
             !op->src[0] || op->src[0]->ne[1] != int64_t(view.query_tokens)) return false;
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    const auto path = ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
+        uint32_t(view.query_tokens),ggml_type(view.shape.type_k),ggml_type(view.shape.type_v));
     size_t bytes = 0;
-    if (view.query_tokens <= 2) {
+    if (view.query_tokens <= 2 && path == ggml_cuda_kv_stream_attention_path::vector) {
         ggml_kv_stream_resume_plan plan;
         if (!resume_plan(backend,view.shape.type_k,view.shape.type_v,
                 uint32_t(op->src[0]->ne[2]),uint32_t(view.shape.heads),
                 uint32_t(view.query_tokens),view.active_tokens,plan)) return false;
         if (!vector_spans_workspace(view,plan,bytes)) return false;
     } else {
-        if ((view.query_tokens != 3 && view.query_tokens != 4) ||
+        if ((view.query_tokens != 3 && view.query_tokens != 4 && path != ggml_cuda_kv_stream_attention_path::mma) ||
                 !((view.shape.type_k == GGML_TYPE_F16 && view.shape.type_v == GGML_TYPE_F16) ||
                   (view.shape.type_k == GGML_TYPE_Q8_0 && view.shape.type_v == GGML_TYPE_Q4_0))) return false;
-        auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
         bytes = ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,op,view.count);
         if (!bytes) return false;
     }
@@ -591,8 +594,15 @@ static bool mma_workspace(ggml_backend_t backend, int32_t key, int32_t value,
     std::memcpy(op.op_params,&scale,sizeof(scale));
     auto & ctx=*static_cast<ggml_backend_cuda_context *>(backend->context);
     ggml_cuda_set_device(ctx.device);
-    const size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
+    size_t required=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
     if (!required) return false;
+    if (ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
+            2,ggml_type(key),ggml_type(value)) == ggml_cuda_kv_stream_attention_path::mma) {
+        q.ne[1]=mask.ne[1]=2;
+        const size_t tg2=ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(ctx,&op,spans);
+        if (!tg2) return false;
+        required=std::max(required,tg2);
+    }
     bytes=required;
     return true;
 }
@@ -614,8 +624,11 @@ static bool spans(
             prototype_k->ne[2] != view.shape.heads || prototype_v->ne[2] != view.shape.heads ||
             mask->ne[0] < int64_t(view.active_tokens)) return false;
 
-    if (view.query_tokens >= 3) {
-        if ((view.query_tokens != 3 && view.query_tokens != 4) ||
+    auto & ctx = *static_cast<ggml_backend_cuda_context *>(backend->context);
+    const auto path = ggml_cuda_kv_stream_attention_select(ggml_cuda_info().devices[ctx.device].cc,
+        uint32_t(view.query_tokens),ggml_type(view.shape.type_k),ggml_type(view.shape.type_v));
+    if (view.query_tokens >= 3 || path == ggml_cuda_kv_stream_attention_path::mma) {
+        if ((view.query_tokens != 3 && view.query_tokens != 4 && path != ggml_cuda_kv_stream_attention_path::mma) ||
                 !((view.shape.type_k == GGML_TYPE_F16 && view.shape.type_v == GGML_TYPE_F16) ||
                   (view.shape.type_k == GGML_TYPE_Q8_0 && view.shape.type_v == GGML_TYPE_Q4_0))) return false;
         size_t required = 0;

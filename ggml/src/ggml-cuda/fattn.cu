@@ -4,6 +4,7 @@
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
 #include "fattn.cuh"
+#include "kv-stream-attention-dispatch.h"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 // one list per group of ncols1 queries: a column is selected if any query of the group can see it
@@ -517,6 +518,7 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
 namespace {
 struct mma_span_launch {
     dim3 blocks;
+    int ncols1 = 0;
     int ncols2 = 0;
     int ntiles_x = 0;
     int ntiles_z_gqa = 0;
@@ -544,7 +546,7 @@ static bool mma_span_launch_make(
             !((k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16) ||
               (k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q4_0)) ||
             dst->type != GGML_TYPE_F32 || q->ne[0] != 256 || v->ne[0] != 256 ||
-            k->ne[0] != 256 || (q->ne[1] != 3 && q->ne[1] != 4) ||
+            k->ne[0] != 256 || (q->ne[1] != 2 && q->ne[1] != 3 && q->ne[1] != 4) ||
             k->ne[2] <= 0 || v->ne[2] != k->ne[2] || q->ne[2] <= 0 ||
             q->ne[2]%k->ne[2] ||
             (q->ne[2]/k->ne[2] != 2 && q->ne[2]/k->ne[2] != 6 && q->ne[2]/k->ne[2] != 8) ||
@@ -556,9 +558,10 @@ static bool mma_span_launch_make(
     memcpy(params,dst->op_params,sizeof(params));
     if (!std::isfinite(params[0]) || params[0] <= 0 || params[1] != 0 || params[2] != 0) return false;
 
-    constexpr int DKQ = 256, DV = 256, ncols1 = 4;
+    constexpr int DKQ = 256, DV = 256;
     const int gqa_ratio = int(q->ne[2]/k->ne[2]);
     // Stock Blackwell uses eight columns for ratio six and masks the two padded heads.
+    const int ncols1 = ggml_cuda_kv_stream_mma_ncols1(uint32_t(q->ne[1]),gqa_ratio);
     const int ncols2 = gqa_ratio > 4 ? 8 : 2, ncols = ncols1*ncols2;
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!turing_mma_available(cc)) return false;
@@ -580,6 +583,7 @@ static bool mma_span_launch_make(
     const size_t shared_combine = size_t(nwarps)*cols_per_warp*(nbatch_combine+4)*sizeof(half2);
 
     mma_span_launch next;
+    next.ncols1 = ncols1;
     next.ncols2 = ncols2;
     next.shared_bytes = std::max(shared_combine,q_in_reg ?
         std::max(shared_q,shared_kv+shared_mask) : shared_q+shared_kv+shared_mask);
@@ -594,9 +598,10 @@ static bool mma_span_launch_make(
     next.ntiles_kv = int((int64_t(k->ne[1])+nbatch_fa-1)/nbatch_fa);
     if (int64_t(next.ntiles_kv)*next.ntiles_dst > INT_MAX) return false;
 
-    fattn_kernel_t ordinary = ncols2 == 8 ?
-        flash_attn_ext_f16<DKQ,DV,ncols1,8,false,false> :
-        flash_attn_ext_f16<DKQ,DV,ncols1,2,false,false>;
+    fattn_kernel_t ordinary = ncols1 == 2 ?
+        flash_attn_ext_f16<DKQ,DV,2,8,false,false> :
+        ncols2 == 8 ? flash_attn_ext_f16<DKQ,DV,4,8,false,false> :
+        flash_attn_ext_f16<DKQ,DV,4,2,false,false>;
     CUDA_CHECK(cudaFuncSetAttribute(
         ordinary,cudaFuncAttributeMaxDynamicSharedMemorySize,int(next.shared_bytes)));
     int max_blocks_per_sm = 0;
@@ -635,12 +640,12 @@ size_t ggml_cuda_flash_attn_ext_mma_f16_spans_workspace(
     return mma_span_launch_make(ctx,dst,spans,plan) ? plan.bytes : 0;
 }
 
-template<int ncols2>
+template<int ncols1, int ncols2>
 static bool ggml_cuda_flash_attn_ext_mma_f16_spans_case(
         ggml_backend_cuda_context & ctx, ggml_tensor * dst,
         const ggml_cuda_kv_span * spans, size_t count,
         void * workspace, const mma_span_launch & plan) {
-    constexpr int DKQ = 256, DV = 256, ncols1 = 4;
+    constexpr int DKQ = 256, DV = 256;
     constexpr bool softcap = false, v_is_k = false;
     auto kernel = dst->src[1]->type == GGML_TYPE_Q8_0 ?
         flash_attn_ext_f16_spans<DKQ,DV,ncols1,ncols2,softcap,v_is_k,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0> :
@@ -718,9 +723,10 @@ bool ggml_cuda_flash_attn_ext_mma_f16_spans(
     mma_span_launch plan;
     if (!spans || !workspace || !mma_span_launch_make(ctx,dst,count,plan) ||
             workspace_bytes < plan.bytes || uintptr_t(workspace)%128) return false;
+    if (plan.ncols1 == 2) return ggml_cuda_flash_attn_ext_mma_f16_spans_case<2,8>(ctx,dst,spans,count,workspace,plan);
     return plan.ncols2 == 8 ?
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<8>(ctx,dst,spans,count,workspace,plan) :
-        ggml_cuda_flash_attn_ext_mma_f16_spans_case<2>(ctx,dst,spans,count,workspace,plan);
+        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,8>(ctx,dst,spans,count,workspace,plan) :
+        ggml_cuda_flash_attn_ext_mma_f16_spans_case<4,2>(ctx,dst,spans,count,workspace,plan);
 }
 
 template<ggml_type type>

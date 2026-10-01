@@ -1,4 +1,5 @@
 #include "kv-stream-block-test.h"
+#include "../src/llama-kv-stream-model.h"
 #include <chrono>
 #include <cstdio>
 
@@ -218,7 +219,12 @@ int main(int argc, char ** argv) {
             ggml_kv_stream_resume_plan planned;
             const bool planned_ok=get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
                 64,8,queries,input.padded,planned);
-            if (queries <= 2 && !t.assert_true(planned_ok)) return;
+            if (queries == 1 && !t.assert_true(planned_ok)) return;
+            if (queries == 2 && !planned_ok) {
+                size_t mma_bytes=0;
+                if (!t.assert_true(get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,
+                        64,8,input.padded,3,mma_bytes) && mma_bytes > 0)) return;
+            }
             for (uint32_t layer=0;layer<2;++layer) {
                 const auto expected=ordinary(f,input,layer);
                 if (!t.assert_true(f.resident->compute_streamed(
@@ -227,7 +233,8 @@ int main(int argc, char ** argv) {
                 const auto actual=input.read();
                 close_values(t,expected,actual,1e-6f);
                 t.assert_true(same_float_bits(expected,actual));
-                t.assert_equal(queries <= 2 ? (layer ? size_t(3) : size_t(2)) : size_t(1),f.resident->last_attention_calls());
+                const size_t calls = queries <= 2 && planned_ok ? (layer ? size_t(3) : size_t(2)) : size_t(1);
+                t.assert_equal(calls,f.resident->last_attention_calls());
             }
             t.assert_true(!f.resident->sequence_active());
             t.assert_equal(size_t(14),f.resident->sequence_stats().copy_calls);
@@ -285,6 +292,30 @@ int main(int argc, char ** argv) {
         t.assert_true(!get()->resume(backend.get(),op,ggml_backend_memory_lease_buffer(workspace.lease.get()),bad,input.padded,0,true));
         std::vector<float> actual(sentinel.size()); ggml_backend_tensor_get(op,actual.data(),0,ggml_nbytes(op));
         t.assert_true(actual==sentinel);
+    });
+    if (argc>1 && !std::strcmp(argv[1],"--cuda")) t.test("tg1_only_resume_reclaims_decode_attention", [&](testing & t) {
+        auto * dev=ggml_backend_dev_by_name("CUDA0");
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev,nullptr));
+        auto get=reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
+        if (!t.assert_true(get && get() && get()->resume_plan && get()->mma_workspace)) return;
+        fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,513);
+        ggml_kv_stream_resume_plan one,two;
+        const bool tg1=get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,1,
+            f.host->layout().tokens,one);
+        const bool tg2=get()->resume_plan(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,2,
+            f.host->layout().tokens,two);
+        if (tg2) return;
+        if (!t.assert_true(tg1)) return;
+        ggml_kv_stream_layout page;
+        if (!t.assert_true(ggml_kv_stream_layout_make(f.policy.shape,256,page).status == ggml_kv_stream_status::success)) return;
+        auto model=llama_kv_stream_model::create({backend.get(),f.host->config(),page.bytes*4,256,4});
+        llama_kv_stream_memory_requirements requirements;
+        if (!t.assert_true(bool(model) && model->memory_requirements(requirements))) return;
+        t.assert_true(requirements.attention_decode_bytes < requirements.attention_prefill_bytes);
+        size_t mma_bytes=0;
+        t.assert_true(get()->mma_workspace(backend.get(),GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,4,2,
+            f.host->layout().tokens,3,mma_bytes) && mma_bytes <= requirements.attention_decode_bytes);
     });
     return t.summary();
 }

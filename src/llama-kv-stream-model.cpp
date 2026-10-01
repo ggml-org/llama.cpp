@@ -363,9 +363,16 @@ std::unique_ptr<llama_kv_stream_model> llama_kv_stream_model::create(const llama
         auto get = reinterpret_cast<ggml_kv_stream_partial_ops_get>(ggml_backend_reg_get_proc_address(
             ggml_backend_dev_backend_reg(dev),"ggml_backend_kv_stream_partial_ops"));
         ggml_kv_stream_resume_plan plan;
-        s->config.resume_decode = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") && get && get() &&
-            get()->version >= 5 && get()->resume_plan && get()->resume && get()->resume_plan(config.backend,
-                config.host.shape.type_k,config.host.shape.type_v,config.query_heads,config.host.shape.heads,std::min(2u,config.max_batch_rows),s->host->layout().tokens,plan);
+        const auto * partial_ops = get ? get() : nullptr;
+        const bool resume_capable = config.resume_decode && !std::getenv("LLAMA_KV_STREAM_DECODE_GATHER") &&
+            partial_ops && partial_ops->version >= 5 && partial_ops->resume_plan && partial_ops->resume;
+        const auto plan_resume = [&](uint32_t queries) {
+            return partial_ops->resume_plan(config.backend,config.host.shape.type_k,config.host.shape.type_v,
+                config.query_heads,config.host.shape.heads,queries,s->host->layout().tokens,plan);
+        };
+        const uint32_t decode_rows = std::min(2u,config.max_batch_rows);
+        s->config.resume_decode = resume_capable &&
+            (plan_resume(decode_rows) || (decode_rows == 2 && plan_resume(1)));
         s->decode_bytes = s->config.resume_decode ? plan.bytes : s->host->layout().bytes;
         if (s->config.resume_decode && get()->version >= 9 && get()->mma_workspace) {
             size_t mma_bytes=0;

@@ -1,4 +1,5 @@
 #include "kv-stream-block-test.h"
+#include "../ggml/src/ggml-cuda/kv-stream-attention-dispatch.h"
 
 #include <algorithm>
 #include <chrono>
@@ -260,6 +261,19 @@ static int benchmark_spans() {
 int main(int argc, char ** argv) {
     if (argc > 1 && !std::strcmp(argv[1], "--bench")) return benchmark_spans();
     testing t;
+    t.test("ampere_decode_dispatch_matches_stock", [](testing & t) {
+        using path = ggml_cuda_kv_stream_attention_path;
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::mma);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(890,1,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(890,2,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0) == path::vector);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860,2,GGML_TYPE_Q5_0,GGML_TYPE_Q4_0) == path::none);
+        t.assert_true(ggml_cuda_kv_stream_attention_select(860,2,GGML_TYPE_F16,GGML_TYPE_F16) == path::none);
+        t.assert_equal(4,ggml_cuda_kv_stream_mma_ncols1(2,2));
+        t.assert_equal(2,ggml_cuda_kv_stream_mma_ncols1(2,6));
+        t.assert_equal(2,ggml_cuda_kv_stream_mma_ncols1(2,8));
+        t.assert_equal(4,ggml_cuda_kv_stream_mma_ncols1(3,8));
+    });
     if (argc > 1 && !std::strcmp(argv[1], "--cuda-gqa6")) t.set_filter("qwen_ratio_six_tg3_tg4_matches_stock|qwen_24_4_tg2_aligned_and_wrapped_spans_are_exact");
     t.test("resume_layout_accounts_for_tg1_and_tg2", [](testing & t) {
         ggml_kv_stream_resume_plan one, two;
