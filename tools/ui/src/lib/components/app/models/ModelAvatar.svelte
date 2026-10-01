@@ -38,6 +38,9 @@
 
 	let parsedId = $derived(ModelsService.parseModelId(option.model));
 	let orgName = $derived(parsedId.orgName);
+	// Avatars come from the Hub, so with the metadata setting off they are
+	// hidden entirely and no base-model lookup runs.
+	let hubEnabled = $derived(HuggingFaceService.isEnabled());
 	let tagBaseModel = $derived(
 		(option.tags ?? [])
 			.find((t) => HF_BASE_MODEL_TAG_REGEX.test(t))
@@ -54,6 +57,8 @@
 
 		if (!isNearViewport || !showBaseModelAvatar || !orgName || tagBaseModel) return;
 
+		if (!hubEnabled) return;
+
 		let cancelled = false;
 
 		void HuggingFaceService.getBaseModel(option.model)
@@ -69,7 +74,7 @@
 	});
 </script>
 
-{#if orgName}
+{#if orgName && hubEnabled}
 	<span
 		use:nearViewport={() => (isNearViewport = true)}
 		class={['inline-flex shrink-0', className]}
