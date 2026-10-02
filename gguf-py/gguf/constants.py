@@ -5920,6 +5920,7 @@ class DecisionType:
     OPENJEV = "openjev"  # logits of one label token per option
     LEV     = "lev"      # same as openjev, noul is read from a rating scale
     KEV     = "kev"      # dot product of the hidden states of the last token and of one end token per option
+    NIMBLE  = "nimble"   # same as openjev, the prompt lists all the questions of the request
 
 
 class VisionProjectorType:
