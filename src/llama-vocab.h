@@ -68,6 +68,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_HY_V4             = 57,
     LLAMA_VOCAB_PRE_TYPE_SPARK2_5          = 58,
     LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
+    LLAMA_VOCAB_PRE_TYPE_SOPHIA            = 60,
 };
 
 struct LLM_KV;
