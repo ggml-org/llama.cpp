@@ -692,6 +692,9 @@ struct common_params {
     bool log_json = false;
 
     std::string slot_save_path;
+    bool session_id_enabled = false;          // session-keyed save/restore is enabled
+    std::vector<std::string> session_id_headers; // headers (in priority order) that may carry the session id
+    int session_max_sessions = 128;          // maximum number of session save files to keep
     std::string media_path; // path to directory for loading media files
 
     float slot_prompt_similarity = 0.1f;

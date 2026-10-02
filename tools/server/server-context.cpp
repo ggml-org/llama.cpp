@@ -36,6 +36,8 @@
 #include <windows.h>
 #endif
 
+namespace fs = std::filesystem;
+
 constexpr int HTTP_POLLING_SECONDS = 1;
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
@@ -50,6 +52,37 @@ static common_speculative_output_limits server_output_limits(const common_params
     result.total   = std::max<int32_t>(1, result.total);
     result.per_seq = std::max<int32_t>(1, result.per_seq);
     return result;
+}
+
+// case-insensitive scan for the session affinity headers
+// clients such as the pi coding agent send the conversation id in these headers
+// case-insensitive scan of the headers named by --slot-save-sessions, in the given priority order
+static std::string session_id_from_headers(const std::map<std::string, std::string> & headers, const std::vector<std::string> & names) {
+    for (const auto & target : names) {
+        for (const auto & [hk, hv] : headers) {
+            if (hk.size() != target.size()) {
+                continue;
+            }
+
+            bool match = true;
+            for (size_t i = 0; i < target.size(); i++) {
+                char c = hk[i];
+                if (c >= 'A' && c <= 'Z') {
+                    c = char(c + 32);
+                }
+                if (c != target[i]) {
+                    match = false;
+                    break;
+                }
+            }
+
+            if (match) {
+                return hv;
+            }
+        }
+    }
+
+    return "";
 }
 
 // synthetic draft verification for benchmarking - accept draft tokens at random instead of by match with the target
@@ -255,6 +288,9 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // session held by this slot's KV state, empty if none
+    std::string session_id;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0) {
             return false;
@@ -296,6 +332,7 @@ struct server_slot {
         mem.seq_rm(id, -1, -1);
 
         prompt.clear();
+        session_id.clear();
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -663,6 +700,8 @@ struct server_slot {
             {"is_processing", is_processing()},
         };
 
+        res["session_id"] = session_id;
+
         const auto & ptask = task ? task : task_prev;
 
         if (ptask) {
@@ -908,6 +947,14 @@ private:
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
 
+    // sessions: session id -> where its KV state lives
+    // accessed only on the task-queue thread, same as the slots
+    struct session_entry {
+        int slot = -1; // -1 if the state is only on disk
+        int64_t t_last = 0;
+    };
+    std::map<std::string, session_entry> sessions;
+
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -917,6 +964,8 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        flush_sessions_to_disk();
+
         spec.reset();
         spec_init.reset();
 
@@ -995,6 +1044,9 @@ private:
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
+
+        // persist the sessions held in RAM before the old context is replaced below
+        flush_sessions_to_disk();
 
         const bool has_mmproj = !params.mmproj.path.empty();
         const bool has_draft = params.speculative.has_dft();
@@ -1236,6 +1288,56 @@ private:
         }
 
         slots.clear();
+        sessions.clear();
+
+        // index the session files saved by previous runs so they can be restored,
+        // dropping the oldest ones beyond the cap and registering the survivors
+        // the target and draft files of a session share its id and count as one entry
+        if (params_base.session_id_enabled && !params_base.slot_save_path.empty()) {
+            const std::vector<common_file_info> files = fs_list(params_base.slot_save_path, false);
+
+            std::map<std::string, int64_t> ondisk; // session id -> last modification time
+            std::map<std::string, std::vector<std::string>> paths;
+            for (const auto & f : files) {
+                const std::string & name = f.name;
+                if (name.size() <= 18 || name.substr(0, 14) != "llama-session-") {
+                    continue;
+                }
+                if (name.substr(name.size() - 4) != ".bin" && name.substr(name.size() - 4) != ".dft") {
+                    continue;
+                }
+                const std::string sid = name.substr(14, name.size() - 18);
+                std::error_code ec;
+                const auto mtime = fs::last_write_time(f.path, ec);
+                const int64_t t = ec ? int64_t(0) : mtime.time_since_epoch().count();
+                ondisk[sid] = std::max(ondisk[sid], t);
+                paths[sid].push_back(f.path);
+            }
+
+            std::vector<std::string> order;
+            order.reserve(ondisk.size());
+            for (const auto & kv : ondisk) {
+                order.push_back(kv.first);
+            }
+            std::sort(order.begin(), order.end(), [&](const std::string & a, const std::string & b) {
+                return ondisk[a] > ondisk[b]; // newest first
+            });
+
+            const size_t n_keep = std::min<size_t>(order.size(), (size_t) params_base.session_max_sessions);
+            for (size_t i = n_keep; i < order.size(); ++i) {
+                for (const auto & path : paths[order[i]]) {
+                    std::error_code ec;
+                    fs::remove(path, ec);
+                }
+                ondisk.erase(order[i]);
+                paths.erase(order[i]);
+            }
+
+            // register the surviving sessions so they count against the cap
+            for (const auto & kv : ondisk) {
+                sessions[kv.first].t_last = kv.second;
+            }
+        }
 
         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
@@ -1544,10 +1646,274 @@ private:
         return nullptr;
     }
 
+    // file name of the session save file inside slot_save_path
+    // the client-supplied id must pass fs_validate_filename, checked when the request is parsed
+    std::string session_filepath(const std::string & session_id) const {
+        return params_base.slot_save_path + "llama-session-" + session_id + ".bin";
+    }
+
+    // companion file with the draft context state, written when speculative decoding is active
+    // the suffix is distinct from .bin so it is not parsed as a session file of its own
+    std::string session_dft_filepath(const std::string & session_id) const {
+        return params_base.slot_save_path + "llama-session-" + session_id + ".dft";
+    }
+
+    // pick an idle slot: the requested one if given, else the least recently used
+    server_slot * pick_idle_slot(int id_slot) {
+        server_slot * ret = nullptr;
+
+        for (auto & slot : slots) {
+            if (slot.is_processing()) {
+                continue;
+            }
+            if (id_slot != -1) {
+                if (slot.id == id_slot) {
+                    ret = &slot;
+                }
+                continue;
+            }
+            if (ret == nullptr || slot.t_last_used <= ret->t_last_used) {
+                ret = &slot;
+            }
+        }
+
+        return ret;
+    }
+
+    // serialize the prompt and KV state of the slot to a file
+    // returns the number of bytes written, 0 on failure (the reason goes to err_msg if set)
+    size_t slot_save_to_file(server_slot & slot, const std::string & filepath, double & t_ms, std::string * err_msg) {
+        const int64_t t_start = ggml_time_us();
+
+        std::vector<char> packed;
+        try {
+            packed = slot.prompt.tokens.serialize();
+        } catch (const std::exception & err) {
+            if (err_msg) {
+                *err_msg = err.what();
+            }
+            SLT_ERR(slot, "failed to serialize prompt: %s\n", err.what());
+            t_ms = 0.0;
+            return 0;
+        }
+
+        GGML_ASSERT(packed.size() % sizeof(llama_token) == 0);
+        const size_t nwrite = llama_state_seq_save_file(
+            ctx_tgt, filepath.c_str(), slot.id,
+            reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+
+        t_ms = (ggml_time_us() - t_start) / 1000.0;
+
+        return nwrite;
+    }
+
+    // load the prompt and KV state of the slot from a file
+    // returns the number of bytes read, 0 on failure (the slot is cleared on failure, the reason goes to err_msg if set)
+    size_t slot_restore_from_file(server_slot & slot, const std::string & filepath, double & t_ms, std::string * err_msg) {
+        const int64_t t_start = ggml_time_us();
+
+        size_t nread = 0;
+        try {
+            size_t n_packed = 0;
+            llama_tokens packed;
+            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, nullptr, 0, &n_packed);
+            if (nread != 0) {
+                packed.resize(std::max<size_t>(1, n_packed));
+                nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot.id, packed.data(), packed.size(), &n_packed);
+            }
+            if (nread == 0) {
+                throw std::runtime_error("No available space in KV cache or invalid slot save file");
+            }
+            packed.resize(n_packed);
+
+            server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
+
+            if (restored.size() > (size_t) slot.n_ctx) {
+                throw std::runtime_error("Restored prompt does not fit in the slot context");
+            }
+
+            if (!restored.validate(ctx_tgt)) {
+                throw std::runtime_error("Invalid tokens in slot save file");
+            }
+
+            slot.prompt.clear();
+            slot.prompt.tokens = std::move(restored);
+        } catch (const std::exception & err) {
+            slot.prompt_clear();
+            if (err_msg) {
+                *err_msg = err.what();
+            }
+            SLT_ERR(slot, "failed to restore from %s: %s\n", filepath.c_str(), err.what());
+            nread = 0;
+        }
+
+        if (nread > 0 && ctx_dft != nullptr) {
+            // restore the draft context state, continue without it if unavailable
+            std::string dftpath = filepath;
+            if (dftpath.size() > 4 && dftpath.compare(dftpath.size() - 4, 4, ".bin") == 0) {
+                dftpath.replace(dftpath.size() - 4, 4, ".dft");
+            }
+            if (fs::exists(dftpath)) {
+                llama_token dft_tokens[1];
+                size_t n_packed_dft = 0;
+                if (llama_state_seq_load_file(ctx_dft, dftpath.c_str(), slot.id, dft_tokens, 1, &n_packed_dft) == 0) {
+                    SLT_WRN(slot, "failed to restore draft state from %s, continuing without it\n", dftpath.c_str());
+                }
+            }
+        }
+
+        t_ms = (ggml_time_us() - t_start) / 1000.0;
+
+        return nread;
+    }
+
+    // persist the session held by the slot to disk and clear the stamp
+    // called before the slot's KV state is replaced or cleared
+    void evict_slot_session(server_slot & slot) {
+        if (slot.session_id.empty()) {
+            return;
+        }
+
+        const std::string sid = slot.session_id;
+
+        if (!params_base.slot_save_path.empty()) {
+            const std::string filepath = session_filepath(sid);
+            const std::string dftpath = ctx_dft != nullptr ? session_dft_filepath(sid) : std::string();
+
+            double t_ms = 0.0;
+            std::string err_msg;
+            const size_t n_bytes = slot_save_to_file(slot, filepath, t_ms, &err_msg);
+            if (n_bytes == 0) {
+                SLT_WRN(slot, "failed to save session %s to %s, continuing without persistence\n", sid.c_str(), filepath.c_str());
+            } else if (!dftpath.empty() && llama_state_seq_save_file(ctx_dft, dftpath.c_str(), slot.id, nullptr, 0) == 0) {
+                // the draft state could not be saved, roll back to keep the pair consistent
+                std::error_code ec;
+                fs::remove(filepath, ec);
+                fs::remove(dftpath, ec);
+                SLT_WRN(slot, "failed to save draft state of session %s to %s, continuing without persistence\n", sid.c_str(), dftpath.c_str());
+            } else {
+                SLT_DBG(slot, "saved session %s to %s (%.2f ms, %zu bytes)\n", sid.c_str(), filepath.c_str(), t_ms, n_bytes);
+            }
+        }
+
+        auto it = sessions.find(sid);
+        if (it != sessions.end() && it->second.slot == slot.id) {
+            it->second.slot = -1;
+        }
+
+        slot.session_id.clear();
+    }
+
+    // mark the slot as holding the session and track it in the registry
+    // when the registry is full, the oldest entry that is not in a busy slot is dropped
+    // (its idle slot is cleared, its save file is removed)
+    void stamp_slot_session(server_slot & slot, const std::string & sid) {
+        slot.session_id = sid;
+
+        if (sessions.find(sid) == sessions.end() && sessions.size() >= (size_t) params_base.session_max_sessions) {
+            auto victim = sessions.end();
+            for (auto it = sessions.begin(); it != sessions.end(); ++it) {
+                if (it->second.slot >= 0) {
+                    server_slot * s = get_slot_by_id(it->second.slot);
+                    if (s && s->is_processing()) {
+                        continue; // cannot drop a session in a busy slot
+                    }
+                }
+                if (victim == sessions.end() || it->second.t_last < victim->second.t_last) {
+                    victim = it;
+                }
+            }
+
+            if (victim != sessions.end()) {
+                if (victim->second.slot >= 0) {
+                    server_slot * s = get_slot_by_id(victim->second.slot);
+                    if (s) {
+                        s->prompt_clear();
+                    }
+                }
+                if (!params_base.slot_save_path.empty()) {
+                    std::error_code ec;
+                    fs::remove(session_filepath(victim->first), ec);
+                    fs::remove(session_dft_filepath(victim->first), ec);
+                }
+                sessions.erase(victim);
+            }
+        }
+
+        auto & entry = sessions[sid];
+        entry.slot = slot.id;
+        entry.t_last = ggml_time_us();
+    }
+
+    // persist all sessions held in RAM before the context is destroyed or replaced
+    // a session that was never evicted has no file yet, it would be lost otherwise
+    void flush_sessions_to_disk() {
+        if (ctx_tgt == nullptr) {
+            return;
+        }
+
+        for (auto & slot : slots) {
+            evict_slot_session(slot);
+        }
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
         bool update_cache = false;
+
+        // session-tagged requests: the slot is chosen by session identity, not by prompt similarity
+        if (!task.session_id.empty() &&
+                (task.type == SERVER_TASK_TYPE_COMPLETION || task.type == SERVER_TASK_TYPE_INFILL)) {
+            const std::string & session_id = task.session_id;
+
+            // reuse the slot already holding this session
+            for (auto & slot : slots) {
+                if (slot.is_processing()) {
+                    continue;
+                }
+                if (slot.session_id != session_id) {
+                    continue;
+                }
+                if (task.id_slot != -1 && slot.id != task.id_slot) {
+                    continue; // explicit pin takes priority
+                }
+
+                auto it = sessions.find(session_id);
+                if (it != sessions.end()) {
+                    it->second.t_last = ggml_time_us();
+                }
+
+                SLT_INF(slot, "selected slot by session id (%s)\n", session_id.c_str());
+                return &slot;
+            }
+
+            // no in-memory match, take an idle victim and restore the session if possible
+            server_slot * victim = pick_idle_slot(task.id_slot);
+            if (victim == nullptr) {
+                return nullptr; // no idle slot, the task will be deferred
+            }
+
+            evict_slot_session(*victim);
+
+            const std::string filepath = params_base.slot_save_path.empty()
+                ? std::string()
+                : session_filepath(session_id);
+
+            if (!filepath.empty() && fs::exists(filepath)) {
+                double t_ms = 0.0;
+                std::string err_msg;
+                if (slot_restore_from_file(*victim, filepath, t_ms, &err_msg) > 0) {
+                    SLT_INF(*victim, "restored session %s from %s (%.2f ms)\n", session_id.c_str(), filepath.c_str(), t_ms);
+                } else {
+                    SLT_WRN(*victim, "failed to restore session %s from %s, starting fresh\n", session_id.c_str(), filepath.c_str());
+                }
+            }
+
+            stamp_slot_session(*victim, session_id);
+
+            return victim;
+        }
 
         // if a specific slot is requested, use it (still goes through cache update logic below)
         if (task.id_slot != -1) {
@@ -1634,6 +2000,9 @@ private:
         }
 
         if (ret) {
+            // persist the session held by the slot before its state is replaced
+            evict_slot_session(*ret);
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for completion tasks
@@ -1679,6 +2048,7 @@ private:
             if (slot.prompt.n_tokens() > 0) {
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
 
+                evict_slot_session(slot);
                 slot.prompt_clear();
 
                 res = true;
@@ -2091,6 +2461,7 @@ private:
 
         res->id      = slot.task->id;
         res->id_slot = slot.id;
+        res->session_id = slot.session_id;
 
         res->index = slot.task->index;
 
@@ -2445,6 +2816,7 @@ private:
 
                                 if (params_base.kv_unified) {
                                     // [TAG_IDLE_SLOT_CLEAR]
+                                    evict_slot_session(slot);
                                     slot.prompt_clear();
                                 }
                             }
@@ -2557,30 +2929,16 @@ private:
                         break;
                     }
 
-                    const int64_t t_start = ggml_time_us();
-
                     std::string filename = task.slot_action.filename;
-                    std::string filepath = task.slot_action.filepath;
+                    const std::string & filepath = task.slot_action.filepath;
 
-                    std::vector<char> packed;
-                    try {
-                        packed = slot->prompt.tokens.serialize();
-                    } catch (const std::exception & err) {
-                        send_error(task, err.what(), ERROR_TYPE_NOT_SUPPORTED);
-                        break;
-                    }
-
-                    GGML_ASSERT(packed.size() % sizeof(llama_token) == 0);
-                    const size_t nwrite = llama_state_seq_save_file(
-                        ctx_tgt, filepath.c_str(), slot->id,
-                        reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+                    double t_save_ms = 0.0;
+                    std::string err_msg;
+                    const size_t nwrite = slot_save_to_file(*slot, filepath, t_save_ms, &err_msg);
                     if (nwrite == 0) {
-                        send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
+                        send_error(task, err_msg.empty() ? "Unable to save slot" : err_msg, ERROR_TYPE_SERVER);
                         break;
                     }
-
-                    const int64_t t_end = ggml_time_us();
-                    const double t_save_ms = (t_end - t_start) / 1000.0;
 
                     auto res = std::make_unique<server_task_result_slot_save_load>();
                     res->id       = task.id;
@@ -2607,45 +2965,16 @@ private:
                         break;
                     }
 
-                    const int64_t t_start = ggml_time_us();
-
                     std::string filename = task.slot_action.filename;
-                    std::string filepath = task.slot_action.filepath;
+                    const std::string & filepath = task.slot_action.filepath;
 
-                    size_t nread = 0;
-                    try {
-                        size_t n_packed = 0;
-                        llama_tokens packed;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
-                        if (nread != 0) {
-                            packed.resize(std::max<size_t>(1, n_packed));
-                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
-                        }
-                        if (nread == 0) {
-                            throw std::runtime_error("No available space in KV cache or invalid slot save file");
-                        }
-                        packed.resize(n_packed);
-
-                        server_tokens restored = server_tokens::deserialize(packed, mctx != nullptr);
-
-                        if (restored.size() > (size_t) slot->n_ctx) {
-                            throw std::runtime_error("Restored prompt does not fit in the slot context");
-                        }
-
-                        if (!restored.validate(ctx_tgt)) {
-                            throw std::runtime_error("Invalid tokens in slot save file");
-                        }
-
-                        slot->prompt.clear();
-                        slot->prompt.tokens = std::move(restored);
-                    } catch (const std::exception & err) {
-                        slot->prompt_clear();
-                        send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
+                    double t_restore_ms = 0.0;
+                    std::string err_msg;
+                    const size_t nread = slot_restore_from_file(*slot, filepath, t_restore_ms, &err_msg);
+                    if (nread == 0) {
+                        send_error(task, std::string("Unable to restore slot: ") + err_msg, ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
-
-                    const int64_t t_end = ggml_time_us();
-                    const double t_restore_ms = (t_end - t_start) / 1000.0;
 
                     auto res = std::make_unique<server_task_result_slot_save_load>();
                     res->id       = task.id;
@@ -4322,6 +4651,22 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
             task.id_slot = json_value(data, "id_slot", -1);
             sse_ping_interval = task.params.sse_ping_interval;
+
+            // session id: body field and/or the headers named by --slot-save-sessions, they must agree if both are present
+            // without the flag the session id is not read at all
+            if (params.session_id_enabled) {
+                std::string session_id = json_value(data, "session_id", std::string());
+                const std::string session_header = session_id_from_headers(req.headers, params.session_id_headers);
+                if (!session_header.empty() && !session_id.empty() && session_id != session_header) {
+                    throw std::runtime_error("session_id in the request body and in the headers do not match");
+                }
+                task.session_id = session_id.empty() ? session_header : session_id;
+
+                // the id becomes part of the save file name, it must be a valid filename
+                if (!task.session_id.empty() && !fs_validate_filename("llama-session-" + task.session_id + ".bin")) {
+                    throw std::runtime_error("session_id contains characters invalid in the save file name");
+                }
+            }
 
             // OAI-compat
             task.params.res_type          = res_type;

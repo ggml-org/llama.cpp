@@ -75,6 +75,8 @@ class ServerProcess:
     n_predict: int | None = None
     n_prompts: int | None = 0
     slot_save_path: str | None = None
+    session_id_headers: str | None = None
+    session_max_sessions: int | None = None
     id_slot: int | None = None
     cache_prompt: bool | None = None
     n_slots: int | None = None
@@ -227,6 +229,10 @@ class ServerProcess:
             server_args.extend(["--n-predict", self.n_predict])
         if self.slot_save_path:
             server_args.extend(["--slot-save-path", self.slot_save_path])
+        if self.session_id_headers is not None:
+            server_args.extend(["--slot-save-sessions", self.session_id_headers])
+        if self.session_max_sessions is not None:
+            server_args.extend(["--slot-save-sessions-max", str(self.session_max_sessions)])
         if self.n_ga:
             server_args.extend(["--grp-attn-n", self.n_ga])
         if self.n_ga_w:
