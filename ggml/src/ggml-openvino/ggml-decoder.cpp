@@ -229,6 +229,15 @@ static std::string get_tensor_graph_input_ov_name(const GgmlOvDecoder * decoder,
             return get_tensor_ov_name(cgraph, tensor) + "_swa";
         }
     }
+    if (!decoder->get_model_params().swa_layers.empty() && GgmlOvDecoder::is_kv_idx(tensor, op) &&
+        op->src[2] != nullptr) {
+        // same as the masks: the full and the sliding-window cache get KV write indices of the same name
+        const ggml_tensor * cache = op->src[2]->view_src != nullptr ? op->src[2]->view_src : op->src[2];
+        auto layer = extract_layer_from_name(cache->name);
+        if (layer.has_value() && decoder->is_swa_layer(layer.value())) {
+            return get_tensor_ov_name(cgraph, tensor) + "_swa";
+        }
+    }
     return get_tensor_ov_name(cgraph, tensor);
 }
 
