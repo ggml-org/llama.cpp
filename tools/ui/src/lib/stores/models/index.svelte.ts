@@ -16,8 +16,7 @@ import {
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
-	RECENT_MODELS_LOCALSTORAGE_KEY,
-	SETTINGS_KEYS
+	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
@@ -27,7 +26,6 @@ import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { isAuxSidecar } from '$lib/utils/sidecars';
@@ -547,7 +545,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	 * the server reports only once a model is loaded.
 	 */
 	warmHubDetails(): void {
-		if (!settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB]) return;
+		if (!HuggingFaceService.isEnabled()) return;
 
 		const repos: string[] = [];
 

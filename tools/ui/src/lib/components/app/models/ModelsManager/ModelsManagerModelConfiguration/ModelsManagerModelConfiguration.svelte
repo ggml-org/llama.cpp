@@ -4,10 +4,10 @@
 	import { Trash2 } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
-	import { MODEL_ID, SETTINGS_KEYS } from '$lib/constants';
+	import { MODEL_ID } from '$lib/constants';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore } from '$lib/stores';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -47,7 +47,7 @@
 
 		hubDetails = null;
 
-		if (!settingsStore.config[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] || !repo.includes('/')) {
+		if (!HuggingFaceService.isEnabled() || !repo.includes('/')) {
 			return;
 		}
 

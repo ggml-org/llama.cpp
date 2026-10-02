@@ -129,7 +129,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: true,
+				// TODO: the Hub is off until onboarding suggests turning it on
+				defaultValue: false,
 				help: 'Fetch model metadata (avatars, context length, chat template, file sizes) from the Hugging Face Hub. When off, the UI only shows what the server reports for /v1/models and hides the org avatars.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use Hugging Face Hub API for models metadata',
