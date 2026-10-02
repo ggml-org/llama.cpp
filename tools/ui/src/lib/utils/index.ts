@@ -42,7 +42,7 @@ export {
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
 // CORS Proxy
-export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
+export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from './url';
