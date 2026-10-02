@@ -17,10 +17,7 @@
 
 	let status = $derived(modelsStore.getModelStatus(option.model));
 	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
-	let isLoaded = $derived(
-		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
-			!isOperationInProgress
-	);
+	let isLoaded = $derived(modelsStore.isModelRunning(option.model));
 </script>
 
 {#if download}

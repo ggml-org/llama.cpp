@@ -5,7 +5,7 @@
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
 	import { MODEL_ID } from '$lib/constants';
-	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
+	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
@@ -29,12 +29,8 @@
 
 		return modelsStore.props.getModelProps(option.model);
 	});
-	let status = $derived.by(() => modelsStore.getModelStatus(option.model));
-	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
-	let isLoaded = $derived(
-		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
-			!isOperationInProgress
-	);
+	let status = $derived(modelsStore.getModelStatus(option.model));
+	let isLoaded = $derived(modelsStore.isModelRunning(option.model));
 
 	// The server reports the full metadata only once a model is loaded, which loads it.
 	// With the Hub enabled, it fills those gaps instead.

@@ -4,11 +4,11 @@
 	import ModelContext from '../ModelContext.svelte';
 	import ModelId from '../ModelId.svelte';
 	import type { ModelQuantGroup } from './utils';
-	import { configuredContext, isModelRunning } from './utils';
+	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { MODEL_ROW_GRID_CLASS, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
-	import { settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 
 	interface Props {
 		entry: ModelQuantGroup;
@@ -25,7 +25,7 @@
 			? `${entry.quants.length} variants`
 			: `${entry.quants.length} quants available`
 	);
-	let anyLoaded = $derived(entry.quants.some((quant) => isModelRunning(quant)));
+	let anyLoaded = $derived(entry.quants.some((quant) => modelsStore.isModelRunning(quant.model)));
 	// a repo row stands for its quants, so it reports what they agree on
 	let contextSource = $derived(entry.quants.find((quant) => quant.contextLength) ?? entry.base);
 	let mediaSource = $derived(entry.quants.find((quant) => quant.modalities) ?? entry.base);
