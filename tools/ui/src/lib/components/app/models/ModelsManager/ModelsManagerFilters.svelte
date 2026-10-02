@@ -9,11 +9,14 @@
 		FILTER_TRIGGER_CLASS,
 		MODALITY_FLAG_KEYS,
 		MODALITY_ICONS,
+		MODALITY_KEYS,
 		MODALITY_LABELS,
 		MODALITY_ORDER,
 		type ModalityKey
 	} from '$lib/constants';
 	import { ModelCapability } from '$lib/enums';
+	import { modelsStore } from '$lib/stores';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		/** Capabilities a model must have every one of. */
@@ -45,16 +48,34 @@
 		value
 	}));
 
-	const MODALITY_TOGGLES = MODALITY_ORDER.map((modality) => ({
-		icon: MODALITY_ICONS[modality],
-		label: MODALITY_LABELS[modality],
-		value: MODALITY_FLAG_KEYS[modality]
-	}));
+	// only the modalities the models at hand actually carry: a toggle for something
+	// none of them supports could only ever empty the table
+	let detectedModalities = $derived.by(() => {
+		const keys = new SvelteSet<ModalityKey>();
+
+		for (const option of modelsStore.models) {
+			for (const key of MODALITY_KEYS) {
+				if (option.modalities?.[key]) keys.add(key);
+			}
+		}
+
+		return keys;
+	});
+	let modalityToggles = $derived(
+		MODALITY_ORDER.filter((modality) => detectedModalities.has(MODALITY_FLAG_KEYS[modality])).map(
+			(modality) => ({
+				icon: MODALITY_ICONS[modality],
+				label: MODALITY_LABELS[modality],
+				value: MODALITY_FLAG_KEYS[modality]
+			})
+		)
+	);
 
 	// one group holds what a model can do and what it can accept
-	const TOGGLES = [...CAPABILITY_TOGGLES, ...MODALITY_TOGGLES];
+	let toggles = $derived([...CAPABILITY_TOGGLES, ...modalityToggles]);
 	const CAPABILITY_VALUES = new Set<string>(CAPABILITY_TOGGLES.map((entry) => entry.value));
-	const MODALITY_VALUES = new Set<string>(MODALITY_TOGGLES.map((entry) => entry.value));
+	// every flag value, so a choice made before a model disappeared still round-trips
+	const MODALITY_VALUES = new Set<string>(MODALITY_KEYS);
 
 	// the group holds one flat list, so a change splits back into the two filters
 	function setToggles(values: string[]): void {
@@ -93,7 +114,7 @@
 		value={[...capabilities, ...modalities]}
 		variant="outline"
 	>
-		{#each TOGGLES as toggle (toggle.value)}
+		{#each toggles as toggle (toggle.value)}
 			<ToggleGroup.Item
 				aria-label={toggle.label}
 				class={FILTER_TOGGLE_ITEM_CLASS}

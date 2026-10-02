@@ -162,7 +162,9 @@
 	{/each}
 
 	{#if visibleRows.length === 0}
-		<p class="py-2.5 text-sm text-muted-foreground">This model reports no metadata.</p>
+		<p class="py-2.5 text-sm text-muted-foreground">
+			The model reports its metadata once it is loaded.
+		</p>
 	{/if}
 
 	{#if modalities.length > 0}
@@ -188,8 +190,8 @@
 		{/snippet}
 
 		<pre
-			class="mt-1 max-h-48 overflow-auto rounded-md bg-muted/50 p-2 text-xs whitespace-pre-wrap">{serverProps?.chat_template ??
+			class="mt-1 rounded-md bg-muted/50 p-2 text-xs whitespace-pre-wrap">{serverProps?.chat_template ??
 				gguf?.chat_template ??
-				'Not reported by the server.'}</pre>
+				'Shown once the model is loaded.'}</pre>
 	</CollapsibleSection>
 </div>
