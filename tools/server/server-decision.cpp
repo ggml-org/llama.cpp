@@ -17,6 +17,24 @@ static const char * decision_question_type_name(server_decision_question_type ty
 // lev reads noul from a rating scale: 0 = certainly no, 8 = certainly yes
 static const size_t DECISION_LEV_N_RATINGS = 9;
 
+// a generic model writes its answer as OPEN label CLOSE, the prompt ends with OPEN so the next token is the label
+#define DECISION_GENERIC_OPEN  "\xE2\x8A\xB2" // U+22B2
+#define DECISION_GENERIC_CLOSE "\xE2\x8A\xB3" // U+22B3
+
+// the user message of a generic model
+static const char * DECISION_GENERIC_TEMPLATE =
+    "Read the state, then answer the question by choosing exactly one of the options.\n\n"
+    "# State\n{{ state if state is string else state | tojson }}{% for image in images %}{{ image }}{% endfor %}\n\n"
+    "# Question\n{{ instructions if instructions is string else instructions | tojson }}\n\n"
+    "# Options\n"
+    "{% for o in options %}" DECISION_GENERIC_OPEN "{{ o.label }}" DECISION_GENERIC_CLOSE " "
+    "{% set desc = o.description if o.description is string else o.description | tojson %}"
+    "{% if type == 'noul' %}{{ 'yes' if o.key == 'true' else 'no' }}{% if o.description %}: {{ desc }}{% endif %}"
+    "{% elif type == 'score' and o.description %}{{ desc }}"
+    "{% else %}{{ o.key }}{% if o.description %}: {{ desc }}{% endif %}{% endif %}{{ '\\n' }}"
+    "{% endfor %}{{ '\\n' }}"
+    "Respond with only the label of the best option, written as " DECISION_GENERIC_OPEN "label" DECISION_GENERIC_CLOSE ".";
+
 static std::string decision_meta_str(const llama_model * model, const std::string & key) {
     char buf[256];
     const int32_t n = llama_model_meta_val_str(model, key.c_str(), buf, sizeof(buf));
@@ -27,11 +45,14 @@ static std::string decision_meta_str(const llama_model * model, const std::strin
 // model-specific setup
 //
 
-void server_decision_context::init(const llama_model * model) {
+void server_decision_context::init(const llama_model * model, bool allow_generic) {
     *this = server_decision_context(); // the model can be reloaded
 
     const common_decision_type model_type = common_get_decision_type(model);
     if (model_type == COMMON_DECISION_TYPE_NONE) {
+        if (allow_generic && llama_model_has_decoder(model)) {
+            init_generic(model);
+        }
         return;
     }
 
@@ -124,6 +145,38 @@ void server_decision_context::init(const llama_model * model) {
     SRV_INF("decision model type: %s\n", type_name.c_str());
 }
 
+void server_decision_context::init_generic(const llama_model * model) {
+    vocab = llama_model_get_vocab(model);
+    tmpl  = std::make_shared<const common_chat_template>(DECISION_GENERIC_TEMPLATE, "", "");
+
+    // a label is used only if it is one token between the marks, not merged with them
+    const auto toks_open  = common_tokenize(vocab, DECISION_GENERIC_OPEN,  false, false);
+    const auto toks_close = common_tokenize(vocab, DECISION_GENERIC_CLOSE, false, false);
+    const std::string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    for (const char c : letters) {
+        const auto toks = common_tokenize(vocab, std::string(1, c), false, false);
+        if (toks.size() != 1) {
+            continue;
+        }
+        llama_tokens expected = toks_open;
+        expected.push_back(toks[0]);
+        expected.insert(expected.end(), toks_close.begin(), toks_close.end());
+        if (common_tokenize(vocab, DECISION_GENERIC_OPEN + std::string(1, c) + DECISION_GENERIC_CLOSE, false, false) == expected) {
+            labels.push_back(toks[0]);
+            label_texts.push_back(std::string(1, c));
+        }
+    }
+    if (labels.size() < 2) {
+        SRV_WRN("%s", "the vocab has no usable labels, generic decisions are disabled\n");
+        return;
+    }
+    n_options_max   = labels.size();
+    noul_true_first = true;
+    type            = COMMON_DECISION_TYPE_GENERIC;
+
+    SRV_INF("decision model type: generic (%zu labels)\n", labels.size());
+}
+
 //
 // request parsing
 //
@@ -211,7 +264,19 @@ static void decision_load_image(const json & url, std::vector<raw_buffer> & file
     handle_media(files, url.get<std::string>(), "");
 }
 
-json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files) const {
+// audio is base64 data, as a data URL or not (OpenAI input_audio)
+static void decision_load_audio(const json & data, std::vector<raw_buffer> & files) {
+    if (!data.is_string() || string_starts_with(data.get<std::string>(), "http") || string_starts_with(data.get<std::string>(), "file://")) {
+        throw std::invalid_argument("audio must be base64 data");
+    }
+    if (files.size() >= DECISION_MAX_IMAGES) {
+        throw std::invalid_argument(string_format("too many media files, the maximum is %zu", DECISION_MAX_IMAGES));
+    }
+    handle_media(files, data.get<std::string>(), "");
+}
+
+json server_decision_context::parse_state(const json & body, std::vector<raw_buffer> & files, size_t & n_audio) const {
+    n_audio = 0;
     if (body.contains("images") && !body.at("images").is_null()) {
         if (!body.at("images").is_array()) {
             throw std::invalid_argument("\"images\" must be an array");
@@ -228,7 +293,7 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
         return state;
     }
 
-    // chat messages: take the image parts out of the content
+    // chat messages: take the image and audio parts out of the content
     json messages_out = json::array();
     for (const auto & msg : messages) {
         if (!msg.is_object() || !msg.contains("content") || !msg.at("content").is_array()) {
@@ -240,6 +305,10 @@ json server_decision_context::parse_state(const json & body, std::vector<raw_buf
             if (part.is_object() && json_value(part, "type", std::string()) == "image_url" && part.contains("image_url")) {
                 const json & image_url = part.at("image_url");
                 decision_load_image(image_url.is_object() && image_url.contains("url") ? image_url.at("url") : image_url, files);
+            } else if (part.is_object() && json_value(part, "type", std::string()) == "input_audio" && part.contains("input_audio")) {
+                const json input_audio = json_value(part, "input_audio", json::object());
+                decision_load_audio(input_audio.contains("data") ? input_audio.at("data") : json_value(input_audio, "url", json()), files);
+                n_audio++;
             } else {
                 content.push_back(part);
             }
@@ -350,6 +419,10 @@ size_t server_decision_context::n_variants(const server_decision_question & ques
     if (type == COMMON_DECISION_TYPE_LEV && question.type == SERVER_DECISION_QUESTION_CHOICE && question.options.size() > 1) {
         return 2;
     }
+    // same for generic, also for noul but not for score, a reversed scale changes the answer
+    if (type == COMMON_DECISION_TYPE_GENERIC && question.type != SERVER_DECISION_QUESTION_SCORE && question.options.size() > 1) {
+        return 2;
+    }
     return 1;
 }
 
@@ -432,10 +505,23 @@ void server_decision_context::fill_task(
         const std::vector<raw_buffer> & files,
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
+        const server_chat_params & chat_params,
         server_task & task) const {
-    const std::string prompt = render(state, question, variant, files.size());
+    std::string prompt = render(state, question, variant, files.size());
 
-    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV) {
+    if (type == COMMON_DECISION_TYPE_GENERIC) {
+        common_chat_msg msg;
+        msg.role    = "user";
+        msg.content = prompt;
+
+        common_chat_templates_inputs inputs;
+        inputs.messages        = {msg};
+        inputs.use_jinja       = chat_params.use_jinja;
+        inputs.enable_thinking = false;
+        prompt = common_chat_templates_apply(chat_params.tmpls.get(), inputs).prompt + DECISION_GENERIC_OPEN;
+    }
+
+    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_GENERIC) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
         task.decision.labels.assign(labels.begin(), labels.begin() + n_outputs(question));
         if (!files.empty()) {
@@ -444,7 +530,8 @@ void server_decision_context::fill_task(
         }
     }
 
-    llama_tokens tokens = common_tokenize(vocab, prompt, false, true);
+    // the chat template leaves the BOS token to the tokenizer
+    llama_tokens tokens = common_tokenize(vocab, prompt, type == COMMON_DECISION_TYPE_GENERIC, true);
     if (type == COMMON_DECISION_TYPE_LAYA) {
         fill_task_laya(tokens, question, task);
     }

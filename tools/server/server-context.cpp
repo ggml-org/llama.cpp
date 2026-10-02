@@ -1118,7 +1118,7 @@ private:
         vocab = llama_model_get_vocab(model_tgt);
 
         try {
-            decision.init(model_tgt);
+            decision.init(model_tgt, !params_base.embedding);
         } catch (const std::exception & e) {
             SRV_ERR("failed to init decision model: %s\n", e.what());
             return false;
@@ -5376,9 +5376,14 @@ void server_routes::init_routes() {
         const auto questions = decision.parse_questions(body);
 
         std::vector<raw_buffer> files;
-        const json state = decision.parse_state(body, files);
-        if (!files.empty() && (!decision.can_use_images() || !meta->has_inp_image)) {
+        size_t n_audio = 0;
+        const json state = decision.parse_state(body, files, n_audio);
+        if (files.size() > n_audio && (!decision.can_use_images() || !meta->has_inp_image)) {
             res->error(format_error_response("This server does not support image input for decisions. For a model that supports it, start it with `--mmproj`", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+        if (n_audio > 0 && (!decision.can_use_audio() || !meta->has_inp_audio)) {
+            res->error(format_error_response("This server does not support audio input for decisions. For a model that supports it, start it with `--mmproj`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
 
@@ -5390,7 +5395,7 @@ void server_routes::init_routes() {
                 for (size_t variant = 0; variant < decision.n_variants(question); variant++) {
                     server_task task = server_task(SERVER_TASK_TYPE_DECISION);
                     task.id = rd.get_new_id();
-                    decision.fill_task(state, question, variant, files, ctx_server.mctx, ctx_server.init_opt, task);
+                    decision.fill_task(state, question, variant, files, ctx_server.mctx, ctx_server.init_opt, meta->chat_params, task);
                     tasks.push_back(std::move(task));
                 }
             }
