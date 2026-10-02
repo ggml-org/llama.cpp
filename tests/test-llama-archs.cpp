@@ -152,6 +152,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
+            || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_HY_V4) {
         n_embd = 128;
@@ -165,7 +166,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         //n_vocab = 4096; // must be >= the hard-coded codec head size (3072)
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
-        n_layer = 8; // 1 layer per stack x 2 h-cycles x (3 l-cycles + 1) cache slots
+        n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
     }
 
     uint32_t n_head_kv = n_head;
@@ -203,14 +204,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR ||
-            arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3) {
+            arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_GLM5_NEXT) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             n_head_per_layer.push_back(il == 1 ? 0 : n_head);
         }
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
+        // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
+        if (arch == LLM_ARCH_GLM5_NEXT) {
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        } else {
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
+        }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
@@ -229,11 +235,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_KIMI_LINEAR
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
-            || arch == LLM_ARCH_MISTRAL4
-            || arch == LLM_ARCH_HY_V4) {
-        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
+            || arch == LLM_ARCH_GLM5_NEXT
+            || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_MISTRAL4) {
+        // GLM5 next MLA is nope only, the cache row is the compressed latent alone.
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(512) : uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
-        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       arch == LLM_ARCH_GLM5_NEXT ? uint32_t(0) : uint32_t(64));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(192));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128));
         if (arch == LLM_ARCH_DOTS3NOTE) {
@@ -289,8 +297,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
     // indexer head count is independent of the main attention head count.
-    if (arch == LLM_ARCH_QWEN4EXP) {
+    if (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,  1.0e-6f);
         ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
         // without this the QSA layers fall back to dense and go uncovered
         ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>(n_layer, 4));
@@ -332,6 +342,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(131072));
 
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL,        uint32_t(4));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, true);
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
     // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
     // summing to n_rot / 2 (n_rot is 64 in this fixture)
@@ -372,10 +384,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     }
 
     if (arch == LLM_ARCH_HRM_TEXT) {
-        // 8 cache slots alias 2 physical blocks: 1 low-stack layer + 1 high-stack layer
+        // 6 cache slots alias 2 physical blocks: 1 low-stack layer + 1 high-stack layer
         ms.add_kv(LLM_KV_HRM_LAYERS_PER_STACK, uint32_t(1));
         ms.add_kv(LLM_KV_HRM_H_CYCLES,         uint32_t(2));
-        ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(3));
+        ms.add_kv(LLM_KV_HRM_L_CYCLES,         uint32_t(2));
     }
 
     if (arch == LLM_ARCH_MAPLE) {
@@ -498,20 +510,17 @@ static std::vector<float> get_logits(
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_ctx    = llama_n_ctx(lctx);
     const uint32_t n_tokens = tokens.size();
-    llama_batch batch = llama_batch_init(n_ctx, 0, 1);
+    common_batch batch(lctx);
     GGML_ASSERT(n_tokens <= n_ctx);
     for (uint32_t pos = 0; pos < n_tokens; pos++) {
-        common_batch_add(batch, tokens[pos], pos, {0}, true);
+        batch.add(tokens[pos], pos, 0, true);
     }
-    batch.n_tokens = n_tokens;
     if (encode) {
-        if (llama_encode(lctx, batch)) {
-            llama_batch_free(batch);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_ENCODE, batch.get())) {
             throw std::runtime_error("failed to encode batch");
         }
     }
-    if (llama_decode(lctx, batch)) {
-        llama_batch_free(batch);
+    if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         throw std::runtime_error("failed to decode batch");
     }
 
@@ -523,8 +532,52 @@ static std::vector<float> get_logits(
             ret.push_back(logits_ith[j]);
         }
     }
-    llama_batch_free(batch);
     return ret;
+}
+
+static bool check_causal_attn_toggle(
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const uint32_t n_past   = tokens.size();
+    const uint32_t n_ubatch = llama_n_ubatch(lctx);
+
+    GGML_ASSERT(n_past + n_ubatch/2 + n_ubatch <= llama_n_ctx(lctx));
+
+    llama_set_causal_attn(lctx, false);
+
+    common_batch batch(lctx);
+
+    bool ok = true;
+    uint32_t pos = n_past;
+    for (const uint32_t n_tokens : { n_ubatch/2, n_ubatch }) {
+        batch.clear();
+        for (uint32_t i = 0; i < n_tokens; i++) {
+            batch.add(tokens[i], pos++, 0, true);
+        }
+
+        const int32_t rc = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        if (rc != 0) {
+            LOG_ERR("%s: n_tokens=%u: llama_process returned %d\n", __func__, n_tokens, rc);
+            ok = false;
+            break;
+        }
+
+        const float * logits = llama_get_logits_ith(lctx, n_tokens - 1);
+        if (logits == nullptr) {
+            LOG_ERR("%s: n_tokens=%u: no logits\n", __func__, n_tokens);
+            ok = false;
+            break;
+        }
+        for (uint32_t j = 0; j < n_vocab; j++) {
+            if (std::isnan(logits[j])) {
+                LOG_ERR("%s: n_tokens=%u: nan logit\n", __func__, n_tokens);
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    return ok;
 }
 
 static bool moe_mandatory(const llm_arch arch) {
@@ -573,6 +626,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
+        case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
@@ -852,6 +906,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         if (nmse_val > 1e-4) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
+                        }
+                        if (!encode && !check_causal_attn_toggle(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens)) {
+                            if (test_ok) {
+                                status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
+                            }
+                            test_ok = false;
                         }
                     }
 

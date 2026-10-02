@@ -211,6 +211,10 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
         if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
+    if (ctx->owned) {
+        ggml_aligned_free(ctx->all_data, ctx->all_size);
+    }
+
     delete ctx;
 }
 
@@ -311,6 +315,28 @@ static void ggml_backend_zdnn_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     memset(ctx->all_data, value, ctx->all_size);
 }
 
+static void ggml_backend_zdnn_buffer_reset(ggml_backend_buffer_t buffer) {
+    ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
+
+    for (const auto & buf_ptr : ctx->buffers) {
+        ggml_backend_zdnn_buffer * buf = buf_ptr.get();
+
+        if (buf->extra != nullptr) {
+            free(buf->extra->data);
+        }
+
+        if (buf->ztensor.buffer_size > 0) {
+            ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
+        }
+    }
+
+    if (ctx->buffers.size() > 1) {
+        ctx->buffers.resize(1);
+    }
+
+    ctx->n_buffers = 1;
+}
+
 static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .free_buffer   = */ ggml_backend_zdnn_buffer_free_buffer,
     /* .get_base      = */ ggml_backend_zdnn_buffer_get_base,
@@ -322,7 +348,7 @@ static ggml_backend_buffer_i ggml_backend_zdnn_buffer_i = {
     /* .get_tensor_2d = */ NULL,
     /* .cpy_tensor    = */ NULL,
     /* .clear         = */ ggml_backend_zdnn_buffer_clear,
-    /* .reset         = */ NULL,
+    /* .reset         = */ ggml_backend_zdnn_buffer_reset,
 };
 
 //
@@ -388,12 +414,14 @@ static bool ggml_backend_zdnn_buffer_type_is_host(ggml_backend_buffer_type_t buf
 ggml_backend_buffer_type_t ggml_backend_zdnn_buffer_type(void) {
     static ggml_backend_buffer_type ggml_backend_buffer_type_zdnn = {
         /* .iface   = */ {
-            /* .get_name       = */ ggml_backend_zdnn_buffer_type_get_name,
-            /* .alloc_buffer   = */ ggml_backend_zdnn_buffer_type_alloc_buffer,
-            /* .get_alignment  = */ ggml_backend_zdnn_buffer_type_get_alignment,
-            /* .get_max_size   = */ NULL,
-            /* .get_alloc_size = */ NULL,  // defaults to ggml_nbytes
-            /* .is_host        = */ ggml_backend_zdnn_buffer_type_is_host,
+            /* .get_name            = */ ggml_backend_zdnn_buffer_type_get_name,
+            /* .alloc_buffer        = */ ggml_backend_zdnn_buffer_type_alloc_buffer,
+            /* .alloc_buffer_n      = */ NULL,
+            /* .get_alignment       = */ ggml_backend_zdnn_buffer_type_get_alignment,
+            /* .get_max_size        = */ NULL,
+            /* .get_alloc_size      = */ NULL,  // defaults to ggml_nbytes
+            /* .get_alloc_size_n    = */ NULL,
+            /* .is_host             = */ ggml_backend_zdnn_buffer_type_is_host,
         },
         /* .device  = */ &g_ggml_backend_zdnn_device,
         /* .context = */ NULL,

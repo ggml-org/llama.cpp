@@ -1008,7 +1008,7 @@ server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context *
             return server_tokens(tmp, false);
         }
    } else {
-       throw std::runtime_error("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
+       throw std::invalid_argument("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
    }
 }
 
@@ -1023,7 +1023,7 @@ std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtm
         result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special, init_opt));
     }
     if (result.empty()) {
-        throw std::runtime_error("\"prompt\" must not be empty");
+        throw std::invalid_argument("\"prompt\" must not be empty");
     }
     return result;
 }
@@ -1076,7 +1076,7 @@ json oaicompat_completion_params_parse(const json & body) {
 // - file:// for local files (only allowed if media_path is set)
 // - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
 // - raw base64 encoded data
-static void handle_media(
+void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
         const std::string & media_path) {
