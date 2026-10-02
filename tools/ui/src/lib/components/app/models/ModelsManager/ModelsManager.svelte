@@ -13,6 +13,7 @@
 	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
 	import { conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
+	import { filterModelOptions } from '$lib/utils';
 	import { type Snippet, untrack } from 'svelte';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -98,11 +99,10 @@
 		modelsStore.favoriteModelIds.has(option.model)
 	);
 	let matching = $derived.by(() => {
-		const term = filter.trim().toLowerCase();
+		// the term matches what the selector search matches: name, model, aliases and tags
+		const searched = filterModelOptions(allModels, filter);
 
-		return allModels.filter((option) => {
-			if (term && !`${option.name} ${option.model}`.toLowerCase().includes(term)) return false;
-
+		return searched.filter((option) => {
 			// every capability asked for has to be there: tools and reasoning are
 			// features a model either has or does not, unlike modalities
 			if (
