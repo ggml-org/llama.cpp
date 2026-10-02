@@ -305,6 +305,8 @@ struct common_chat_input {
     common_chat_input substr(size_t pos, size_t n = std::string::npos) const;
 };
 
+common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const std::string & text);
+
 // per-message parsing syntax
 // should be derived from common_chat_params
 struct common_chat_parser_params {

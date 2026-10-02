@@ -318,17 +318,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
                 return;
             }
 
-            common_chat_input input;
-            auto tokens = common_tokenize(ctx.vocab, s, false, true);
-            for (size_t i = 0; i < tokens.size(); i++) {
-                std::string piece = common_token_to_piece(ctx.vocab, tokens[i], true);
-                if (i == 0 && !piece.empty() && std::isspace((unsigned char) piece[0]) && !std::isspace((unsigned char) s[0])) {
-                    // Some tokenizers will add a space before the first special token, need to exclude
-                    continue;
-                }
-                input.append(piece, tokens[i]);
-            }
-            ctx.params.chat_parser_params.generation_prompt = std::move(input);
+            ctx.params.chat_parser_params.generation_prompt = common_chat_input_tokenize(ctx.vocab, s);
         }));
 
     add((new field_bool("parse_tool_calls", params.chat_parser_params.parse_tool_calls))
