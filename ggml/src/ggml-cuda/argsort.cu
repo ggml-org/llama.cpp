@@ -48,7 +48,8 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                               const int        ncols,
                               const int        nrows,
                               ggml_sort_order  order,
-                              cudaStream_t     stream) {
+                              cudaStream_t     stream,
+                              bool             use_segmented_radix) {
     ggml_cuda_pool_alloc<int>   temp_indices_alloc(pool, ncols * nrows);
     ggml_cuda_pool_alloc<float> temp_keys_alloc(pool, ncols * nrows);
     // Device*Sort algorithms currently do not allow for in-place sorting/aliasing of input/outputs
@@ -91,7 +92,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
             CUDA_CHECK(DeviceRadixSort::SortPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys_out,  // keys in, keys out
                                                   temp_indices, dst,  // values (indices)
                                                   ncols, 0, sizeof(float) * 8, stream));
-        } else if (is_capturing) {
+        } else if (is_capturing || use_segmented_radix) {
             CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(
                 nullptr, temp_storage_bytes, temp_keys, temp_keys_out,  // keys in, keys out
                 temp_indices, dst,                                  // values (indices)
@@ -110,7 +111,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                                                             temp_keys_out, // keys out
                                                             temp_indices, dst,  // values (indices)
                                                             ncols, 0, sizeof(float) * 8, stream));
-        } else if (is_capturing) {
+        } else if (is_capturing || use_segmented_radix) {
             CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
                 nullptr, temp_storage_bytes, temp_keys, temp_keys_out, temp_indices, dst, ncols * nrows, nrows,
                 offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
@@ -130,7 +131,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                                                   temp_keys_out, // keys out
                                                   temp_indices, dst,  // values (indices)
                                                   ncols, 0, sizeof(float) * 8, stream));
-        } else if (is_capturing) {
+        } else if (is_capturing || use_segmented_radix) {
             CUDA_CHECK(DeviceSegmentedRadixSort::SortPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys_out,
                                                            temp_indices, dst, ncols * nrows, nrows, offset_iterator,
                                                            offset_iterator + 1, 0, sizeof(float) * 8, stream));
@@ -145,7 +146,7 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
                                                             temp_keys_out, // keys out
                                                             temp_indices, dst,  // values (indices)
                                                             ncols, 0, sizeof(float) * 8, stream));
-        } else if (is_capturing) {
+        } else if (is_capturing || use_segmented_radix) {
             CUDA_CHECK(DeviceSegmentedRadixSort::SortPairsDescending(
                 d_temp_storage, temp_storage_bytes, temp_keys, temp_keys_out, temp_indices, dst, ncols * nrows, nrows,
                 offset_iterator, offset_iterator + 1, 0, sizeof(float) * 8, stream));
@@ -296,7 +297,7 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     for (int64_t i = 0; i < nrows; i += chunk_nrows) {
         int iter_nrows = std::min((int64_t) chunk_nrows, nrows - i);
 
-        argsort_f32_i32_cuda_cub(pool, src0_d, (int *) dst_d, ncols, iter_nrows, order, stream);
+        argsort_f32_i32_cuda_cub(pool, src0_d, (int *) dst_d, ncols, iter_nrows, order, stream, false);
 
         src0_d += ncols * iter_nrows;
         dst_d  += ncols * iter_nrows;
