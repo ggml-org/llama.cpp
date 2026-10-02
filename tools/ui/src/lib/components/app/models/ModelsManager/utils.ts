@@ -21,7 +21,6 @@ export function downloadProgressFor(repoWithTag: string): ModelDownloadProgress 
 	);
 }
 
-/** One tracked download of the status feed. */
 /**
  * One table row per tracked download, so the table lists them the way it lists
  * any other model. A paused download is already in the router's listing, so its
