@@ -3,7 +3,7 @@ import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enum
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
 import type { ModelDownloadProgress, ModelOption } from '$lib/types/models';
-import { detectThinkingSupport, detectToolUseSupport } from '$lib/utils';
+import { detectThinkingSupport, detectToolUseSupport, repoOf } from '$lib/utils';
 
 /** One repo of the table, with the rows it ships as. */
 export interface ModelQuantGroup {
@@ -90,19 +90,12 @@ export function modelContextLength(option: ModelOption): number | null {
 	);
 }
 
-/** Repo a `repo:quant` id belongs to, the id itself when it carries no quant. */
-export function modelRepoKey(model: string): string {
-	const quant = ModelsService.parseModelId(model).quantization;
-
-	return quant ? model.slice(0, model.lastIndexOf(':')) : model;
-}
-
 /** Fold the quants of one repo into a single entry, so the table shows one row per model. */
 export function groupModelQuants(models: ModelOption[]): ModelQuantGroup[] {
 	const groups = new Map<string, ModelQuantGroup>();
 
 	for (const option of models) {
-		const key = modelRepoKey(option.model);
+		const key = repoOf(option.model);
 		const group = groups.get(key);
 
 		if (group) {

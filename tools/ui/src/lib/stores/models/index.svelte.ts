@@ -12,7 +12,6 @@ import {
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
-	MODEL_ID,
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
 	RECENT_MODELS_LOCALSTORAGE_KEY
@@ -27,6 +26,7 @@ import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/sta
 import { serverStore } from '$lib/stores/server.svelte';
 import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
 import { getConversationModel } from '$lib/utils/conversation-utils';
+import { repoOf } from '$lib/utils/model-names';
 import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
@@ -537,7 +537,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const repos: string[] = [];
 
 		for (const option of this.models) {
-			const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+			const repo = repoOf(option.model);
 
 			if (repo?.includes('/') && !repos.includes(repo)) repos.push(repo);
 		}
@@ -572,7 +572,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		for (const { item, parsed } of entries) {
 			if (!parsed.sidecar || isAuxSidecar(parsed.sidecar)) continue;
 
-			const repo = item.id.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+			const repo = repoOf(item.id);
 			// the entry id's quant is the sidecar file's own quant
 			const badge: ModelSidecarBadge = {
 				kind: parsed.sidecar,
@@ -603,7 +603,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 					const displayNameSource =
 						details?.name && details.name.trim().length > 0 ? details.name : item.id;
 					const modelId = details?.model || item.id;
-					const repo = modelId.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+					const repo = repoOf(modelId);
 
 					return {
 						aliases: item.aliases ?? [],
