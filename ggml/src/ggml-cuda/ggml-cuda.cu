@@ -1769,7 +1769,7 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
     return true;
 }
 
-static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
+static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor, const ggml_tensor * gate = nullptr) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
     const ggml_tensor * dst  = tensor;
@@ -1782,7 +1782,11 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
         src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     const int cc      = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
+    use_mul_mat_vec_f = use_mul_mat_vec_f && ggml_cuda_should_use_mmvf(src0, cc, is_mul_mat_id ? src1->ne[2] : src1->ne[1]);
+
+    if (gate && !ggml_cuda_should_use_mmvf(gate->src[0], cc, is_mul_mat_id ? src1->ne[2] : src1->ne[1])) {
+        return false;
+    }
 
     //we only support fusion for ncols_dst = 1
     if (tensor->op == GGML_OP_MUL_MAT && dst->ne[1] != 1) {
@@ -1846,7 +1850,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
-    if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
+    if (ggml_cuda_should_use_mmvf(src0, cc, ne11)) {
         // The custom vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -1856,7 +1860,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (ne01 == 1 && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
             && src0->type == GGML_TYPE_F32
             && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
-            && ggml_cuda_should_use_mmvf(src1->type, cc, src1->ne, src1->nb, /*ne11 =*/ 1)) {
+            && ggml_cuda_should_use_mmvf(src1, cc, /*ne11 =*/ 1)) {
         ggml_tensor dst_vec = *dst;
         dst_vec.ne[0] = ne11;
         dst_vec.ne[1] = 1;
@@ -1903,7 +1907,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
                 return false;
             }
         } else if (src0->type == GGML_TYPE_F8_E4M3 &&
-                ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, dst->ne[2])) {
+                ggml_cuda_should_use_mmvf(src0, cc, dst->ne[2])) {
             return false;
         } else if (src0->type != GGML_TYPE_F8_E4M3 && GGML_CUDA_CC_IS_AMD(cc)) {
             return false;
@@ -1944,7 +1948,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     return;
                 }
             } else if (src0->type == GGML_TYPE_F8_E4M3 &&
-                    ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne2)) {
+                    ggml_cuda_should_use_mmvf(src0, cc, ne2)) {
                 ggml_cuda_mul_mat_vec_f(ctx, src0, src1, ids, dst);
                 return;
             } else {
@@ -3802,7 +3806,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fusion_data.glu_op     = ggml_get_glu_op(glu);
                 fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
-                if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
+                if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n, gate_n)) {
                     ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, cgraph->nodes[glu_idx], &fusion_data);
                     fused_mul_mat_vec = true;
                     fused_node_count  = n_ops;
@@ -3903,7 +3907,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fusion_data.glu_op     = ggml_get_glu_op(glu);
                 fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
-                if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
+                if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n, gate_n)) {
                     ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, cgraph->nodes[glu_idx], &fusion_data);
                     fused_mul_mat_vec = true;
                     fused_node_count  = n_ops;
@@ -3959,7 +3963,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const ggml_tensor * src1 = up_n->src[1];
             const ggml_tensor * ids  = up_n->src[2];
 
-            if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n)) {
+            if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n, gate_n)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
                 fusion_data.gate      = gate_n->src[0];
                 fusion_data.x_bias    = up_bias_tensor;
@@ -4002,7 +4006,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             const ggml_tensor * src1 = up->src[1];
             const ggml_tensor * ids  = up->src[2];
 
-            if (ggml_cuda_should_fuse_mul_mat_vec_f(up)) {
+            if (ggml_cuda_should_fuse_mul_mat_vec_f(up, gate)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
                 fusion_data.gate      = gate->src[0];
                 fusion_data.glu_op    = ggml_get_glu_op(glu);
