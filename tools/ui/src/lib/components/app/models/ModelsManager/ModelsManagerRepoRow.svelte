@@ -6,7 +6,7 @@
 	import type { ModelQuantGroup } from './utils';
 	import { configuredContext, isModelRunning } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 
@@ -50,8 +50,8 @@
 	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 		<ModelAvatar
 			option={entry.base}
-			showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
-			showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+			showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
+			showRepoOrgAvatar={settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
 			size="size-9"
 		/>
 

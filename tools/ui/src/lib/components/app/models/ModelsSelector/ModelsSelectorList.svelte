@@ -10,7 +10,7 @@
 		type ModelItem,
 		windowLocalGroups
 	} from '$lib/components/app/navigation/utils';
-	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW } from '$lib/constants';
+	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW, SETTINGS_KEYS } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
@@ -121,7 +121,7 @@
 {/snippet}
 
 {#snippet listRows(items: ModelItem[], prefix: string)}
-	{#if settingsStore.config.groupModelsByFamily}
+	{#if settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
 		<GroupedList
 			group={familyHeading}
 			groupStateKey={prefix}
@@ -153,8 +153,8 @@
 		onMouseEnter={() => {}}
 		{onSelect}
 		{option}
-		showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
-		showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+		showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
+		showRepoOrgAvatar={settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
 	/>
 {/snippet}
 
