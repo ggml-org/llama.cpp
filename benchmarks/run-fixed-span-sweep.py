@@ -88,7 +88,6 @@ def server_command(args: argparse.Namespace, context: int, mtp_length: int, aren
     ]
     if mtp_length:
         command += [
-            "--kv-stream-auxiliary-layers", "1",
             "--spec-type", "draft-mtp",
             "--spec-draft-n-max", str(mtp_length),
         ]

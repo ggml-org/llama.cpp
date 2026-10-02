@@ -15,6 +15,19 @@ SPEC.loader.exec_module(SWEEP)
 
 
 class MtpSweepTests(unittest.TestCase):
+    def test_mtp_command_uses_model_derived_layer_count(self):
+        args = SimpleNamespace(server=Path("/build/llama-server"), model=Path("/models/model.gguf"),
+                               batch_size=256, ubatch_size=256, arena_mib=2240, port=1246,
+                               no_kv_stream_rs_rollback=True)
+        command = SWEEP.server_command(args, 8192, 3)
+        self.assertNotIn("--kv-stream-auxiliary-layers", command)
+        self.assertEqual(command[command.index("--spec-type") + 1], "draft-mtp")
+        self.assertEqual(command[command.index("--spec-draft-n-max") + 1], "3")
+        self.assertIn("--no-kv-stream-rs-rollback", command)
+        baseline = SWEEP.server_command(args, 8192, 0)
+        self.assertNotIn("--spec-type", baseline)
+        self.assertNotIn("--no-kv-stream-rs-rollback", baseline)
+
     def test_default_sweep_includes_full_native_context(self):
         with patch("sys.argv", [str(SCRIPT), "--model", "model.gguf"]):
             args = SWEEP.arguments()
@@ -252,7 +265,7 @@ class MtpSweepTests(unittest.TestCase):
         mtp = SWEEP.server_command(args, 8192, 3)
         self.assertEqual(mtp[mtp.index("--spec-type") + 1], "draft-mtp")
         self.assertEqual(mtp[mtp.index("--spec-draft-n-max") + 1], "3")
-        self.assertEqual(mtp[mtp.index("--kv-stream-auxiliary-layers") + 1], "1")
+        self.assertNotIn("--kv-stream-auxiliary-layers", mtp)
         probe = SWEEP.server_command(args, 8192, 3, arena_mib=2337)
         self.assertEqual(probe[probe.index("--kv-stream-arena-mib") + 1], "2337")
 

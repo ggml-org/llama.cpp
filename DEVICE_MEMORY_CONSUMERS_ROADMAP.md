@@ -2,7 +2,7 @@
 
 Saved: 2026-09-10
 
-Last source review: 2026-09-17, against the checkpoint commits below.
+Last source review: 2026-09-30 for the vision/MTP integration paths; earlier checkpoint evidence is unchanged.
 
 ## Status and how to resume
 
@@ -35,6 +35,8 @@ Develop on an integration branch based on milestone 3. Create a checkpoint branc
 3. Extend sharing to vision/mmproj execution, supporting separate vision encoders and encoder-free multimodal models.
 
 Initial production scope: one active execution operation per session, one CUDA GPU, ordinary generation without MTP. Common coordination APIs remain backend-agnostic. Streaming kernels, allocation properties, and executable-graph lifecycle support require backend-specific implementation and validation.
+
+Milestone 7 first qualifies multimodal inference with MTP disabled, then qualifies the current serial embedded Qwen MTP configuration before claiming production vision support. Broader speculative modes remain outside this roadmap.
 
 Existing buffer-view support on another backend does not imply streamed-attention support.
 
@@ -135,10 +137,10 @@ The split below preserves milestones 4-8 and all existing parent stage scopes. I
 | 4 | 11 | Separate planning, asynchronous lifetimes, recovery, and the first real consumer. |
 | 5 | Original units through 5.6f; stages 5.7-5.9 are non-gating follow-ups | Establish exact bounded streaming, server/cache integration, and backend-neutral producer overlap. |
 | 6 | 13 | Separate measurement, accounting, KV growth/shrink, fixed-parent integration, phase activation, recovery, and budget probing. |
-| 7 | 11 | Separate embedding lifetime, KV suspension, projector ownership/reload, and server wiring. |
+| 7 | 14 | Separate embedding lifetime, multimodal KV positions, live serial ownership, KV suspension, projector reload, server wiring, and embedded MTP qualification. |
 | 8 | 9, including conditional 8.2b | Separate real model adapters, capability coverage, and sustained lifecycle validation. |
 
-These are planned review units, not a guarantee of final diff size or 65 mandatory code commits. The real cross-attention adapter in 8.2b is conditional; a documented deferral is not an implemented adapter. Do not create empty commits just to satisfy a count. If a substage still contains two independently risky changes, name an additional subdivision before implementing it and preserve completed identifiers.
+These are planned review units, not a guarantee of final diff size or a fixed number of mandatory code commits. The real cross-attention adapter in 8.2b is conditional; a documented deferral is not an implemented adapter. Do not create empty commits just to satisfy a count. If a substage still contains two independently risky changes, name an additional subdivision before implementing it and preserve completed identifiers.
 
 - The dependency column lists immediate prerequisites. `M3` is the existing checkpoint; `M4` through `M7` mean the preceding milestone has passed its full acceptance gate.
 - Tables group work by parent scope, not strict execution order. In milestone 4, implement 4.4a before 4.3b. In milestone 5, implement 5.4a before 5.3c; the host-write baseline does not depend on batched write optimization.
@@ -287,21 +289,26 @@ Acceptance:
 
 ## Milestone 7: separate vision encoder integration
 
-Outcome: a Qwen-style vision encoder and language model safely share phase-specific memory.
+Outcome: a Qwen-style vision encoder and language model safely share phase-specific memory, including the current embedded MTP mode after a no-MTP baseline passes.
+
+Before real-model qualification, obtain a matching mmproj and record its weight bytes, actual image/batch graph workspace, transient output, text/recurrent state, and the configured image-token and mtmd batch-token limits. The local Qwen3.8 GGUF snapshot does not include mmproj. Warmup graph size alone is not a bound for every dynamic image batch. Keep unsupported media requests and layouts rejected until their full lifecycle is qualified.
 
 | Commit unit | Prerequisites | Implementation boundary | Required tests / evidence |
 | --- | --- | --- | --- |
-| 7.1a | M6 | Borrowed mtmd compute workspace consumer with explicit requirements and executable lifetime. | Variable image sizes/batches, workspace sizing, attachment failure, and drain before release. |
-| 7.1b | 7.1a | Handoff embedding ownership independent of reusable vision workspace; preserve the existing host boundary initially. | Multiple images, partial/chunked consumption, embedding lifetime after workspace release, and cancellation cleanup. |
-| 7.2a | 7.1b | Session execution plan for vision encoding followed by embedding prefill; initially retain existing allocations. | Text/image/text ordering, follow-up images with existing state, multiple images, and encoding failure without unsafe text execution. |
-| 7.3a | 7.2a | Full KV device suspension: drain authoritative writes/copies, release device binding, and preserve host/runtime identity; explicitly account for recurrent state. | Zero retained KV device lease/pool, dirty tails saved, unchanged host cache, suspended execution rejected, and state outside KV protected. |
+| 7.1a | M6 | Borrowed mtmd compute workspace consumer with explicit requirements and executable lifetime. Plan from the actual preprocessed image batch before attachment; do not treat the warmup reservation as a universal maximum. | Variable image sizes/batches, batch too large for the grant, checked scheduler reservation, attachment failure, and drain before release. |
+| 7.1b | 7.1a | Handoff embedding ownership independent of reusable vision workspace; preserve the existing host boundary initially. A batch may encode images that appear later in the prompt. | Compatible/incompatible media batches, partial/chunked consumption in prompt order, embeddings alive until the final batch consumer after workspace release, and cancellation cleanup. |
+| 7.2a | 7.1b | Session execution plan for ordered text/image chunks with batchable vision encoding and later embedding prefill; initially retain existing allocations and leave MTP disabled. | Text/image/text ordering, follow-up images with existing state, multiple images, and encoding failure without unsafe text execution. |
+| 7.2b | 7.2a | Admit image-embedding prefill to adaptive KV. Keep sequential physical KV append indices distinct from Qwen M-RoPE model positions; retain cache-cell position metadata and explicit prefill intent. | Mixed text/image batches, overlapping/nonconsecutive image positions, later text positions, KV/recurrent state and generated output against ordinary mtmd, cache save/restore, and malformed-position rejection. |
+| 7.2c | 7.2b | Generalize the live serial parent from its single MTP child to coordinated text, vision, and optional MTP consumers without concurrent use of aliased storage. | One active scheduler per parent, repeated handoffs, pending compute/copy drain, captured-pointer invalidation, cancellation, and failure recovery; fake three-consumer tests precede live wiring. |
+| 7.3a | 7.2c | Full KV device suspension: drain authoritative writes/copies, release device binding, and preserve host/runtime identity; explicitly account for recurrent state. | Zero retained KV device lease/pool, dirty tails saved, unchanged host cache, suspended execution rejected, and state outside KV protected. |
 | 7.3b | 7.3a | Resume suspended KV into a fresh grant and rebuild affected mirrors/executables. | Different grants/addresses, host content restored, stale capture rejection, and attention/recurrent-state equivalence. |
 | 7.3c | 7.3b | Interrupted suspension/restoration and integration with vision-stage borrowing. | Allocation/rebind failure, cancellation before/after eviction, retry versus invalid-session rules, and repeated vision/text transitions. |
 | 7.4a | 7.2a | Separate projector device-weight ownership from model metadata and host/reload source while keeping current eager residency. | Shared owners, tensor metadata lifetime, loading equivalence, and destruction without double release. |
 | 7.4b | 7.4a | Explicit projector-weight unload/reload with executable invalidation and tensor rebinding. | Repeated new-address reload, stale tensor/capture rejection, drain before unload, and numerical equivalence. |
 | 7.4c | 7.4b, 7.3c | Coordinate reloadable projector storage with phase grants and failure recovery; account for weights that stay outside the arena. | Budgets unable to hold both phase allocations, reload failure, no double-allocation assumption, and persistent conversation state. |
-| 7.5a | 7.4c | Complete multimodal server flow, image-related cache reuse, and serial session cleanup. | Real image/text requests, follow-up images, reused media prefixes, aborted requests, and handoff final-use ordering. |
-| 7.5b | 7.5a | Qualify memory savings, transition latency, and documented supported vision configuration. | Peak below simultaneous phase sum, expected post-request baseline, repeatable outputs, and separate projector reload versus KV reload costs. |
+| 7.5a | 7.4c | Complete no-MTP multimodal server flow, image-related cache reuse, and serial session cleanup. Lift the streaming/mmproj server guard only for qualified configurations. | Real image/text requests, follow-up images, compatible and separate media batches, reused media prefixes, aborted requests, and handoff final-use ordering. |
+| 7.5b | 7.5a | Qualify no-MTP memory savings, transition latency, and documented supported vision configuration. | Peak below simultaneous phase sum, batch-size-dependent workspace, expected post-request baseline, repeatable outputs, and separate projector reload versus KV reload costs. |
+| 7.5c | 7.5b | Qualify the current serial embedded Qwen MTP mode across vision/text handoffs; preserve the no-MTP path as a fallback. | Image-embedding draft catch-up, M-RoPE position handling, target/MTP/vision scheduler ownership, ring-guard retirement, rejection replay, cancellation, long-context correctness and peak memory. |
 
 Acceptance:
 
@@ -311,6 +318,8 @@ Acceptance:
 - Existing KV and hybrid recurrent state survive vision execution.
 - Host KV ownership does not force retention of the device pool during vision execution.
 - Handoff embeddings remain available for all consumers, including later chunks from a media batch.
+- Physical KV append order remains independent of image M-RoPE positions; subsequent text and prompt-cache operations preserve both.
+- The documented production configuration works with embedded MTP after a separately qualified no-MTP vision baseline; unsupported speculation remains explicitly rejected.
 
 ## Milestone 8: encoder-free plans and integration hardening
 
@@ -339,7 +348,7 @@ Acceptance:
 
 - Concurrent request execution and overlapping stages.
 - Multi-GPU streaming and per-device capacity coordination.
-- MTP/speculative execution layouts.
+- Other MTP/speculative execution layouts beyond the qualified serial embedded Qwen mode.
 - General model-weight or MoE-expert eviction policies.
 - Optimized streaming engines for ROCm, SYCL, Vulkan, OpenCL, and other accelerators.
 
@@ -353,7 +362,7 @@ The contracts should permit these additions without claiming they are implemente
 | 4 | Safe execution-stage coordination |
 | 5 | Fixed-budget adaptive KV streaming |
 | 6 | Text prefill/decode reclamation |
-| 7 | Separate vision/text sharing and reloadable projector storage |
+| 7 | Separate vision/text sharing, reloadable projector storage, and current embedded MTP coexistence |
 | 8 | Encoder-free integration and consolidated validation |
 
 ## Progress ledger
@@ -423,7 +432,7 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.5a | Ready for review (combined) | - | Exact shared-device parent API/CLI, phase-arena compatibility alias, legacy fixed-pool preservation, and order-independent conflict rejection. |
 | 6.5b | Ready for review (combined) | - | Exact minimum KV bootstrap, all-phase startup validation, next-granule rejection, and phase-safe maximum-budget execution probing. |
 | 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
-| 7.1a-7.5b | Planned | - | See substage dependencies and milestone acceptance gate. |
+| 7.1a-7.5c | Planned | - | See substage dependencies and milestone acceptance gate; no vision integration stage is complete. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation

@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_set>
 
 #undef NDEBUG
@@ -16,6 +17,57 @@
 
 static void test(void) {
     common_params params;
+
+    {
+        common_params automatic;
+        automatic.shared_device_memory_bytes = 2240*1024*1024ULL;
+        automatic.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        automatic.speculative.draft.n_max = 3;
+        automatic.cache_type_k = GGML_TYPE_Q8_0;
+        automatic.cache_type_v = GGML_TYPE_Q4_0;
+        assert(common_params_uses_streamed_mtp(automatic));
+        assert(common_kv_stream_auxiliary_layers(automatic, 1) == 1);
+        assert(common_kv_stream_auxiliary_layers(automatic, 3) == 3);
+        assert(automatic.kv_stream_auxiliary_layers == 0);
+        const auto automatic_draft = common_base_params_to_speculative(automatic);
+        assert(automatic_draft.cache_type_k == GGML_TYPE_Q8_0);
+        assert(automatic_draft.cache_type_v == GGML_TYPE_Q4_0);
+        assert(automatic_draft.kv_stream_auxiliary_layers == 0);
+        assert(automatic_draft.kv_stream_pool_bytes == 0);
+        assert(automatic_draft.shared_device_memory_bytes == 0);
+        automatic.kv_stream_pool_bytes = automatic.shared_device_memory_bytes;
+        automatic.shared_device_memory_bytes = 0;
+        assert(common_kv_stream_auxiliary_layers(automatic, 3) == 3);
+        automatic.kv_stream_auxiliary_layers = 1;
+        assert(common_kv_stream_auxiliary_layers(automatic, 1) == 1);
+        auto rejects = [](const common_params & params, int32_t count, const std::string & message) {
+            try {
+                common_kv_stream_auxiliary_layers(params, count);
+            } catch (const std::invalid_argument & error) {
+                return std::string(error.what()).find(message) != std::string::npos;
+            }
+            return false;
+        };
+        assert(rejects(automatic, 3, "does not match"));
+        automatic.kv_stream_auxiliary_layers = 0;
+        assert(rejects(automatic, 0, "no MTP"));
+        assert(rejects(automatic, -1, "no MTP"));
+        automatic.speculative.draft.mparams.path = "standalone.gguf";
+        assert(rejects(automatic, 1, "embedded"));
+        automatic.speculative.draft.mparams.path.clear();
+        automatic.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3);
+        assert(rejects(automatic, 1, "only draft-mtp"));
+        automatic.speculative.types = {COMMON_SPECULATIVE_TYPE_NONE};
+        assert(!common_params_uses_streamed_mtp(automatic));
+        assert(common_kv_stream_auxiliary_layers(automatic, 3) == 0);
+        automatic.kv_stream_auxiliary_layers = 1;
+        assert(rejects(automatic, 1, "requires"));
+        automatic.kv_stream_auxiliary_layers = 0;
+        automatic.kv_stream_pool_bytes = 0;
+        automatic.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+        assert(!common_params_uses_streamed_mtp(automatic));
+        assert(common_kv_stream_auxiliary_layers(automatic, 3) == 0);
+    }
 
     auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
                                    int32_t total, int32_t per_seq) {
@@ -219,10 +271,30 @@ static void test(void) {
         common_params full_checkpoint;
         assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),full_checkpoint,LLAMA_EXAMPLE_SERVER));
         assert(common_context_params_to_llama(full_checkpoint).n_rs_seq == 0);
+        common_params automatic_mtp;
+        argv = {"binary_name","--kv-stream-arena-mib","2240",
+            "--spec-type","draft-mtp","--spec-draft-n-max","3"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),automatic_mtp,LLAMA_EXAMPLE_SERVER));
+        assert(automatic_mtp.kv_stream_auxiliary_layers == 0);
+        assert(common_kv_stream_auxiliary_layers(automatic_mtp,1) == 1);
+        assert(common_context_params_to_llama(automatic_mtp).n_rs_seq == 3);
+        argv.push_back("--no-kv-stream-rs-rollback");
+        common_params automatic_full_checkpoint;
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),automatic_full_checkpoint,LLAMA_EXAMPLE_SERVER));
+        assert(common_context_params_to_llama(automatic_full_checkpoint).n_rs_seq == 0);
+        common_params multiple_heads;
+        argv = {"binary_name","--kv-stream-arena-mib","2240",
+            "--kv-stream-auxiliary-layers","3","--spec-type","draft-mtp"};
+        assert(common_params_parse(argv.size(),list_str_to_char(argv).data(),multiple_heads,LLAMA_EXAMPLE_SERVER));
+        assert(common_kv_stream_auxiliary_layers(multiple_heads,3) == 3);
         for (const std::vector<std::string> & invalid_rollback : {
                 std::vector<std::string>{"binary_name","--shared-device-memory-mib","4096",
                     "--kv-stream-auxiliary-layers","1","--spec-type","draft-mtp",
-                    "--spec-draft-n-max","4"}}) {
+                    "--spec-draft-n-max","4"},
+                std::vector<std::string>{"binary_name","--kv-stream-arena-mib","2240",
+                    "--spec-type","draft-mtp","--spec-draft-n-max","4"},
+                std::vector<std::string>{"binary_name","--spec-type","draft-mtp",
+                    "--no-kv-stream-rs-rollback"}}) {
             common_params rejected;
             argv = invalid_rollback;
             assert(!common_params_parse(argv.size(),list_str_to_char(argv).data(),rejected,LLAMA_EXAMPLE_SERVER));
@@ -230,7 +302,7 @@ static void test(void) {
         for (const std::vector<std::string> & invalid_aux : {
                 std::vector<std::string>{"binary_name","--kv-stream-auxiliary-layers","1"},
                 std::vector<std::string>{"binary_name","--shared-device-memory-mib","4096",
-                    "--kv-stream-auxiliary-layers","2"}}) {
+                    "--kv-stream-auxiliary-layers","-1"}}) {
             common_params rejected;
             argv = invalid_aux;
             assert(!common_params_parse(argv.size(),list_str_to_char(argv).data(),rejected,LLAMA_EXAMPLE_SERVER));

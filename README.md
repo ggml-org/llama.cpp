@@ -28,12 +28,14 @@ Example for the embedded-MTP `UD-IQ4_XS` GGUF. The 2,240 MiB arena fit this test
   --ctx-size 262144 --parallel 1 \
   --batch-size 256 --ubatch-size 256 --n-gpu-layers 999 \
   --flash-attn on --cache-type-k q8_0 --cache-type-v q4_0 \
-  --kv-stream-arena-mib 2240 --kv-stream-auxiliary-layers 1 \
+  --kv-stream-arena-mib 2240 \
   --spec-type draft-mtp --spec-draft-n-max 3 \
   --fit off --no-mmproj
 ```
 
-Attached MTP **inherits the target's K/V types**: here its K is Q8_0 and V is Q4_0. Do not add `--cache-type-k-draft` or `--cache-type-v-draft` expecting a different attached-MTP quant; the shared 17-layer layout currently requires matching types. To disable MTP, remove the auxiliary-layer and two speculative flags.
+With streaming and `--spec-type draft-mtp`, the server derives the auxiliary KV layer count from the loaded model's NextN/MTP metadata before allocating its context. Qwen3.8 contributes one layer, forming the shared 17-layer layout. The legacy `--kv-stream-auxiliary-layers 1` flag is optional and must match the model count. Multi-layer MTP metadata is detected, but its streaming execution is not yet supported; such models receive an explicit capability error.
+
+Attached MTP **inherits the target's K/V types**: here its K is Q8_0 and V is Q4_0. Do not add `--cache-type-k-draft` or `--cache-type-v-draft` expecting a different attached-MTP quant; the shared layout currently requires matching types. To disable MTP, remove the two speculative flags and the legacy auxiliary-layer flag if present.
 
 Recreate the fixed-arena sweep (8 Ki through 256 Ki, four MTP settings). `--no-manage-production` avoids touching the local `llm-llmster` container; omit it only if you want the script to manage that container. The included [article corpus](benchmarks/data/online-articles-262144-words.txt) is Wikipedia text under CC BY-SA 4.0 with article attributions, separate from the code license.
 

@@ -583,7 +583,7 @@ struct common_params {
     bool no_kv_offload     = false; // disable KV offloading
     size_t kv_stream_pool_bytes = 0; // experimental serial CUDA consumer
     size_t shared_device_memory_bytes = 0; // exact shared device-local phase budget; mutually exclusive with kv_stream_pool_bytes
-    uint32_t kv_stream_auxiliary_layers = 0; // opt-in attached MTP host cache
+    uint32_t kv_stream_auxiliary_layers = 0; // optional legacy assertion; context count comes from model metadata
     bool no_kv_stream_rs_rollback = false; // retain full checkpoints for attached MTP
     bool warmup            = true;  // warmup run
     bool check_tensors     = false; // validate tensor data
@@ -1003,6 +1003,11 @@ private:
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
 
 common_init_result_ptr common_init_from_params(common_params & params, bool model_only = false);
+
+// Detect intent before model metadata is available; this does not establish backend support.
+bool common_params_uses_streamed_mtp(const common_params & params);
+// Resolve the count before context allocation; reject missing metadata and conflicting legacy values.
+uint32_t common_kv_stream_auxiliary_layers(const common_params & params, int32_t model_nextn_layers);
 
 struct llama_model_params   common_model_params_to_llama  (      common_params & params);
 struct llama_context_params common_context_params_to_llama(const common_params & params);

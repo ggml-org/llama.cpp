@@ -274,9 +274,12 @@ llama_context::llama_context(
     if (cparams.kv_stream_auxiliary_layers && cparams.n_rs_seq > 3) {
         throw std::runtime_error("KV-stream recurrent rollback supports depth 1-3");
     }
-    if (cparams.kv_stream_auxiliary_layers > 1 ||
-            (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming())) {
-        throw std::runtime_error("experimental auxiliary KV cache requires one layer and an enabled KV streaming pool");
+    if (cparams.kv_stream_auxiliary_layers > 1) {
+        throw std::runtime_error("model requests " + std::to_string(cparams.kv_stream_auxiliary_layers) +
+            " MTP KV layers; adaptive KV currently supports only a single Qwen MTP layer");
+    }
+    if (cparams.kv_stream_auxiliary_layers && !cparams.kv_streaming()) {
+        throw std::runtime_error("auxiliary KV cache requires an enabled KV streaming pool or arena");
     }
     if (cparams.kv_stream_pool_bytes && cparams.shared_device_memory_bytes) {
         throw std::runtime_error("kv_stream_pool_bytes and shared_device_memory_bytes are mutually exclusive");

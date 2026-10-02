@@ -2575,7 +2575,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
 
     result.cache_type_k  = params_spec.cache_type_k;
     result.cache_type_v  = params_spec.cache_type_v;
-    if (params.kv_stream_auxiliary_layers) {
+    if (common_params_uses_streamed_mtp(params)) {
         result.cache_type_k = params.cache_type_k;
         result.cache_type_v = params.cache_type_v;
     }
