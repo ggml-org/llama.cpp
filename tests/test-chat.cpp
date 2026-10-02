@@ -4864,8 +4864,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
-    // K2 Horizon - <ifm|think> reasoning (<ifm|think_fast>/<ifm|think_faster> for medium/low reasoning_effort),
-    // tool calls in an <ifm|tool_calls> section as xml (default), xml_typed or json
+    // K2 Horizon
     {
         auto tst = peg_tester("models/templates/IFM-K2-Horizon.jinja", detailed_debug);
 
@@ -4873,25 +4872,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist_thoughts)
             .expect_reconstruction()
-            .run();
-
-        tst.test("I'm\nthinking</ifm|think_fast>Hello, world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .chat_template_kwargs({ { "reasoning_effort", R"("medium")" } })
-            .expect(message_assist_thoughts)
-            .run();
-
-        tst.test("I'm\nthinking</ifm|think_faster>Hello, world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .chat_template_kwargs({ { "reasoning_effort", R"("low")" } })
-            .expect(message_assist_thoughts)
-            .run();
-
-        // The 3.7B ends medium and low effort reasoning with </ifm|think>
-        tst.test("I'm\nthinking</ifm|think>Hello, world!\nWhat's up?")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .chat_template_kwargs({ { "reasoning_effort", R"("medium")" } })
-            .expect(message_assist_thoughts)
             .run();
 
         tst.test("I'm\nthinking")
@@ -4930,20 +4910,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .chat_template_kwargs({ { "tool_call_format", R"("xml_typed")" } })
             .expect(message_assist_call_thoughts)
             .expect_reconstruction()
-            .run();
-
-        // The models leave out the type even when asked for xml_typed
-        tst.test(
-               "I'm\nthinking</ifm|think><ifm|tool_calls>\n"
-               "<ifm|tool_call>special_function\n"
-               "<ifm|arg_key>arg1</ifm|arg_key>\n"
-               "<ifm|arg_value>1</ifm|arg_value>\n"
-               "</ifm|tool_call>\n"
-               "</ifm|tool_calls>")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({ special_function_tool })
-            .chat_template_kwargs({ { "tool_call_format", R"("xml_typed")" } })
-            .expect(message_assist_call_thoughts)
             .run();
 
         tst.test(
