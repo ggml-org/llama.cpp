@@ -214,6 +214,7 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 //////////////////////
 struct optimize_feature {
     bool reorder=false;
+    bool onednn_optimized_gemm=false;
 };
 
 struct sycl_device_info {
@@ -636,6 +637,14 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 }
 
 bool gpu_has_xmx(sycl::device &dev);
+
+#if GGML_SYCL_DNNL
+// oneDNN builds JIT kernels only for some GPU architectures. On the rest it falls back to
+// reference kernels, which are much slower than the SYCL kernels here.
+inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
+    return ggml_sycl_info().devices[device].opt_feature.onednn_optimized_gemm;
+}
+#endif
 
 int ggml_sycl_get_env(const char *env_name, int default_val);
 
