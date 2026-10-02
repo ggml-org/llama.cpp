@@ -1477,33 +1477,19 @@ void common_chat_input::prepend(const common_chat_input & prefix) {
 }
 
 common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const std::string & text) {
-    common_chat_input input(text);
-
-    auto text_has = [&](size_t pos, const std::string & str) {
-        return text.compare(pos, str.size(), str) == 0;
-    };
-
-    size_t pos = 0;
-    for (const auto token : common_tokenize(vocab, text, false, true)) {
-        const std::string piece = common_token_to_piece(vocab, token, true);
-        // some tokenizers add a space before the piece that the text does not have
-        const std::string trimmed = string_starts_with(piece, " ") ? piece.substr(1) : piece;
-
-        // some tokenizers remove the whitespace next to a special token, skip it
-        size_t at = pos;
-        while (at < text.size() && std::isspace((unsigned char) text[at]) && !text_has(at, piece) && !text_has(at, trimmed)) {
-            at++;
+    common_chat_input input;
+    auto tokens = common_tokenize(vocab, text, false, true);
+    for (size_t i = 0; i < tokens.size(); i++) {
+        std::string piece = common_token_to_piece(vocab, tokens[i], true);
+        if (i == 0 && std::isspace(piece[0]) && !std::isspace(text[0])) {
+            // Some tokenizers will add a space before the first special token, need to exclude
+            continue;
         }
-
-        const std::string & found = text_has(at, piece) ? piece : trimmed;
-        if (!text_has(at, found)) {
-            // the token is not in the text, keep the text without tokens
-            return common_chat_input(text);
-        }
-        if (!found.empty()) {
-            input.tokens[at] = token;
-        }
-        pos = at + found.size();
+        input.append(piece, tokens[i]);
+    }
+    if (input.text != text) {
+        // the pieces do not give back the same text, keep the text without tokens
+        return common_chat_input(text);
     }
     return input;
 }
