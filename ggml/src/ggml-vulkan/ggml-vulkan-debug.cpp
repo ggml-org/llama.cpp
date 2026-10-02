@@ -964,9 +964,11 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                 ggml_flash_attn_ext_add_sinks(tensor_clone, src_clone[4]);
             }
         } else if (tensor->op == GGML_OP_MUL_MAT) {
-            tensor_clone = ggml_mul_mat(ggml_ctx, src_clone[0], src_clone[1]);
+            tensor_clone = src_clone[2] ? ggml_mul_mat_ext(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], nullptr)
+                                        : ggml_mul_mat(ggml_ctx, src_clone[0], src_clone[1]);
         } else if (tensor->op == GGML_OP_MUL_MAT_ID) {
-            tensor_clone = ggml_mul_mat_id(ggml_ctx, src_clone[0], src_clone[1], src_clone[2]);
+            tensor_clone = src_clone[3] ? ggml_mul_mat_id_ext(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], src_clone[3], nullptr)
+                                        : ggml_mul_mat_id(ggml_ctx, src_clone[0], src_clone[1], src_clone[2]);
         } else if (tensor->op == GGML_OP_SUB) {
             tensor_clone = ggml_sub(ggml_ctx, src_clone[0], src_clone[1]);
         } else if (tensor->op == GGML_OP_MUL) {
@@ -1558,4 +1560,3 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
     VK_LOG_DEBUG("END ggml_vk_check_results_1(" << tensor->name << ")");
 }
 #endif
-
