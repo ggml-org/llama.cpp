@@ -432,8 +432,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.5a | Ready for review (combined) | - | Exact shared-device parent API/CLI, phase-arena compatibility alias, legacy fixed-pool preservation, and order-independent conflict rejection. |
 | 6.5b | Ready for review (combined) | - | Exact minimum KV bootstrap, all-phase startup validation, next-granule rejection, and phase-safe maximum-budget execution probing. |
 | 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
-| 7.1a | Ready for review | - | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release; CPU ownership tests and real CUDA projector embeddings qualified. See evidence below. |
-| 7.1b-7.5c | Planned | - | Embedding handoff, text/image admission, three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
+| 7.1a | Committed | dfed912b5 | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release. Its numerical fixture is corrected and requalified in 7.1b. |
+| 7.1b | Ready for review | - | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
+| 7.2a-7.5c | Planned | - | Ordered text/image admission, three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3565,7 +3566,7 @@ Task files and this roadmap are staged for user review. Unrelated README, infras
 
 ### Stage 7.1a: borrowed vision compute workspace
 
-Implemented on `feature/mmproj-v2` after rebasing onto V2 `e5a7b37d9`. This is the vision consumer seam, not a production multimodal streaming configuration. The server's streaming/mmproj rejection remains in place until the later integration stages.
+Committed as `dfed912b5` on `feature/mmproj-v2` after rebasing onto V2 `e5a7b37d9`. This is the vision consumer seam, not a production multimodal streaming configuration. The server's streaming/mmproj rejection remains in place until the later integration stages.
 
 The private `mtmd-workspace.h` interface measures the actual preprocessed media batch, attaches one committed lease per canonical buffer-type group, executes inside those bounds, and drains and retires native graph captures before returning storage. It reuses `llama_memory_workspace` and `llama_memory_executor`, rather than adding another allocator or ownership model. The scheduler and backends outlive the consumer. Image embeddings retain their existing host-vector ownership; projector weights remain eagerly loaded outside the workspace.
 
@@ -3577,16 +3578,16 @@ Qualification:
 
 - TDD red cases covered missing owner behavior, partial-attachment rollback, exact-tail placement, measurement mutation and the requested physical CUDA buffer type before the fixes passed.
 - The new CPU suite passes **10 cases / 88 assertions**, covering measurement without compute allocation, canonical aliases, invalid types/counts, exact and larger grants, oversized graphs, foreign attachments, graph retirement, retained asynchronous dependencies, release ordering and reentry rejection.
-- The real-model suite passes **11 cases / 183 assertions** using the downloaded F16 projector from the same IQ4_XS GGUF snapshot. Four complete embedding comparisons have **zero maximum absolute error** against ordinary mtmd encoding. The oversized-image rejection is followed by successful execution of the original batch, and host embeddings remain readable after workspace release.
+- The original real-model suite passed **11 cases / 183 assertions**, exercising actual encoder execution, bounded allocation, oversized-image rejection and recovery. Stage 7.1b discovered that vocabulary-only loading reported zero embedding width, making the original embedding-value comparisons vacuous. Do not use that run as numerical equivalence evidence; the corrected full-value qualification is recorded under 7.1b below.
 - The four focused suites (`test-mtmd-workspace`, `test-memory-workspace`, `test-alloc`, `test-mtmd-c-api`) pass Release, ASan with leak checking and UBSan. Eighteen additional/focused Release suite selections cover the common planner, transitions, executor, activation/recovery, KV geometry/policy/binding and backend memory APIs; the complete Release allocator suite also passes on CUDA.
 - CUDA Compute Sanitizer memcheck passes the real-model suite with UVM enabled for weights and physical device-local workspace leases: **zero errors**. The complete server target rebuilds successfully. Production is restored with its original image and configuration after testing.
 
-| Synthetic input size | Measured total borrowed workspace | Maximum embedding error |
-| --- | ---: | ---: |
-| 320 x 320 | 12.903 MiB | 0 |
-| 640 x 384 | 30.967 MiB | 0 |
-| 1024 x 768 | 99.094 MiB | 0 |
-| 1280 x 1024 | 165.156 MiB | 0 |
+| Synthetic input size | Measured total borrowed workspace |
+| --- | ---: |
+| 320 x 320 | 12.903 MiB |
+| 640 x 384 | 30.967 MiB |
+| 1024 x 768 | 99.094 MiB |
+| 1280 x 1024 | 165.156 MiB |
 
 These are allocation and numerical equivalence tests, not grounding-quality or end-to-end generation benchmarks. The fixtures allow smaller image-token counts to exercise variable workspace sizes. Native capture retirement is currently qualified for CPU and CUDA, matching the existing text consumer capability gate; other backends reject this opt-in path until a safe retirement hook is available. Their ordinary mtmd path remains unchanged. Windows export annotations are included, but no Windows build was available for validation. Audio borrowing, independent multi-image handoff, M-RoPE/physical KV-index separation, live text/vision/MTP coordination, projector unload/reload, and server admission belong to later stages.
 
@@ -3599,3 +3600,34 @@ build-device-memory-infra-cuda-release/bin/test-mtmd-workspace \
 ```
 
 For CUDA memory checks, prefix that invocation with `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1 compute-sanitizer --tool memcheck --error-exitcode 1`. Validation logs are under `/tmp/vision-7.1a-cuda-final.log` and `/tmp/vision-7.1a-cuda-memcheck-final.log`. Stage files and this roadmap are staged for user review; no assistant commit or push was made.
+
+### Stage 7.1b: retained host embedding handoff
+
+The private `mtmd-embeddings.h` interface gives consumers a copyable, read-only `mtmd_embedding_view` of an encoded media chunk. A view owns only the host result snapshot; it does not retain a vision workspace lease, scheduler, projector, input pixels or chunk metadata. The caller must separately keep the input metadata needed for M-RoPE and other position rules while consuming that chunk. A view can outlive the original batch and projector, and checked `slice(first_token, token_count, output)` calls share the same allocation without copying rows or crossing chunk boundaries.
+
+```mermaid
+flowchart LR
+    W[Borrowed vision workspace] --> E[Encoder completes and copies results to host]
+    E --> H[Published host embedding snapshot]
+    E --> R[Drain and return vision workspace]
+    B[Media batch owner] --> H
+    A[Earlier image consumer] --> H
+    L[Later image consumer or token slice] --> H
+    H --> F[Free host storage after the final owner releases it]
+```
+
+Each successful batch encoding moves its existing output vector into a snapshot and freezes the chunk row offsets and embedding width. A failed encoding or invalid publication leaves the previous successful generation intact. Existing views remain valid across successful re-encoding, explicit batch-output clearing, cancellation, input-chunk destruction and context teardown. The legacy C getter remains a borrowed mutable pointer for ABI compatibility; callers using retained views must treat the shared data as read-only. Adding a chunk does not publish output for it, and lookup of an unencoded or unknown chunk returns null without traversing stale row bounds.
+
+There is no additional VRAM allocation, pinned-host allocation, H2D/D2H transfer or attention-kernel change. Publication and view acquisition do not copy embedding values. Retaining any slice keeps the whole batch's host output alive until its last consumer releases it. Re-encoding uses a separate host output vector while the previous result remains available; this can temporarily retain two generations of ordinary RAM. Their size is `output_tokens * embedding_width * sizeof(float)` per generation, not an arena grant.
+
+The existing media compatibility check is factored into a backend-neutral, non-mutating validator with checked token totals. It preserves model batching capability and the existing rule that the first independent image can exceed the combined-batch token limit. Positive compatible batches, incompatible image shapes, unsupported batching, text rejection and exact/insufficient limits are tested without forcing a backend to accept unsupported batches. The current Qwen projector still rejects batching independent images; this stage does not enable a model capability that its graph builder lacks.
+
+TDD and qualification:
+
+- Initial placeholder ownership behavior produced four failing cases. Subsequent red tests covered batching decisions and empty moved-from views before their implementations passed.
+- `test-mtmd-embeddings` passes **7 cases / 88 assertions** for zero-copy adoption, chunk row mapping, partial/nested slices, overflow and invalid-size rejection, prior-generation preservation, copied/moved views, final-consumer lifetime, cancellation and batch compatibility. Release, ASan with leak checking and UBSan pass for this suite and the existing mtmd workspace/C API suites.
+- The real CUDA projector suite passes **11 cases / 601 assertions**. It now loads full model metadata with `no_alloc=true`, `load_mode=NONE` and CPU layer placement, requires nonzero model input width, and compares **12,226,560 embedding values** across the four synthetic images. Width is 5,120 for this model. All four maximum absolute errors are **zero** against ordinary mtmd encoding.
+- Actual retained outputs survive workspace release, a failed retry, output clearing, batch/input destruction, another image's encoding, and projector/model destruction. After teardown, every output is consumed in ordered 13-token slices and compared with the stock result. Re-encoding the first batch keeps its prior view valid.
+- CUDA memcheck with UVM enabled for projector weights and physical borrowed workspace reports **zero errors**. Six focused Release suites include the memory transition, executor and workspace controls. The complete server target rebuilds successfully. Production is restored with its original image/configuration and health checked after testing.
+
+Logs: `/tmp/vision-7.1b-cuda-final.log` and `/tmp/vision-7.1b-cuda-memcheck.log`. The test fixture's earlier zero-width crash was a validation bug, not a retained-view lifetime failure. This corrected qualification supersedes the 7.1a numerical claim. Full main-model decoding, mixed text/image execution order, position admission and text/vision/MTP scheduler handoff remain in 7.2 and later stages. No production mmproj gate is lifted here, and no assistant commit or push is made.

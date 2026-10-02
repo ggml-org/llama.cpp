@@ -5,6 +5,7 @@
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
 #include "mtmd-workspace.h"
+#include "mtmd-embeddings.h"
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
@@ -420,15 +421,8 @@ struct mtmd_input_chunks {
 struct mtmd_batch {
     mtmd_context * ctx;
     std::vector<const mtmd_input_chunk *> entries;
-    std::vector<float> output_embd; // aggregated output embedding for the whole batch
+    mtmd_embedding_output output_embd;
     mtmd_batch(mtmd_context * ctx): ctx(ctx) {}
-    int32_t n_tokens() const {
-        int32_t n = 0;
-        for (const auto * chunk : entries) {
-            n += mtmd_input_chunk_get_n_tokens(chunk);
-        }
-        return n;
-    }
 };
 
 // slice template, used by some llava-uhd models to correctly place the special tokens around image embeddings
@@ -2078,6 +2072,7 @@ void mtmd_batch_free(mtmd_batch * batch) {
 }
 
 int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
+    if (!batch || !batch->ctx || !chunk) return 1;
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_ERR("%s: text chunk is not supported in batch\n", __func__);
         return 1;
@@ -2089,29 +2084,11 @@ int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk)
         return 1;
     }
 
-    if (batch->entries.empty()) {
-        // batch must have at least one chunk
-        batch->entries.push_back(chunk);
-        return 0;
-    }
-
-    if (!clip_support_batch(ctx)) {
-        // if no batching support, batch can only have one single chunk
-        return 2; // "batch too large" error code
-    }
-
-    int32_t new_n_tokens = batch->n_tokens() + (int32_t)mtmd_input_chunk_get_n_tokens(chunk);
-    if (new_n_tokens > batch->ctx->batch_max_tokens) {
-        return 2; // "batch too large" error code
-    }
-
-    auto & first_chunk = batch->entries[0];
-    if (first_chunk->can_batch_with(*chunk)) {
-        batch->entries.push_back(chunk);
-        return 0;
-    }
-
-    return 3; // "cannot batch" error code
+    const auto limit = batch->ctx->batch_max_tokens > 0 ? size_t(batch->ctx->batch_max_tokens) : 0;
+    const int32_t result = mtmd_batch_validate_chunk(batch->entries, chunk, clip_support_batch(ctx), limit);
+    if (result != 0) return result;
+    batch->entries.push_back(chunk);
+    return 0;
 }
 
 static mtmd::input_chunk_ptr mtmd_batch_prepare_chunk(mtmd_batch * batch) {
@@ -2161,15 +2138,23 @@ static mtmd::input_chunk_ptr mtmd_batch_prepare_chunk(mtmd_batch * batch) {
 }
 
 static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
+    if (!batch || !batch->ctx) return 1;
     auto batch_chunk=mtmd_batch_prepare_chunk(batch);
     if (!batch_chunk) return 1;
     LOG_DBG("%s: encoding batch with %zu entries and total %zu tokens\n",
             __func__, batch->entries.size(), mtmd_input_chunk_get_n_tokens(batch_chunk.get()));
+    std::vector<float> values;
     int32_t res = mtmd_encode_chunk_impl(
         batch->ctx,
         batch_chunk.get(),
-        batch->output_embd);
-    return res;
+        values);
+    if (res != 0) return res;
+    std::vector<mtmd_embedding_chunk> chunks;
+    chunks.reserve(batch->entries.size());
+    for (const auto * chunk : batch->entries) {
+        chunks.push_back({chunk, mtmd_input_chunk_get_n_tokens(chunk)});
+    }
+    return batch->output_embd.publish(chunks, batch->ctx->n_embd_out(), values) ? 0 : 1;
 }
 
 // The same combined chunk drives both measurement and execution, including temporal merges.
@@ -2193,6 +2178,34 @@ bool mtmd_release_compute_workspace(mtmd_context * ctx) {
     return ctx && ctx->ctx_v && clip_release_compute_workspace(ctx->ctx_v);
 }
 
+// Retain host rows without retaining the projector, scheduler, batch, or input chunk.
+bool mtmd_batch_acquire_output_embd(const mtmd_batch * batch, const mtmd_input_chunk * chunk,
+        mtmd_embedding_view & output) noexcept {
+    return batch && batch->output_embd.acquire(chunk, output);
+}
+
+// Cancellation drops the batch's ownership, but in-flight consumers keep their own views.
+void mtmd_batch_clear_output_embd(mtmd_batch * batch) noexcept {
+    if (batch) batch->output_embd.clear();
+}
+
+// Keep the legacy single-image rule; the batch-token limit applies when combining chunks.
+int32_t mtmd_batch_validate_chunk(const std::vector<const mtmd_input_chunk *> & entries,
+        const mtmd_input_chunk * chunk, bool support_batch, size_t max_tokens) noexcept {
+    if (!chunk || chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) return 1;
+    if (entries.empty()) return 0;
+    if (!support_batch) return 2;
+    size_t tokens = mtmd_input_chunk_get_n_tokens(chunk);
+    if (tokens > max_tokens) return 2;
+    for (const auto * entry : entries) {
+        if (!entry) return 1;
+        const size_t rows = mtmd_input_chunk_get_n_tokens(entry);
+        if (rows > max_tokens - tokens) return 2;
+        tokens += rows;
+    }
+    return entries.front()->can_batch_with(*chunk) ? 0 : 3;
+}
+
 int32_t mtmd_batch_encode(mtmd_batch * batch) {
     try {
         return mtmd_batch_encode_impl(batch);
@@ -2203,23 +2216,7 @@ int32_t mtmd_batch_encode(mtmd_batch * batch) {
 }
 
 float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
-    if (batch->output_embd.empty()) {
-        LOG_ERR("%s: batch has not been encoded yet\n", __func__);
-        return nullptr;
-    }
-    size_t offset = 0;
-    const size_t n_embd = batch->ctx->n_embd_out();
-    for (const auto * c : batch->entries) {
-        size_t offset_prev = offset;
-        size_t n_tokens = mtmd_input_chunk_get_n_tokens(c);
-        offset += n_tokens * n_embd;
-        GGML_ASSERT(offset_prev <  batch->output_embd.size());
-        GGML_ASSERT(offset      <= batch->output_embd.size());
-        if (c == chunk) {
-            return &batch->output_embd.data()[offset_prev];
-        }
-    }
-    return nullptr; // not found
+    return batch ? batch->output_embd.borrow(chunk) : nullptr;
 }
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {

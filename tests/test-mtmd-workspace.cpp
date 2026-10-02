@@ -1,4 +1,5 @@
 #include "../tools/mtmd/mtmd-workspace.h"
+#include "../tools/mtmd/mtmd-embeddings.h"
 #include "../ggml/src/ggml-backend-impl.h"
 #include "testing.h"
 #include "ggml-cpu.h"
@@ -244,9 +245,13 @@ int main(int argc,char ** argv) {
         mtmd_log_set(log,nullptr);
         ggml_backend_load_all();
         auto model_params=llama_model_default_params();
-        model_params.vocab_only=true;
+        model_params.no_alloc=true;
+        model_params.n_gpu_layers=0;
+        model_params.load_mode=LLAMA_LOAD_MODE_NONE;
+        model_params.use_extra_bufts=false;
         llama_model_ptr model(llama_model_load_from_file(model_path,model_params));
         if (!t.assert_true(bool(model))) return;
+        if (!t.assert_true(llama_model_n_embd_inp(model.get()) > 0)) return;
         auto params=mtmd_context_params_default();
         params.use_gpu=cuda; params.warmup=false; params.n_threads=2;
         params.flash_attn_type=LLAMA_FLASH_ATTN_TYPE_ENABLED;
@@ -267,6 +272,7 @@ int main(int argc,char ** argv) {
             }
         }
         if (!t.assert_true(compute_type != nullptr)) return;
+        std::vector<std::pair<mtmd_embedding_view, std::vector<float>>> retained_outputs;
         size_t previous_bytes=0;
         for (auto shape : {std::pair{320u,320u},std::pair{640u,384u},std::pair{1024u,768u},std::pair{1280u,1024u}}) {
             std::vector<uint8_t> pixels(size_t(shape.first)*shape.second*3);
@@ -290,7 +296,7 @@ int main(int argc,char ** argv) {
             const size_t elements=mtmd_input_chunk_get_n_tokens(chunk)*llama_model_n_embd_inp(model.get());
             auto * expected_ptr=mtmd_batch_get_output_embd(reference.get(),chunk);
             if (!t.assert_true(expected_ptr != nullptr)) return;
-            const std::vector<float> expected(expected_ptr,expected_ptr+elements);
+            std::vector<float> expected(expected_ptr,expected_ptr+elements);
             std::vector<ggml_backend_memory_workspace_group> groups;
             if (!t.assert_true(mtmd_batch_measure_compute_workspace(batch.get(),groups,compute_type)) || !t.assert_true(!groups.empty())) return;
             if (!t.assert_true(groups[0].buft == compute_type)) return;
@@ -314,6 +320,14 @@ int main(int argc,char ** argv) {
                     !t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
             float * actual=mtmd_batch_get_output_embd(batch.get(),chunk);
             if (!t.assert_true(actual != nullptr)) return;
+            mtmd_embedding_view retained;
+            if (!t.assert_true(mtmd_batch_acquire_output_embd(batch.get(), chunk, retained))) return;
+            t.assert_true(retained.data() == actual);
+            t.assert_equal(mtmd_input_chunk_get_n_tokens(chunk), retained.n_tokens());
+            t.assert_equal(size_t(llama_model_n_embd_inp(model.get())), retained.n_embd());
+            mtmd::input_chunk_ptr duplicate(mtmd_input_chunk_copy(chunk));
+            t.assert_equal(2, mtmd_batch_add_chunk(batch.get(), duplicate.get()));
+            t.assert_true(mtmd_batch_get_output_embd(batch.get(), duplicate.get()) == nullptr);
             if (!t.assert_true(std::all_of(actual,actual+elements,[](float value) { return std::isfinite(value); }))) return;
             float error=0;
             for (size_t i=0;i<elements;++i) {
@@ -338,6 +352,7 @@ int main(int argc,char ** argv) {
                 t.assert_true(mtmd_batch_encode(too_large.get()) != 0);
                 if (!t.assert_equal(0,mtmd_batch_encode(batch.get()))) return;
                 actual=mtmd_batch_get_output_embd(batch.get(),chunk);
+                t.assert_true(retained.data() != actual);
             }
             t.assert_true(mtmd_release_compute_workspace(borrowed.get()));
             for (auto & grant : grants) {
@@ -346,6 +361,28 @@ int main(int argc,char ** argv) {
             }
             t.assert_true(std::equal(expected.begin(),expected.end(),actual,
                 [](float a,float b) { return std::abs(a-b) <= 1e-5f; }));
+            t.assert_true(mtmd_batch_encode(batch.get()) != 0);
+            t.assert_true(mtmd_batch_get_output_embd(batch.get(), chunk) == actual);
+            mtmd_batch_clear_output_embd(batch.get());
+            t.assert_true(mtmd_batch_get_output_embd(batch.get(), chunk) == nullptr);
+            batch.reset();
+            chunks.reset();
+            t.assert_true(std::equal(expected.begin(), expected.end(), retained.data()));
+            retained_outputs.emplace_back(std::move(retained), std::move(expected));
+        }
+        borrowed.reset();
+        stock.reset();
+        model.reset();
+        for (const auto & result : retained_outputs) {
+            const auto & view = result.first;
+            if (!t.assert_equal(result.second.size(), view.n_tokens() * view.n_embd())) return;
+            for (size_t first = 0; first < view.n_tokens(); first += 13) {
+                mtmd_embedding_view part;
+                const size_t count = std::min(size_t(13), view.n_tokens() - first);
+                if (!t.assert_true(view.slice(first, count, part))) return;
+                t.assert_true(std::equal(part.data(), part.data() + count * part.n_embd(),
+                    result.second.data() + first * part.n_embd()));
+            }
         }
     });
     return t.summary();

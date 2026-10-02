@@ -348,6 +348,8 @@ MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
+// Borrow rows from the last successful encoding; unknown or newly added chunks return NULL.
+// The pointer expires on the next successful encoding, output clearing, or batch destruction.
 MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
 
 
