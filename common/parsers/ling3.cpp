@@ -104,7 +104,7 @@ common_chat_params common_chat_params_init_ling3(const common_chat_template &   
 
         // the think block must close before the JSON, so the turn cannot end inside the reasoning
         if (has_response_format) {
-            auto closed_reasoning = p.optional(p.optional(p.literal(THINK_START)) + think_body + p.literal(THINK_END));
+            auto closed_reasoning = p.literal(THINK_START) + think_body + p.literal(THINK_END);
             auto response_format  = p.content(p.schema(p.json(), "response-format", inputs.json_schema));
             return opener + (closed_reasoning << response_format) + end;
         }

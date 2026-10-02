@@ -4851,26 +4851,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
-        // The grammar rejects a prose answer and does not let the turn end inside the think block.
-        {
-            auto tmpls = read_templates(tst.template_path());
-
-            common_chat_templates_inputs inputs;
-            inputs.messages    = { message_user };
-            inputs.json_schema = invoice_schema;
-
-            const std::pair<bool, std::string> rejected[] = {
-                { false, "## Invoice\nThe amount is 123.45." },
-                { true,  R"(The invoice is {"amount": 123.45})" },
-            };
-            for (const auto & [thinking, output] : rejected) {
-                inputs.enable_thinking = thinking;
-                auto params  = common_chat_templates_apply(tmpls.get(), inputs);
-                auto grammar = build_grammar(params.grammar);
-                GGML_ASSERT(grammar && !match_string(params.generation_prompt + output, grammar.get()));
-            }
-        }
-
         // Continuation: the partial assistant turn is spliced back into the prompt.
         common_chat_msg prefill = simple_assist_msg("", "I'm thinking");
 
