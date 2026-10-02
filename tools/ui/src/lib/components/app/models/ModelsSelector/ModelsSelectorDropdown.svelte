@@ -11,18 +11,13 @@
 	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import {
-		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
-		MODEL_ICON,
-		MODEL_ID,
-		SETTINGS_KEYS
-	} from '$lib/constants';
+	import { DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR, MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { ModelsService } from '$lib/services/models.service';
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
-	import { modelLoadFraction } from '$lib/utils';
+	import { modelLoadFraction, repoOf } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -63,7 +58,7 @@
 
 	/** Draft sidecar as it reads in the trigger tooltip, with its own quant. */
 	function draftSidecarLabel(baseModel: string, badge: ModelSidecarBadge): string {
-		const baseRepo = baseModel.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+		const baseRepo = repoOf(baseModel);
 
 		// a sidecar of the model's own repo reads as a bare tag, a foreign one keeps its id
 		if (badge.repo === baseRepo) {

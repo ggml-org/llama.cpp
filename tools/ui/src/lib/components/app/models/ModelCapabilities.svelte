@@ -4,7 +4,7 @@
 	import { ModelCapability } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
-	import { detectThinkingSupport, detectToolUseSupport, nearViewport } from '$lib/utils';
+	import { detectThinkingSupport, detectToolUseSupport, nearViewport, repoOf } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -25,7 +25,7 @@
 
 		// only the chat template says whether tools and reasoning work, and the Hub
 		// carries it for a local GGUF whether the model is loaded or not
-		const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? '';
+		const repo = repoOf(option.model);
 
 		if (!repo.includes(MODEL_ID.ORG_SEPARATOR)) return;
 

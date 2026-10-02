@@ -67,3 +67,11 @@ export function orgOf(repoId: string | null | undefined): string {
 
 	return repoId.split(MODEL_ID.ORG_SEPARATOR)[0] || repoId;
 }
+
+/**
+ * Repo of a quantized model id (`ggml-org/Qwen3-8B-GGUF:Q4_K_M` ->
+ * `ggml-org/Qwen3-8B-GGUF`), the id itself when it carries no quant tag.
+ */
+export function repoOf(modelId: string): string {
+	return modelId.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] || modelId;
+}
