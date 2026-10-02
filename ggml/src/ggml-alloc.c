@@ -1130,6 +1130,7 @@ static struct ggml_tensor ** ggml_backend_alloc_ctx_tensors_from_buft_collect(
 
     struct ggml_tensor ** tensors = (struct ggml_tensor **) malloc(n * sizeof(struct ggml_tensor *));
     if (tensors == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, n * sizeof(struct ggml_tensor *));
         return NULL;
     }
     int i = 0;
