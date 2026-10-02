@@ -420,6 +420,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const option = this.models.find((model) => model.model === modelName);
 
 		if (option) {
+			// the updating guard inside selectModelById cannot refuse this call: that
+			// call is the only one that raises the flag, and it clears it before it returns
 			void this.selectModelById(option.id);
 		}
 	}
