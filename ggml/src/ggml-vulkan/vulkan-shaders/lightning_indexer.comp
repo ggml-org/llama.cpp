@@ -53,9 +53,9 @@ layout(push_constant) uniform PushConstants {
 };
 
 // the row padding keeps the keys of consecutive invocations in distinct banks
-shared float16_t k_tile[BK][HEAD_SIZE + 2];
-shared float     q_tile[BT][HEAD_SIZE];
-shared float     w_tile[BT];
+shared f16vec4 k_tile[BK][HEAD_SIZE / 4 + 1];
+shared f16vec4 q_tile[BT][HEAD_SIZE / 4];
+shared float   w_tile[BT];
 
 void main() {
     const uint tid = gl_LocalInvocationID.x;
@@ -74,12 +74,12 @@ void main() {
     // stage the key tile four elements at a time, rows past n_kv are zero
     [[unroll]] for (uint i = tid; i < BK * HEAD_SIZE / 4; i += WG_SIZE) {
         const uint r = i / (HEAD_SIZE / 4);
-        const uint c = 4 * (i % (HEAD_SIZE / 4));
+        const uint c4 = i % (HEAD_SIZE / 4);
 
         vec4 v = vec4(0.0);
         if (ik0 + r < n_kv) {
             const uint k_offset = (ik0 + r) * k_nb2 + s * k_nb3;
-            const uint e = k_offset / k_elem_bytes + c;
+            const uint e = k_offset / k_elem_bytes + c4 * 4;
 
             if (FaTypeK == GGML_TYPE_F16) {
                 v = vec4(k_f16[e], k_f16[e + 1], k_f16[e + 2], k_f16[e + 3]);
@@ -88,14 +88,11 @@ void main() {
             } else if (FaTypeK == GGML_TYPE_BF16) {
                 v = bf16_to_fp32(uvec4(k_bf16[e], k_bf16[e + 1], k_bf16[e + 2], k_bf16[e + 3]));
             } else {
-                v = dequantize4(c / k_block_elems, c % k_block_elems, k_offset / FaBlockBytesK, BINDING_IDX_K);
+                v = dequantize4((c4 * 4) / k_block_elems, (c4 * 4) % k_block_elems, k_offset / FaBlockBytesK, BINDING_IDX_K);
             }
         }
 
-        k_tile[r][c + 0] = float16_t(v.x);
-        k_tile[r][c + 1] = float16_t(v.y);
-        k_tile[r][c + 2] = float16_t(v.z);
-        k_tile[r][c + 3] = float16_t(v.w);
+        k_tile[r][c4] = f16vec4(v);
     }
 
     const uint kl = tid % BK;
@@ -110,11 +107,17 @@ void main() {
         // the previous head is fully consumed and, on the first pass, the key tile is complete
         barrier();
 
-        [[unroll]] for (uint i = tid; i < BT * HEAD_SIZE; i += WG_SIZE) {
-            const uint r = i / HEAD_SIZE;
-            const uint c = i % HEAD_SIZE;
+        [[unroll]] for (uint i = tid; i < BT * HEAD_SIZE / 4; i += WG_SIZE) {
+            const uint r = i / (HEAD_SIZE / 4);
+            const uint c4 = i % (HEAD_SIZE / 4);
             const uint t = t0 + r;
-            q_tile[r][c] = t < n_tokens ? q[h * q_nb1 + t * q_nb2 + s * q_nb3 + c] : 0.0;
+
+            vec4 v = vec4(0.0);
+            if (t < n_tokens) {
+                const uint q_base = h * q_nb1 + t * q_nb2 + s * q_nb3 + c4 * 4;
+                v = vec4(q[q_base], q[q_base + 1], q[q_base + 2], q[q_base + 3]);
+            }
+            q_tile[r][c4] = f16vec4(v);
         }
 
         if (tid < BT) {
@@ -129,10 +132,11 @@ void main() {
             qk[j] = 0.0;
         }
 
-        [[unroll]] for (uint c = 0; c < HEAD_SIZE; ++c) {
-            const float k_val = float(k_tile[kl][c]);
+        [[unroll]] for (uint c4 = 0; c4 < HEAD_SIZE / 4; ++c4) {
+            const f16vec4 kv = k_tile[kl][c4];
             [[unroll]] for (uint j = 0; j < TPI; ++j) {
-                qk[j] += k_val * q_tile[tl + j * TS][c];
+                const f16vec4 qv = q_tile[tl + j * TS][c4];
+                qk[j] += float(dot(kv, qv));
             }
         }
 
