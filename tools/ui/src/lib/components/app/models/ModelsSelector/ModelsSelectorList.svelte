@@ -53,7 +53,7 @@
 	let sentinelEl = $state<HTMLElement | null>(null);
 	const localGroups = $derived(windowLocalGroups(groups, visibleCount));
 	const localRowCount = $derived(
-		groups.loaded.length + groups.available.reduce((count, group) => count + group.items.length, 0)
+		groups.available.reduce((count, group) => count + group.items.length, 0)
 	);
 	const hasMoreLocal = $derived(localGroups.shown < localRowCount);
 
@@ -202,10 +202,6 @@
 {/if}
 
 {#snippet localRows()}
-	{#each localGroups.loaded as item (`loaded-${item.option.id}`)}
-		{@render render(item, !showOrgName)}
-	{/each}
-
 	{@render listRows(
 		localGroups.available.flatMap((group) => group.items),
 		'local'
@@ -216,7 +212,7 @@
 	{/if}
 {/snippet}
 
-{#if groups.loaded.length > 0 || groups.available.length > 0}
+{#if groups.available.length > 0}
 	<ModelsSection label="Local models" persistKey={LOCAL_BACKEND_ID} revealChevronOnHover sticky>
 		{#snippet icon()}
 			<Logo class="shrink-0" style="--size: 0.875rem" />

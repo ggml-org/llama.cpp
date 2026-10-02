@@ -108,7 +108,6 @@
 		const order: string[] = [];
 
 		for (const item of ms.favoriteItems) order.push(item.option.id);
-		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
 		for (const group of ms.groupedFilteredOptions.available) {
 			for (const item of group.items) order.push(item.option.id);
 		}
