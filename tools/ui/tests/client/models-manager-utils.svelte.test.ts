@@ -5,7 +5,8 @@
 import {
 	downloadGroups,
 	groupModelQuants,
-	modelContextLength
+	modelContextLength,
+	splitHiddenQuants
 } from '$lib/components/app/models/ModelsManager/utils';
 import { LOCAL_BACKEND_ID } from '$lib/constants';
 import { ModelGroupKind, ServerModelStatus } from '$lib/enums';
@@ -123,5 +124,41 @@ describe('modelsStore.isModelRunning', () => {
 		expect(modelsStore.isModelRunning('org/loading')).toBe(false);
 		expect(modelsStore.isModelRunning('org/failed')).toBe(false);
 		expect(modelsStore.isModelRunning('org/unknown')).toBe(false);
+	});
+});
+
+describe('splitHiddenQuants', () => {
+	const entry = (repo: string, quants: string[]) => ({
+		base: option(quants[0]),
+		key: repo,
+		kind: ModelGroupKind.QUANTS,
+		quants: quants.map((model) => option(model))
+	});
+
+	it('keeps the visible quants of a partly hidden repo in the local block', () => {
+		const repo = entry('org/Qwen3-8B', ['org/Qwen3-8B:Q4_K_M', 'org/Qwen3-8B:Q8_0']);
+		const { hidden, local } = splitHiddenQuants([repo], (picked) => picked.model.endsWith('Q8_0'));
+
+		expect(hidden.map((group) => [group.key, group.quants.length])).toEqual([
+			['org/Qwen3-8B::hidden', 1]
+		]);
+		expect(local.map((group) => [group.key, group.quants.length])).toEqual([['org/Qwen3-8B', 1]]);
+		expect(local[0].base.model).toBe('org/Qwen3-8B:Q4_K_M');
+	});
+
+	it('moves a repo whose quants are all hidden', () => {
+		const repo = entry('org/Qwen3-8B', ['org/Qwen3-8B:Q4_K_M', 'org/Qwen3-8B:Q8_0']);
+		const { hidden, local } = splitHiddenQuants([repo], () => true);
+
+		expect(hidden[0].quants).toHaveLength(2);
+		expect(local).toEqual([]);
+	});
+
+	it('leaves a repo with no hidden quant alone', () => {
+		const repo = entry('org/Qwen3-8B', ['org/Qwen3-8B:Q4_K_M']);
+		const { hidden, local } = splitHiddenQuants([repo], () => false);
+
+		expect(hidden).toEqual([]);
+		expect(local[0].key).toBe('org/Qwen3-8B');
 	});
 });
