@@ -845,6 +845,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
                 ne03,              ne3,           s03, s13,              s3,                 ids_stride, prec, ctx.stream());
         } break;
         case GGML_TYPE_F8_E4M3: {
+            // TODO: Honor F32 accumulation and keep F32 activations, including in fused matmuls.
             ggml_cuda_pool_alloc<nv_bfloat16> src1_bf16(ctx.pool(), ggml_nelements(src1));
             to_bf16_nc_cuda_t to_bf16 = ggml_get_to_bf16_nc_cuda(GGML_TYPE_F32);
             GGML_ASSERT(to_bf16 != nullptr);
