@@ -26,6 +26,7 @@ struct fa_shape {
     int       ne01;  // query rows
     int       ne11;  // KV length
     ggml_type type_kv;
+    int       nh = FA_NH;  // KV heads, FA_NR2 query heads each
 };
 
 // mirrors test_flash_attn_ext::build_graph for the subset this tuner sweeps
@@ -34,21 +35,21 @@ static ggml_tensor * fa_build_graph(ggml_context * ctx, const fa_shape & s) {
     const int64_t dk_padded = GGML_PAD(s.dk, ggml_blck_size(s.type_kv));
     const int64_t dv_padded = GGML_PAD(s.dv, ggml_blck_size(s.type_kv));
 
-    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, dk_padded, s.ne01, FA_NH * FA_NR2, FA_NR3);
+    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, dk_padded, s.ne01, s.nh * FA_NR2, FA_NR3);
     ggml_set_name(q, "q");
 
     // K/V are views of a 2x-tall parent, as they are of the KV cache in production
-    ggml_tensor * k0 = ggml_new_tensor_4d(ctx, s.type_kv, dk_padded, 2 * s.ne11, FA_NH, FA_NR3);
-    ggml_tensor * k  = ggml_view_4d(ctx, k0, dk_padded, s.ne11, FA_NH, FA_NR3, k0->nb[1], k0->nb[2], k0->nb[3], 0);
+    ggml_tensor * k0 = ggml_new_tensor_4d(ctx, s.type_kv, dk_padded, 2 * s.ne11, s.nh, FA_NR3);
+    ggml_tensor * k  = ggml_view_4d(ctx, k0, dk_padded, s.ne11, s.nh, FA_NR3, k0->nb[1], k0->nb[2], k0->nb[3], 0);
     ggml_set_name(k, "k");
 
     ggml_tensor * v = nullptr;
     if (dk_padded == 576 && dv_padded == 512) {
         // MLA: the V cache is a sub-view of the K cache
-        v = ggml_view_4d(ctx, k, dv_padded, s.ne11, FA_NH, FA_NR3, k->nb[1], k->nb[2], k->nb[3], 0);
+        v = ggml_view_4d(ctx, k, dv_padded, s.ne11, s.nh, FA_NR3, k->nb[1], k->nb[2], k->nb[3], 0);
     } else {
-        ggml_tensor * v0 = ggml_new_tensor_4d(ctx, s.type_kv, dv_padded, 2 * s.ne11, FA_NH, FA_NR3);
-        v                = ggml_view_4d(ctx, v0, dv_padded, s.ne11, FA_NH, FA_NR3, v0->nb[1], v0->nb[2], v0->nb[3], 0);
+        ggml_tensor * v0 = ggml_new_tensor_4d(ctx, s.type_kv, dv_padded, 2 * s.ne11, s.nh, FA_NR3);
+        v                = ggml_view_4d(ctx, v0, dv_padded, s.ne11, s.nh, FA_NR3, v0->nb[1], v0->nb[2], v0->nb[3], 0);
     }
     ggml_set_name(v, "v");
 
@@ -64,7 +65,7 @@ static ggml_tensor * fa_build_graph(ggml_context * ctx, const fa_shape & s) {
 
 static uint64_t fa_op_flops(const fa_shape & s) {
     // Q*K^T is ne01 x dk x ne11, P*V is ne01 x ne11 x dv, per head
-    return (uint64_t) 2 * FA_NH * FA_NR2 * s.ne01 * (s.dk + s.dv) * s.ne11 * FA_NR3;
+    return (uint64_t) 2 * s.nh * FA_NR2 * s.ne01 * (s.dk + s.dv) * s.ne11 * FA_NR3;
 }
 
 static void fa_init_uniform(ggml_tensor * t, std::mt19937 & rng, float min, float max) {
@@ -635,6 +636,249 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
 
     if (n_untrusted > 0) {
         fprintf(stderr, "\n%d cells excluded as untrusted (see DROP lines above)\n", n_untrusted);
+    }
+
+    return true;
+}
+
+// ---- FA (non-vec) (Q, NSG): baseline tile vs the wide tile (Q = 16) with 4 or 8 simdgroups ----
+
+bool tuner_fa_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tuner_opts & opts) {
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+
+    auto set_ov    = (set_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_override");
+    auto clr_ov    = (clear_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_override");
+    auto ne11_b    = (bucket_t)       ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_fa_ne11_bucket");
+    auto dev_token = (device_token_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_device_token");
+    if (!set_ov || !clr_ov || !ne11_b || !dev_token) {
+        fprintf(stderr, "error: metal fa tuning procs unavailable\n");
+        return false;
+    }
+
+    // head sizes that fit the wide tile in the threadgroup memory (see ggml_metal_op_flash_attn_ext_cfg)
+    struct shape_t {
+        int dk, dv;
+    };
+
+    const shape_t shapes[] = {
+        { 32,  32  },
+        { 40,  40  },
+        { 48,  48  },
+        { 64,  64  },
+        { 72,  72  },
+        { 80,  80  },
+        { 96,  96  },
+        { 96,  64  },
+        { 112, 112 },
+        { 128, 128 },
+        { 192, 192 },
+        { 192, 128 },
+        { 256, 256 },
+    };
+
+    // KV lengths per ne11 bucket, and per KV length: the smallest batch that uses the wide tile, the smallest one
+    // that may pad its last tile with more rows than baseline, and two typical physical batch sizes
+    const std::vector<std::vector<int>> ne11_rep = { { 512, 1024, 2048 }, { 4096 }, { 8192 }, { 16384 }, { 32768 }, { 65536 } };
+    const int ne01_rep[] = { ggml_metal_tuning::FA_NE01_MIN, 8*ggml_metal_tuning::FA_NE01_MIN_PARTIAL_TILES + 8, 512, 2048 };
+
+    // 8 query heads, 32..1024 wide tiles
+    const int ne01_rep_small[] = { 64, 128, 256, 512, 1024, 2048 };
+
+    const int TILES_LARGE = 1024;  // a row must win from this launch size up
+
+    // cands[0] is the baseline
+    const ggml_metal_tuning::fa_cfg_t cands[] = {
+        { ggml_metal_tuning::FA_Q_BASELINE, 0 },
+        { ggml_metal_tuning::FA_Q_WIDE,     4 },
+        { ggml_metal_tuning::FA_Q_WIDE,     8 },
+    };
+    const size_t n_cands = std::size(cands);
+
+    const double TUNE_THETA = 1.02;   // min speedup vs baseline at large launches to emit a row
+                                      // (FA_NE01_MIN_PARTIAL_TILES is sized against this)
+    const double TUNE_TIE   = 1.03;   // min speedup vs an earlier candidate to replace it
+    const double TUNE_EPS   = 0.015;  // a win must clear this, and a loss must exceed it
+    const double TUNE_BAND  = 0.03;   // a cell this close to baseline is re-measured, so that decisions
+                                      // either side of TUNE_EPS rest on the same number of measurements
+    const int    TUNE_RETRY = 2;      // extra measurements of such a cell, always all of them, all count
+
+    const cooldown_opts cool = {
+        opts.cooldown, opts.cool_drift, opts.cool_eps, opts.cool_max_wait, opts.cool_max_retry,
+    };
+
+    fprintf(stderr, "seed=%u reps=%d cooldown=%s\n", opts.seed, opts.reps, cool.enabled ? "on" : "off");
+    fprintf(stderr, "device token: %s\n", dev_token(dev));
+
+    for (auto s : shapes) {
+        if (!fa_filter_has(opts.dk_filter, std::to_string(s.dk).c_str())) {
+            continue;
+        }
+
+        // per ne11 bucket: the fastest config at large launches (or 0) and its tiles_min
+        std::vector<int> best;
+        std::vector<int> best_tiles;
+        std::set<int>    tiles_all = { TILES_LARGE };
+
+        for (const auto & ne11_pts : ne11_rep) {
+            std::vector<double> t_large(n_cands, 0.0);
+            std::vector<bool>   ok(n_cands, true);
+            std::vector<int>    tiles_bad(n_cands, 0);
+
+            // the host rejects the wide tile when the padded V head does not split over the simdgroups
+            for (size_t i = 1; i < n_cands; ++i) {
+                ok[i] = GGML_PAD(s.dv, 64) % (16*cands[i].NSG) == 0;
+            }
+
+            struct pt_t {
+                int ne11, ne01, nh;
+            };
+
+            std::vector<pt_t> pts;
+            for (int ne11 : ne11_pts) {
+                for (int ne01 : ne01_rep) {
+                    if (ne01 <= ne11) {
+                        pts.push_back({ ne11, ne01, FA_NH });
+                    }
+                }
+                for (int ne01 : ne01_rep_small) {
+                    if (ne01 <= ne11) {
+                        pts.push_back({ ne11, ne01, 1 });
+                    }
+                }
+            }
+
+            for (const auto & [ne11, ne01, nh] : pts) {
+                const fa_shape sh = { s.dk, s.dv, ne01, ne11, GGML_TYPE_F16, nh };
+
+                const int tiles = ((ne01 + ggml_metal_tuning::FA_Q_WIDE - 1)/ggml_metal_tuning::FA_Q_WIDE)*nh*FA_NR2;
+
+                perf_cell cell = build_perf_cell(
+                    backend, [&](ggml_context * ctx) { return fa_build_graph(ctx, sh); },
+                    [&](ggml_context * ctx) { fa_init_tensors(ctx, sh, opts.seed); },
+                    [&](ggml_tensor *) { return fa_op_flops(sh); });
+
+                char label[128];
+                snprintf(label, sizeof(label), "dk=%d dv=%d ne11=%d ne01=%d tiles=%d", s.dk, s.dv, ne11, ne01, tiles);
+
+                // a cell whose first measurement is within TUNE_BAND of baseline is measured TUNE_RETRY more times;
+                // every measurement is kept and the decision uses the median ratio over all of them
+                std::vector<cell_result> rs;
+                for (int retry = 0; cell.gf != nullptr && retry <= TUNE_RETRY; ++retry) {
+                    cell_result r1 = measure_cell(
+                        backend, cell, opts.reps, { 2, 1, 0 }, [&](int i) { set_ov(cands[i].Q, cands[i].NSG); },
+                        [&]() { clr_ov(); }, 0, cool, label);
+                    if (!r1.trusted || r1.t[0] <= 0.0) {
+                        rs.clear();
+                        break;
+                    }
+                    rs.push_back(r1);
+                    if (retry == 0) {
+                        bool close = false;
+                        for (size_t i = 1; i < n_cands; ++i) {
+                            close = close || (ok[i] && r1.t[i] > 0.0 && std::fabs(r1.t[0]/r1.t[i] - 1.0) <= TUNE_BAND);
+                        }
+                        if (!close) {
+                            break;
+                        }
+                        fprintf(stderr, "# RETRY %s (within %.1f%% of baseline)\n", label, 100.0*TUNE_BAND);
+                    }
+                    fprintf(stderr, "#   attempt %d: Q8=%.1f", retry, r1.t[0]);
+                    for (size_t i = 1; i < n_cands; ++i) {
+                        fprintf(stderr, "  Q%dNSG%d=%.1f", cands[i].Q, cands[i].NSG, r1.t[i]);
+                    }
+                    fprintf(stderr, "\n");
+                }
+
+                cell_result r;
+                if (!rs.empty()) {
+                    // per candidate: the median time and the median baseline/candidate ratio across the measurements
+                    r.t.assign(n_cands, 0.0);
+                    for (size_t i = 0; i < n_cands; ++i) {
+                        std::vector<double> v;
+                        for (const auto & r1 : rs) {
+                            v.push_back(i == 0 ? r1.t[0] : r1.t[0]/r1.t[i]);
+                        }
+                        std::sort(v.begin(), v.end());
+                        r.t[i] = i == 0 ? v[v.size()/2] : r.t[0]/v[v.size()/2];
+                    }
+                } else {
+                    r.trusted = false;
+                }
+
+                if (cell.gf == nullptr || !r.trusted) {
+                    fprintf(stderr, "# DROP untrusted cell %s\n", label);
+                    ok.assign(n_cands, false);
+                    continue;
+                }
+
+                // a small launch of full tiles moves tiles_min, any other loss drops the config
+                const bool small = tiles < TILES_LARGE && ne01 % ggml_metal_tuning::FA_Q_WIDE == 0;
+                if (small) {
+                    tiles_all.insert(tiles);
+                }
+
+                fprintf(stderr, "# %s: Q8=%.1f", label, r.t[0]);
+                for (size_t i = 1; i < n_cands; ++i) {
+                    if (GGML_PAD(s.dv, 64) % (16*cands[i].NSG) != 0) {
+                        fprintf(stderr, "  Q%dNSG%d=n/a", cands[i].Q, cands[i].NSG);
+                        continue;
+                    }
+                    fprintf(stderr, "  Q%dNSG%d=%.1f (%.3fx)", cands[i].Q, cands[i].NSG, r.t[i], r.t[0] / r.t[i]);
+
+                    // a small launch moves tiles_min instead of dropping the config: a full tile of queries
+                    // on anything short of a win, a partial one only on a clear loss, as it also pays for the
+                    // rows the wide tile pads. A clear loss at a large launch drops the config
+                    if (!(r.t[i] > 0.0)) {
+                        ok[i] = false;
+                        continue;
+                    }
+                    const bool win  = r.t[i] * (1.0 + TUNE_EPS) <= r.t[0];
+                    const bool loss = r.t[0] * (1.0 + TUNE_EPS) <= r.t[i];
+                    if (tiles < TILES_LARGE && (loss || (small && !win))) {
+                        tiles_bad[i] = std::max(tiles_bad[i], tiles);
+                    } else if (loss) {
+                        ok[i] = false;
+                    }
+                }
+                fprintf(stderr, "\n");
+
+                if (tiles >= TILES_LARGE) {
+                    for (size_t i = 0; i < n_cands; ++i) {
+                        t_large[i] += r.t[i];
+                    }
+                }
+            }
+
+            int best_i = 0;
+            for (size_t i = 1; i < n_cands; ++i) {
+                if (ok[i] && ok[0] && t_large[i] * TUNE_THETA <= t_large[0] && (best_i == 0 || t_large[i] * TUNE_TIE <= t_large[best_i])) {
+                    best_i = (int) i;
+                }
+            }
+
+            // tiles_min: the first sampled launch size with no loss at or above it
+            const int tiles_min = best_i ? *tiles_all.upper_bound(tiles_bad[best_i]) : 0;
+
+            fprintf(stderr, "# dk=%d dv=%d ne11=%d => Q%d,NSG%d tiles_min=%d\n", s.dk, s.dv, ne11_pts.back(), cands[best_i].Q, cands[best_i].NSG, tiles_min);
+            best.push_back(best_i);
+            best_tiles.push_back(tiles_min);
+        }
+
+        // the same row in every bucket -> one ne11-collapsed default row
+        bool collapse = true;
+        for (size_t b = 1; b < best.size(); ++b) {
+            collapse = collapse && best[b] == best[0] && best_tiles[b] == best_tiles[0];
+        }
+
+        for (size_t b = 0; b < best.size(); ++b) {
+            if (best[b] == 0 || (collapse && b > 0)) {
+                continue;
+            }
+            printf("    { { %s, %d, %d, %d }, { %d, %d }, %d },\n", dev_token(dev),
+                   collapse ? (int) ggml_metal_tuning::FA_NE11_DEFAULT : ne11_b(ne11_rep[b].back()), s.dk, s.dv,
+                   cands[best[b]].Q, cands[best[b]].NSG, best_tiles[b]);
+        }
+        fflush(stdout);
     }
 
     return true;

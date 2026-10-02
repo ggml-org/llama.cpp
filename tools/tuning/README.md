@@ -9,6 +9,7 @@ A non-zero exit code means bad arguments or a wrong environment (no Metal device
 | tuner | tunes | table |
 |---|---|---|
 | `fa-vec` | flash-attn vec `(Q, NE)` per `(dtype, head size, KV depth, batch width)` | `fa_vec_tuned_table` |
+| `fa` | flash-attn (non-vec) `(Q, NSG)` per `(head size, KV depth)` | `fa_tuned_table` |
 
 ## Adding a device to the FA-vec table
 
@@ -49,6 +50,22 @@ The tuner itself does no numerical checks, so the other head sizes have no autom
 
 If the device is not in `enum ggml_metal_device_id` yet, register it in `ggml/src/ggml-metal/ggml-metal-device.{h,m}` first.
 The tuner emits whatever token the runtime reports for the machine, so an unregistered device emits `GGML_METAL_DEVICE_GENERIC` and its rows would apply to every unknown device.
+
+## Adding a device to the FA table
+
+```bash
+./build/bin/ggml-metal-tuning fa > fa_rows.txt 2> fa_sweep.log
+```
+
+The sweep times the baseline tile against the wide tile with 4 and with 8 simdgroups at GQA 8, F16 K/V, over 8 KV depths (3 of them in the first bucket) x up to 4 batch widths per head size, and again with 8 query heads from 32 to 1024 tiles (30-45 minutes on M5, depending on how many cells are re-measured).
+Unlike the FA-vec table, rows stay keyed by the SKU token the tuner emits: `tiles_min` depends on how many GPU cores the device has, which varies within a family.
+A launch is counted in dispatched wide tiles: `ceil(batch/16) x query heads x streams`.
+A KV-depth bucket gets a row only for a config that is at least 2% faster in aggregate over the launches of 1024 tiles or more and has no clear loss (more than 1.5%) at any of them, so a device where the wide tile does not pay off emits nothing and stays at baseline.
+The last number of a row is `tiles_min`: the smallest sampled launch in that KV-depth bucket at or above which every small launch of full tiles wins and no partial-tile launch clearly loses. Below it the baseline tile is kept. A partial last tile also pays for the rows it pads, so it only raises `tiles_min` on a clear loss, never on a result near baseline.
+A win must clear 1.5% and a loss must exceed it. A cell whose first measurement is within 3% of baseline is measured two more times, and the decision uses the median ratio over the three, so that both sides of the 1.5% cutoff rest on the same number of measurements. A cell that is neither a win nor a loss moves `tiles_min` up at a small full-tile launch; at a large launch its time simply stays in the aggregate that the 2% gate is applied to.
+The 8-simdgroup variant replaces the 4-simdgroup one only when it is at least 3% faster, so that rows do not flip on noise.
+Rows of one head size collapse into a single default row only when every bucket picks the same config and the same `tiles_min`.
+`test-backend-ops test -o FLASH_ATTN_EXT -b MTL0` forces the wide tile regardless of the table.
 
 ## Thermal throttling
 

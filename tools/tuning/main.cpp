@@ -13,6 +13,7 @@ struct tuner_def {
 
 static const tuner_def k_tuners[] = {
     { "fa-vec", tuner_fa_vec_run },
+    { "fa",     tuner_fa_run     },
 };
 
 static void usage(const char * argv0) {
@@ -23,6 +24,7 @@ static void usage(const char * argv0) {
     printf("\n");
     printf("  tuners:\n");
     printf("    fa-vec            flash-attn vec (Q,NE) for ggml-metal-tuning.cpp\n");
+    printf("    fa                flash-attn (non-vec) (Q,NSG) for ggml-metal-tuning.cpp\n");
     printf("\n");
     printf("  options:\n");
     printf("    -b <name>         backend device (default: first Metal device)\n");
