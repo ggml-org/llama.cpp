@@ -1249,6 +1249,9 @@ static bool ggml_backend_cuda_comm_allreduce_tensor(void * comm_ctx_v, struct gg
         return false;
     }
     auto * comm_ctx = static_cast<ggml_backend_cuda_comm_context *>(comm_ctx_v);
+    for (ggml_backend_t backend : comm_ctx->backends) {
+        backend->is_synchronized = false;
+    }
     return comm_ctx->try_allreduce(comm_ctx, tensors);
 }
 
@@ -5891,6 +5894,10 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
         /* .context = */ ctx,
     };
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    cuda_backend->supports_sync_tracking = true;
+#endif
 
     return cuda_backend;
 }

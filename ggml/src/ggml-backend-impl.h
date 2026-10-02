@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 2
+    #define GGML_BACKEND_API_VERSION 3
 
     //
     // Backend buffer type
@@ -160,6 +160,16 @@ extern "C" {
         struct ggml_backend_i iface;
         ggml_backend_dev_t device;
         void * context;
+
+        // Async submissions clear this; only a full backend synchronization sets it.
+#ifdef __cplusplus
+        bool is_synchronized = false;
+        // Enable only when all async submission paths invalidate is_synchronized.
+        bool supports_sync_tracking = false;
+#else
+        bool is_synchronized;
+        bool supports_sync_tracking;
+#endif
     };
 
     struct ggml_backend_event {
