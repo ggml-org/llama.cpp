@@ -9,13 +9,8 @@
 		type ModelsTableGroup,
 		modelSupports
 	} from './utils';
-	import {
-		LOCAL_BACKEND_ID,
-		type ModalityKey,
-		MODELS_TABLE_GROUP_LABELS,
-		ModelsTableGroupKind
-	} from '$lib/constants';
-	import { ModelCapability } from '$lib/enums';
+	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
+	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
 	import { conversationsStore, modelsStore, uiStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { type Snippet, untrack } from 'svelte';

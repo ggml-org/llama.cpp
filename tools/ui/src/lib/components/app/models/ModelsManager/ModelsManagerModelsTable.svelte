@@ -33,11 +33,15 @@
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
 		MODEL_ROW_GRID_CLASS,
-		MODEL_ROW_WINDOW,
+		MODEL_ROW_WINDOW
+	} from '$lib/constants';
+	import {
+		KeyboardKey,
+		ModelCapability,
+		ModelDownloadConfirmAction,
 		ModelsTableGroupKind,
 		ModelsTableSortKey
-	} from '$lib/constants';
-	import { KeyboardKey, ModelCapability, ModelDownloadConfirmAction } from '$lib/enums';
+	} from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
