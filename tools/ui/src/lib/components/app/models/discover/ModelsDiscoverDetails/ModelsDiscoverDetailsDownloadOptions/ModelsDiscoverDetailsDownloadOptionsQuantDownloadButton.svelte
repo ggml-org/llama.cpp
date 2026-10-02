@@ -154,10 +154,15 @@
 				/>
 			</span>
 		{:else}
-			<!-- paused: the play affordance fades in on hover; visible directly on touch -->
+			<!-- paused: the state at rest, the resume affordance taking its place on
+			     hover, the way the spinner gives way to the pause action above -->
 			<span class="relative inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center">
+				<Pause
+					class="absolute h-3.5 w-3.5 text-muted-foreground transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-0 [@media(pointer:coarse)]:hidden"
+				/>
+
 				<Play
-					class="absolute h-3.5 w-3.5 scale-75 opacity-0 transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:scale-100 group-hover:opacity-100 [@media(pointer:coarse)]:scale-100 [@media(pointer:coarse)]:opacity-100"
+					class="absolute h-3.5 w-3.5 opacity-0 transition-opacity duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100"
 				/>
 			</span>
 		{/if}
