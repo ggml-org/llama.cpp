@@ -75,7 +75,7 @@ void server_decision_context::init(const llama_model * model) {
         }
         n_options_max   = labels.size();
         noul_true_first = true;
-    } else if (model_type == COMMON_DECISION_TYPE_LEV) {
+    } else if (model_type == COMMON_DECISION_TYPE_LEV || model_type == COMMON_DECISION_TYPE_NIMBLE) {
         // label codes are A..Z then AA..ZZ, only the ones that are a single token are used
         std::vector<std::string> codes;
         for (char a = 'A'; a <= 'Z'; a++) {
@@ -360,7 +360,7 @@ size_t server_decision_context::n_outputs(const server_decision_question & quest
     return question.options.size();
 }
 
-std::string server_decision_context::render(const json & state, const server_decision_question & question, size_t variant, size_t n_images) const {
+json server_decision_context::render_options(const server_decision_question & question, size_t variant) const {
     const size_t n_options = question.options.size();
 
     // the second variant shows the options in the reverse order
@@ -382,15 +382,36 @@ std::string server_decision_context::render(const json & state, const server_dec
         }
         options.push_back(option);
     }
+    return options;
+}
 
+std::string server_decision_context::render(
+        const json & state,
+        const std::vector<server_decision_question> & questions,
+        const server_decision_question & question,
+        size_t variant,
+        size_t n_images) const {
     // the template is given raw JSON values, it serializes the ones that are not strings
     json inp = json{
         {"id",           question.id},
         {"type",         decision_question_type_name(question.type)},
         {"instructions", question.instructions},
         {"state",        state},
-        {"options",      options},
+        {"options",      render_options(question, variant)},
     };
+
+    // the nimble prompt lists all the questions of the request
+    if (type == COMMON_DECISION_TYPE_NIMBLE) {
+        inp["questions"] = json::array();
+        for (const auto & q : questions) {
+            inp["questions"].push_back(json{
+                {"id",           q.id},
+                {"type",         decision_question_type_name(q.type)},
+                {"instructions", q.instructions},
+                {"options",      render_options(q, 0)},
+            });
+        }
+    }
 
     // lev was trained with sorted keys
     if (type == COMMON_DECISION_TYPE_LEV) {
@@ -427,15 +448,16 @@ std::string server_decision_context::render(const json & state, const server_dec
 
 void server_decision_context::fill_task(
         const json & state,
+        const std::vector<server_decision_question> & questions,
         const server_decision_question & question,
         size_t variant,
         const std::vector<raw_buffer> & files,
         mtmd_context * mctx,
         const mtmd_helper_init_opt & init_opt,
         server_task & task) const {
-    const std::string prompt = render(state, question, variant, files.size());
+    const std::string prompt = render(state, questions, question, variant, files.size());
 
-    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV) {
+    if (type == COMMON_DECISION_TYPE_OPENJEV || type == COMMON_DECISION_TYPE_LEV || type == COMMON_DECISION_TYPE_NIMBLE) {
         // lev reads the ratings of a noul question at its first labels, not at the digits
         task.decision.labels.assign(labels.begin(), labels.begin() + n_outputs(question));
         if (!files.empty()) {

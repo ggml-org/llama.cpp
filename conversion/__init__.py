@@ -152,6 +152,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "LLaMAForCausalLM": "llama",
     "KevModel": "lev",
     "LevModel": "lev",
+    "NimbleModel": "lev",
     "Lfm25AudioTokenizer": "lfm2",
     "Lfm2BidirectionalModel": "lfm2",
     "Lfm2ForCausalLM": "lfm2",

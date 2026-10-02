@@ -1184,6 +1184,7 @@ static const std::map<common_decision_type, std::string> COMMON_DECISION_TYPE_NA
     { COMMON_DECISION_TYPE_OPENJEV, "openjev" },
     { COMMON_DECISION_TYPE_LEV,     "lev"     },
     { COMMON_DECISION_TYPE_KEV,     "kev"     },
+    { COMMON_DECISION_TYPE_NIMBLE,  "nimble"  },
     { COMMON_DECISION_TYPE_LAYA,    "laya"    },
 };
 
