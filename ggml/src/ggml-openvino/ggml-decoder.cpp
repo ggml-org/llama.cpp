@@ -803,10 +803,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     // from the first graph onwards, while the view grows with context depth and would invert the
     // comparison at shallow depth.
     //
-    // Layers whose leaf is smaller than the largest leaf are the windowed ones. When every layer
-    // reports the same extent there is no distinction to draw -- either the model has no windowed
-    // layers, or the window is at least as large as the context so the two caches coincide, in
-    // which case a windowed layer and a full-attention one compute the same thing.
+    // Layers whose leaf is smaller than the largest leaf are the windowed ones. Equal extents do not
+    // rule them out: the windowed cache is padded to n_swa + n_ubatch, which can equal the full
+    // context (gemma-4 at -c 1024 -ub 512). See the mask fallback below.
     //
     // Getting this wrong is silent and severe: with the windowed layers classified as
     // full-attention, permute's KV slicing uses attention_size instead of attention_size_swa. The
@@ -849,6 +848,25 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
                 if (model_params.swa_mask == nullptr) {
                     model_params.swa_mask = layer_mask[layer];
                 }
+            }
+        }
+
+        // equal extents: tell the two masks apart by the layers that read them, the larger group is swa (gemma-4: 4 of 5 layers)
+        // groups of equal size can not be told apart, so leave the layers unclassified
+        if (model_params.swa_layers.empty()) {
+            std::map<const ggml_tensor *, std::vector<int>> mask_layers;
+            for (const auto & [layer, mask] : layer_mask) {
+                mask_layers[mask].push_back(layer);
+            }
+            if (mask_layers.size() == 2 &&
+                mask_layers.begin()->second.size() != std::next(mask_layers.begin())->second.size()) {
+                auto swa = mask_layers.begin();
+                auto other = std::next(swa);
+                if (other->second.size() > swa->second.size()) {
+                    std::swap(swa, other);
+                }
+                model_params.swa_layers = swa->second;
+                model_params.swa_mask = swa->first;
             }
         }
         std::sort(model_params.swa_layers.begin(), model_params.swa_layers.end());
