@@ -15,7 +15,6 @@ import {
 	MODEL_ID,
 	MODEL_ROW_WINDOW,
 	RECENT_MODEL_LIMIT,
-	RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
 	RECENT_MODELS_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
@@ -54,22 +53,6 @@ function mergedDraftSidecars(
 }
 
 /** Last use timestamp per backend-qualified model id. */
-function loadRecentModelUsage(): Record<string, number> {
-	if (!browser) return {};
-
-	try {
-		const raw = localStorage.getItem(RECENT_MODEL_USAGE_LOCALSTORAGE_KEY);
-
-		if (!raw) return {};
-
-		const parsed = JSON.parse(raw) as unknown;
-
-		return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
-	} catch {
-		return {};
-	}
-}
-
 /** Models kept out of the selector. */
 function loadHiddenModels(): Set<string> {
 	if (!browser) return new SvelteSet<string>();
@@ -128,7 +111,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	loading = $state(false);
 	models = $state<ModelOption[]>([]);
 	recentModelIds = $state<string[]>(loadRecentModels());
-	recentModelUsage = $state<Record<string, number>>(loadRecentModelUsage());
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
@@ -675,23 +657,10 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			...this.recentModelIds.filter((id) => id !== qualifiedId)
 		].slice(0, RECENT_MODEL_LIMIT);
 
-		// only the recent ids ever read their usage stamp, prune the rest
-		const usage: Record<string, number> = {};
-
-		for (const id of this.recentModelIds) {
-			usage[id] = id === qualifiedId ? Date.now() : (this.recentModelUsage[id] ?? 0);
-		}
-
-		this.recentModelUsage = usage;
-
 		if (!browser) return;
 
 		try {
 			localStorage.setItem(RECENT_MODELS_LOCALSTORAGE_KEY, JSON.stringify(this.recentModelIds));
-			localStorage.setItem(
-				RECENT_MODEL_USAGE_LOCALSTORAGE_KEY,
-				JSON.stringify(this.recentModelUsage)
-			);
 		} catch {
 			console.warn('[ModelsStore] Failed to persist the recently used models');
 		}
