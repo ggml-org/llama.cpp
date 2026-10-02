@@ -7,7 +7,7 @@
 	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { MODEL_ROW_GRID_CLASS, SETTINGS_KEYS } from '$lib/constants';
-	import { ModelGroupKind } from '$lib/enums';
+	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 
 	interface Props {
@@ -29,17 +29,25 @@
 	// a repo row stands for its quants, so it reports what they agree on
 	let contextSource = $derived(entry.quants.find((quant) => quant.contextLength) ?? entry.base);
 	let mediaSource = $derived(entry.quants.find((quant) => quant.modalities) ?? entry.base);
+
+	function handleKeydown(event: KeyboardEvent): void {
+		if (event.key === KeyboardKey.SPACE) event.preventDefault();
+
+		if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) onToggle();
+	}
 </script>
 
-<!-- the name cell discloses the quants, so the row itself takes no focus -->
-<div class={[MODEL_ROW_GRID_CLASS, 'group rounded-md px-2 py-2.5 transition hover:bg-muted/40']}>
-	<button
-		aria-expanded={expanded}
-		class="flex min-w-0 cursor-pointer items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-		onclick={onToggle}
-		style="padding-left: {indent}px"
-		type="button"
-	>
+<div
+	class={[
+		MODEL_ROW_GRID_CLASS,
+		'cursor-pointer rounded-md px-2 py-2.5 transition hover:bg-muted/40'
+	]}
+	onclick={onToggle}
+	onkeydown={handleKeydown}
+	role="button"
+	tabindex="0"
+>
+	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
 		<ModelAvatar
 			option={entry.base}
 			showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
@@ -66,7 +74,7 @@
 
 			<span class="block text-xs text-muted-foreground">{groupLabel}</span>
 		</span>
-	</button>
+	</span>
 
 	<ModelContext
 		class="justify-self-end"
