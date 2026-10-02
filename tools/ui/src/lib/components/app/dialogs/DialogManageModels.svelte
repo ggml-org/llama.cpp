@@ -28,6 +28,10 @@
 
 				<span>Models</span>
 			</Dialog.Title>
+
+			<Dialog.Description class="sr-only">
+				Browse, load and delete the models the server can serve.
+			</Dialog.Description>
 		</Dialog.Header>
 
 		<div class="min-h-0 flex-1">
