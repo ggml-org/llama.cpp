@@ -650,6 +650,56 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+// A plan made while x[1] was not an output lets x[2] reuse its memory, so it must not be reused once x[1] is an output
+static void test_realloc_output_flag_changed() {
+    dummy_backend    backend = dummy_backend_init(SIZE_MAX, /*align*/ 4);
+    ggml_gallocr_ptr galloc  = ggml_gallocr_ptr(ggml_gallocr_new(&backend.buffer_type));
+
+    for (bool is_output : { false, true, false }) {
+        auto [ctx, graph, ctx_ptr] = make_context();
+        ggml_tensor * x[3];
+        x[0] = make_input_with_size(ctx, 16);
+        x[1] = ggml_scale(ctx, x[0], 2.0f);
+        x[2] = ggml_scale(ctx, x[1], 2.0f); // computed in-place in x[1] unless x[1] is an output
+        if (is_output) {
+            ggml_set_output(x[1]);
+        }
+        ggml_set_output(x[2]);
+        ggml_build_forward_expand(graph, x[2]);
+        assign_names(ctx);
+
+        GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+        check_all_allocated(graph);
+        check_no_overlap(graph);
+    }
+}
+
+// Same for a node that becomes an input: it is written before the graph is computed
+static void test_realloc_input_flag_changed() {
+    dummy_backend    backend = dummy_backend_init(SIZE_MAX, /*align*/ 4);
+    ggml_gallocr_ptr galloc  = ggml_gallocr_ptr(ggml_gallocr_new(&backend.buffer_type));
+
+    for (bool is_input : { false, true, false }) {
+        auto [ctx, graph, ctx_ptr] = make_context();
+        ggml_tensor * x[3];
+        x[0] = make_input_with_size(ctx, 16);
+        x[1] = ggml_scale(ctx, x[0], 2.0f); // computed in-place in x[0] unless x[1] is an input
+        x[2] = ggml_sum(ctx, x[1]);
+        if (is_input) {
+            ggml_set_input(x[1]);
+        }
+        ggml_set_output(x[2]);
+        ggml_build_forward_expand(graph, x[2]);
+        assign_names(ctx);
+
+        GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+        check_all_allocated(graph);
+        if (is_input) {
+            GGML_ASSERT(!memory_overlap(x[0], x[1]));
+        }
+    }
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -672,5 +722,7 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+    run("test_realloc_output_flag_changed", test_realloc_output_flag_changed);
+    run("test_realloc_input_flag_changed", test_realloc_input_flag_changed);
     return 0;
 }
