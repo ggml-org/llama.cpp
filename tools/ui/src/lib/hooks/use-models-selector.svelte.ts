@@ -83,8 +83,10 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 		return options.some((option) => option.model === currentModel);
 	});
+	// the search, the rows and the sections all read the visible set; only the current
+	// model resolves against `options`, since it can be hidden and still selected
 	const visibleOptions = $derived(options.filter((option) => !modelsStore.isHidden(option.id)));
-	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
+	const filteredOptions = $derived(filterModelOptions(visibleOptions, searchTerm));
 	const favoriteItems = $derived(
 		groupFavoriteOptions(
 			filterModelOptions(visibleOptions, searchTerm),
