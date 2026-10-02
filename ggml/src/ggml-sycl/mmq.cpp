@@ -13,32 +13,6 @@
 #include "mmq.hpp"
 #include "vecdotq.hpp"
 
-typedef void (*allocate_tiles_sycl_t)(
-    int** x_ql,
-    sycl::half2** x_dm,
-    int** x_qh,
-    int** x_sc);
-typedef void (*load_tiles_sycl_t)(
-    const void* __restrict__ vx,
-    int* __restrict__ x_ql,
-    sycl::half2* __restrict__ x_dm,
-    int* __restrict__ x_qh,
-    int* __restrict__ x_sc,
-    const int& i_offset,
-    const int& i_max,
-    const int& k,
-    const int& blocks_per_row);
-typedef float (*vec_dot_q_mul_mat_sycl_t)(
-    const int* __restrict__ x_ql,
-    const sycl::half2* __restrict__ x_dm,
-    const int* __restrict__ x_qh,
-    const int* __restrict__ x_sc,
-    const int* __restrict__ y_qs,
-    const sycl::half2* __restrict__ y_ms,
-    const int& i,
-    const int& j,
-    const int& k);
-
 
 template <int mmq_y>
 static __dpct_inline__ void

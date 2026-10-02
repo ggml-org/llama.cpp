@@ -16,10 +16,6 @@
 #include "common.hpp"
 #include "convert.hpp"
 
-typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
-typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
-                                            const int iqs, dfloat2 &v);
-typedef void (*dequantize_kernel_f32_t)(const void * vx, const int64_t ib, const int iqs, float & v0, float & v1);
 
 #if QK_K == 256
 static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m);
