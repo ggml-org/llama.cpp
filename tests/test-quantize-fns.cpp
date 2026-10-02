@@ -243,6 +243,42 @@ static int test_vec_dot_q(bool verbose) {
     return num_failed;
 }
 
+// In every group, all values with importance are equal, and the max (0) has none.
+// The scale search in make_qkx3_quants then fits min == max and passes inf/nan to nearest_int (#29804).
+static int test_quantize_imatrix_degenerate(bool verbose) {
+    const int64_t n = 256;
+    std::vector<float> x(n);
+    std::vector<float> imatrix(n);
+    std::vector<float> out(n);
+    int num_failed = 0;
+
+    printf("Testing degenerate imatrix:\n");
+    for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1}) {
+        const int64_t group = type == GGML_TYPE_Q2_K ? 16 : 32;
+        for (int64_t i = 0; i < n; ++i) {
+            const int64_t g = i / group;
+            const int64_t p = i % group;
+            const bool important = p % 3 == 1;
+            x[i] = important ? -0.02f*(g + 1) : (p % 2 ? -1.0f : 0.0f);
+            imatrix[i] = important ? 1.0f : 0.0f;
+        }
+        printf("  - %s\n", ggml_type_name(type));
+
+        std::vector<uint8_t> q(ggml_row_size(type, n));
+        ggml_quantize_init(type);
+        ggml_quantize_chunk(type, x.data(), q.data(), 0, 1, n, imatrix.data());
+        ggml_get_type_traits(type)->to_float(q.data(), out.data(), n);
+
+        const bool failed = !std::all_of(out.begin(), out.end(), [](float v) { return std::isfinite(v); });
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("%5s imatrix degenerate groups:      %s\n", ggml_type_name(type), RESULT_STR[failed]);
+        }
+    }
+
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -264,6 +300,7 @@ int main(int argc, char * argv[]) {
 
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_vec_dot_q(verbose);
+    num_failed += test_quantize_imatrix_degenerate(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
