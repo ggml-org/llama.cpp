@@ -125,14 +125,15 @@
 	{#if settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
 		<GroupedList
 			group={familyHeading}
-			groupStateKey={prefix}
 			groups={groupModelFamilies(items, (row) => row.option.model).map((family) => ({
 				entries: family.entries,
 				group: family,
 				key: `${prefix}-${family.key}`
 			}))}
+			initialCollapsed={modelsStore.collapsedGroupsUnder(prefix)}
 			item={listItem}
 			keyOf={(row) => `${prefix}-${row.option.id}`}
+			onCollapsedChange={(key, collapsed) => modelsStore.setGroupCollapsed(prefix, key, collapsed)}
 			stickyStyle="top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem - 1px)"
 		/>
 	{:else}
