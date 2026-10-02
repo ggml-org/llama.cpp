@@ -21,6 +21,7 @@ import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
 import type { ApiModelsSseDownloadProgressData, ModelDownloadProgress } from '$lib/types';
 import type { ModelSidecarBadge } from '$lib/types/models';
+import { repoOf } from '$lib/utils/model-names';
 import { isAuxSidecar } from '$lib/utils/sidecars';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
@@ -100,7 +101,7 @@ export class ModelStatusManager {
 
 			if (!args) continue;
 
-			const baseRepo = m.id.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0];
+			const baseRepo = repoOf(m.id);
 
 			for (let i = 0; i < args.length - 1; i++) {
 				if (args[i] !== CLI_FLAGS.MODEL_DRAFT && args[i] !== CLI_FLAGS.MODEL_DRAFT_SHORT) {

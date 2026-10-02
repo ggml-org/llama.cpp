@@ -4,12 +4,12 @@
 	import { Trash2 } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
-	import { MODEL_ID } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsStore } from '$lib/stores';
 	import type { HfModelDetailInfo } from '$lib/types/huggingface';
 	import type { ModelOption } from '$lib/types/models';
+	import { repoOf } from '$lib/utils';
 
 	interface Props {
 		onClose: () => void;
@@ -37,7 +37,7 @@
 	let hubDetails = $state<HfModelDetailInfo | null>(null);
 
 	$effect(() => {
-		const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? option.model;
+		const repo = repoOf(option.model);
 
 		let cancelled = false;
 

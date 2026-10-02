@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { MODEL_ID } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
-	import { nearViewport } from '$lib/utils';
+	import { nearViewport, repoOf } from '$lib/utils';
 	import { formatContextLength } from '$lib/utils/formatters';
 
 	interface Props {
@@ -25,7 +24,7 @@
 		if (reported || !isNearViewport) return;
 
 		// a local GGUF carries its trained context in the model metadata
-		const repo = option.model.split(MODEL_ID.QUANTIZATION_SEPARATOR)[0] ?? '';
+		const repo = repoOf(option.model);
 
 		if (!repo) return;
 
