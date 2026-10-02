@@ -19,7 +19,8 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-ibm.yml',
-      'ggml/src/ggml-cpu/**'
+      'ggml/src/ggml-cpu/**',
+      'ggml/src/ggml-zdnn/**'
     ]
 
 concurrency:
