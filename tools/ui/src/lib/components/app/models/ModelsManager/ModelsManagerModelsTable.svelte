@@ -141,7 +141,8 @@
 
 		switch (sortKey) {
 			case ModelsTableSortKey.CONTEXT:
-				return modelContextLength(a) - modelContextLength(b);
+				// a context we cannot read yet sorts with the smallest ones
+				return (modelContextLength(a) ?? 0) - (modelContextLength(b) ?? 0);
 			case ModelsTableSortKey.NAME:
 				return a.model.localeCompare(b.model);
 			case ModelsTableSortKey.STATUS:
