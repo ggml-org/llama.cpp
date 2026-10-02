@@ -69,7 +69,7 @@
 	{#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
 			<Loader2 class="h-3.5 w-3.5 animate-spin" />
-			Loading models…
+			Loading models...
 		</div>
 	{:else if ms.options.length === 0 && ms.isMultiModel}
 		<span class="text-xs text-muted-foreground">No models yet.</span>
