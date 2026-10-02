@@ -33,7 +33,8 @@
 		modelsStore,
 		serverStore,
 		settingsStore,
-		toolsStore
+		toolsStore,
+		uiStore
 	} from '$lib/stores';
 	import type {
 		FileMentionEntry,
@@ -475,6 +476,19 @@
 	function refocusInput() {
 		queueMicrotask(() => inputRef?.focus());
 	}
+
+	// A flow outside the chat, e.g. the models manager closing onto it, asks for the
+	// composer back. The dialog's focus scope is still tearing down, so focus on a
+	// frame of its own.
+	$effect(() => {
+		if (uiStore.manageModelsOpen) return;
+
+		if (!uiStore.composerFocusRequested) return;
+
+		uiStore.composerFocusRequested = false;
+
+		setTimeout(() => inputRef?.focus(), 0);
+	});
 
 	// Splice the mention link in place of the `@<query>` token. Uses the
 	// live cursor, not a stale snapshot - the token may have been edited.
