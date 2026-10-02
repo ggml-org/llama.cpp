@@ -55,7 +55,9 @@ url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
 
 [tool.uv.sources]
-torch = { index = "pytorch" }
+torch = [
+    { index = "pytorch", marker = "sys_platform == 'linux'" },
+]
 
 [[tool.uv.index]]
 name = "pytorch"
