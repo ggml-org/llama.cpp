@@ -434,7 +434,8 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
 | 7.1a | Committed | dfed912b5 | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release. Its numerical fixture is corrected and requalified in 7.1b. |
 | 7.1b | Committed | 09f566915 | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
-| 7.2a | Ready for review | - | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
+| 7.2a | Committed | 9295ce06c | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
+| 7.2b prerequisite | Ready for review | - | Pre-existing short-prefill dispatch bug isolated and fixed at the 7.2a checkpoint before restoring the ongoing embedding/position work. |
 | 7.2b-7.5c | Planned | - | Adaptive embedding/position admission, live three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
@@ -3637,6 +3638,8 @@ Logs: `/tmp/vision-7.1b-cuda-final.log` and `/tmp/vision-7.1b-cuda-memcheck.log`
 
 ### Stage 7.2a: ordered text/image session execution
 
+Committed as `9295ce06c`.
+
 The private `mtmd-session.h` interface turns borrowed prompt chunks into explicit `text_prefill`, `vision_encode`, and `embedding_prefill` steps. It is a request-order owner, not a second memory allocator or replacement for the existing stage coordinator. Device allocations, target KV/recurrent state, positions, and input metadata remain caller-owned. The same prepared backend must execute the plan, and copying/moving an active plan is not allowed.
 
 Preparation validates every input and freezes the model's media-batching decisions before executing either model. It groups compatible images in media order even when text lies between them. An incompatible image or batch-size boundary starts a new group; the planner does not skip it to combine images farther ahead. Each group's encode step runs immediately before its first image prefill. Retained host views then allow later images from the same group to wait for their actual prompt positions without retaining the transient mtmd batch object.
@@ -3674,3 +3677,21 @@ Artifacts: `/tmp/vision-7.2a-cuda-final.log`, `/tmp/vision-7.2a-memcheck.log`, a
 Run the default CPU suite with `build-device-memory-infra-cuda-release/bin/test-mtmd-session`. Add `--cuda --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --mmproj /path/to/mmproj-F16.gguf` for the optional full-model fixture. CUDA memory-access qualification uses `compute-sanitizer --tool memcheck --report-api-errors no --error-exitcode 1` before that invocation.
 
 This checkpoint qualifies the internal session plan and a live ordinary-allocation adapter. Public helper/server routing remains unchanged, as does the streaming/mmproj server guard. Adaptive embedding admission and physical KV-index versus model-position separation are 7.2b; live coordinated ownership is 7.2c; production server admission is 7.5. Audio, speculative execution, long-context streaming vision, and other accelerator inference paths are not qualified here. Stage files and this roadmap are staged for user review, with no assistant commit or push.
+
+### Prerequisite before 7.2b: short-prefill phase dispatch
+
+The broader text-only regression exposed a bug already present at the committed 7.2a checkpoint: native span selection treated any one-to-four-query operation as decode-capable, ignoring explicit prefill intent. A three-token prefill after generation requested 4,659,328 bytes of span/MMA scratch from a 3,407,872-byte encoded-gather grant. The two-query prefill selector could also avoid the intended strict-gather route when resumed decoding was enabled.
+
+Following the user's prerequisite-fix policy, the uncommitted 7.2b implementation is parked in the task-scoped stash named `codex-7.2b-parked-before-prefill-intent-fix`. Unrelated benchmark files remain untouched. The working tree returns to `9295ce06c`, with only this narrow fix, its regression test and this ledger staged. After the user commits the fix, reapply that stash onto the new checkpoint and finish 7.2b qualification. Stage 7.2b is not marked complete.
+
+The common resident-attention dispatcher now requires decode intent for the segmented span path. All short prefills use encoded gathering plus ordinary native attention, just like longer prefills. TG2 prefill is explicitly admitted to that same native path rather than the older split/fold route. Actual TG1-TG4 decode retains the existing resumable/vector/MMA decisions. No backend API, CUDA kernel, quantization arithmetic or arena budget is changed. Native attention's output-side scratch was already accounted for by the graph allocator; the new synthetic fixture reserves an actual attention output tensor so this requirement is exercised correctly.
+
+TDD and qualification:
+
+- With 7.2b parked, the focused regression reproduced the same three-query scratch rejection. This establishes the defect at the previous checkpoint rather than attributing it to the new position work.
+- `test-kv-stream-session --cuda-short-prefill` passes **1 case / 52 assertions**, using an exact gather-sized lease at a nonzero parent offset. Each query count 1, 2, 3 and 4 is exercised with streamed history, and both layer outputs match stock attention **bit-for-bit**.
+- The complete CUDA session suite passes **17 cases / 778 assertions**, including TG2 resumed decode, TG3/TG4 stock-MMA decode, ring guards and repartition/handoff controls.
+- The full IQ4_XS text-context suite passes **5 cases / 561 assertions**. The previously failing serial decode-to-prefill scenario has zero logit error and **14/14 matching boundaries**. Ubatch 256 and 512 retain zero logit error, zero recurrent relative L2 error, and **32/32 matching continuation tokens**.
+- The focused CUDA memcheck reports **zero memory-access errors**, with API-error reporting disabled as in the existing graph-update qualification. The CPU/common session control passes ASan with leak checking and UBSan. Production is restored with its original image/configuration and health checked after testing.
+
+Logs: `/tmp/kv-short-prefill-red.log`, `/tmp/kv-short-prefill-final.log`, `/tmp/kv-short-prefill-full-session.log`, `/tmp/kv-short-prefill-full-model.log`, and `/tmp/kv-short-prefill-memcheck.log`. No assistant commit or push was made.

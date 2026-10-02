@@ -22,7 +22,8 @@ int main(int argc, char ** argv) {
     const bool physical_map_only = argc > 1 && !std::strcmp(argv[1],"--cuda-physical-map");
     const bool guard_only = argc > 1 && !std::strcmp(argv[1],"--cuda-guard-handoff");
     const bool page_boundary_only = argc > 1 && !std::strcmp(argv[1],"--cuda-mtp-page-boundary");
-    const bool cuda = physical_map_only || guard_only || page_boundary_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
+    const bool short_prefill_only = argc > 1 && !std::strcmp(argv[1],"--cuda-short-prefill");
+    const bool cuda = physical_map_only || guard_only || page_boundary_only || short_prefill_only || (argc > 1 && !std::strcmp(argv[1],"--cuda"));
     ggml_backend_ptr backend;
     if (cuda) { ggml_backend_load_all(); auto * dev = ggml_backend_dev_by_name("CUDA0"); if (!dev) return 1; backend.reset(ggml_backend_dev_init(dev,nullptr)); }
     else backend.reset(ggml_backend_cpu_init());
@@ -30,6 +31,7 @@ int main(int argc, char ** argv) {
     if (guard_only) t.set_filter("guarded_target_session_preserves_mtp_ring_and_releases_for_replan");
     if (physical_map_only) t.set_filter("shared_physical_pool_publishes_only_target_pairs");
     if (page_boundary_only) t.set_filter("speculative_page_boundary_reconstruction_reopens_mtp_admission");
+    if (short_prefill_only) t.set_filter("short_prefill_uses_its_gather_grant_and_matches_stock");
     t.test("unsupported_and_missing_session_dependencies_are_rejected", [&](testing & t) {
         fixture f(backend.get(),cuda);
         t.assert_true(!llama_kv_stream_session::create(backend.get(),f.content,{f.policy,33,4,false},nullptr,nullptr,nullptr));
@@ -102,6 +104,49 @@ int main(int argc, char ** argv) {
         session.reset();
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(writer.arena.get()));
         t.assert_equal(size_t(0),ggml_backend_memory_arena_lease_count(partial.arena.get()));
+    });
+    if (cuda) t.test("short_prefill_uses_its_gather_grant_and_matches_stock", [&](testing & t) {
+        constexpr size_t active = 1067;
+        for (uint32_t queries : {1u, 2u, 3u, 4u}) {
+            fixture f(backend.get(),true,GGML_TYPE_Q8_0,GGML_TYPE_Q4_0,2048,false,2,4,12);
+            f.policy.initial_ring_slots = 6;
+            block_workspace writer(f,32768,19), attention(f,f.host->layout().bytes,29);
+            auto session = llama_kv_stream_session::create(backend.get(),f.content,
+                {f.policy,4,24,false,true,true},f.lease.get(),writer.lease.get(),attention.lease.get());
+            if (!t.assert_true(bool(session) && session->restore(active-queries))) return;
+            session_inputs kv(backend.get(),queries,1024);
+            block_inputs input(f,active,queries,false,24);
+            // Native MMA stores extra scratch beside its output; reserve an actual attention tensor.
+            auto * key = ggml_new_tensor_3d(input.context.get(),GGML_TYPE_Q8_0,256,input.padded,4);
+            auto * value = ggml_new_tensor_3d(input.context.get(),GGML_TYPE_Q4_0,256,input.padded,4);
+            for (auto * tensor : {key,value}) {
+                tensor->nb[1] = ggml_row_size(tensor->type,1024);
+                tensor->nb[2] = ggml_row_size(tensor->type,256);
+                tensor->nb[3] = input.padded*tensor->nb[1];
+            }
+            auto * output = ggml_flash_attn_ext(input.context.get(),input.q,key,value,input.mask,1.0f/16,0,0);
+            ggml_flash_attn_ext_set_prec(output,GGML_PREC_F32);
+            auto * type = ggml_backend_buffer_get_type(input.buffer.get());
+            ggml_backend_buffer_ptr output_buffer(ggml_backend_buft_alloc_buffer(type,ggml_backend_buft_get_alloc_size(type,output)));
+            if (!t.assert_true(bool(output_buffer))) return;
+            if (!t.assert_equal(GGML_STATUS_SUCCESS,ggml_backend_tensor_alloc(
+                    output_buffer.get(),output,ggml_backend_buffer_get_base(output_buffer.get())))) return;
+            input.output = output;
+            if (!t.assert_true(session->begin(active,queries,false))) return;
+            t.assert_equal(uint32_t(0),session->policy().decode_active_pages);
+            std::vector<std::vector<float>> actual;
+            for (uint32_t layer = 0; layer < 2; ++layer) {
+                if (!t.assert_true("producer query width " + std::to_string(queries),session->produce(layer,kv.k,kv.v))) return;
+                if (!t.assert_true("attention query width " + std::to_string(queries),
+                        session->attention(layer,input.q,input.mask,input.output,1.0f/16))) return;
+                ggml_backend_synchronize(backend.get());
+                actual.push_back(input.read());
+            }
+            for (uint32_t layer = 0; layer < 2; ++layer)
+                t.assert_true(same_float_bits(stock_attention(f,input,layer),actual[layer]));
+            t.assert_equal(active,session->tokens());
+            t.assert_equal(f.host->layout().bytes,session->attention_workspace_bytes());
+        }
     });
     if (cuda) t.test("invalid_grants_and_shapes_are_rejected_before_session_creation", [&](testing & t) {
         fixture f(backend.get(),true); block_workspace writer(f,32768,19), partial(f,65536,29), duplicate(f,65536,19), tiny(f,8,39);

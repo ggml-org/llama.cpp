@@ -1032,6 +1032,7 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     ggml_kv_stream_block_layout work;
     ggml_kv_stream_layout gathered;
     ggml_kv_stream_resume_plan resume_plan;
+    const bool prefill = cross && !s.sequence->decode;
     const bool resumed = s.resumed_decode && cross && s.sequence->decode && q->ne[1] <= 2 && !s.fallback &&
         ops->version >= 5 && ops->resume_plan && ops->resume &&
         ops->resume_plan(s.backend,s.binding.config.shape.type_k,s.binding.config.shape.type_v,
@@ -1039,12 +1040,13 @@ bool llama_kv_stream_resident::compute_streamed(uint32_t layer, ggml_tensor * q,
     const bool span_shape = q->ne[1] <= 2 ||
         (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0) ||
         (s.binding.config.shape.type_k == GGML_TYPE_F16 && s.binding.config.shape.type_v == GGML_TYPE_F16);
-    const bool segmented = span_shape && s.native_graph_attention && cross && !s.fallback &&
+    const bool segmented = span_shape && s.native_graph_attention && cross && !prefill && !s.fallback &&
         q->ne[1] <= 4 && blocks <= slots && ops->version >= 8 && ops->spans && ops->spans_workspace &&
         (q->ne[1] != 2 || resumed ||
          (s.binding.config.shape.type_k == GGML_TYPE_Q8_0 && s.binding.config.shape.type_v == GGML_TYPE_Q4_0)) &&
         (prefix == padded || !resumed);
-    const bool native = s.native_graph_attention && !resumed && (q->ne[1] != 2 || segmented || !s.resumed_decode);
+    // Short prefills use the same encoded gather and stock kernel as longer prefills.
+    const bool native = s.native_graph_attention && !resumed && (prefill || q->ne[1] != 2 || segmented || !s.resumed_decode);
     if (ggml_kv_stream_block_layout_make(size_t(q->ne[1])*size_t(q->ne[2]),size_t(output->ne[0]),work).status !=
             ggml_kv_stream_partial_status::success) return false;
     if (native && !segmented && ggml_kv_stream_layout_make(s.binding.config.shape,padded,gathered).status != ggml_kv_stream_status::success) return false;
