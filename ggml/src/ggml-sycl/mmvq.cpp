@@ -2745,7 +2745,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     GGML_UNUSED(ctx);
 }
 
-// vec_dot_q_sycl_t adapters for the IQ vec_dots that take their codebook tables as extra
+// vec_dot_iq*_* adapters for the IQ vec_dots that take their codebook tables as extra
 // arguments: bind the constant tables here (as vec_dot_iq2_s_q8_1 / vec_dot_iq1_m_q8_1 already do
 // internally) so they can be used as template arguments of mul_mat_vec_q_moe.
 static __dpct_inline__ float vec_dot_iq2_xxs_q8_1_moe(const void * __restrict__ vbq,
