@@ -12886,12 +12886,14 @@ static size_t ggml_backend_opencl_buffer_type_get_alloc_size(ggml_backend_buffer
 }
 
 static ggml_backend_buffer_type_i ggml_backend_opencl_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_opencl_buffer_type_get_name,
-    /* .alloc_buffer     = */ ggml_backend_opencl_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_opencl_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_opencl_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_opencl_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name            = */ ggml_backend_opencl_buffer_type_get_name,
+    /* .alloc_buffer        = */ ggml_backend_opencl_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_opencl_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_opencl_buffer_type_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_opencl_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ NULL,
 };
 
 //
@@ -14799,6 +14801,9 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
     if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         kernel = backend_ctx->kernel_sigmoid_f32;
     } else if (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+        kernel = backend_ctx->kernel_sigmoid_f16;
+    } else if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+        // bf16 converted to f16
         kernel = backend_ctx->kernel_sigmoid_f16;
     } else {
         GGML_ASSERT(false && "Unsupported data types for sigmoid (input and output must be both f32 or f16)");

@@ -1076,7 +1076,7 @@ json oaicompat_completion_params_parse(const json & body) {
 // - file:// for local files (only allowed if media_path is set)
 // - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
 // - raw base64 encoded data
-static void handle_media(
+void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
         const std::string & media_path) {

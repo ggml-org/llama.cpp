@@ -333,6 +333,8 @@ struct common_params_speculative_draft {
 
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
+    bool probabilistic = false; // sample the draft and verify by rejection, instead of argmax and match
+
     common_params_model mparams;
 
     llama_context * ctx_tgt = nullptr;
@@ -938,9 +940,6 @@ struct common_file_info {
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
 
-// fs open, also handle UTF8 on Windows
-std::ifstream fs_open_ifstream(const std::string & fname, std::ios_base::openmode mode);
-
 void fs_write_atomic(const std::filesystem::path & path, const std::string & data);
 
 //
@@ -955,6 +954,19 @@ bool tty_can_use_colors();
 //
 
 struct common_sampler;
+
+// typed decision models, see "<arch>.decision.type" in the model metadata
+enum common_decision_type {
+    COMMON_DECISION_TYPE_NONE,    // not a decision model
+    COMMON_DECISION_TYPE_OPENJEV, // logits of one label token per option, read at the last prompt token
+    COMMON_DECISION_TYPE_LEV,     // same as openjev, noul is read from a rating scale
+    COMMON_DECISION_TYPE_KEV,     // dot product of the hidden states of the last token and of one end token per option
+    COMMON_DECISION_TYPE_NIMBLE,  // same as openjev, the prompt lists all the questions of the request
+    COMMON_DECISION_TYPE_LAYA,    // score of one marker token per option, read from the embeddings output
+    COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
+};
+
+common_decision_type common_get_decision_type(const struct llama_model * model);
 
 // note: defines the model, context, samplers, ets. lifetimes
 struct common_init_result {
