@@ -2273,6 +2273,10 @@ private:
                     return;
                 }
                 if (decision.pointer < 0) {
+                    if (std::isnan(embd[decision.column])) {
+                        send_error(slot, "the model could not evaluate the decision", ERROR_TYPE_SERVER);
+                        return;
+                    }
                     res->scores.push_back(embd[decision.column]);
                     continue;
                 }

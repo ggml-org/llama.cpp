@@ -115,7 +115,7 @@ struct clef_spans {
     };
     std::vector<question> questions;
     std::vector<option>   options;
-    bool valid = false; // at least one question, and each question has an option
+    bool valid = false; // one sequence, at least one question, and each question has an option
 };
 
 // see llama_batch_ext_set_decision_order()
@@ -125,7 +125,8 @@ static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
     const int32_t ORDER_OPTION         = 4;
 
     clef_spans res;
-    if (ubatch.decision_order == nullptr) {
+    // TODO: support multiple sequences
+    if (ubatch.decision_order == nullptr || ubatch.n_seqs_unq != 1) {
         return res;
     }
 
@@ -168,14 +169,20 @@ public:
     }
 
     void set_input(const llama_ubatch * ubatch) override {
-        if (tokens == nullptr) {
-            return;
-        }
         GGML_ASSERT(ubatch->token);
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens * sizeof(llama_token));
 
-        const auto spans = clef_get_spans(*ubatch);
-        GGML_ASSERT(spans.valid && spans.questions.size() == n_questions && spans.options.size() == n_options);
+        // without valid spans, the head runs on one empty question with one empty option
+        auto spans = clef_get_spans(*ubatch);
+        if (!spans.valid) {
+            spans.questions = {{ 0, 0, 0 }};
+            spans.options   = {{ 0, 0, 0 }};
+        }
+        GGML_ASSERT(spans.questions.size() == n_questions && spans.options.size() == n_options);
+
+        // the scores are NaN if the batch has a decision order that cannot be used
+        const float status_data = spans.valid || ubatch->decision_order == nullptr ? 0.0f : NAN;
+        ggml_backend_tensor_set(status, &status_data, 0, ggml_nbytes(status));
 
         std::vector<float>   pool_q_data(n_tokens * n_questions, 0.0f);
         std::vector<int32_t> types(n_questions);
@@ -209,8 +216,8 @@ public:
     bool can_reuse(const llm_graph_params & params) override {
         // the values are computed again in set_input(), only the shapes must match
         const auto spans = clef_get_spans(params.ubatch);
-        const size_t n_q = spans.valid ? spans.questions.size() : 0;
-        const size_t n_o = spans.valid ? spans.options.size()   : 0;
+        const size_t n_q = spans.valid ? spans.questions.size() : 1;
+        const size_t n_o = spans.valid ? spans.options.size()   : 1;
         return n_q == n_questions && n_o == n_options;
     }
 
@@ -220,10 +227,11 @@ public:
     ggml_tensor * question_type   = nullptr; // I32 [n_questions]
     ggml_tensor * option_question = nullptr; // I32 [n_options]
     ggml_tensor * option_mask     = nullptr; // F32 [n_options, n_questions], 0 if the option belongs to the question, else -inf
+    ggml_tensor * status          = nullptr; // F32 [1], added to the scores: 0, or NaN on invalid input
 
     const int64_t n_tokens;
-    size_t n_questions = 0; // 0 if the batch has no valid spans
-    size_t n_options   = 0;
+    size_t n_questions = 1;
+    size_t n_options   = 1;
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
@@ -286,19 +294,12 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
     cur = build_norm(inpL, model.output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
 
-    // TODO: support multiple sequences
-    const bool is_single_seq = ubatch.n_seqs_unq == 1;
+    // the head is always evaluated, so that the graph has the same nodes for every batch
+    cur = build_head(cur, inp_decision);
 
-    if (inp_decision->n_questions > 0 && is_single_seq) {
-        cur = build_head(cur, inp_decision);
-        // row i of the output is the score of option i
-        cur = ggml_pad(ctx0, cur, 0, n_tokens - cur->ne[1], 0, 0);
-    } else {
-        if (ubatch.decision_order != nullptr) {
-            LLAMA_LOG_ERROR("%s: %s, the head is not evaluated\n", __func__, is_single_seq ? "invalid decision order" : "more than one sequence in the batch");
-        }
-        cur = ggml_scale(ctx0, ggml_cont(ctx0, ggml_view_2d(ctx0, cur, 1, n_tokens, cur->nb[1], 0)), 0.0f);
-    }
+    // row i of the output is the score of option i
+    cur = ggml_pad(ctx0, cur, 0, n_tokens - cur->ne[1], 0, 0);
+    cur = ggml_add(ctx0, cur, inp_decision->status);
     cb(cur, "result_decision", -1);
 
     res->t_embd = cur;
@@ -512,7 +513,8 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     inp->question_type   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_questions);
     inp->option_question = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_options);
     inp->option_mask     = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_options, n_questions);
-    for (ggml_tensor * t : { inp->tokens, inp->pool_q, inp->pool_o, inp->question_type, inp->option_question, inp->option_mask }) {
+    inp->status          = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    for (ggml_tensor * t : { inp->tokens, inp->pool_q, inp->pool_o, inp->question_type, inp->option_question, inp->option_mask, inp->status }) {
         ggml_set_input(t);
     }
 
