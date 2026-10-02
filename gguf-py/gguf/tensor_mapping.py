@@ -48,6 +48,7 @@ class TensorNameMap:
         # Token type embeddings
         MODEL_TENSOR.TOKEN_TYPES: (
             "embeddings.token_type_embeddings",  # bert nomic-bert
+            "type_emb",  # laya
         ),
 
         # Normalization of token embeddings
@@ -216,6 +217,7 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
+            "head.layers.{bid}.norm1",  # laya
         ),
 
         # Attention norm 2
@@ -250,6 +252,7 @@ class TensorNameMap:
             "layers.{bid}.attn.Wqkv",                                              # modern-bert
             "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
             "model.layers.{bid}.linear_attn.in_proj_qkv",                          # qwen3.5
+            "head.layers.{bid}.self_attn.in_proj",  # laya
         ),
 
         # Attention query
@@ -355,6 +358,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
             "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
             "model.blocks.{bid}.attn.attn_resid",                           # talkie
+            "head.layers.{bid}.self_attn.out_proj",  # laya
         ),
 
         # Attention output norm
@@ -420,7 +424,8 @@ class TensorNameMap:
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
-            "layers.{bid}.mlp_norm"                                          # modern-bert
+            "layers.{bid}.mlp_norm",                                         # modern-bert
+            "head.layers.{bid}.norm2",  # laya
         ),
 
         # Pre feed-forward norm
@@ -533,6 +538,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.up_proj",            # cogvlm
             "model.blocks.{bid}.mlp.mlp_linear",                      # talkie
+            "head.layers.{bid}.linear1",  # laya
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -663,6 +669,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
             "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
             "model.blocks.{bid}.mlp.mlp_resid",                       # talkie
+            "head.layers.{bid}.linear2",  # laya
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -1441,14 +1448,17 @@ class TensorNameMap:
             "pre_classifier",   # distillbert
             "dense",            # neobert
             "head.dense",       # modern-bert
+            "scorer.1",  # laya
         ),
 
         MODEL_TENSOR.CLS_OUT: (
             "classifier.out_proj", # roberta
+            "scorer.3",  # laya
         ),
 
         MODEL_TENSOR.CLS_NORM: (
             "head.norm", # modern-bert
+            "scorer.0",  # laya
         ),
         #############################################################################
 

@@ -320,6 +320,13 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class Decision:
+        TYPE               = "{arch}.decision.type"
+        # note: single-use-case keys can be hard-coded in cpp code
+        BLOCK_COUNT        = "{arch}.decision.block_count"
+        MAX_HEAD_TOKENS    = "{arch}.decision.max_head_tokens"
+        TEMPERATURE        = "{arch}.decision.temperature.{name}"  # name: "<type>" or "<type>.<n_opt bucket>"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -2487,6 +2494,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.MODERN_BERT: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.TOKEN_TYPES,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_OUT,
@@ -2881,6 +2889,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.CLS_OUT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_Q_NORM,
@@ -5904,6 +5913,13 @@ class GGUFValueType(IntEnum):
         # TODO: need help with 64-bit types in Python
         else:
             raise ValueError(f"Unknown type: {type(val)}")
+
+
+class DecisionType:
+    LAYA    = "laya"     # head blocks + scorer on the hidden state of one marker token per option
+    OPENJEV = "openjev"  # logits of one label token per option
+    LEV     = "lev"      # same as openjev, noul is read from a rating scale
+    KEV     = "kev"      # dot product of the hidden states of the last token and of one end token per option
 
 
 class VisionProjectorType:

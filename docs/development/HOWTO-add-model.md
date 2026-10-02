@@ -139,6 +139,23 @@ Note:
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
 - For audio generation models, see `tools/mtmd/README-dev.md`
 
+## Add a decision model
+
+A decision model answers typed questions about a state in one forward pass. It is served by `POST /v1/systemone` in `llama-server`, see [the server docs](../../tools/server/README.md).
+
+The conversion is the same as above, but a new model needs its own `DecisionType` in `gguf-py/gguf/constants.py`. See the existing models and follow the pattern.
+
+> [!IMPORTANT]
+>
+> Most of the logic is handled in `tools/server/server-decision.cpp`, to avoid too many changes to `libllama`.
+
+Note:
+- If a new public API is needed in `libllama`, add it to `llama-ext.h`.
+- Metadata with a single use case must be hard-coded in `server-decision.cpp` instead of being saved to the GGUF. This avoids bloating the conversion code.
+- Most importantly, keep your change as small and as self-contained as possible. Reuse the existing infrastructure whenever you can.
+
+For more information, see [PR #29818](https://github.com/ggml-org/llama.cpp/pull/29818).
+
 ## Tips and tricks
 
 ### Prefer conversion-time tensor modifications over graph-time ones
