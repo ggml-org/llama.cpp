@@ -2,9 +2,9 @@
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsSelectorList from '$lib/components/app/models/ModelsSelector/ModelsSelectorList.svelte';
 	import ModelsSelectorOption from '$lib/components/app/models/ModelsSelector/ModelsSelectorOption.svelte';
-	import type { GroupedModelOptions, ModelItem } from '$lib/components/app/navigation/utils';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores/models/index.svelte';
+	import type { GroupedModelOptions, ModelItem } from '$lib/utils';
 
 	const { Story } = defineMeta({
 		parameters: {

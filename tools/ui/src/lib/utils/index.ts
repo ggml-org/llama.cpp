@@ -47,6 +47,17 @@ export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cor
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from './url';
 
+// Model list helpers
+export {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions,
+	windowLocalGroups,
+	type GroupedModelOptions,
+	type ModelItem,
+	type OrgGroup
+} from './model-list';
+
 // Progress helpers
 export { modelLoadFraction, modelLoadProgressText } from './progress';
 
