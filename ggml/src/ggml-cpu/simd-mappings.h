@@ -6,11 +6,19 @@
 #include <arm_sve.h>
 
 static inline svbool_t load_as_svbool(const uint32_t * p) {
+#if defined(__GNUC__) || defined(__clang__)
     svbool_t r;
     __asm__("ldr %0, %1"
             : "=Upa"(r)
             : "Q"(*p));
     return r;
+#else
+    const svbool_t  ptrue  = svptrue_b8();
+    const svuint8_t raw = svld1_u8(svwhilelt_b8_u64(0, svcntd()), p);
+    const svuint8_t sel = svlsr_n_u8_x(ptrue, svindex_u8(0, 1), 3);
+    const svuint8_t msk = svdupq_n_u8(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+    return svcmpne_n_u8(ptrue, svand_u8_x(ptrue, svtbl_u8(raw, sel), msk), 0);
+#endif
 }
 #endif // __ARM_FEATURE_SVE
 
