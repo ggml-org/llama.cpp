@@ -33,7 +33,8 @@
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
 		MODEL_ROW_GRID_CLASS,
-		MODEL_ROW_WINDOW
+		MODEL_ROW_WINDOW,
+		SETTINGS_KEYS
 	} from '$lib/constants';
 	import {
 		KeyboardKey,
@@ -97,7 +98,9 @@
 	let sections = $derived(
 		groups.map((group) => {
 			// a flat section lists its models straight, families or not
-			const flat = FLAT_SECTIONS.has(group.kind) || !settingsStore.config.groupModelsByFamily;
+			const flat =
+				FLAT_SECTIONS.has(group.kind) ||
+				!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY];
 			// downloads keep the feed's order: their progress, not their name, moves
 			const items =
 				group.kind === ModelsTableGroupKind.DOWNLOADING ? group.items : sortEntries(group.items);
