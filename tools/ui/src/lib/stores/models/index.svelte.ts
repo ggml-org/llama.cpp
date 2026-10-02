@@ -470,6 +470,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
+	/** Persist one family of a section, e.g. a folded `Qwen` under the local models. */
+	setGroupCollapsed(prefix: string, key: string, collapsed: boolean): void {
+		this.setGroupOpen(`${prefix}-${key}`, !collapsed);
+	}
+
 	setGroupOpen(id: string, open: boolean): void {
 		const next = new SvelteMap(this.groupOpenState);
 
