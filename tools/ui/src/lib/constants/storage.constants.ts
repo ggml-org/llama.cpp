@@ -34,9 +34,6 @@ export const MODEL_GROUP_OPEN_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.modelGroup
 /** Recently used model ids, most recent first, backend-qualified. */
 export const RECENT_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModels`;
 
-/** Last use timestamp per backend-qualified model id. */
-export const RECENT_MODEL_USAGE_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.recentModelUsage`;
-
 /** Model ids kept out of the selector, backend-qualified. */
 export const HIDDEN_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.hiddenModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
