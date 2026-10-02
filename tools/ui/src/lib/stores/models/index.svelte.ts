@@ -52,7 +52,6 @@ function mergedDraftSidecars(
 	return merged;
 }
 
-/** Last use timestamp per backend-qualified model id. */
 /** Models kept out of the selector. */
 function loadHiddenModels(): Set<string> {
 	if (!browser) return new SvelteSet<string>();
