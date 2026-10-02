@@ -7,7 +7,7 @@
 	import { configuredContext, isModelRunning } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
+	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
 
 	interface Props {
@@ -21,7 +21,7 @@
 	let { entry, expanded, indent = 0, onToggle }: Props = $props();
 
 	let groupLabel = $derived(
-		entry.kind === 'variants'
+		entry.kind === ModelGroupKind.VARIANTS
 			? `${entry.quants.length} variants`
 			: `${entry.quants.length} quants available`
 	);
