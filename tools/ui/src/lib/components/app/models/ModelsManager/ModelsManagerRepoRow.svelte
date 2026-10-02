@@ -6,9 +6,9 @@
 	import type { ModelQuantGroup } from './utils';
 	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { MODEL_ROW_GRID_CLASS, SETTINGS_KEYS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
 	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore } from '$lib/stores';
 
 	interface Props {
 		entry: ModelQuantGroup;
@@ -48,12 +48,7 @@
 	tabindex="0"
 >
 	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-		<ModelAvatar
-			option={entry.base}
-			showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
-			showRepoOrgAvatar={settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
-			size="size-9"
-		/>
+		<ModelAvatar option={entry.base} size="size-9" />
 
 		<span class="min-w-0">
 			<span class="flex min-w-0 items-center gap-1.25">

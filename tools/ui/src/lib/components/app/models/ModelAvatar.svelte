@@ -1,7 +1,8 @@
 <script lang="ts">
 	import ModelOrgAvatar from './ModelOrgAvatar.svelte';
-	import { HF_BASE_MODEL_TAG_REGEX } from '$lib/constants';
+	import { HF_BASE_MODEL_TAG_REGEX, SETTINGS_KEYS } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
+	import { settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { nearViewport, orgOf } from '$lib/utils';
 	import type { Snippet } from 'svelte';
@@ -14,7 +15,8 @@
 		quantPositionClass?: string;
 		quantSize?: string;
 		/** Show the base model's org as the main image, the repo (quantizer) org as the
-		 *  corner badge. The base org costs one Hub request per repo. */
+		 *  corner badge. The base org costs one Hub request per repo. Left unset with
+		 *  {@link showRepoOrgAvatar}, the row follows the family grouping. */
 		showBaseModelAvatar?: boolean;
 		/** Show the repo's own org as the main image, skipping the base model.
 		 *  Used inside a heading that already carries the base org. */
@@ -30,14 +32,25 @@
 		option,
 		quantPositionClass = '-bottom-1 -right-1',
 		quantSize = 'h-3 w-3',
-		showBaseModelAvatar = false,
+		showBaseModelAvatar,
 		showQuantBadge = true,
-		showRepoOrgAvatar = false,
+		showRepoOrgAvatar,
 		size = 'size-5'
 	}: Props = $props();
 
 	let parsedId = $derived(ModelsService.parseModelId(option.model));
 	let orgName = $derived(parsedId.orgName);
+	// A row names neither flag, so it shows the base org with the quantizer badge
+	// while the lists are grouped by family and the repo org alone when they are not.
+	// A caller that names one of the two keeps control of what the avatar shows.
+	let followsGrouping = $derived(
+		showBaseModelAvatar === undefined && showRepoOrgAvatar === undefined
+	);
+	let groupedByFamily = $derived(
+		settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY] ?? false
+	);
+	let baseOrgMain = $derived(showBaseModelAvatar ?? (followsGrouping && !groupedByFamily));
+	let repoOrgMain = $derived(showRepoOrgAvatar ?? (followsGrouping && groupedByFamily));
 	// Avatars come from the Hub, so with the metadata setting off they are
 	// hidden entirely and no base-model lookup runs.
 	let hubEnabled = $derived(HuggingFaceService.isEnabled());
@@ -55,7 +68,7 @@
 	$effect(() => {
 		fetchedBaseModelOrg = null;
 
-		if (!isNearViewport || !showBaseModelAvatar || !orgName || tagBaseModel) return;
+		if (!isNearViewport || !baseOrgMain || !orgName || tagBaseModel) return;
 
 		if (!hubEnabled) return;
 
@@ -81,8 +94,8 @@
 	>
 		<ModelOrgAvatar
 			class="mt-0"
-			org={showRepoOrgAvatar ? orgName : (baseModelOrg ?? orgName)}
-			quantOrg={showBaseModelAvatar && showQuantBadge && !showRepoOrgAvatar ? orgName : undefined}
+			org={repoOrgMain ? orgName : (baseModelOrg ?? orgName)}
+			quantOrg={baseOrgMain && showQuantBadge && !repoOrgMain ? orgName : undefined}
 			{quantPositionClass}
 			{quantSize}
 			{size}
