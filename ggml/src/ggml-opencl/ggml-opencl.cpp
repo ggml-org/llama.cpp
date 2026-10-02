@@ -14730,13 +14730,6 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
 
     GGML_ASSERT(ne00 % 4 == 0);
 
-    const int nth = MIN(64, ne00);
-
-    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
-    size_t local_work_size[] = {(size_t)nth, 1, 1};
-
-    cl_kernel kernel = backend_ctx->kernel_rms_norm;
-
     // Note, this kernel declares local memory in kernel args and the size
     // depends on subgroup size.
     // Note, this requires OpenCL 2.1 and above
@@ -14756,6 +14749,13 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
         GGML_ASSERT(false && "Unsupported GPU");
     }
 
+    const int nth = MIN(sgs, ne00);
+
+    size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
+    size_t local_work_size[] = {(size_t)nth, 1, 1};
+
+    cl_kernel kernel = backend_ctx->kernel_rms_norm;
+
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),    &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong),  &offset0));
     CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),    &extrad->data_device));
@@ -14769,7 +14769,8 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong),  &nb03));
     CL_CHECK(clSetKernelArg(kernel, 11, sizeof(float),     &eps));
     // This is local memory - the size depends on subgroup size.
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float)*nth/sgs,  NULL));
+    const size_t local_mem_size = MAX(1, sizeof(float) * nth / sgs);
+    CL_CHECK(clSetKernelArg(kernel, 12, local_mem_size,  NULL));
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
