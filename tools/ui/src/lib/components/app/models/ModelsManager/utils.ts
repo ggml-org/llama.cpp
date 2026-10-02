@@ -2,7 +2,7 @@ import { LOCAL_BACKEND_ID } from '$lib/constants';
 import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
-import type { ModelDownloadProgress, ModelOption } from '$lib/types/models';
+import type { ModelDownloadEntry, ModelDownloadProgress, ModelOption } from '$lib/types/models';
 import { detectThinkingSupport, detectToolUseSupport, repoOf } from '$lib/utils';
 
 /** One repo of the table, with the rows it ships as. */
@@ -22,18 +22,15 @@ export function downloadProgressFor(repoWithTag: string): ModelDownloadProgress 
 }
 
 /** One tracked download of the status feed. */
-export interface DownloadEntry {
-	isPaused: boolean;
-	progress: ModelDownloadProgress | null;
-	repoWithTag: string;
-}
-
 /**
  * One table row per tracked download, so the table lists them the way it lists
  * any other model. A paused download is already in the router's listing, so its
  * own option is reused; a fresh one stands for its tag alone.
  */
-export function downloadGroups(entries: DownloadEntry[], models: ModelOption[]): ModelQuantGroup[] {
+export function downloadGroups(
+	entries: ModelDownloadEntry[],
+	models: ModelOption[]
+): ModelQuantGroup[] {
 	return entries.map((entry) => {
 		const option = models.find((candidate) => candidate.model === entry.repoWithTag) ?? {
 			backendId: LOCAL_BACKEND_ID,

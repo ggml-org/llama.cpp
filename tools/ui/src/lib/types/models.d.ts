@@ -51,6 +51,13 @@ export interface ModelDownloadProgress {
 	files: Record<string, ModelDownloadFileProgress>;
 }
 
+/** One tracked download of the status feed, in flight or paused. */
+export interface ModelDownloadEntry {
+	isPaused: boolean;
+	progress: ModelDownloadProgress | null;
+	repoWithTag: string;
+}
+
 export interface ParsedModelId {
 	raw: string;
 	orgName: string | null;
