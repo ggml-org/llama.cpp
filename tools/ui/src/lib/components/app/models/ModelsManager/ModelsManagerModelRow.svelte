@@ -9,9 +9,9 @@
 	import { configuredContext, downloadProgressFor } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import { MODEL_ROW_GRID_CLASS, SETTINGS_KEYS } from '$lib/constants';
+	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
 	import { KeyboardKey, ModelRowDownloadState } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -59,12 +59,7 @@
 	tabindex="0"
 >
 	<span class="flex min-w-0 items-center gap-3" style="padding-left: {indent}px">
-		<ModelAvatar
-			{option}
-			showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
-			showRepoOrgAvatar={settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
-			size="size-9"
-		/>
+		<ModelAvatar {option} size="size-9" />
 
 		<span class="flex min-w-0 items-center gap-1.25">
 			<ModelId
