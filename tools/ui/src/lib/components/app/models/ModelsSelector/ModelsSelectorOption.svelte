@@ -22,10 +22,6 @@
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
-		/** Show the base model's org as the main avatar and the repo (quant) org as the corner badge; resolves the base org lazily via HF. */
-		showBaseModelAvatar?: boolean;
-		/** Show the repo's own org instead of the base model's. */
-		showRepoOrgAvatar?: boolean;
 	}
 
 	let {
@@ -36,9 +32,7 @@
 		onKeyDown,
 		onMouseEnter,
 		onSelect,
-		option,
-		showBaseModelAvatar = false,
-		showRepoOrgAvatar = false
+		option
 	}: Props = $props();
 
 	let serverStatus = $derived(modelsStore.getModelStatus(option.model));
@@ -55,8 +49,6 @@
 	let showCapabilities = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR] ?? false
 	);
-	// with showBaseModelAvatar the base model's org is the main image and the repo
-	// (quantizer) org the corner badge; the base org resolves lazily via HF
 </script>
 
 <div
@@ -80,7 +72,7 @@
 	tabindex="0"
 	title={loadTitle}
 >
-	<ModelAvatar {option} {showBaseModelAvatar} {showRepoOrgAvatar} />
+	<ModelAvatar {option} />
 
 	<ModelId
 		aliases={option.aliases}
