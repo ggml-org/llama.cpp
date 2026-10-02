@@ -8,7 +8,6 @@
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
 	} from '$lib/components/app';
-	import type { ModelItem } from '$lib/components/app/navigation/utils';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR, MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
@@ -17,6 +16,7 @@
 	import { ModelsService } from '$lib/services/models.service';
 	import { modelsStore, settingsStore, uiStore } from '$lib/stores';
 	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
+	import type { ModelItem } from '$lib/utils';
 	import { modelLoadFraction, repoOf } from '$lib/utils';
 
 	interface Props {

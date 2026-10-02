@@ -1,12 +1,12 @@
-import type { ModelItem } from '$lib/components/app/navigation/utils';
-import {
-	filterModelOptions,
-	groupFavoriteOptions,
-	groupModelOptions
-} from '$lib/components/app/navigation/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
 import { modelsStore, serverStore, uiStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
+import {
+	filterModelOptions,
+	groupFavoriteOptions,
+	groupModelOptions,
+	type ModelItem
+} from '$lib/utils';
 import { onMount } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 

@@ -2,6 +2,8 @@ import { ModelModality } from '$lib/enums';
 import type { ModelOption } from '$lib/types/models';
 import { SvelteMap } from 'svelte/reactivity';
 
+/** Model list helpers: search, grouping and windowing of the selector rows. */
+
 export interface ModelItem {
 	option: ModelOption;
 	flatIndex: number;
