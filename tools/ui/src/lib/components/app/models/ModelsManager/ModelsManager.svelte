@@ -7,7 +7,8 @@
 		modelContextLength,
 		type ModelQuantGroup,
 		type ModelsTableGroup,
-		modelSupports
+		modelSupports,
+		splitHiddenQuants
 	} from './utils';
 	import { LOCAL_BACKEND_ID, type ModalityKey, MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
 	import { ModelCapability, ModelsTableGroupKind } from '$lib/enums';
@@ -175,11 +176,10 @@
 
 		for (const entry of favorites) claimed.add(entry.key);
 
-		const hidden = rest.filter(
-			(entry) => !claimed.has(entry.key) && entry.quants.some((q) => modelsStore.isHidden(q.id))
+		const { hidden, local } = splitHiddenQuants(
+			rest.filter((entry) => !claimed.has(entry.key)),
+			(option) => modelsStore.isHidden(option.id)
 		);
-		const hiddenKeys = new SvelteSet(hidden.map((entry) => entry.key));
-		const local = rest.filter((entry) => !claimed.has(entry.key) && !hiddenKeys.has(entry.key));
 		const ordered: ModelsTableGroup[] = [];
 		// loaded models lead the table, then favorites, then the local block
 		const pushSection = (kind: ModelsTableGroupKind, items: ModelQuantGroup[]): void => {
