@@ -1,8 +1,12 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { Heart, Power } from '@lucide/svelte';
-	import { GroupedList, ModelAvatar, ModelsSelectorOption } from '$lib/components/app';
-	import { ModelsSection } from '$lib/components/app';
+	import {
+		GroupedList,
+		ModelAvatar,
+		ModelsSection,
+		ModelsSelectorOption
+	} from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
 	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW, SETTINGS_KEYS } from '$lib/constants';
@@ -83,7 +87,7 @@
 	/** In-flight / paused downloads, tracked by the status feed. */
 	// only a running download belongs in the selector; a paused one waits in the
 	// manager table, where its partial files are resumed or dropped
-	let getDownloadEntries = $derived(
+	let downloadEntries = $derived(
 		modelsStore.status.getDownloadEntries().filter((entry) => !entry.isPaused)
 	);
 
@@ -189,10 +193,10 @@
 	</ModelsSection>
 {/if}
 
-{#if getDownloadEntries.length > 0}
+{#if downloadEntries.length > 0}
 	<p class={headerClass} style={headerStyle}>Downloading</p>
 
-	{#each getDownloadEntries as entry (entry.repoWithTag)}
+	{#each downloadEntries as entry (entry.repoWithTag)}
 		<ModelsSelectorDownloadItem {entry} onRequestCancel={requestCancel} {showOrgName} />
 	{/each}
 {/if}

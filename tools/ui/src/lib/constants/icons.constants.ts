@@ -105,13 +105,13 @@ export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> =
 	[ChatFormCommandAction.PROMPT]: PromptCommandIcon
 };
 
-/** Icons the model load control shows for its states and actions. */
 /** Icons of the download control a manager row shows while it downloads. */
 export const MODEL_DOWNLOAD_ICONS = {
 	pause: PauseDownloadIcon,
 	resume: ResumeDownloadIcon
 } as const;
 
+/** Icons the model load control shows for its states and actions. */
 export const MODEL_LOAD_ICONS = {
 	failed: LoadFailedIcon,
 	load: LoadIcon,
