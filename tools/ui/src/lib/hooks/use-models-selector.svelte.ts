@@ -66,7 +66,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	const updating = $derived(modelsStore.updating);
 	const activeId = $derived(modelsStore.selectedModelId);
 	// a lone llama.cpp server without a router has nothing to choose from
-	const isMultiModel = $derived(serverStore.isRouterMode);
 	const isRouter = $derived(serverStore.isRouterMode);
 	const serverModel = $derived(modelsStore.singleModelName);
 	const currentModel = $derived(opts.currentModel());
@@ -130,7 +129,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		if (loading || updating) return;
 
 		// a single-model server has no list: the trigger opens the manager instead
-		if (!isMultiModel) {
+		if (!isRouter) {
 			if (open) uiStore.openModelsManager();
 
 			return;
@@ -266,7 +265,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		},
 
 		get isMultiModel() {
-			return isMultiModel;
+			return isRouter;
 		},
 
 		get isRouter() {
