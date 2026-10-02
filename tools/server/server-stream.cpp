@@ -297,10 +297,10 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
             std::string live;
             for (const auto & kv : sessions) {
                 if (!live.empty()) live += ", ";
-                live += kv.first;
+                live += sanitize_log_str(kv.first);
             }
             SRV_WRN("stop on unknown stream session, conv_id=%s matched nothing, %zu live: [%s]\n",
-                    conversation_id.c_str(), sessions.size(), live.c_str());
+                    sanitize_log_str(conversation_id).c_str(), sessions.size(), live.c_str());
             return;
         }
         s = it->second;
@@ -566,7 +566,7 @@ server_http_context::handler_t server_stream_make_delete_handler() {
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
         }
-        SRV_TRC("DELETE /v1/stream conv_id=%s -> evict_and_cancel\n", conv_id.c_str());
+        SRV_TRC("DELETE /v1/stream conv_id=%s -> evict_and_cancel\n", sanitize_log_str(conv_id).c_str());
         g_stream_sessions.evict_and_cancel(conv_id);
         auto res = std::make_unique<server_http_res>();
         res->status = 204;
@@ -596,7 +596,7 @@ std::string server_stream_conv_id_from_headers(const std::map<std::string, std::
 
 static stream_pipe_producer * server_stream_create_spipe(const std::map<std::string, std::string> & headers) {
     std::string conversation_id = server_stream_conv_id_from_headers(headers);
-    SRV_TRC("conv_id=%s (empty=%d)\n", conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
+    SRV_TRC("conv_id=%s (empty=%d)\n", sanitize_log_str(conversation_id).c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
         return nullptr;
     }

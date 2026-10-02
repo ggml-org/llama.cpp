@@ -527,6 +527,10 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 
 std::string safe_json_to_str(const json & data);
 
+// escape control characters (C0 + DEL) so that client-supplied strings cannot
+// inject forged lines into the server log (CWE-117)
+std::string sanitize_log_str(const std::string & s);
+
 std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
 std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens);
 

@@ -1091,7 +1091,7 @@ static void handle_media(
         common_remote_params params;
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
-        SRV_INF("downloading image from '%s'\n", url.c_str());
+        SRV_INF("downloading image from '%s'\n", sanitize_log_str(url).c_str());
         auto res = common_remote_get_content(url, params);
         if (200 <= res.first && res.first < 300) {
             SRV_INF("downloaded %zu bytes\n", res.second.size());
@@ -1112,7 +1112,7 @@ static void handle_media(
         if (!fs_validate_filename(file_path, true)) {
             throw std::invalid_argument("file path is not allowed: " + file_path);
         }
-        SRV_INF("loading image from local file '%s'\n", (media_path + file_path).c_str());
+        SRV_INF("loading image from local file '%s'\n", sanitize_log_str(media_path + file_path).c_str());
         std::ifstream file(media_path + file_path, std::ios::binary);
         if (!file) {
             throw std::invalid_argument("file does not exist or cannot be opened: " + file_path);
@@ -1597,6 +1597,22 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
     }
 
     return cur;
+}
+
+std::string sanitize_log_str(const std::string & s) {
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        const auto uc = (unsigned char) c;
+        if (uc < 0x20 || uc == 0x7f) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "\\x%02x", uc);
+            out += buf;
+        } else {
+            out += c;
+        }
+    }
+    return out;
 }
 
 std::string safe_json_to_str(const json & data) {
