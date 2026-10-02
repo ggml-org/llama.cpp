@@ -346,8 +346,8 @@
 									onMouseEnter={() => (highlightedId = option.id)}
 									onSelect={ms.handleSelect}
 									{option}
-									showBaseModelAvatar={!settingsStore.config.groupModelsByFamily}
-									showRepoOrgAvatar={settingsStore.config.groupModelsByFamily}
+									showBaseModelAvatar={!settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
+									showRepoOrgAvatar={settingsStore.config[SETTINGS_KEYS.GROUP_MODELS_BY_FAMILY]}
 								/>
 							{/snippet}
 
