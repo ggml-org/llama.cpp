@@ -159,8 +159,10 @@ static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
     // each question needs an option
     res.valid = ok && !res.questions.empty() && std::find(has_option.begin(), has_option.end(), false) == has_option.end();
     if (!res.valid) {
-        res.questions = {{ 0, 0, 0 }};
-        res.options   = {{ 0, 0, 0 }};
+        res.questions.clear();
+        res.options.clear();
+        res.questions.push_back({ 0, 0, 0 });
+        res.options.push_back({ 0, 0, 0 });
     }
     return res;
 }
