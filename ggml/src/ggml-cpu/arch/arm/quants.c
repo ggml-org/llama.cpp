@@ -920,6 +920,25 @@ void ggml_vec_dot_nvfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     *s = sumf;
 }
 
+#if defined(__ARM_FEATURE_SVE)
+// qh is 32 bits; the asm load is valid only for VL=256/512 (4/8-byte predicate loads).
+static inline svbool_t load_as_svbool(const uint32_t * p) {
+#if defined(__GNUC__) || defined(__clang__)
+    svbool_t r;
+    __asm__("ldr %0, %1"
+            : "=Upa"(r)
+            : "Q"(*p));
+    return r;
+#else
+    const svbool_t  ptrue  = svptrue_b8();
+    const svuint8_t raw = svld1_u8(svwhilelt_b8_u64(0, svcntd()), (const uint8_t *) p);
+    const svuint8_t sel = svlsr_n_u8_x(ptrue, svindex_u8(0, 1), 3);
+    const svuint8_t msk = svdupq_n_u8(1, 2, 4, 8, 16, 32, 64, 128, 1, 2, 4, 8, 16, 32, 64, 128);
+    return svcmpne_n_u8(ptrue, svand_u8_x(ptrue, svtbl_u8(raw, sel), msk), 0);
+#endif
+}
+#endif
+
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -1008,7 +1027,8 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                 sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1));
             } break;
-        default:
+        case 256:
+        case 512:
             {
                 const svbool_t p32  = svptrue_pat_b8(SV_VL32);
                 const svbool_t p16h = svptrue_pat_b8(SV_VL16);
@@ -1046,6 +1066,9 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                 sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1));
             } break;
+        default:
+            assert(false && "Unsupported vector length");
+            break;
     }
 
 #elif defined(__ARM_NEON)
@@ -1236,7 +1259,8 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                 sumf = svaddv_f32(p4, svadd_f32_x(p4, sumv0, sumv1)) + summs0 + summs1;
             } break;
-        default:
+        case 256:
+        case 512:
             {
                 const svbool_t p32  = svptrue_pat_b8(SV_VL32);
                 const svbool_t p16h = svptrue_pat_b8(SV_VL16);
@@ -1277,6 +1301,9 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
                 sumf = svaddv_f32(p8, svadd_f32_x(p8, sumv0, sumv1)) + summs0 + summs1;
             } break;
+        default:
+            assert(false && "Unsupported vector length");
+            break;
     }
 
 #elif defined(__ARM_NEON)
