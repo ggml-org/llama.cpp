@@ -232,10 +232,19 @@ else()
             VERBATIM
         )
 
+        set(AIR_FA_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fa_f16_tensor.air")
+        add_custom_command(
+            OUTPUT ${AIR_FA_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_f16.metal -o ${AIR_FA_TENSOR}
+            DEPENDS kernels/fa_f16.metal ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/fa_f16.metal (tensor API)"
+            VERBATIM
+        )
+
         add_custom_command(
             OUTPUT ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
-            COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_MM_TENSOR} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
-            DEPENDS ${AIR_MM_TENSOR}
+            COMMAND xcrun -sdk ${METAL_SDK} metallib ${AIR_MM_TENSOR} ${AIR_FA_TENSOR} -o ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-tensor.metallib
+            DEPENDS ${AIR_MM_TENSOR} ${AIR_FA_TENSOR}
             COMMENT "Linking tensor API Metal kernels into ggml-tensor.metallib"
         )
 
@@ -248,7 +257,7 @@ else()
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-common.h
         COMMAND rm -f ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ggml-metal-impl.h
         COMMAND rm -rf ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels
-        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR}
+        DEPENDS ${AIR_FILES} ${AIR_MM_TENSOR} ${AIR_FA_TENSOR}
         COMMENT "Linking Metal kernels into default.metallib"
     )
 
