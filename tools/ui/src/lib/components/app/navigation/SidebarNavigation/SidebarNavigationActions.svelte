@@ -50,8 +50,6 @@
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 
-	const actionsItems = SIDEBAR_ACTIONS_ITEMS;
-
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
 			searchInputRef.focus();
@@ -63,7 +61,7 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * actionsItems.length);
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
 	});
 
 	function handleSearchModeDeactivate() {
@@ -113,7 +111,7 @@
 			? 'hidden pointer-events-none'
 			: ''}"
 	>
-		{#each actionsItems as item, i (item.tooltip)}
+		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
@@ -174,7 +172,7 @@
 	</div>
 {:else}
 	<div class="{className} flex-col gap-1 hidden md:flex">
-		{#each actionsItems as item, i (item.tooltip)}
+		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemOnClick =
