@@ -18,6 +18,8 @@ add_library(mtmd
             mtmd-image.cpp
             mtmd-embeddings.cpp
             mtmd-embeddings.h
+            mtmd-session.cpp
+            mtmd-session.h
             mtmd-workspace.cpp
             mtmd-workspace.h
             mtmd.h

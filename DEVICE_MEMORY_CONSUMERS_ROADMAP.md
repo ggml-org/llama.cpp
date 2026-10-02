@@ -433,8 +433,9 @@ Record substage completion here only after the required validation succeeds. Exp
 | 6.5b | Ready for review (combined) | - | Exact minimum KV bootstrap, all-phase startup validation, next-granule rejection, and phase-safe maximum-budget execution probing. |
 | 6.5c | Ready for review (combined) | - | Parseable grant/transition/residency/copy diagnostics plus full-model numerical, memory, and representative phase-arena performance qualification. |
 | 7.1a | Committed | dfed912b5 | Actual-batch mtmd workspace measurement, bounded borrowed execution, native-capture retirement and lease release. Its numerical fixture is corrected and requalified in 7.1b. |
-| 7.1b | Ready for review | - | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
-| 7.2a-7.5c | Planned | - | Ordered text/image admission, three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
+| 7.1b | Committed | 09f566915 | Retained host embedding views, checked token slices, atomic result publication, cancellation cleanup and compatible/incompatible batch controls. CPU ownership and real CUDA lifetime/equivalence tests pass. |
+| 7.2a | Ready for review | - | Backend-neutral ordered text/image session plan and ordinary mtmd baseline adapter. Initial/follow-up IQ4_XS logits and 16 continuation tokens match the legacy helper; failed images stop later prefill. |
+| 7.2b-7.5c | Planned | - | Adaptive embedding/position admission, live three-consumer coordination, KV suspension, projector reload and production vision remain pending. |
 | 8.1a-8.5 | Planned | - | Real adapter 8.2b conditional; otherwise explicitly deferred. |
 
 ## Substage 4.1a implementation and validation
@@ -3603,6 +3604,8 @@ For CUDA memory checks, prefix that invocation with `GGML_CUDA_ENABLE_UNIFIED_ME
 
 ### Stage 7.1b: retained host embedding handoff
 
+Committed as `09f566915`.
+
 The private `mtmd-embeddings.h` interface gives consumers a copyable, read-only `mtmd_embedding_view` of an encoded media chunk. A view owns only the host result snapshot; it does not retain a vision workspace lease, scheduler, projector, input pixels or chunk metadata. The caller must separately keep the input metadata needed for M-RoPE and other position rules while consuming that chunk. A view can outlive the original batch and projector, and checked `slice(first_token, token_count, output)` calls share the same allocation without copying rows or crossing chunk boundaries.
 
 ```mermaid
@@ -3631,3 +3634,43 @@ TDD and qualification:
 - CUDA memcheck with UVM enabled for projector weights and physical borrowed workspace reports **zero errors**. Six focused Release suites include the memory transition, executor and workspace controls. The complete server target rebuilds successfully. Production is restored with its original image/configuration and health checked after testing.
 
 Logs: `/tmp/vision-7.1b-cuda-final.log` and `/tmp/vision-7.1b-cuda-memcheck.log`. The test fixture's earlier zero-width crash was a validation bug, not a retained-view lifetime failure. This corrected qualification supersedes the 7.1a numerical claim. Full main-model decoding, mixed text/image execution order, position admission and text/vision/MTP scheduler handoff remain in 7.2 and later stages. No production mmproj gate is lifted here, and no assistant commit or push is made.
+
+### Stage 7.2a: ordered text/image session execution
+
+The private `mtmd-session.h` interface turns borrowed prompt chunks into explicit `text_prefill`, `vision_encode`, and `embedding_prefill` steps. It is a request-order owner, not a second memory allocator or replacement for the existing stage coordinator. Device allocations, target KV/recurrent state, positions, and input metadata remain caller-owned. The same prepared backend must execute the plan, and copying/moving an active plan is not allowed.
+
+Preparation validates every input and freezes the model's media-batching decisions before executing either model. It groups compatible images in media order even when text lies between them. An incompatible image or batch-size boundary starts a new group; the planner does not skip it to combine images farther ahead. Each group's encode step runs immediately before its first image prefill. Retained host views then allow later images from the same group to wait for their actual prompt positions without retaining the transient mtmd batch object.
+
+When the model supports a two-image batch, the logical order is:
+
+```mermaid
+flowchart LR
+    T0[Text prefix] --> E[Encode images A and B]
+    E --> A[Prefill image A]
+    A --> T1[Intervening text]
+    T1 --> B[Prefill image B]
+    B --> T2[Text suffix]
+    E -. retain host output .-> H[Image B embedding view]
+    H -. consume at its prompt position .-> B
+```
+
+The current Qwen projector does not batch independent images, so its corresponding flow has a separate encode step before each image. This stage preserves that native capability restriction; compatible batching is tested through the common backend contract rather than forcing an unsupported Qwen graph shape.
+
+The backend interface separates non-executing batch validation, image encoding with ordered retained outputs, and target prefill. Before any image prefill, the owner checks output count, non-null data, embedding width, and token-row count. It rejects speculative execution, invalid media/byte sizes, foreign backend submission and reentry. Encoding or prefill failure closes the request, releases pending host views, and prevents all later text/image operations. A failed owner cannot be restarted. Cancellation inside a callback defers view release until the callback returns; cancellation after successful completion is a no-op.
+
+`mtmd_session_eval_chunks()` is a live, serial baseline adapter using existing `mtmd_batch_*` encoding and the ordinary text/image decode helpers. It preserves their batching, M-RoPE, non-causal setup and position progression, and passes no draft/MTP callback. It does not reset a supplied conversation prefix, reclaim graph storage, suspend KV, unload projector weights or share arenas. Target work must finish using passed host views before a backend callback returns; native queue draining for shared device allocations remains in 7.2c. A completed prefix can remain after a later failure, and the caller is responsible for target-state recovery rather than replaying the failed request blindly.
+
+Qualification:
+
+- The initial placeholder implementation produced **7 failing cases**. Additional red tests exposed missing backend-affinity and size-overflow admission checks before those checks passed.
+- The common CPU suite passes **12 cases / 146 assertions**. It covers batched lookahead with ordered consumption, separate incompatible/unbatchable images, follow-up progress, encoder/prefill errors and exceptions, malformed outputs, cancellation at and within callbacks, preparation cancellation, reentry, backend affinity, pure text, empty requests and speculation rejection.
+- A real IQ4_XS Qwen3.8-27B target plus the matching F16 projector passes **13 cases / 168 assertions**. The fixture loads the target weights normally with all GPU layers, MTP disabled, context 1,024, batch/ubatch 64 and Q8_0/Q4_0 KV. Image/text helper calls use batch 32. The first prompt contains two images separated by text; a follow-up adds another image to the saved prefix state.
+- Planned versus ordinary mtmd helper execution has **zero maximum logit error** for the initial and follow-up prompts, matching final positions, and **16/16 matching greedy continuation token IDs**. A real missing-pixel image fails encoding, and both the reported position and target KV position stop at the completed text prefix; subsequent text is not decoded. Prefix save/restore is used only to control the A/B test, not by the session implementation.
+- Seven focused Release suites pass, including the memory transition/executor/workspace controls and four mtmd suites. The four mtmd suites also pass ASan with leak checking and UBSan. The complete server target rebuilds successfully.
+- CUDA memcheck with UVM enabled passes with **zero memory-access errors** using `--report-api-errors no`. The first default-reporting run passed all numerical assertions but reported six handled API errors: three `cudaGraphExecUpdate` failures plus their `cudaGetLastError` clearing calls. The existing CUDA backend explicitly handles error 910 by destroying and reinstantiating the graph executable. No CUDA graph code was changed or error silently ignored by the implementation; both the original report and the memory-only report are retained.
+
+Artifacts: `/tmp/vision-7.2a-cuda-final.log`, `/tmp/vision-7.2a-memcheck.log`, and `/tmp/vision-7.2a-memcheck-memory-only.log`. Production is restored with its existing image/configuration and health checked after qualification.
+
+Run the default CPU suite with `build-device-memory-infra-cuda-release/bin/test-mtmd-session`. Add `--cuda --model /path/to/Qwen3.8-27B-UD-IQ4_XS.gguf --mmproj /path/to/mmproj-F16.gguf` for the optional full-model fixture. CUDA memory-access qualification uses `compute-sanitizer --tool memcheck --report-api-errors no --error-exitcode 1` before that invocation.
+
+This checkpoint qualifies the internal session plan and a live ordinary-allocation adapter. Public helper/server routing remains unchanged, as does the streaming/mmproj server guard. Adaptive embedding admission and physical KV-index versus model-position separation are 7.2b; live coordinated ownership is 7.2c; production server admission is 7.5. Audio, speculative execution, long-context streaming vision, and other accelerator inference paths are not qualified here. Stage files and this roadmap are staged for user review, with no assistant commit or push.

@@ -396,6 +396,8 @@ llama_build_and_test(test-mtmd-workspace.cpp)
 target_link_libraries(test-mtmd-workspace PRIVATE mtmd)
 llama_build_and_test(test-mtmd-embeddings.cpp)
 target_link_libraries(test-mtmd-embeddings PRIVATE mtmd)
+llama_build_and_test(test-mtmd-session.cpp)
+target_link_libraries(test-mtmd-session PRIVATE mtmd)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)
