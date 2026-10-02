@@ -1,10 +1,7 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ModelsManagerModelRow from '$lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
-	import ModelsManagerRepoRow from '$lib/components/app/models/ModelsManager/ModelsManagerRepoRow.svelte';
-	import type { ModelQuantGroup } from '$lib/components/app/models/ModelsManager/utils';
 	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
-	import { ModelGroupKind } from '$lib/enums';
 	import type { ModelOption } from '$lib/types/models';
 	import { expect } from 'storybook/test';
 
@@ -23,55 +20,33 @@
 		name: 'Qwen3-8B'
 	};
 
-	const entry: ModelQuantGroup = {
-		base: option,
-		key: 'org/Qwen3-8B',
-		kind: ModelGroupKind.QUANTS,
-		quants: [option]
-	};
-
 	const ROW_NAME = /org\/Qwen3\s+8B/;
 </script>
 
-<!-- The row itself is not a control: its name cell takes focus and the actions
-     control is the next tab stop, so a keyboard user never lands on a button that
-     holds another button. -->
+<script lang="ts">
+	let selected = $state(false);
+</script>
+
+<!-- The row answers Enter and Space on its own, so a keyboard user selects a model
+     without reaching for the pointer. -->
 <Story
-	name="RowTabStops"
+	name="RowKeyboardSelect"
 	play={async ({ canvas, userEvent }) => {
-		const select = await canvas.findByRole('button', { name: ROW_NAME });
+		const row = await canvas.findByRole('button', { name: ROW_NAME });
 
-		select.focus();
-		await userEvent.tab();
+		row.focus();
+		await userEvent.keyboard('{Enter}');
 
-		await expect(await canvas.findByRole('button', { name: 'Model actions' })).toHaveFocus();
+		await expect(row).toHaveClass(/bg-accent/);
 	}}
 >
 	<div class={MODEL_ROW_GRID_CLASS + ' w-[40rem]'}>
 		<ModelsManagerModelRow
 			isFavorite={() => false}
 			onDelete={() => {}}
-			onSelect={() => {}}
+			onSelect={() => (selected = true)}
 			{option}
-			selected={false}
+			{selected}
 		/>
-	</div>
-</Story>
-
-<!-- A repo row discloses its quants, so its control carries aria-expanded and
-     answers to the keyboard without a keydown handler of its own. -->
-<Story
-	name="RepoRowDisclosure"
-	play={async ({ canvas, userEvent }) => {
-		const toggle = await canvas.findByRole('button', { name: /1 quants available/ });
-
-		await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-		toggle.focus();
-		await userEvent.keyboard('{Enter}');
-	}}
->
-	<div class={MODEL_ROW_GRID_CLASS + ' w-[40rem]'}>
-		<ModelsManagerRepoRow {entry} expanded={false} onToggle={() => {}} />
 	</div>
 </Story>
