@@ -5,15 +5,16 @@
 	import { ModelsSection } from '$lib/components/app';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import Logo from '$lib/components/app/misc/Logo.svelte';
-	import {
-		type GroupedModelOptions,
-		type ModelItem,
-		windowLocalGroups
-	} from '$lib/components/app/navigation/utils';
 	import { LOCAL_BACKEND_ID, MODEL_ROW_WINDOW, SETTINGS_KEYS } from '$lib/constants';
 	import { ModelDownloadConfirmAction } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
-	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
+	import {
+		type GroupedModelOptions,
+		groupModelFamilies,
+		type ModelFamilyGroup,
+		type ModelItem,
+		windowLocalGroups
+	} from '$lib/utils';
 
 	interface Props {
 		groups: GroupedModelOptions;
