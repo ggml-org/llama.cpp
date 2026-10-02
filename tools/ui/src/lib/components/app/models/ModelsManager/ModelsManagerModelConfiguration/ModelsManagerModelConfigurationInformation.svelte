@@ -48,7 +48,7 @@
 			value: serverProps
 				? `${formatNumber(serverProps.default_generation_settings?.n_ctx ?? 0)} tokens`
 				: option.contextLength
-					? `${formatParameters(option.contextLength)} tokens`
+					? `${formatNumber(option.contextLength)} tokens`
 					: gguf?.context_length
 						? `${formatNumber(gguf.context_length)} tokens`
 						: null
