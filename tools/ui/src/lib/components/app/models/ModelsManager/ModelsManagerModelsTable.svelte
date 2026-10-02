@@ -3,12 +3,7 @@
 	import ModelsManagerQuantRow from './ModelsManagerQuantRow.svelte';
 	import ModelsManagerRepoRow from './ModelsManagerRepoRow.svelte';
 	import ModelsManagerTableToolbar from './ModelsManagerTableToolbar.svelte';
-	import {
-		isModelRunning,
-		modelContextLength,
-		type ModelQuantGroup,
-		type ModelsTableGroup
-	} from './utils';
+	import { modelContextLength, type ModelQuantGroup, type ModelsTableGroup } from './utils';
 	import {
 		ArrowDown,
 		ArrowUp,
@@ -43,7 +38,7 @@
 		ModelsTableGroupKind,
 		ModelsTableSortKey
 	} from '$lib/enums';
-	import { settingsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
 	import type { Snippet } from 'svelte';
@@ -153,7 +148,9 @@
 			case ModelsTableSortKey.NAME:
 				return a.model.localeCompare(b.model);
 			case ModelsTableSortKey.STATUS:
-				return Number(isModelRunning(b)) - Number(isModelRunning(a));
+				return (
+					Number(modelsStore.isModelRunning(b.model)) - Number(modelsStore.isModelRunning(a.model))
+				);
 			default:
 				return 0;
 		}
