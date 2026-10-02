@@ -1,5 +1,10 @@
-import { LOCAL_BACKEND_ID, ModelGroupKind, ModelsTableGroupKind } from '$lib/constants';
-import { ModelCapability, ServerModelStatus } from '$lib/enums';
+import { LOCAL_BACKEND_ID } from '$lib/constants';
+import {
+	ModelCapability,
+	ModelGroupKind,
+	ModelsTableGroupKind,
+	ServerModelStatus
+} from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
 import type { ModelDownloadProgress, ModelOption } from '$lib/types/models';

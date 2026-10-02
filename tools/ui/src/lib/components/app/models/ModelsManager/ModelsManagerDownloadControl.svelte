@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { downloadProgressFor } from './utils';
 	import { ActionIcon } from '$lib/components/app';
-	import { MODEL_DOWNLOAD_ICONS, ModelRowDownloadState } from '$lib/constants';
+	import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
+	import { ModelRowDownloadState } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 

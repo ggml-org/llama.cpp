@@ -9,8 +9,8 @@
 	import { configuredContext, downloadProgressFor } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import { MODEL_ROW_GRID_CLASS, ModelRowDownloadState } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
+	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
+	import { KeyboardKey, ModelRowDownloadState } from '$lib/enums';
 	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { ModelOption } from '$lib/types/models';
 
