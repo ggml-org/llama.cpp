@@ -41,18 +41,11 @@
 		showRepoOrgAvatar = false
 	}: Props = $props();
 
-	let currentRouterModels = $derived(modelsStore.routerModels);
-	let serverStatus = $derived.by(() => {
-		const model = currentRouterModels.find((m) => m.id === option.model);
-
-		return (model?.status?.value as ServerModelStatus) ?? null;
-	});
+	let serverStatus = $derived(modelsStore.getModelStatus(option.model));
 	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
-	let isLoaded = $derived(
-		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
-	);
+	let isLoaded = $derived(modelsStore.isModelRunning(option.model));
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 
 	let loadProgress = $derived(isLoading ? modelsStore.status.getLoadProgress(option.model) : null);

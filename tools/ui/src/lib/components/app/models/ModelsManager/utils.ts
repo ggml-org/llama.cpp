@@ -1,10 +1,5 @@
 import { LOCAL_BACKEND_ID } from '$lib/constants';
-import {
-	ModelCapability,
-	ModelGroupKind,
-	ModelsTableGroupKind,
-	ServerModelStatus
-} from '$lib/enums';
+import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
 import { HuggingFaceService, ModelsService } from '$lib/services';
 import { modelsStore } from '$lib/stores';
 import type { ModelDownloadProgress, ModelOption } from '$lib/types/models';
@@ -66,19 +61,11 @@ export interface ModelsTableGroup {
 	label: string;
 }
 
-/** True when the model is loaded (or sleeping) and not mid-operation. */
-export function isModelRunning(option: ModelOption): boolean {
-	const status = modelsStore.getModelStatus(option.model);
-
-	return (
-		(status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING) &&
-		!modelsStore.status.isOperationInProgress(option.model)
-	);
-}
-
 /** Context the model runs with: what a loaded model reports. */
 export function configuredContext(option: ModelOption): number | null {
-	return isModelRunning(option) ? modelsStore.props.getModelContextSize(option.model) : null;
+	return modelsStore.isModelRunning(option.model)
+		? modelsStore.props.getModelContextSize(option.model)
+		: null;
 }
 
 export function modelSupports(option: ModelOption, capability: ModelCapability): boolean {

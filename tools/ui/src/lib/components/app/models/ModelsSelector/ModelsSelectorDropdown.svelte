@@ -158,8 +158,7 @@
 			return;
 		}
 
-		const model = modelsStore.routerModels.find((m) => m.id === modelId);
-		const status = model?.status?.value as ServerModelStatus | undefined;
+		const status = modelsStore.getModelStatus(modelId);
 
 		if (status === ServerModelStatus.LOADING) return;
 

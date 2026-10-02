@@ -379,6 +379,11 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return status === ServerModelStatus.LOADED || status === ServerModelStatus.SLEEPING;
 	}
 
+	/** Loaded, or sleeping, and not mid-operation: what a row shows as running. */
+	isModelRunning(modelId: string): boolean {
+		return this.isModelLoaded(modelId) && !this._status.isOperationInProgress(modelId);
+	}
+
 	/**
 	 * Select a model. `recordRecent` keeps automatic picks out of the recency list.
 	 */
