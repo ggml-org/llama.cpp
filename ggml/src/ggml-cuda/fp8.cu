@@ -133,7 +133,8 @@ bool ggml_cuda_mul_mat_fp8(
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
     if (!fp8_mma_hardware_available(cc) || src0->type != GGML_TYPE_F8_E4M3 || src1->type != GGML_TYPE_F32 ||
             dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) || src0->ne[0] % 16 != 0 || src0->ne[1] % 16 != 0 ||
-            src0->nb[0] != sizeof(uint8_t) || src0->nb[1] != (size_t) src0->ne[0] || src1->nb[0] != sizeof(float)) {
+            src0->nb[0] != sizeof(uint8_t) || src0->nb[1] != (size_t) src0->ne[0] || src1->nb[0] != sizeof(float) ||
+            !ggml_cuda_is_aligned(src0, 16) || !ggml_cuda_is_aligned(dst, 16)) {
         return false;
     }
 
