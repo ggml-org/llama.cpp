@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { MODEL_ID } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import type { ModelOption } from '$lib/types/models';
 	import { nearViewport, repoOf } from '$lib/utils';
@@ -26,7 +27,8 @@
 		// a local GGUF carries its trained context in the model metadata
 		const repo = repoOf(option.model);
 
-		if (!repo) return;
+		// a local file path has no repo to read, and the Hub would answer 404
+		if (!repo.includes(MODEL_ID.ORG_SEPARATOR)) return;
 
 		let cancelled = false;
 
