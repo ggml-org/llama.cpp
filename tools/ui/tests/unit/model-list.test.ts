@@ -26,46 +26,43 @@ function option(model: string, orgName: string | null = null): ModelOption {
 	};
 }
 
-const row = (model: string, flatIndex: number) => ({ flatIndex, option: option(model) });
+const row = (model: string) => ({ option: option(model) });
 
 function groups(): GroupedModelOptions {
 	return {
 		available: [
-			{ items: [row('org/a', 0), row('org/b', 1), row('org/c', 2)], orgName: 'org' },
-			{ items: [row('other/d', 3)], orgName: 'other' }
-		],
-		loaded: [row('org/loaded', 4)]
+			{ items: [row('org/a'), row('org/b'), row('org/c')], orgName: 'org' },
+			{ items: [row('other/d')], orgName: 'other' }
+		]
 	};
 }
 
 describe('windowLocalGroups', () => {
-	it('shows the loaded models first, then fills the budget in listed order', () => {
-		const windowed = windowLocalGroups(groups(), 3);
+	it('fills the budget in listed order', () => {
+		const windowed = windowLocalGroups(groups(), 2);
 
-		expect(windowed.loaded.map((item) => item.option.model)).toEqual(['org/loaded']);
 		expect(windowed.available.flatMap((group) => group.items).map((item) => item.option.model)) //
 			.toEqual(['org/a', 'org/b']);
-		expect(windowed.shown).toBe(3);
+		expect(windowed.shown).toBe(2);
 	});
 
 	it('drops an org whose whole budget is spent', () => {
-		const windowed = windowLocalGroups(groups(), 4);
+		const windowed = windowLocalGroups(groups(), 3);
 
 		expect(windowed.available.map((group) => group.orgName)).toEqual(['org']);
-		expect(windowed.shown).toBe(4);
+		expect(windowed.shown).toBe(3);
 	});
 
 	it('keeps every group when the budget covers the list', () => {
 		const windowed = windowLocalGroups(groups(), 99);
 
 		expect(windowed.available.map((group) => group.orgName)).toEqual(['org', 'other']);
-		expect(windowed.shown).toBe(5);
+		expect(windowed.shown).toBe(4);
 	});
 
-	it('shows nothing but the loaded entries on a zero budget', () => {
+	it('shows nothing on a zero budget', () => {
 		const windowed = windowLocalGroups(groups(), 0);
 
-		expect(windowed.loaded).toEqual([]);
 		expect(windowed.available).toEqual([]);
 		expect(windowed.shown).toBe(0);
 	});
@@ -93,13 +90,15 @@ describe('filterModelOptions', () => {
 });
 
 describe('groupModelOptions', () => {
-	it('splits the loaded models from the rest and groups the rest by org', () => {
-		const grouped = groupModelOptions(
-			[option('org/a', 'org'), option('org/b', 'org'), option('other/c', 'other')],
-			(model) => model === 'org/a'
-		);
+	it('groups the options by org, unnamed last', () => {
+		const grouped = groupModelOptions([
+			option('org/a', 'org'),
+			option('org/b', 'org'),
+			option('other/c', 'other'),
+			option('plain')
+		]);
 
-		expect(grouped.loaded.map((item) => item.option.model)).toEqual(['org/a']);
-		expect(grouped.available.map((group) => group.orgName)).toEqual(['org', 'other']);
+		expect(grouped.available.map((group) => group.orgName)).toEqual(['org', 'other', null]);
+		expect(grouped.available[0].items.map((item) => item.option.model)).toEqual(['org/a', 'org/b']);
 	});
 });

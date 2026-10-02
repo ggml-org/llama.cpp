@@ -18,7 +18,6 @@
 		return [
 			...selector.favoriteItems.map((item) => item.option.id),
 			...selector.loadedItems.map((item) => item.option.id),
-			...selector.groupedFilteredOptions.loaded.map((item) => item.option.id),
 			...selector.groupedFilteredOptions.available.flatMap((group) =>
 				group.items.map((item) => item.option.id)
 			)
