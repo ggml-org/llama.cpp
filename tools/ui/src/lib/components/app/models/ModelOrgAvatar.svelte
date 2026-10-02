@@ -71,9 +71,12 @@
 			</span>
 		{:else}
 			<div class="rounded-md">
+				<!-- the server serves the app under COEP require-corp, so a cross-origin
+				     image has to be fetched in CORS mode to be allowed -->
 				<img
 					alt=""
 					class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
+					crossorigin="anonymous"
 					loading="lazy"
 					onerror={() => {
 						failedAvatarOrgs.add(org);
@@ -101,6 +104,7 @@
 					<img
 						alt=""
 						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
+						crossorigin="anonymous"
 						loading="lazy"
 						onerror={() => {
 							failedAvatarOrgs.add(quantOrg ?? '');
