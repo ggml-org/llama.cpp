@@ -134,3 +134,36 @@ function groupKind(quants: ModelOption[]): ModelGroupKind {
 
 	return isQuant ? ModelGroupKind.QUANTS : ModelGroupKind.VARIANTS;
 }
+
+/**
+ * Split the repos of a section into the quants that are hidden and the ones that
+ * are not, so a partly hidden repo lists in both blocks instead of dragging its
+ * visible quants into the hidden one.
+ */
+export function splitHiddenQuants(
+	entries: ModelQuantGroup[],
+	isHidden: (option: ModelOption) => boolean
+): { hidden: ModelQuantGroup[]; local: ModelQuantGroup[] } {
+	const hidden: ModelQuantGroup[] = [];
+	const local: ModelQuantGroup[] = [];
+
+	for (const entry of entries) {
+		const hiddenQuants = entry.quants.filter((quant) => isHidden(quant));
+		const localQuants = entry.quants.filter((quant) => !isHidden(quant));
+
+		if (hiddenQuants.length > 0) {
+			hidden.push({
+				...entry,
+				base: hiddenQuants[0],
+				key: `${entry.key}::hidden`,
+				quants: hiddenQuants
+			});
+		}
+
+		if (localQuants.length > 0) {
+			local.push({ ...entry, base: localQuants[0], quants: localQuants });
+		}
+	}
+
+	return { hidden, local };
+}
