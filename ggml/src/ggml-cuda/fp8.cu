@@ -24,6 +24,7 @@ static __global__ void mul_mat_fp8_fallback(
         if (threadIdx.x == 0) {
             *(float *) (dst + i0*sizeof(float) + i1*nb1 + i2*nb2 + i3*nb3) = sum;
         }
+        __syncthreads();
     }
 }
 
